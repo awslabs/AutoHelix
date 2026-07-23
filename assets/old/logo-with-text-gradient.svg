@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 80" width="300" height="80">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#10b981"/>
+      <stop offset="50%" style="stop-color:#06b6d4"/>
+      <stop offset="100%" style="stop-color:#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="grad2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6"/>
+      <stop offset="50%" style="stop-color:#06b6d4"/>
+      <stop offset="100%" style="stop-color:#10b981"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#10b981"/>
+      <stop offset="50%" style="stop-color:#06b6d4"/>
+      <stop offset="100%" style="stop-color:#3b82f6"/>
+    </linearGradient>
+  </defs>
+  <!-- Helix loop icon (scaled to ~48px, vertically centered) -->
+  <g transform="translate(10, 6) scale(0.34)">
+    <path d="M 141.9 69.6 L 141.6 73.0 L 141.5 76.1 L 141.6 78.8 L 142.1 81.3 L 143.0 83.5 L 144.4 85.6 L 146.2 87.6 L 148.5 89.7 L 151.1 91.9 L 154.0 94.3 L 157.0 97.0 L 160.0 100.0 L 162.8 103.3 L 165.3 106.9 L 167.4 110.7 L 168.9 114.6 L 169.7 118.7 L 169.7 122.7 L 169.0 126.5 L 167.5 130.1 L 165.3 133.3 L 162.5 136.1 L 159.0 138.3 L 155.2 140.1"
+          fill="none" stroke="url(#grad1)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M 130.4 141.9 L 127.0 141.6 L 123.9 141.5 L 121.2 141.6 L 118.7 142.1 L 116.5 143.0 L 114.4 144.4 L 112.4 146.2 L 110.3 148.5 L 108.1 151.1 L 105.7 154.0 L 103.0 157.0 L 100.0 160.0 L 96.7 162.8 L 93.1 165.3 L 89.3 167.4 L 85.4 168.9 L 81.3 169.7 L 77.3 169.7 L 73.5 169.0 L 69.9 167.5 L 66.7 165.3 L 63.9 162.5 L 61.7 159.0 L 59.9 155.2"
+          fill="none" stroke="url(#grad1)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M 58.1 130.4 L 58.4 127.0 L 58.5 123.9 L 58.4 121.2 L 57.9 118.7 L 57.0 116.5 L 55.6 114.4 L 53.8 112.4 L 51.5 110.3 L 48.9 108.1 L 46.0 105.7 L 43.0 103.0 L 40.0 100.0 L 37.2 96.7 L 34.7 93.1 L 32.6 89.3 L 31.1 85.4 L 30.3 81.3 L 30.3 77.3 L 31.0 73.5 L 32.5 69.9 L 34.7 66.7 L 37.5 63.9 L 41.0 61.7 L 44.8 59.9"
+          fill="none" stroke="url(#grad1)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M 69.6 58.1 L 73.0 58.4 L 76.1 58.5 L 78.8 58.4 L 81.3 57.9 L 83.5 57.0 L 85.6 55.6 L 87.6 53.8 L 89.7 51.5 L 91.9 48.9 L 94.3 46.0 L 97.0 43.0 L 100.0 40.0 L 103.3 37.2 L 106.9 34.7 L 110.7 32.6 L 114.6 31.1 L 118.7 30.3 L 122.7 30.3 L 126.5 31.0 L 130.1 32.5 L 133.3 34.7 L 136.1 37.5 L 138.3 41.0 L 140.1 44.8"
+          fill="none" stroke="url(#grad1)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M 151.1 108.1 L 148.5 110.3 L 146.2 112.4 L 144.4 114.4 L 143.0 116.5 L 142.1 118.7 L 141.6 121.2 L 141.5 123.9 L 141.6 127.0 L 141.9 130.4 L 142.2 134.2 L 142.4 138.2 L 142.4 142.4 L 142.1 146.8 L 141.3 151.1 L 140.1 155.2 L 138.3 159.0 L 136.1 162.5 L 133.3 165.3 L 130.1 167.5 L 126.5 169.0 L 122.7 169.7 L 118.7 169.7 L 114.6 168.9 L 110.7 167.4"
+          fill="none" stroke="url(#grad2)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M 91.9 151.1 L 89.7 148.5 L 87.6 146.2 L 85.6 144.4 L 83.5 143.0 L 81.3 142.1 L 78.8 141.6 L 76.1 141.5 L 73.0 141.6 L 69.6 141.9 L 65.8 142.2 L 61.8 142.4 L 57.6 142.4 L 53.2 142.1 L 48.9 141.3 L 44.8 140.1 L 41.0 138.3 L 37.5 136.1 L 34.7 133.3 L 32.5 130.1 L 31.0 126.5 L 30.3 122.7 L 30.3 118.7 L 31.1 114.6 L 32.6 110.7"
+          fill="none" stroke="url(#grad2)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M 48.9 91.9 L 51.5 89.7 L 53.8 87.6 L 55.6 85.6 L 57.0 83.5 L 57.9 81.3 L 58.4 78.8 L 58.5 76.1 L 58.4 73.0 L 58.1 69.6 L 57.8 65.8 L 57.6 61.8 L 57.6 57.6 L 57.9 53.2 L 58.7 48.9 L 59.9 44.8 L 61.7 41.0 L 63.9 37.5 L 66.7 34.7 L 69.9 32.5 L 73.5 31.0 L 77.3 30.3 L 81.3 30.3 L 85.4 31.1 L 89.3 32.6"
+          fill="none" stroke="url(#grad2)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M 108.1 48.9 L 110.3 51.5 L 112.4 53.8 L 114.4 55.6 L 116.5 57.0 L 118.7 57.9 L 121.2 58.4 L 123.9 58.5 L 127.0 58.4 L 130.4 58.1 L 134.2 57.8 L 138.2 57.6 L 142.4 57.6 L 146.8 57.9 L 151.1 58.7 L 155.2 59.9 L 159.0 61.7 L 162.5 63.9 L 165.3 66.7 L 167.5 69.9 L 169.0 73.5 L 169.7 77.3 L 169.7 81.3 L 168.9 85.4 L 167.4 89.3"
+          fill="none" stroke="url(#grad2)" stroke-width="7" stroke-linecap="round"/>
+  </g>
+  <!-- Text: "AutoHelix" as single element for tight kerning -->
+  <text x="80" y="56" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="48" letter-spacing="-1.5" fill="url(#textGrad)"><tspan font-weight="700">Auto</tspan><tspan font-weight="300">Helix</tspan></text>
+</svg>

@@ -1,0 +1,41 @@
+# All paths below are relative to the project root — they resolve inside the
+# per-iteration worktree, so use relative paths (src/, tests/), not absolute.
+
+goal: |
+  Describe what you want the agent to optimize.
+
+# Must pass (exit 0) or the iteration is rejected
+# constraints:
+#   - pytest tests/
+
+# Commands run after each iteration — output is captured for the agent.
+# Add `values:` to extract numbers that gate and rank the run.
+# metrics:
+#   - command: python benchmark.py
+#     values:
+#       throughput: higher
+#       latency: lower
+#     # capture:
+#     #   - results/log.json
+#   # A command with no `values:` just captures output for context — you can
+#   # also spell these `observables:` (same thing).
+
+# Optional: reject iterations that regress a metric too far
+# acceptance:
+#   metric_gates:
+#     - metric: throughput
+#       max_regression_pct: 10
+
+# What may the agent modify? (everything else is reverted)
+# scope:
+#   editable: [src/]
+
+# agent:
+#   type: claude          # claude, codex, opencode
+#   # model: claude-opus-4-8
+#   # timeout_seconds: 1800
+
+# budget:
+#   iterations: 5
+#   # time: 2h            # total wall-clock
+#   # iteration_time: 15m # per-iteration deadline (agent sees countdown)

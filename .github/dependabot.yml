@@ -1,0 +1,28 @@
+version: 2
+
+# Dependabot watches dependency manifests and opens PRs when a dependency has a
+# newer or security-patched version. Results also surface under the repo's
+# Security → Dependabot alerts tab.
+#
+# Two ecosystems apply to this repo:
+#   - pip: Python dependencies declared in pyproject.toml
+#   - github-actions: the action versions pinned in .github/workflows/*.yml
+
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - python
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions

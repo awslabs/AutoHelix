@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 344" width="440" height="344">
+  <defs>
+    <style>
+      .code { font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+      .key { fill: #7dd3fc; }
+      .val { fill: #d1d5db; }
+      .str { fill: #86efac; }
+      .comment { fill: #6b7280; }
+      .punct { fill: #9ca3af; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="440" height="344" rx="8" fill="#0d1117"/>
+  <rect x="0.5" y="0.5" width="439" height="343" rx="7.5" fill="none" stroke="#21262d" stroke-width="1"/>
+
+  <!-- File label -->
+  <text x="220" y="28" text-anchor="middle" font-family="-apple-system, 'Inter', sans-serif" font-size="10.5" fill="#484f58">autohelix.yaml</text>
+  <line x1="16" y1="38" x2="424" y2="38" stroke="#21262d" stroke-width="0.5"/>
+
+  <!-- goal -->
+  <text x="24" y="68" class="code" xml:space="preserve"><tspan class="key">goal</tspan><tspan class="punct">:</tspan><tspan class="str"> Make sort_list faster in sort.py.</tspan></text>
+
+  <!-- constraints -->
+  <text x="24" y="98" class="code" xml:space="preserve"><tspan class="key">constraints</tspan><tspan class="punct">:</tspan></text>
+  <text x="38" y="116" class="code" xml:space="preserve"><tspan class="punct">-</tspan><tspan class="str"> pytest test_sort.py</tspan></text>
+
+  <!-- metrics -->
+  <text x="24" y="146" class="code" xml:space="preserve"><tspan class="key">metrics</tspan><tspan class="punct">:</tspan></text>
+  <text x="38" y="164" class="code" xml:space="preserve"><tspan class="punct">-</tspan><tspan class="key"> command</tspan><tspan class="punct">:</tspan><tspan class="str"> python benchmark.py</tspan></text>
+  <text x="52" y="182" class="code" xml:space="preserve"><tspan class="key">values</tspan><tspan class="punct">:</tspan></text>
+  <text x="66" y="200" class="code" xml:space="preserve"><tspan class="key">speed</tspan><tspan class="punct">:</tspan><tspan class="str"> higher</tspan></text>
+
+  <!-- scope -->
+  <text x="24" y="230" class="code" xml:space="preserve"><tspan class="key">scope</tspan><tspan class="punct">:</tspan></text>
+  <text x="38" y="248" class="code" xml:space="preserve"><tspan class="key">editable</tspan><tspan class="punct">:</tspan><tspan class="val"> [sort.py]</tspan></text>
+
+  <!-- budget -->
+  <text x="24" y="278" class="code" xml:space="preserve"><tspan class="key">budget</tspan><tspan class="punct">:</tspan></text>
+  <text x="38" y="296" class="code" xml:space="preserve"><tspan class="key">iterations</tspan><tspan class="punct">:</tspan><tspan class="val"> 2</tspan></text>
+</svg>

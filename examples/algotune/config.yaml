@@ -1,0 +1,11 @@
+source:
+  repo: https://github.com/oripress/AlgoTune.git
+  raw_url: https://raw.githubusercontent.com/oripress/AlgoTune/main/AlgoTuneTasks
+  task_path: AlgoTuneTasks/{task_name}/{task_name}.py
+  description_path: AlgoTuneTasks/{task_name}/description.txt
+  generation_json: reports/generation.json
+
+defaults:
+  problem_size: 1000
+  num_problems: 20
+  num_runs: 5

@@ -1,0 +1,16 @@
+# Performance optimization: speed up a slow bubble sort.
+goal: Make sort_list faster in sort.py.
+
+constraints:
+  - pytest test_sort.py
+
+metrics:
+  - command: python benchmark.py
+    values:
+      speed: higher
+
+scope:
+  editable: [sort.py]
+
+budget:
+  iterations: 2

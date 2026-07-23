@@ -1,0 +1,32 @@
+goal: |
+  Optimize the solve() method in solver.py for the {task_name} task.
+  The Solver class wraps {class_name} from {task_name}.py.
+  Only edit solver.py — you may import any standard library or numpy/scipy.
+
+  Workspace tools:
+    python eval_input.py [seed]  — quick single-problem test (correctness + timing)
+    python reference.py [seed]   — show reference output for a problem
+    python profile.py [seed]     — cProfile bottleneck analysis
+    python check.py              — full correctness check (50 seeds)
+    python benchmark.py          — final speedup measurement
+
+  Rules:
+    - Do not add memoization, persistent caches, or cross-call precomputation.
+    - Do not specialize for repeated benchmark inputs.
+    - Single-threaded CPU only: the benchmark pins the process to one core and hides the
+      GPU (matching AlgoTune's convention), so parallelism or GPU offload won't help — the
+      speedup must come from a better algorithm.
+
+constraints:
+  - python check.py
+
+metrics:
+  - command: python benchmark.py
+    values:
+      speedup: higher
+
+scope:
+  editable: [solver.py]
+
+budget:
+  iterations: 10

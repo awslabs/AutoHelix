@@ -1,0 +1,15 @@
+# Preprocessing and model config. See train.py for the full set of options:
+#   scaler: standard | minmax | robust
+#   feature_selection: {method: k_best, k: <int>}
+#   pca: {n_components: <int>}
+#   model type: logistic_regression | random_forest | gradient_boosting | knn | svc
+preprocessing:
+  scaler: null
+  feature_selection: null
+  pca: null
+
+model:
+  type: logistic_regression
+  params:
+    C: 1.0
+    max_iter: 100

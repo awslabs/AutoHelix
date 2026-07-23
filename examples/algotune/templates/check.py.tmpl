@@ -1,0 +1,39 @@
+"""Correctness check for {task_name}."""
+
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+# Match benchmark.py: validate correctness CPU-only and single-core, so a GPU/threaded
+# solver can't pass the check under conditions it won't be timed under.
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+if hasattr(os, "sched_setaffinity"):
+    try:
+        os.sched_setaffinity(0, {{int(os.environ.get("AUTOHELIX_BENCH_CORE", "0"))}})
+    except (ValueError, OSError):
+        pass
+
+import sys
+from {task_name} import {class_name}
+from solver import Solver
+
+NUM_CHECK = 50
+
+
+def main() -> int:
+    task = {class_name}()
+    solver = Solver()
+
+    for seed in range(1, NUM_CHECK + 1):
+        problem = task.generate_problem({problem_size}, random_seed=seed)
+        solution = solver.solve(problem)
+        if not task.is_solution(problem, solution):
+            print(f"FAIL: seed={{seed}}")
+            return 1
+
+    print("ok")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

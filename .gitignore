@@ -1,0 +1,30 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.DS_Store
+
+# AutoHelix runtime state
+.autohelix/
+
+# Benchmark data and plots (regenerate with: python scripts/bench/collect_results.py)
+bench_results/
+
+# Benchmark infrastructure (local-only launch/setup scripts)
+scripts/bench/
+
+# Scratch/manual real-agent test scripts (kept local, not shipped)
+scripts/test_*.sh
+
+# Local working notes (updates log, blog drafts, design docs, comparisons, archive)
+notes/
+
+# Local/personal
+env.sh
+TODO.md
+
+# Progress-plot generator (kept local; the rendered progress.png is committed)
+examples/posttrain-gsm8k/progress/plot_progress.py

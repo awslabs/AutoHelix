@@ -1,0 +1,211 @@
+"""Benchmark for {task_name} — measures speedup over reference."""
+
+import copy
+import gc
+import inspect
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+# Hide any GPU. AlgoTune is a single-threaded CPU benchmark and the reference is timed
+# on CPU, so a solver that offloads to GPU would be measured against a CPU baseline —
+# not a fair speedup. Making CUDA unavailable forces CPU-only solutions.
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+# Pin to a single core. The thread-count env vars above are only advisory and can be
+# defeated (e.g. calling OpenBLAS's set_num_threads via ctypes *after* import), but CPU
+# affinity is enforced by the OS: thread pools may still spawn threads, yet they all
+# time-share one core and cannot parallelize. AUTOHELIX_BENCH_CORE selects which core,
+# so parallel runs can pin each worker to a distinct one (defaults to core 0).
+if hasattr(os, "sched_setaffinity"):
+    try:
+        os.sched_setaffinity(0, {{int(os.environ.get("AUTOHELIX_BENCH_CORE", "0"))}})
+    except (ValueError, OSError):
+        pass
+
+import sys
+import time
+
+# Snapshot timing function before any user code is imported.
+_perf_counter_ns = time.perf_counter_ns
+
+import numpy as np
+
+NUM_PROBLEMS = {num_problems}
+NUM_RUNS = {num_runs}
+PROBLEM_SIZE = {problem_size}
+
+
+def _deep_materialize(obj):
+    """Force materialization of lazy objects (lists, dicts, arrays, generators, proxies)."""
+    import types
+    if isinstance(obj, (types.GeneratorType, map, filter)):
+        return _deep_materialize(list(obj))
+    elif hasattr(obj, "__array__"):
+        return np.asarray(obj)
+    elif isinstance(obj, dict):
+        return {{k: _deep_materialize(v) for k, v in obj.items()}}
+    elif isinstance(obj, list):
+        return [_deep_materialize(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_deep_materialize(item) for item in obj)
+    else:
+        return obj
+
+
+def _clear_solver_caches(solver_module):
+    """Clear all mutable state in the solver module that could cache results."""
+    # Clear all module-level mutable containers (dicts, sets, lists)
+    for name in list(vars(solver_module)):
+        if name.startswith('__'):
+            continue
+        obj = getattr(solver_module, name, None)
+        if isinstance(obj, dict):
+            obj.clear()
+        elif isinstance(obj, (set, list)):
+            obj.clear()
+    # Also clear class-level attributes on Solver and its MRO
+    if hasattr(solver_module, "Solver"):
+        for cls in type.mro(solver_module.Solver):
+            if cls is object:
+                continue
+            for name in list(vars(cls)):
+                if name.startswith('__'):
+                    continue
+                obj = getattr(cls, name, None)
+                if isinstance(obj, dict):
+                    obj.clear()
+                elif isinstance(obj, (set, list)):
+                    obj.clear()
+    # Clear functools lru_caches
+    for name, obj in inspect.getmembers(solver_module):
+        if hasattr(obj, "cache_clear") and callable(obj.cache_clear):
+            try:
+                obj.cache_clear()
+            except Exception:
+                pass
+    # Double gc.collect: first pass may trigger __del__ that resurrects caches;
+    # re-clear after to defeat that.
+    gc.collect()
+    for name in list(vars(solver_module)):
+        if name.startswith('__'):
+            continue
+        obj = getattr(solver_module, name, None)
+        if isinstance(obj, dict):
+            obj.clear()
+        elif isinstance(obj, (set, list)):
+            obj.clear()
+    gc.collect()
+
+
+_IMMUTABLE_ATOMS = (str, bytes, bool, int, float, complex, type(None))
+
+
+def _is_immutable(obj):
+    """True if copy.deepcopy legitimately returns obj unchanged (identity).
+
+    Atoms (numbers, str, None) are immutable; a tuple/frozenset is immutable
+    only if every element is. numpy scalars count as atoms too.
+    """
+    if isinstance(obj, _IMMUTABLE_ATOMS):
+        return True
+    if isinstance(obj, (tuple, frozenset)):
+        return all(_is_immutable(x) for x in obj)
+    # numpy scalar (0-d) — immutable atom; arrays are mutable so fall through
+    if type(obj).__module__ == "numpy" and getattr(obj, "ndim", 1) == 0:
+        return True
+    return False
+
+
+def _time_solve(solve_func, problems, num_runs, deepcopy_fn=None):
+    """Time solve across problems, return min total time.
+
+    Each run uses deep-copied problems so that object identity changes
+    between runs. Results are materialized inside the timed region to
+    defeat lazy-evaluation exploits. Uses snapshotted timer to prevent
+    clock manipulation.
+    """
+    _dc = deepcopy_fn or copy.deepcopy
+    times = []
+    for _ in range(num_runs):
+        run_problems = [_dc(p) for p in problems]
+        # Verify deepcopy produced distinct objects (defeats __deepcopy__ subversion).
+        # Immutable objects (ints, str, and tuples/frozensets of immutables) are
+        # legitimately returned as-is by copy.deepcopy — that's a CPython
+        # optimization, not an exploit — so only flag same-identity on mutables.
+        for orig, copied in zip(problems, run_problems):
+            if orig is copied and not _is_immutable(orig):
+                raise RuntimeError("deepcopy returned same object — possible exploit")
+        start = _perf_counter_ns()
+        for p in run_problems:
+            result = solve_func(p)
+            result = _deep_materialize(result)
+        elapsed = _perf_counter_ns() - start
+        times.append(elapsed)
+    return min(times)
+
+
+def main() -> int:
+    from {task_name} import {class_name}
+
+    task = {class_name}()
+
+    # Use separate problem sets for warmup vs. timing to defeat memoization.
+    # Warmup seeds are disjoint from timed seeds.
+    warmup_problems = [task.generate_problem(PROBLEM_SIZE, random_seed=seed)
+                       for seed in range(9001, 9004)]
+    problems = [task.generate_problem(PROBLEM_SIZE, random_seed=seed)
+                for seed in range(1, NUM_PROBLEMS + 1)]
+
+    # Baseline: time BEFORE importing solver so solver can't sabotage reference
+    def ref_solve(p):
+        return task.solve(p)
+
+    for p in warmup_problems:
+        ref_solve(p)
+
+    baseline_time = _time_solve(ref_solve, problems, NUM_RUNS)
+
+    # Snapshot deepcopy and harness globals before solver import
+    _real_deepcopy = copy.deepcopy
+    _harness_snapshot = {{name: id(obj) for name, obj in globals().items()
+                         if callable(obj)}}
+
+    # NOW import solver — its import-time code cannot affect baseline timing
+    import solver as solver_module
+    from solver import Solver
+
+    # Verify solver import didn't patch our harness or deepcopy
+    _current = {{name: id(obj) for name, obj in globals().items()
+                if callable(obj)}}
+    for name, expected_id in _harness_snapshot.items():
+        if _current.get(name) != expected_id:
+            raise RuntimeError(f"Harness function '{{name}}' was patched by solver")
+    if copy.deepcopy is not _real_deepcopy:
+        copy.deepcopy = _real_deepcopy
+
+    # Solver: warmup with different problems, then clear all state
+    solver = Solver()
+
+    for p in warmup_problems:
+        solver.solve(p)
+
+    # Clear ALL module-level state and class-level caches, re-instantiate
+    _clear_solver_caches(solver_module)
+    solver = Solver()
+
+    solver_time = _time_solve(solver.solve, problems, NUM_RUNS, deepcopy_fn=_real_deepcopy)
+
+    if solver_time <= 0:
+        speedup = float("inf")
+    else:
+        speedup = baseline_time / solver_time
+
+    print(f"baseline_ns: {{baseline_time}}")
+    print(f"solver_ns: {{solver_time}}")
+    print(f"speedup: {{speedup:.4f}}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

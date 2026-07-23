@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 604" width="880" height="604">
+  <defs>
+    <style>
+      .code { font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace; font-size: 11.5px; }
+      .key { fill: #7dd3fc; }
+      .val { fill: #d1d5db; }
+      .str { fill: #86efac; }
+      .comment { fill: #6b7280; }
+      .punct { fill: #9ca3af; }
+      .label { font-family: -apple-system, 'Inter', 'Segoe UI', sans-serif; font-size: 11.5px; font-weight: 600; fill: #e6edf3; }
+      .desc { font-family: -apple-system, 'Inter', 'Segoe UI', sans-serif; font-size: 10.5px; fill: #8b949e; }
+      .connector { stroke: #30363d; stroke-width: 1; fill: none; }
+      .dot { fill: #484f58; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="880" height="604" rx="8" fill="#0d1117"/>
+  <rect x="0.5" y="0.5" width="879" height="603" rx="7.5" fill="none" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Code panel (left) -->
+
+  <!-- goal section -->
+  <text x="28" y="40" class="code key">goal</text><text x="55" y="40" class="code punct">:</text><text x="62" y="40" class="code str"> |</text>
+  <text x="42" y="56" class="code str">Optimize the data pipeline for throughput</text>
+  <text x="42" y="72" class="code str">while maintaining correctness on all inputs.</text>
+
+  <!-- constraints section -->
+  <text x="28" y="104" class="code key">constraints</text><text x="103" y="104" class="code punct">:</text>
+  <text x="42" y="120" class="code punct">-</text><text x="52" y="120" class="code str"> pytest tests/ -x</text>
+  <text x="42" y="136" class="code punct">-</text><text x="52" y="136" class="code str"> mypy src/ --strict</text>
+
+  <!-- metrics section -->
+  <text x="28" y="168" class="code key">metrics</text><text x="77" y="168" class="code punct">:</text>
+  <text x="42" y="184" class="code punct">-</text><text x="52" y="184" class="code key"> command</text><text x="107" y="184" class="code punct">:</text><text x="115" y="184" class="code str"> python benchmark.py</text>
+  <text x="56" y="200" class="code key">timeout</text><text x="105" y="200" class="code punct">:</text><text x="113" y="200" class="code val"> 1800</text>
+  <text x="56" y="216" class="code key">values</text><text x="98" y="216" class="code punct">:</text>
+  <text x="70" y="232" class="code key">throughput</text><text x="140" y="232" class="code punct">:</text><text x="148" y="232" class="code str"> higher</text>
+  <text x="70" y="248" class="code key">latency_p99</text><text x="147" y="248" class="code punct">:</text><text x="155" y="248" class="code str"> lower</text>
+  <text x="56" y="264" class="code key">capture</text><text x="105" y="264" class="code punct">:</text>
+  <text x="70" y="280" class="code punct">-</text><text x="80" y="280" class="code str"> results/profile.json</text>
+
+  <!-- acceptance section -->
+  <text x="28" y="312" class="code key">acceptance</text><text x="98" y="312" class="code punct">:</text>
+  <text x="42" y="328" class="code key">metric_gates</text><text x="122" y="328" class="code punct">:</text>
+  <text x="56" y="344" class="code punct">-</text><text x="66" y="344" class="code key"> metric</text><text x="108" y="344" class="code punct">:</text><text x="116" y="344" class="code str"> throughput</text>
+  <text x="66" y="360" class="code key">max_regression_pct</text><text x="196" y="360" class="code punct">:</text><text x="204" y="360" class="code val"> 5</text>
+
+  <!-- scope section -->
+  <text x="28" y="392" class="code key">scope</text><text x="63" y="392" class="code punct">:</text>
+  <text x="42" y="408" class="code key">editable</text><text x="100" y="408" class="code punct">:</text><text x="108" y="408" class="code val"> [src/pipeline/, src/transforms/]</text>
+
+  <!-- agent section -->
+  <text x="28" y="448" class="code key">agent</text><text x="63" y="448" class="code punct">:</text>
+  <text x="42" y="464" class="code key">type</text><text x="73" y="464" class="code punct">:</text><text x="81" y="464" class="code str"> claude</text>
+  <text x="42" y="480" class="code key">model</text><text x="77" y="480" class="code punct">:</text><text x="85" y="480" class="code str"> claude-opus-4-8</text>
+
+  <!-- budget section -->
+  <text x="28" y="512" class="code key">budget</text><text x="70" y="512" class="code punct">:</text>
+  <text x="42" y="528" class="code key">iterations</text><text x="112" y="528" class="code punct">:</text><text x="120" y="528" class="code val"> 10</text>
+  <text x="42" y="544" class="code key">cost</text><text x="73" y="544" class="code punct">:</text><text x="81" y="544" class="code val"> 30</text>
+  <text x="42" y="560" class="code key">time</text><text x="73" y="560" class="code punct">:</text><text x="81" y="560" class="code str"> 4h</text>
+  <text x="42" y="576" class="code key">iteration_time</text><text x="140" y="576" class="code punct">:</text><text x="148" y="576" class="code str"> 30m</text>
+
+  <!-- Annotation panel (right) — all lines are horizontal -->
+
+  <!-- Goal annotation -->
+  <line x1="460" y1="56" x2="530" y2="56" class="connector"/>
+  <circle cx="530" cy="56" r="2.5" class="dot"/>
+  <text x="542" y="48" class="label">Goal</text>
+  <text x="542" y="63" class="desc">What the agent should achieve. Natural language.</text>
+  <text x="542" y="77" class="desc">This becomes the core of the agent's prompt.</text>
+
+  <!-- Constraints annotation -->
+  <line x1="240" y1="128" x2="530" y2="128" class="connector"/>
+  <circle cx="530" cy="128" r="2.5" class="dot"/>
+  <text x="542" y="120" class="label">Constraints</text>
+  <text x="542" y="135" class="desc">Each must exit 0, or the iteration is rejected.</text>
+  <text x="542" y="149" class="desc">Failed iterations are discarded — nothing lands.</text>
+
+  <!-- Metrics annotation -->
+  <line x1="275" y1="232" x2="530" y2="232" class="connector"/>
+  <circle cx="530" cy="232" r="2.5" class="dot"/>
+  <text x="542" y="214" class="label">Metrics</text>
+  <text x="542" y="229" class="desc">Commands run after each iteration. Values marked</text>
+  <text x="542" y="243" class="desc">higher/lower rank the run and tell the harness</text>
+  <text x="542" y="257" class="desc">which direction is better. Captured artifacts give</text>
+  <text x="542" y="271" class="desc">the agent full context on why a metric changed.</text>
+
+  <!-- Acceptance annotation -->
+  <line x1="265" y1="344" x2="530" y2="344" class="connector"/>
+  <circle cx="530" cy="344" r="2.5" class="dot"/>
+  <text x="542" y="332" class="label">Acceptance gates</text>
+  <text x="542" y="347" class="desc">Optional. Reject iterations that regress a metric</text>
+  <text x="542" y="361" class="desc">beyond a threshold. Guard multiple metrics without</text>
+  <text x="542" y="375" class="desc">collapsing them into one score.</text>
+
+  <!-- Scope annotation -->
+  <line x1="420" y1="408" x2="530" y2="408" class="connector"/>
+  <circle cx="530" cy="408" r="2.5" class="dot"/>
+  <text x="542" y="404" class="label">Scope</text>
+  <text x="542" y="419" class="desc">Directories the agent may modify. Everything</text>
+  <text x="542" y="433" class="desc">outside is protected and auto-reverted.</text>
+
+  <!-- Agent annotation -->
+  <line x1="225" y1="464" x2="530" y2="464" class="connector"/>
+  <circle cx="530" cy="464" r="2.5" class="dot"/>
+  <text x="542" y="460" class="label">Agent</text>
+  <text x="542" y="475" class="desc">Backend: claude, codex, or opencode.</text>
+  <text x="542" y="489" class="desc">Model selection, timeouts, memory options.</text>
+
+  <!-- Budget annotation -->
+  <line x1="175" y1="544" x2="530" y2="544" class="connector"/>
+  <circle cx="530" cy="544" r="2.5" class="dot"/>
+  <text x="542" y="536" class="label">Budget</text>
+  <text x="542" y="551" class="desc">When to stop: iteration count, total wall-clock,</text>
+  <text x="542" y="565" class="desc">per-iteration time, or max USD spend.</text>
+</svg>

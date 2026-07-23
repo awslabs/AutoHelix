@@ -1,0 +1,29 @@
+"""Run the reference solver on a generated problem and show the output."""
+
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+import json
+import sys
+from {task_name} import {class_name}
+
+
+def main() -> int:
+    seed = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    task = {class_name}()
+
+    problem = task.generate_problem({problem_size}, random_seed=seed)
+    solution = task.solve(problem)
+
+    print(json.dumps({{
+        "problem_keys": list(problem.keys()) if isinstance(problem, dict) else str(type(problem)),
+        "solution": solution if not hasattr(solution, "__len__") or len(str(solution)) < 2000
+                    else f"<{{type(solution).__name__}} with {{len(solution) if hasattr(solution, '__len__') else '?'}} elements>",
+    }}, indent=2, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

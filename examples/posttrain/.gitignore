@@ -1,0 +1,4 @@
+# Chat template is extracted from the base model at setup time.
+templates/qwen3.jinja
+
+.DS_Store

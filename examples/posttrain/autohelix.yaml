@@ -1,0 +1,71 @@
+# Post-training example: fine-tune Qwen3-4B-Base to do well on GSM8K.
+# The agent WRITES THE TRAINING CODE (data prep, SFT/RFT, etc.); only the eval
+# harness is frozen. Requires a prepared GPU environment — see README.md for setup.
+
+goal: |
+  Train the small base model `Qwen/Qwen3-4B-Base` to do as well as possible on
+  GSM8K (Grade School Math 8K). You have full freedom over the approach — data
+  sources, training method, and hyperparameters are all yours to choose.
+
+  Environment:
+  - A Python env is ALREADY BUILT — do NOT install packages. Run everything through
+    `./run_native.sh` (e.g. `./run_native.sh python train.py`); it activates the
+    env, pins your assigned GPU, and sets the Hugging Face cache.
+  - Inspect what's installed (`./run_native.sh pip list`) before committing to an
+    approach — the toolkit available may support methods beyond the obvious ones.
+  - The base model and the GSM8K dataset are already in the HF cache. Do not
+    re-download them.
+
+  Where to save (your model is evaluated from a FIXED location):
+  - Save your final model to `$ARTIFACTS/final_model` and intermediate checkpoints
+    under `$ARTIFACTS/checkpoints` — absolute paths OUTSIDE this working directory
+    (see `config.sh` for the value of `$ARTIFACTS`). The eval reads exclusively from
+    `$ARTIFACTS/final_model`.
+  - You may continue training from your best previous checkpoint (see
+    `$ARTIFACTS/final_model`); iterations are meant to compound.
+
+  Rules:
+  1. Operate autonomously — there is no user to ask.
+  2. Run training in the FOREGROUND and wait for it to finish (no `nohup`, `&`,
+     `setsid`) — when you exit, the iteration ends and any detached process is killed.
+  3. Do not train on GSM8K test data — train only on the train split or external,
+     non-contaminating data.
+  4. Only fine-tune from `Qwen/Qwen3-4B-Base`. Submit one of your checkpoints as the
+     final model. Do not download an instruction-tuned version.
+  5. Do not modify the frozen eval files.
+
+# The agent must have produced a loadable model at the fixed artifacts location.
+constraints:
+  - bash check_final_model.sh
+
+# The official scorer reads $ARTIFACTS/final_model and prints GSM8K accuracy.
+metrics:
+  - command: bash run_eval.sh
+    timeout: 1800
+    values:
+      score: higher
+
+acceptance:
+  metric_gates:
+    - metric: score
+      max_regression_pct: 10
+
+# The agent writes the training code; only the eval harness is protected.
+scope:
+  frozen:
+    - evaluate.py
+    - templates/
+    - run_eval.sh
+    - run_native.sh
+    - check_final_model.sh
+    - config.sh
+    - gpu_device.txt
+
+agent:
+  type: claude
+  reasoning_effort: xhigh   # harder thinking → agent explores the toolkit, not just the obvious method
+
+budget:
+  iterations: 20
+  iteration_time: 2h        # per-iteration wall-clock (agent gets a heads-up before the deadline)
+  time: 10h                 # total wall-clock across the whole run

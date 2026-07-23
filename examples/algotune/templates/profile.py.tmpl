@@ -1,0 +1,40 @@
+"""Profile the solver on a generated problem."""
+
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+import cProfile
+import pstats
+import sys
+from {task_name} import {class_name}
+from solver import Solver
+
+
+def main() -> int:
+    seed = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    num_runs = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+    task = {class_name}()
+    solver = Solver()
+
+    problem = task.generate_problem({problem_size}, random_seed=seed)
+
+    # Warmup
+    solver.solve(problem)
+
+    # Profile
+    profiler = cProfile.Profile()
+    profiler.enable()
+    for _ in range(num_runs):
+        solver.solve(problem)
+    profiler.disable()
+
+    stats = pstats.Stats(profiler, stream=sys.stdout)
+    stats.sort_stats("cumulative")
+    stats.print_stats(25)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

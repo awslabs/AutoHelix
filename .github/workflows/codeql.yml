@@ -1,0 +1,48 @@
+name: CodeQL
+
+# Static analysis for security vulnerabilities and coding errors using GitHub's
+# CodeQL engine. Results appear under the repo's Security → Code scanning tab.
+#
+# AutoHelix is pure Python, so we only analyze the `python` language. If a
+# compiled or JS/TS component is ever added, add it to the matrix below.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly re-scan (Mondays 07:00 UTC) so newly disclosed query patterns catch
+    # code that hasn't changed since the last push.
+    - cron: "0 7 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to upload results to the code-scanning dashboard.
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@08d09a53f0f5d694f253bd25732e4429c9e9337f # v3.37.2
+        with:
+          language: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@08d09a53f0f5d694f253bd25732e4429c9e9337f # v3.37.2
+        with:
+          category: "/language:${{ matrix.language }}"

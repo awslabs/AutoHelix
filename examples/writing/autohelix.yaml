@@ -1,0 +1,14 @@
+goal: |
+  Write a clear ~300-word explainer of self-attention in post.md,
+  in the style of a blog post.
+
+reviewer:
+  prompt: |
+    Review post.md as an editor. Give specific, actionable feedback
+    the next revision can act on.
+
+scope:
+  editable: [post.md]
+
+budget:
+  iterations: 3

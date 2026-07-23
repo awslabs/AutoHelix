@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autohelix"
+version = "0.1.0"
+description = "Agent-powered iterative optimization: put an AI agent in a verified improvement loop"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+    { name = "Matthew Trager" },
+    { name = "Elman Mansimov" },
+    { name = "Yi Zhang" },
+    { name = "Wei Xia" },
+    { name = "Stefano Soatto" },
+]
+keywords = ["ai", "agent", "llm", "optimization", "code-generation", "claude"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "pyyaml>=6.0",
+    "click>=8.0",
+    "rich>=13.0",
+    "jinja2>=3.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/awslabs/AutoHelix"
+Repository = "https://github.com/awslabs/AutoHelix"
+Issues = "https://github.com/awslabs/AutoHelix/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+examples = [
+    "numpy>=1.20",
+    "scipy>=1.10",
+    "scikit-learn>=1.4",
+]
+
+[project.scripts]
+autohelix = "autohelix.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autohelix"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (run with: pytest -m slow)",
+]

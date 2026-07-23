@@ -1,0 +1,47 @@
+"""Evaluate solver on a single generated problem."""
+
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+import sys
+import time
+from {task_name} import {class_name}
+from solver import Solver
+
+
+def main() -> int:
+    seed = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    task = {class_name}()
+    solver = Solver()
+
+    problem = task.generate_problem({problem_size}, random_seed=seed)
+
+    # Run solver
+    start = time.perf_counter()
+    solution = solver.solve(problem)
+    solver_time = time.perf_counter() - start
+
+    # Run reference
+    start = time.perf_counter()
+    reference = task.solve(problem)
+    ref_time = time.perf_counter() - start
+
+    # Check correctness
+    correct = task.is_solution(problem, solution)
+
+    print(f"seed: {{seed}}")
+    print(f"correct: {{correct}}")
+    print(f"solver_time_ms: {{solver_time * 1000:.2f}}")
+    print(f"reference_time_ms: {{ref_time * 1000:.2f}}")
+    if ref_time > 0:
+        print(f"speedup: {{ref_time / solver_time:.4f}}")
+    if not correct:
+        print(f"solver_output_keys: {{list(solution.keys()) if isinstance(solution, dict) else type(solution).__name__}}")
+        print(f"reference_output_keys: {{list(reference.keys()) if isinstance(reference, dict) else type(reference).__name__}}")
+    return 0 if correct else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,19 @@
+# Budget control demo: mock agent (no LLM), synthetic cost/time. See README.md.
+goal: Append a line each iteration (trivial — this demo is about budgets, not the task).
+
+constraints:
+  - python -c "import os; assert os.path.exists('mock_change.txt')"
+
+scope:
+  editable: [mock_change.txt]
+
+agent:
+  type: mock
+  settings:
+    cost_usd: 0.03      # synthetic per-iteration cost the harness accumulates
+    sleep_seconds: 1    # synthetic per-iteration wall-clock
+
+budget:
+  iterations: 20        # hard cap on iteration count
+  cost: 0.10            # stop once cumulative cost ≥ $0.10 (wins here, at iter 4)
+  time: 60s             # stop once total wall-clock ≥ 60s
