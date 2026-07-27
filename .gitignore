@@ -25,6 +25,3 @@ notes/
 # Local/personal
 env.sh
 TODO.md
-
-# Progress-plot generator (kept local; the rendered progress.png is committed)
-examples/posttrain-gsm8k/progress/plot_progress.py
