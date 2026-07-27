@@ -79,7 +79,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-*(Or `pip install autohelix` for just the CLI, without the bundled examples.)*
+Or `pip install autohelix` for just the CLI, without the bundled examples.
 
 AutoHelix uses Claude Code by default (looks for `claude` on your `PATH`). Codex and
 OpenCode are also supported — see [agent setup](docs/getting-started.md#agent-setup).
@@ -301,6 +301,13 @@ sandbox is usually a reasonable tradeoff. For stronger guarantees, or on sensiti
 machines, use the Docker mode.
 
 </details>
+
+## Contributing & feedback
+
+We'd love to hear how you're using AutoHelix — the goals you point it at, patterns
+you wish it supported, or rough edges you hit. Please
+[open an issue](https://github.com/awslabs/AutoHelix/issues) for bugs, ideas, or
+use cases you'd like to share. Contributions are welcome.
 
 ## Citation
 
