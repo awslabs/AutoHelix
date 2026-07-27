@@ -4,9 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autohelix"
-version = "0.0.1"
+version = "0.1.0"
 description = "Agent-powered iterative optimization: put an AI agent in a verified improvement loop"
-readme = "README.md"
+readme = "assets/README-pypi.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [
@@ -54,13 +54,13 @@ packages = ["src/autohelix"]
 # doesn't sweep in the whole working tree (docs, examples, assets, CI config, or
 # local-only files). only-include replaces hatchling's default include patterns
 # (which would otherwise grab every README.md and .gitignore in the tree), so the
-# sdist stays as clean as the wheel. The top-level README/LICENSE/NOTICE are added
+# sdist stays as clean as the wheel. The PyPI readme/LICENSE/NOTICE are added
 # via force-include since they live outside the only-included paths.
 [tool.hatch.build.targets.sdist]
 only-include = ["src/autohelix"]
 
 [tool.hatch.build.targets.sdist.force-include]
-"README.md" = "README.md"
+"assets/README-pypi.md" = "assets/README-pypi.md"
 "LICENSE" = "LICENSE"
 "NOTICE" = "NOTICE"
 "pyproject.toml" = "pyproject.toml"

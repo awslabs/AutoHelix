@@ -79,6 +79,8 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
+*(Or `pip install autohelix` for just the CLI, without the bundled examples.)*
+
 AutoHelix uses Claude Code by default (looks for `claude` on your `PATH`). Codex and
 OpenCode are also supported — see [agent setup](docs/getting-started.md#agent-setup).
 
@@ -253,6 +255,7 @@ Compared to other tools, AutoHelix adds a minimal amount of structure to ensure 
 | | AutoHelix | autoresearch | Ralph | `/goal` | `/loop` |
 |--|--|--|--|--|--|
 | Goal-directed | ✓ any metric(s) | ✓ val loss | ✓ task list | ✓ boolean | ✗ |
+| Agent-agnostic | ✓ | ✓ | ✓ | ✗ | ✗ |
 | Validation gates | ✓ | ~ self-checks | ✗ | ✗ | ✗ |
 | Isolation on failure | ✓ worktree | ~ self-resets | ✗ | ✗ | ✗ |
 | Fresh context each iteration | ✓ | ✗ | ✓ | ✗ | ✗ |
@@ -261,7 +264,6 @@ Compared to other tools, AutoHelix adds a minimal amount of structure to ensure 
 | Budget control | ✓ iters, time, cost | ✗ | iters only | iters only | ✗ |
 | Time-aware agent | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Parallel exploration | ✓ | ✗ | ✗ | ✗ | ✗ |
-| Agent-agnostic | ✓ | ✓ | ✓ | ✗ | ✗ |
 
 
 </details>
