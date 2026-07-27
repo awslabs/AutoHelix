@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autohelix"
-version = "0.1.0"
+version = "0.0.1"
 description = "Agent-powered iterative optimization: put an AI agent in a verified improvement loop"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,6 +49,21 @@ autohelix = "autohelix.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/autohelix"]
+
+# Scope the source distribution to the package + packaging metadata only, so it
+# doesn't sweep in the whole working tree (docs, examples, assets, CI config, or
+# local-only files). only-include replaces hatchling's default include patterns
+# (which would otherwise grab every README.md and .gitignore in the tree), so the
+# sdist stays as clean as the wheel. The top-level README/LICENSE/NOTICE are added
+# via force-include since they live outside the only-included paths.
+[tool.hatch.build.targets.sdist]
+only-include = ["src/autohelix"]
+
+[tool.hatch.build.targets.sdist.force-include]
+"README.md" = "README.md"
+"LICENSE" = "LICENSE"
+"NOTICE" = "NOTICE"
+"pyproject.toml" = "pyproject.toml"
 
 [tool.pytest.ini_options]
 markers = [
