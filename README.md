@@ -79,6 +79,8 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
+*(Or `pip install autohelix` for just the CLI, without the bundled examples.)*
+
 AutoHelix uses Claude Code by default (looks for `claude` on your `PATH`). Codex and
 OpenCode are also supported — see [agent setup](docs/getting-started.md#agent-setup).
 
