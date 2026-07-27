@@ -253,6 +253,7 @@ Compared to other tools, AutoHelix adds a minimal amount of structure to ensure 
 | | AutoHelix | autoresearch | Ralph | `/goal` | `/loop` |
 |--|--|--|--|--|--|
 | Goal-directed | ✓ any metric(s) | ✓ val loss | ✓ task list | ✓ boolean | ✗ |
+| Agent-agnostic | ✓ | ✓ | ✓ | ✗ | ✗ |
 | Validation gates | ✓ | ~ self-checks | ✗ | ✗ | ✗ |
 | Isolation on failure | ✓ worktree | ~ self-resets | ✗ | ✗ | ✗ |
 | Fresh context each iteration | ✓ | ✗ | ✓ | ✗ | ✗ |
@@ -261,7 +262,6 @@ Compared to other tools, AutoHelix adds a minimal amount of structure to ensure 
 | Budget control | ✓ iters, time, cost | ✗ | iters only | iters only | ✗ |
 | Time-aware agent | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Parallel exploration | ✓ | ✗ | ✗ | ✗ | ✗ |
-| Agent-agnostic | ✓ | ✓ | ✓ | ✗ | ✗ |
 
 
 </details>
