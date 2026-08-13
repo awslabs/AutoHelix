@@ -1,0 +1,11 @@
+source:
+  hf_dataset: ScalingIntelligence/KernelBench
+  # KernelBench levels: 1 = single primitive kernels, 2 = fused operators,
+  # 3 = full model architectures, 4 = HuggingFace model forward passes.
+  levels: [1, 2, 3, 4]
+
+defaults:
+  evaluation_timeout: 1800
+  correctness_trials: 5
+  iterations: 10
+  agent_model: us.anthropic.claude-opus-4-8

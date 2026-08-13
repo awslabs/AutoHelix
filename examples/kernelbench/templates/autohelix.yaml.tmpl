@@ -1,0 +1,60 @@
+goal: |
+  Write an optimized GPU implementation of the reference PyTorch module and make
+  it as fast as possible while staying numerically correct.
+
+  Problem: {problem_name}
+
+  Workspace:
+    problem/reference.py  — the reference `Model` (nn.Module), plus `get_inputs()`
+                            and `get_init_inputs()`. Read it to see exactly what
+                            to compute.
+    solution.py           — YOUR CODE (edit this). Define `ModelNew`, an nn.Module
+                            with the SAME constructor signature and forward output
+                            as `Model`, but faster.
+    check_solution.py     — static reward-hack screen (runs first).
+    eval_solution.py      — checks correctness (allclose over several seeded
+                            trials) and measures speedup vs the reference.
+
+  How you optimize is open: custom CUDA C++ or Triton kernels, operator fusion,
+  torch.compile, better memory layout, etc. `ModelNew(*get_init_inputs())` is
+  constructed and called as `model(*get_inputs())`, same as the reference.
+
+  Rules (correctness is measured, not trusted — the harness defends itself):
+    - Only edit solution.py.
+    - You may read and run the evaluation scripts to understand the public
+      benchmark. Do not modify them or access/alter their runtime state.
+    - Do NOT manipulate timing, RNG, CUDA streams, or precision/backend flags.
+      Solutions that do are rejected.
+    - Do not make network requests or download code, data, or dependencies from
+      solution.py. The final kernel must be self-contained.
+    - Optimize the actual computation. A real, honest speedup on a real kernel is
+      the goal; a >2x speedup on a well-known op is suspicious — double-check it.
+    - Run `python eval_solution.py` to test.
+
+constraints:
+  - python check_solution.py
+  - command: python eval_solution.py --check-only
+    timeout: {evaluation_timeout}
+
+metrics:
+  - command: python eval_solution.py
+    values:
+      mean_speedup: higher
+    timeout: {evaluation_timeout}
+
+acceptance:
+  # eval_solution.py emits mean_speedup only on success. This gate makes a
+  # missing/zero result reject the iteration instead of merging unmeasured code.
+  metric_gates:
+    - metric: mean_speedup
+      max_regression_pct: 99
+
+scope:
+  editable: [solution.py]
+
+agent:
+  type: claude
+  model: {agent_model}
+
+budget:
+  iterations: {iterations}

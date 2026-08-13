@@ -250,6 +250,43 @@ class TestClaudeCodeBuildCommand:
         assert cmd[-1] == "do the thing"
 
 
+class TestClaudeCodeRunResult:
+    def test_json_error_fails_even_when_process_exits_zero(self, tmp_path):
+        from unittest.mock import patch
+
+        from autohelix.agents.runner import ProcessRunResult
+
+        agent = ClaudeCodeAgent(config=AgentConfig())
+
+        def fake_run_process(**kwargs):
+            kwargs["line_callback"](json.dumps({
+                "type": "result",
+                "subtype": "success",
+                "is_error": True,
+                "result": "API Error: invalid model",
+                "duration_ms": 10,
+                "total_cost_usd": 0,
+                "usage": {},
+            }))
+            return ProcessRunResult(exit_code=0)
+
+        with patch(
+            "autohelix.agents.claudecode.run_process",
+            side_effect=fake_run_process,
+        ):
+            result = agent.run(
+                worktree_path=tmp_path,
+                prompt="test",
+                iteration=1,
+                log_path=tmp_path / "agent.log",
+                event_callback=lambda event: None,
+            )
+
+        assert not result.success
+        assert result.exit_code == 0
+        assert result.error == "API Error: invalid model"
+
+
 class TestClaudeCodeAutoMemory:
     def test_auto_memory_disabled_sets_env(self):
         """When auto_memory is False, env should include CLAUDE_CODE_DISABLE_AUTO_MEMORY."""

@@ -13,6 +13,7 @@ import subprocess
 
 import pytest
 
+from autohelix.agents import AgentRunResult
 from autohelix.config import Config, load_config
 from autohelix.harness import Harness
 from autohelix.history import History
@@ -89,6 +90,59 @@ class TestMockAgentIntegration:
         for i, r in enumerate(results[1:], start=1):
             assert r.iteration == i
             assert r.accepted is True
+
+    def test_agent_failure_rejects_without_validation(
+        self, integration_project, monkeypatch
+    ):
+        harness = Harness(integration_project, verbose=False)
+        monkeypatch.setattr(
+            harness,
+            "run_agent",
+            lambda *args, **kwargs: AgentRunResult(
+                success=False,
+                exit_code=0,
+                error="API Error: invalid model",
+            ),
+        )
+
+        harness.run(max_iterations=1)
+
+        result = History(integration_project).load()[-1]
+        assert not result.accepted
+        assert result.metrics == {}
+        assert result.reason == "agent failed: API Error: invalid model"
+
+    def test_missing_baseline_metric_aborts_before_agent(self, integration_project):
+        (integration_project / "autohelix.yaml").write_text("""
+goal: Test baseline failure
+
+agent:
+  type: mock
+
+metrics:
+  - command: python -c "print('no metrics here')"
+    values:
+      score: higher
+""")
+        subprocess.run(
+            ["git", "add", "autohelix.yaml"],
+            cwd=integration_project,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "Configure missing baseline metric"],
+            cwd=integration_project,
+            capture_output=True,
+        )
+
+        harness = Harness(integration_project, verbose=False)
+        with pytest.raises(
+            RuntimeError,
+            match="Baseline benchmark did not produce required metric.*score",
+        ):
+            harness.run(max_iterations=1)
+
+        assert History(integration_project).load() == []
 
     def test_constraint_failure_rejects(self, integration_project):
         """A failing constraint should reject the iteration."""

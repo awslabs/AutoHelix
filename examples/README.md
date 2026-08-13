@@ -53,16 +53,39 @@ cd /tmp/autohelix-sorting
 autohelix run
 ```
 
-AlgoTune and nested AutoHelix fetch tasks and use their own setup commands:
+AlgoTune, KernelBench, and nested AutoHelix use their own setup commands:
 
 ```bash
 python examples/algotune/setup.py --list
 python examples/algotune/setup.py eigenvalues_real \
   --dir /tmp/autohelix-algotune
 
+python examples/kernelbench/setup.py --download
+python examples/kernelbench/setup.py --list
+python examples/kernelbench/setup.py L1_1_Square_matrix_multiplication \
+  --dir /tmp/autohelix-kernelbench
+
 python examples/nested-autohelix/setup.py \
   --dir /tmp/autohelix-nested
 ```
+
+## KernelBench Tasks (GPU kernel optimization)
+
+**kernelbench/** scaffolds any of the 270
+[KernelBench](https://huggingface.co/datasets/ScalingIntelligence/KernelBench)
+tasks. Download the MIT-licensed task definitions once, then select a task:
+
+```bash
+python examples/kernelbench/setup.py --download
+python examples/kernelbench/setup.py --list
+python examples/kernelbench/setup.py L1_1_Square_matrix_multiplication
+```
+
+The download step requires the `datasets` package; the generated project
+requires a CUDA-enabled PyTorch environment. Task code is downloaded at setup
+time and is not vendored in this repository. The evaluator follows KernelBench's
+fp32 correctness tolerance and cold-cache mean-runtime protocol, with additional
+untimed checks for evaluator tampering and output caching.
 
 The [post-training example](posttrain/) requires a prepared GPU environment and
 manual setup. Follow each example's README or generated instructions for any

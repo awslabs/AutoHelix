@@ -1,0 +1,25 @@
+# Your optimized kernel goes here.
+#
+# The reference implementation lives in problem/reference.py — it defines
+# `Model`, `get_inputs()`, and `get_init_inputs()`. You must define `ModelNew`,
+# an nn.Module with the SAME constructor signature and the SAME forward output
+# as `Model`, but faster.
+#
+# Below is a correct-but-slow starting point: ModelNew subclasses the reference
+# Model unchanged (speedup ~1x). Replace its forward with an optimized version —
+# custom CUDA/Triton kernels, fused ops, torch.compile, etc.
+#
+# Run `python eval_solution.py` to check correctness and measure speedup.
+import torch
+import torch.nn as nn
+
+{reference_code}
+
+
+class ModelNew(Model):
+    """Optimized replacement for the reference Model.
+
+    Currently a passthrough (identical to Model). Override __init__/forward with
+    your optimized implementation.
+    """
+    pass

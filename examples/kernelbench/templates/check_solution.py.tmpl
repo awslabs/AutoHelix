@@ -1,0 +1,206 @@
+"""Static reward-hack screen for a KernelBench solution.
+
+Runs BEFORE the timing harness as a cheap constraint: rejects solutions whose
+*source* contains known evaluation-bypass patterns, so a hack is caught before
+it can ever produce a speedup number. This complements the runtime defenses in
+eval_solution.py (monkey-patch / thread / side-stream / frame-walk detection) —
+static screening catches the intent in the text; runtime catches it in the act.
+
+Scope is deliberately narrow to avoid false rejections of legitimate kernels:
+we flag stack-frame access, timing/RNG tampering, CUDA stream redirection, and
+silent try/except fallbacks — not ordinary torch/Triton/CUDA usage. Optimizing
+with fused torch ops, torch.compile, Triton, or hand-written CUDA is all fair.
+
+Exit 0 if clean, 1 if a suspicious pattern is found.
+"""
+
+import ast
+import re
+import sys
+from pathlib import Path
+
+SOLUTION = Path(__file__).parent / "solution.py"
+
+
+def _strip_comments_and_strings(code: str) -> str:
+    """Remove comments and string literals so pattern matches reflect real code,
+    not text inside docstrings/messages."""
+    # Drop triple-quoted strings first, then single-line strings, then comments.
+    code = re.sub(r'"""[\s\S]*?"""', '', code)
+    code = re.sub(r"'''[\s\S]*?'''", '', code)
+    code = re.sub(r'"[^"\n]*"', '', code)
+    code = re.sub(r"'[^'\n]*'", '', code)
+    code = re.sub(r'#.*', '', code)
+    return code
+
+
+# (pattern, human explanation). Patterns run against comment/string-stripped code.
+FORBIDDEN = [
+    (r'\bsys\._getframe\b',
+     "sys._getframe — walking the call stack into the eval harness"),
+    (r'\bframe\b.*\bf_back\b|\bf_back\b',
+     "frame.f_back — climbing the stack toward the eval harness"),
+    (r'\binspect\.(currentframe|stack|getouterframes|getframeinfo)\b',
+     "inspect frame introspection"),
+    (r'\bimport\s+ctypes\b|\bfrom\s+ctypes\b',
+     "ctypes — used to poke at CPython internals / native memory"),
+    (r'\bgc\.get_referrers\b|\bgc\.get_objects\b',
+     "gc object graph walking to reach harness objects"),
+    (r'\.__code__\s*=',
+     "__code__ reassignment — swapping a function's body (e.g. the timer)"),
+    (r'\btorch\.cuda\.(set_stream|Stream|StreamContext)\b',
+     "explicit CUDA stream manipulation — hides work on a side stream"),
+    (r'\.record_stream\b|\.wait_stream\b',
+     "stream record/wait — side-stream dispatch"),
+    (r'\btorch\.cuda\.Event\b',
+     "constructing CUDA events in the solution — timing tampering surface"),
+    (r'\bset_float32_matmul_precision\b|allow_tf32\b|\bautocast\b|cudnn\.benchmark\b',
+     "changing global precision/backend flags to cheat the reference"),
+    (r'\b(?:import|from)\s+(?:urllib|requests|httpx|socket)\b',
+     "network access — solutions must not download code, data, or dependencies"),
+    (r'\.\s*ref_times?\b|\b_harness_snapshot\b|\btime_model\b|\btime_function\b',
+     "referencing eval-harness internals by name"),
+]
+
+# try/except that swallows everything is the classic silent-fallback bypass:
+# "try my kernel, on ANY failure return the reference result". Flag bare/broad
+# excepts that pair with a return/pass.
+BARE_EXCEPT = re.compile(r'except\s*(\(\s*Exception\s*\)|Exception)?\s*:', re.MULTILINE)
+
+
+def _literal_string(node):
+    """Resolve a literal string, including simple constant concatenation."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _literal_string(node.left)
+        right = _literal_string(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+def _scan_indirection(code: str) -> list[str]:
+    """Catch common dynamic spellings hidden from source regexes."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+
+    findings = []
+    import_module_names = {{"__import__"}}
+    sys_names = {{"sys"}}
+    inspect_names = {{"inspect"}}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "sys":
+                    sys_names.add(alias.asname or alias.name)
+                elif alias.name == "inspect":
+                    inspect_names.add(alias.asname or alias.name)
+        if isinstance(node, ast.ImportFrom) and node.module == "importlib":
+            for alias in node.names:
+                if alias.name == "import_module":
+                    import_module_names.add(alias.asname or alias.name)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in sys_names
+            and _literal_string(node.args[1]) == "_getframe"
+        ):
+            findings.append("dynamic sys._getframe access")
+
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in sys_names
+            and node.func.attr == "_getframe"
+        ):
+            findings.append("sys._getframe access")
+
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in inspect_names
+            and _literal_string(node.args[1])
+            in {{"currentframe", "stack", "getouterframes", "getframeinfo"}}
+        ):
+            findings.append("dynamic inspect frame introspection")
+
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in inspect_names
+            and node.func.attr
+            in {{"currentframe", "stack", "getouterframes", "getframeinfo"}}
+        ):
+            findings.append("inspect frame introspection")
+
+        dynamic_import = (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "importlib"
+            and node.func.attr == "import_module"
+        ) or (
+            isinstance(node.func, ast.Name)
+            and node.func.id in import_module_names
+        )
+        if (
+            dynamic_import
+            and node.args
+            and (_literal_string(node.args[0]) or "").split(".", 1)[0] == "ctypes"
+        ):
+            findings.append("dynamic ctypes import")
+
+    return findings
+
+
+def scan(code: str) -> list[str]:
+    stripped = _strip_comments_and_strings(code)
+    findings = _scan_indirection(code)
+
+    for pattern, explanation in FORBIDDEN:
+        if re.search(pattern, stripped):
+            findings.append(explanation)
+
+    # Broad except handlers are only suspicious when the body returns/passes
+    # (silent fallback). A narrow `except (RuntimeError, ...)` that re-raises is fine.
+    for m in BARE_EXCEPT.finditer(stripped):
+        tail = stripped[m.end():m.end() + 200]
+        if re.search(r'\b(return|pass)\b', tail) and 'raise' not in tail.split('\n')[0:6][0]:
+            findings.append(
+                "broad try/except with silent fallback (return/pass) — "
+                "may mask kernel failures and return the reference result"
+            )
+            break
+
+    return findings
+
+
+def main() -> int:
+    if not SOLUTION.exists():
+        print("error: solution.py not found")
+        return 1
+
+    findings = scan(SOLUTION.read_text())
+    if findings:
+        print("REWARD-HACK SCREEN FAILED — remove these patterns from solution.py:")
+        for f in findings:
+            print(f"  - {{f}}")
+        return 1
+
+    print("reward-hack screen: clean")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

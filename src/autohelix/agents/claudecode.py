@@ -29,6 +29,7 @@ class ClaudeCodeAgent:
         self._usage: dict[str, object] = {}
         self._incremental_input: int = 0
         self._incremental_output: int = 0
+        self._result_error: str | None = None
 
     def _command_path(self) -> str:
         if self.config.command:
@@ -212,6 +213,15 @@ class ClaudeCodeAgent:
             subtype = payload.get("subtype", "unknown")
             duration_ms = payload.get("duration_ms")
             duration_text = f" in {duration_ms}ms" if duration_ms is not None else ""
+            if payload.get("is_error"):
+                self._result_error = str(
+                    payload.get("result") or f"Claude Code returned {subtype}"
+                )
+                self._emit(
+                    event_callback,
+                    AgentEventKind.ERROR,
+                    self._result_error,
+                )
             # Extract usage/cost data
             cost_usd = payload.get("total_cost_usd")
             usage = payload.get("usage", {})
@@ -262,6 +272,7 @@ class ClaudeCodeAgent:
         self._usage = {}
         self._incremental_input = 0
         self._incremental_output = 0
+        self._result_error = None
 
         # Build env with remapped PYTHONPATH for worktree
         env = build_worktree_env(project_path, worktree_path) if project_path else None
@@ -300,4 +311,15 @@ class ClaudeCodeAgent:
         if not self._usage.get("output_tokens") and self._incremental_output:
             self._usage["output_tokens"] = self._incremental_output
 
-        return AgentRunResult(success=result.exit_code == 0, exit_code=result.exit_code, usage=self._usage)
+        error = self._result_error
+        if result.timed_out:
+            error = format_timeout_seconds(self.config.timeout_seconds)
+        elif result.exit_code != 0 and error is None:
+            error = f"Claude Code exited with status {result.exit_code}"
+
+        return AgentRunResult(
+            success=result.exit_code == 0 and error is None,
+            exit_code=result.exit_code,
+            error=error,
+            usage=self._usage,
+        )

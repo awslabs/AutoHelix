@@ -1,0 +1,41 @@
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates curl git jq ninja-build \
+    procps python3 python3-dev python3-venv ripgrep unzip wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+ADD https://astral.sh/uv/install.sh /tmp/uv-installer.sh
+RUN sh /tmp/uv-installer.sh \
+    && install -m 0755 /root/.local/bin/uv /usr/local/bin/uv \
+    && rm /tmp/uv-installer.sh
+
+RUN uv venv /opt/kernelbench --python /usr/bin/python3 \
+    && VIRTUAL_ENV=/opt/kernelbench uv pip install \
+        torch torchvision --index-url https://download.pytorch.org/whl/cu128 \
+    && VIRTUAL_ENV=/opt/kernelbench uv pip install \
+        click datasets einops jinja2 ninja numpy packaging pyyaml rich \
+        setuptools transformers
+
+RUN npm install -g @anthropic-ai/claude-code
+
+RUN git config --system user.email "autohelix@container" \
+    && git config --system user.name "AutoHelix"
+
+ENV PATH="/opt/kernelbench/bin:/usr/local/cuda/bin:${PATH}"
+ENV VIRTUAL_ENV="/opt/kernelbench"
+ENV CUDA_HOME="/usr/local/cuda"
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV HOME="/home/agent"
+
+RUN mkdir -p /workspace /repo /cache /home/agent \
+    && chmod 1777 /workspace /cache /home/agent
+
+WORKDIR /workspace
+CMD ["/bin/bash"]

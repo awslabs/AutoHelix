@@ -1,0 +1,527 @@
+"""KernelBench evaluation script (standalone — no kernelbench package needed).
+
+Loads the reference `Model` and the candidate `ModelNew`, checks correctness
+(allclose over several seeded trials), and measures speedup using KernelBench's
+fixed-input, cold-cache CUDA-event protocol. Additional checks run outside the
+timed regions to reject common evaluator-tampering and output-caching attacks.
+
+Prints key: value lines for AutoHelix metric parsing.
+
+Contract (KernelBench):
+  problem/reference.py defines `Model(nn.Module)`, `get_inputs()`,
+  `get_init_inputs()`. solution.py must define `ModelNew(nn.Module)` computing
+  the same forward, ideally faster. Model is constructed as
+  `Model(*get_init_inputs())` and called as `model(*get_inputs())`.
+"""
+
+import importlib.util
+import sys
+import os
+import time as _time
+import threading
+import argparse
+from pathlib import Path
+
+# Reduce allocator fragmentation before CUDA initializes. KernelBench inputs and
+# outputs can be several GB; expandable segments let large short-lived tensors
+# (per-iteration inputs, correctness temporaries) be reclaimed cleanly instead
+# of stranding cached blocks. Must be set before the first CUDA allocation.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+import torch
+import torch.nn as nn
+
+# Capture critical function identities BEFORE any user code is imported.
+_ELAPSED_TIME_ADDR = id(torch.cuda.Event.elapsed_time)
+_EVENT_RECORD_ADDR = id(torch.cuda.Event.record)
+_CUDA_SYNCHRONIZE_ADDR = id(torch.cuda.synchronize)
+_MANUAL_SEED = torch.manual_seed
+_TORCH_RANDN = torch.randn
+_TORCH_RAND = torch.rand
+_TORCH_RANDINT = torch.randint
+_INITIAL_FLOAT32_MATMUL_PRECISION = torch.get_float32_matmul_precision()
+_INITIAL_CUDA_MATMUL_ALLOW_TF32 = torch.backends.cuda.matmul.allow_tf32
+_INITIAL_CUDNN_ALLOW_TF32 = torch.backends.cudnn.allow_tf32
+_INITIAL_CUDNN_BENCHMARK = torch.backends.cudnn.benchmark
+
+WARMUP_RUNS = 3
+TIMING_RUNS = 100
+DISCARD_FIRST = 1
+CORRECTNESS_TRIALS = {correctness_trials}
+ATOL = 1e-4
+RTOL = 1e-4
+SEED = 42
+L2_CACHE_BYTES = 256 * 1024 * 1024
+PRECISION = torch.float32
+
+WORKSPACE = Path(__file__).parent
+
+
+# ---------------------------------------------------------------------------
+# Reward-hack defenses (inlined — no external dependencies)
+# ---------------------------------------------------------------------------
+
+class RewardHackDetected(RuntimeError):
+    pass
+
+
+def check_monkey_patch():
+    """Detect if critical CUDA timing or RNG functions have been patched."""
+    if id(torch.cuda.Event.elapsed_time) != _ELAPSED_TIME_ADDR:
+        raise RewardHackDetected("torch.cuda.Event.elapsed_time has been monkey-patched")
+    if id(torch.cuda.Event.record) != _EVENT_RECORD_ADDR:
+        raise RewardHackDetected("torch.cuda.Event.record has been monkey-patched")
+    if id(torch.cuda.synchronize) != _CUDA_SYNCHRONIZE_ADDR:
+        raise RewardHackDetected("torch.cuda.synchronize has been monkey-patched")
+    if id(torch.manual_seed) != id(_MANUAL_SEED):
+        raise RewardHackDetected("torch.manual_seed has been monkey-patched")
+    if id(torch.randn) != id(_TORCH_RANDN):
+        raise RewardHackDetected("torch.randn has been monkey-patched")
+    if id(torch.rand) != id(_TORCH_RAND):
+        raise RewardHackDetected("torch.rand has been monkey-patched")
+    if id(torch.randint) != id(_TORCH_RANDINT):
+        raise RewardHackDetected("torch.randint has been monkey-patched")
+
+
+def _trust_reference_rng_functions():
+    """Accept RNG wrappers installed by trusted reference dependencies.
+
+    Transformers may lazily import torch.compile machinery while constructing a
+    reference model, replacing torch.manual_seed with a semantically equivalent
+    wrapper. Refresh only after trusted reference initialization, before any
+    candidate code is imported; later candidate-side changes remain detectable.
+    """
+    global _MANUAL_SEED, _TORCH_RANDN, _TORCH_RAND, _TORCH_RANDINT
+    _MANUAL_SEED = torch.manual_seed
+    _TORCH_RANDN = torch.randn
+    _TORCH_RAND = torch.rand
+    _TORCH_RANDINT = torch.randint
+
+
+def _restore_backend_settings():
+    """Give reference and solution the same process-default backend settings."""
+    torch.set_float32_matmul_precision(_INITIAL_FLOAT32_MATMUL_PRECISION)
+    torch.backends.cuda.matmul.allow_tf32 = _INITIAL_CUDA_MATMUL_ALLOW_TF32
+    torch.backends.cudnn.allow_tf32 = _INITIAL_CUDNN_ALLOW_TF32
+    torch.backends.cudnn.benchmark = _INITIAL_CUDNN_BENCHMARK
+
+
+def _check_backend_settings():
+    """Reject candidate-side changes that would make the comparison asymmetric."""
+    if torch.get_float32_matmul_precision() != _INITIAL_FLOAT32_MATMUL_PRECISION:
+        raise RewardHackDetected("float32_matmul_precision was changed during evaluation")
+    if torch.backends.cuda.matmul.allow_tf32 != _INITIAL_CUDA_MATMUL_ALLOW_TF32:
+        raise RewardHackDetected("cuda.matmul.allow_tf32 was changed during evaluation")
+    if torch.backends.cudnn.allow_tf32 != _INITIAL_CUDNN_ALLOW_TF32:
+        raise RewardHackDetected("cudnn.allow_tf32 was changed during evaluation")
+    if torch.backends.cudnn.benchmark != _INITIAL_CUDNN_BENCHMARK:
+        raise RewardHackDetected("cudnn.benchmark was changed during evaluation")
+    if torch.is_autocast_enabled():
+        raise RewardHackDetected("autocast was enabled during evaluation")
+
+
+def _harness_fingerprint():
+    """Fingerprint each harness function by BOTH its object id and its __code__
+    id. The __code__ id matters: `fn.__code__ = evil.__code__` swaps the body
+    while keeping the same function object, so an object-id-only check misses it.
+    """
+    fp = {{}}
+    for name, obj in globals().items():
+        if callable(obj):
+            code_id = id(obj.__code__) if hasattr(obj, '__code__') else None
+            fp[name] = (id(obj), code_id)
+    return fp
+
+
+def check_harness_integrity(snapshot):
+    """Verify eval-harness functions weren't patched (frame-walk / __code__ swap)."""
+    current = {{}}
+    for name, obj in globals().items():
+        if callable(obj):
+            code_id = id(obj.__code__) if hasattr(obj, '__code__') else None
+            current[name] = (id(obj), code_id)
+    for name, expected in snapshot.items():
+        if current.get(name) != expected:
+            raise RewardHackDetected(f"Eval harness function '{{name}}' was patched by solution")
+
+
+def check_thread_injection(threads_before, threads_after):
+    """Detect if user code spawned background threads."""
+    if threads_after > threads_before:
+        raise RewardHackDetected(
+            f"Thread injection detected: {{threads_after}} threads after call "
+            f"vs {{threads_before}} before"
+        )
+
+
+def check_lazy_outputs(output, path="output"):
+    """Detect lazy/proxy tensors anywhere in a structured output."""
+    if isinstance(output, torch.Tensor):
+        if type(output) is not torch.Tensor:
+            raise RewardHackDetected(
+                f"Lazy evaluation detected at {{path}}: output is "
+                f"{{type(output).__name__}}, not torch.Tensor"
+            )
+        return
+    if isinstance(output, dict):
+        for key, value in output.items():
+            check_lazy_outputs(value, f"{{path}}[{{key!r}}]")
+        return
+    if isinstance(output, (tuple, list)):
+        for index, value in enumerate(output):
+            check_lazy_outputs(value, f"{{path}}[{{index}}]")
+
+
+def load_module_from_file(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def set_seed(seed: int):
+    _MANUAL_SEED(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def to_device(value, device):
+    """Move tensors to the evaluation device, using fp32 for floating values."""
+    if not isinstance(value, torch.Tensor):
+        return value
+    dtype = PRECISION if value.dtype.is_floating_point else value.dtype
+    return value.to(device=device, dtype=dtype)
+
+
+def check_correctness(ref, sol, atol=ATOL, rtol=RTOL, path="output"):
+    """Recursively compare tensor values and the complete output structure."""
+    ref_is_tensor = isinstance(ref, torch.Tensor)
+    sol_is_tensor = isinstance(sol, torch.Tensor)
+    if ref_is_tensor != sol_is_tensor:
+        return False, (
+            f"{{path}}: type mismatch "
+            f"{{type(ref).__name__}} vs {{type(sol).__name__}}"
+        )
+    if ref_is_tensor:
+        if ref.shape != sol.shape:
+            return False, f"{{path}}: shape mismatch {{ref.shape}} vs {{sol.shape}}"
+        if not torch.allclose(ref, sol, atol=atol, rtol=rtol):
+            max_abs = (ref - sol).abs().max().item()
+            return False, f"{{path}}: max_abs_err={{max_abs:.2e}} exceeds tolerance"
+        return True, "ok"
+
+    if isinstance(ref, dict):
+        if not isinstance(sol, dict):
+            return False, (
+                f"{{path}}: type mismatch "
+                f"{{type(ref).__name__}} vs {{type(sol).__name__}}"
+            )
+        if ref.keys() != sol.keys():
+            return False, (
+                f"{{path}}: dictionary keys mismatch "
+                f"{{list(ref.keys())}} vs {{list(sol.keys())}}"
+            )
+        for key in ref:
+            ok, err = check_correctness(
+                ref[key], sol[key], atol, rtol, f"{{path}}[{{key!r}}]"
+            )
+            if not ok:
+                return False, err
+        return True, "ok"
+
+    if isinstance(ref, (tuple, list)):
+        if not isinstance(sol, (tuple, list)):
+            return False, (
+                f"{{path}}: type mismatch "
+                f"{{type(ref).__name__}} vs {{type(sol).__name__}}"
+            )
+        if len(ref) != len(sol):
+            return False, (
+                f"{{path}}: output count mismatch "
+                f"expected {{len(ref)}}, got {{len(sol)}}"
+            )
+        for index, (ref_value, sol_value) in enumerate(zip(ref, sol)):
+            ok, err = check_correctness(
+                ref_value, sol_value, atol, rtol, f"{{path}}[{{index}}]"
+            )
+            if not ok:
+                return False, err
+        return True, "ok"
+
+    scalar_types = (type(None), bool, int, float, str)
+    if isinstance(ref, scalar_types):
+        if type(ref) is not type(sol):
+            return False, (
+                f"{{path}}: type mismatch "
+                f"{{type(ref).__name__}} vs {{type(sol).__name__}}"
+            )
+        if ref != sol:
+            return False, f"{{path}}: value mismatch {{ref!r}} vs {{sol!r}}"
+        return True, "ok"
+
+    return False, f"{{path}}: unsupported output type {{type(ref).__name__}}"
+
+
+def build_inputs(get_inputs_fn, device, seed):
+    """Generate a fresh set of inputs on `device` for a given seed."""
+    set_seed(seed)
+    raw = get_inputs_fn()
+    return [to_device(value, device) for value in raw]
+
+
+def _refill_inputs_from_factory(inputs, get_inputs_fn, device, seed):
+    """Put factory-generated values into existing buffers for an anti-cache probe."""
+    set_seed(seed)
+    fresh = get_inputs_fn()
+    if len(fresh) != len(inputs):
+        raise RuntimeError("get_inputs() returned a different number of inputs")
+    for i, (value, new_value) in enumerate(zip(inputs, fresh)):
+        if isinstance(value, torch.Tensor) and isinstance(new_value, torch.Tensor):
+            expected_dtype = (
+                PRECISION if new_value.dtype.is_floating_point else new_value.dtype
+            )
+            if value.shape != new_value.shape or value.dtype != expected_dtype:
+                raise RuntimeError(f"get_inputs() changed tensor metadata for input {{i}}")
+            value.copy_(new_value)
+        elif isinstance(new_value, torch.Tensor):
+            inputs[i] = to_device(new_value, device)
+        else:
+            inputs[i] = new_value
+
+
+def clear_l2_cache(device):
+    """Match KernelBench's cold-cache CUDA-event timing protocol."""
+    dummy = torch.empty(
+        L2_CACHE_BYTES // 8,
+        dtype=torch.int64,
+        device=device,
+    )
+    dummy.fill_(42)
+    del dummy
+
+
+def time_model(model, inputs, device, warmup=WARMUP_RUNS,
+               runs=TIMING_RUNS, discard_first=DISCARD_FIRST) -> float:
+    """Return KernelBench's mean cold-cache CUDA-event runtime in milliseconds."""
+    for _ in range(warmup):
+        model(*inputs)
+        torch.cuda.synchronize(device)
+    torch.cuda.empty_cache()
+
+    times = []
+    wall_ms = 0.0
+    for trial in range(runs + discard_first):
+        torch.cuda.synchronize(device)  # drain ALL streams before timing
+        clear_l2_cache(device)
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        wall_iter_start = _time.perf_counter()
+        start.record()
+        model(*inputs)
+        end.record()
+        torch.cuda.synchronize(device)  # wait for ALL streams
+        wall_iter_ms = (_time.perf_counter() - wall_iter_start) * 1000
+        if trial >= discard_first:
+            wall_ms += wall_iter_ms
+            times.append(start.elapsed_time(end))
+
+    _check_backend_settings()
+
+    # Side-stream dispatch: CUDA events reporting far less than wall-clock means
+    # work is being launched on non-default streams. wall_ms brackets only the
+    # record→call→sync region, so for honest on-default-stream work the ratio is
+    # ~1; a large ratio means the timed region's events missed the real work.
+    event_total_ms = sum(times)
+    if event_total_ms > 1.0 and wall_ms / event_total_ms > 5.0:
+        raise RewardHackDetected(
+            f"Side-stream dispatch suspected: wall={{wall_ms:.1f}}ms "
+            f"vs events={{event_total_ms:.1f}}ms (ratio={{wall_ms/event_total_ms:.1f}}x)"
+        )
+
+    # KernelBench rounds its reported mean to three significant digits before
+    # computing effective speedup.
+    return float(f"{{sum(times) / len(times):.3g}}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Validate and benchmark a KernelBench solution.")
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="run correctness checks without the full timing benchmark",
+    )
+    args = parser.parse_args()
+
+    device = torch.device("cuda:0")
+    if not torch.cuda.is_available():
+        print("error: CUDA not available")
+        sys.exit(1)
+    torch.cuda.set_device(device)
+
+    # Load reference BEFORE solution — prevents the solution from sabotaging the
+    # reference by monkey-patching torch ops at import time.
+    ref_mod = load_module_from_file(WORKSPACE / "problem" / "reference.py", "_reference")
+    Model = ref_mod.Model
+    get_inputs = ref_mod.get_inputs
+    get_init_inputs = ref_mod.get_init_inputs
+
+    set_seed(SEED)
+    init_args = [to_device(value, device) for value in get_init_inputs()]
+    set_seed(SEED)
+    ref_model = Model(*init_args).to(device=device, dtype=PRECISION).eval()
+    _trust_reference_rng_functions()
+
+    # KernelBench times a fixed factory-generated input. Reference and solution
+    # each receive the same seeded values, while their buffers are allocated and
+    # released separately to keep peak memory bounded.
+    _restore_backend_settings()
+
+    def _build_timing_inputs():
+        return build_inputs(get_inputs, device, SEED)
+
+    if not args.check_only:
+        # Time the reference before the solution is even imported.
+        check_monkey_patch()
+        timing_inputs = _build_timing_inputs()
+        with torch.no_grad():
+            try:
+                ref_time = time_model(ref_model, timing_inputs, device)
+            except torch.cuda.OutOfMemoryError as e:
+                print("pass_rate: 0.0")
+                print(f"error: reference does not fit on this GPU (out of memory): {{e}}")
+                print("hint: this task's tensors exceed the device — use a larger-memory GPU.")
+                sys.exit(1)
+            except Exception as e:
+                print(f"error: reference timing failed: {{e}}")
+                sys.exit(1)
+        # Release the inputs before loading + timing the solution so a multi-GB
+        # task does not keep both models' timing working sets resident.
+        del timing_inputs
+        torch.cuda.empty_cache()
+        _trust_reference_rng_functions()
+
+    # Snapshot harness state (object + __code__ ids) before loading the solution.
+    # The captured torch identities (_TORCH_RANDN, _MANUAL_SEED, …) are checked
+    # separately by check_monkey_patch(). Frame-walking / __code__-swap / ctypes
+    # attempts are also rejected statically by check_solution.py before we run.
+    _harness_snapshot = _harness_fingerprint()
+    integrity_checker = check_harness_integrity
+
+    # Load the solution after reference timing. Static screening and the runtime
+    # fingerprint protect the harness; blocking inspect/ctypes in sys.modules
+    # would also block legitimate Triton and CUDA-extension dependencies.
+    sol_mod = load_module_from_file(WORKSPACE / "solution.py", "_solution")
+
+    integrity_checker(_harness_snapshot)
+
+    ModelNew = sol_mod.ModelNew
+    set_seed(SEED)
+    sol_model = ModelNew(*init_args).to(device=device, dtype=PRECISION).eval()
+    integrity_checker(_harness_snapshot)
+
+    # Restore the process defaults used for the reference in case candidate
+    # import/initialization changed a global backend setting.
+    check_monkey_patch()
+    _restore_backend_settings()
+
+    # Correctness: several trials with distinct seeds / fresh inputs. Free each
+    # trial's inputs + outputs before the next so peak memory is one trial's
+    # working set, not all trials' (KernelBench tensors can be multi-GB).
+    set_seed(SEED)
+    trial_seeds = [
+        _TORCH_RANDINT(0, 2**32 - 1, (1,)).item()
+        for _ in range(CORRECTNESS_TRIALS)
+    ]
+    for trial, tseed in enumerate(trial_seeds):
+        inputs = build_inputs(get_inputs, device, tseed)
+        with torch.no_grad():
+            try:
+                set_seed(tseed)
+                ref_out = ref_model(*inputs)
+                set_seed(tseed)
+                sol_out = sol_model(*inputs)
+            except Exception as e:
+                print("pass_rate: 0.0")
+                print(f"error: runtime error in trial {{trial}}: {{e}}")
+                sys.exit(1)
+        check_lazy_outputs(sol_out)
+        ok, err = check_correctness(ref_out, sol_out)
+        del inputs, ref_out, sol_out
+        torch.cuda.empty_cache()
+        if not ok:
+            print("pass_rate: 0.0")
+            print(f"error: correctness failed on trial {{trial}}: {{err}}")
+            sys.exit(1)
+
+    integrity_checker(_harness_snapshot)
+    check_monkey_patch()
+    _check_backend_settings()
+    if args.check_only:
+        print("correctness: ok")
+        sys.exit(0)
+
+    # Timing (with anti-cheat).
+    try:
+        check_monkey_patch()
+        timing_inputs = _build_timing_inputs()
+        threads_before = threading.active_count()
+        with torch.no_grad():
+            sol_time = time_model(sol_model, timing_inputs, device)
+        check_monkey_patch()
+        integrity_checker(_harness_snapshot)
+
+        # Post-timing correctness: defeats phase-detection (correct during checks,
+        # garbage during timing).
+        post_inputs = build_inputs(get_inputs, device, SEED + 90000)
+        with torch.no_grad():
+            set_seed(SEED + 90000)
+            ref_post = ref_model(*post_inputs)
+            set_seed(SEED + 90000)
+            sol_post = sol_model(*post_inputs)
+        check_lazy_outputs(sol_post)
+        ok, err = check_correctness(ref_post, sol_post)
+        if not ok:
+            raise RewardHackDetected(f"Post-timing correctness failure: {{err}}")
+
+        # Refill the exact buffers used for timing with new factory values. This
+        # catches data_ptr-keyed output caching without changing any timed call.
+        _refill_inputs_from_factory(
+            timing_inputs, get_inputs, device, SEED + 91000
+        )
+        with torch.no_grad():
+            set_seed(SEED + 91000)
+            ref_probe = ref_model(*timing_inputs)
+            set_seed(SEED + 91000)
+            sol_probe = sol_model(*timing_inputs)
+        check_lazy_outputs(sol_probe)
+        ok, err = check_correctness(ref_probe, sol_probe)
+        if not ok:
+            raise RewardHackDetected(f"Post-timing cache probe failed: {{err}}")
+
+        threads_after = threading.active_count()
+        check_thread_injection(threads_before, threads_after)
+        check_monkey_patch()
+        _check_backend_settings()
+        integrity_checker(_harness_snapshot)
+        del timing_inputs, post_inputs, ref_post, sol_post, ref_probe, sol_probe
+        torch.cuda.empty_cache()
+    except RewardHackDetected as e:
+        print("pass_rate: 0.0")
+        print(f"error: REWARD HACK DETECTED: {{e}}")
+        sys.exit(1)
+    except Exception as e:
+        print("pass_rate: 0.0")
+        print(f"error: timing failed: {{e}}")
+        sys.exit(1)
+
+    speedup = ref_time / sol_time if sol_time > 0 else 0.0
+
+    print("pass_rate: 1.0")
+    print(f"mean_speedup: {{speedup:.4f}}")
+    print(f"ref_time_ms: {{ref_time:.4f}}")
+    print(f"sol_time_ms: {{sol_time:.4f}}")
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

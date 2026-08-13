@@ -40,6 +40,10 @@ from autohelix.state import (
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+class _AgentRunFailed(Exception):
+    """Raised when an agent process reports failure before validation."""
+
+
 class _IterationSpinner:
     """A Rich renderable showing iteration progress across all phases.
 
@@ -752,6 +756,11 @@ class Harness:
 
             if not agent_result.success and self.verbose:
                 self._status("Agent did not complete successfully")
+            if not agent_result.success:
+                detail = agent_result.error or (
+                    f"agent exited with status {agent_result.exit_code}"
+                )
+                raise _AgentRunFailed(detail)
 
             # Resolve effective editable scope and revert out-of-scope changes
             effective_editable = self.sandbox.resolve_editable(
@@ -908,6 +917,15 @@ class Harness:
                     usage=agent_usage,
                 )
 
+        except _AgentRunFailed as e:
+            self._status(f"Agent failed: {e}")
+            result = IterationResult(
+                iteration=iteration,
+                accepted=False,
+                metrics={},
+                reason=f"agent failed: {e}",
+                usage=agent_usage,
+            )
         except Exception as e:
             self._status(f"Error: {e}")
             traceback.print_exc()
@@ -959,6 +977,14 @@ class Harness:
                 self.history.save_stdout(0, obs.output, index=i if use_index else None)
             for cap_path in mc.capture:
                 self.history.save_capture(0, self.project_path / cap_path)
+
+        missing_metrics = set(self.config.metric_directions()) - set(metrics)
+        if missing_metrics:
+            names = ", ".join(sorted(missing_metrics))
+            self.log.info(f"baseline FAILED — missing metrics: {names}")
+            raise RuntimeError(
+                f"Baseline benchmark did not produce required metric(s): {names}"
+            )
 
         if metrics:
             metric_str = ", ".join(f"{name}: {value:g}" for name, value in metrics.items())
