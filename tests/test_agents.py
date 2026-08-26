@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind
 from autohelix.agents.claudecode import ClaudeCodeAgent
 from autohelix.agents.codex import CodexAgent
@@ -425,6 +427,14 @@ class TestCodexHandleLine:
         events = _collect_events(self._agent(), "garbage")
         assert events[0].kind == AgentEventKind.RAW
 
+    @pytest.mark.parametrize("value", ["quoted text", [1, 2], 3, True, None])
+    def test_non_object_json_emits_raw(self, value):
+        line = json.dumps(value)
+        events = _collect_events(self._agent(), line)
+        assert len(events) == 1
+        assert events[0].kind == AgentEventKind.RAW
+        assert events[0].text == line
+
     def test_thread_started(self):
         line = json.dumps({"type": "thread.started"})
         events = _collect_events(self._agent(), line)
@@ -450,6 +460,17 @@ class TestCodexHandleLine:
         events = _collect_events(self._agent(), line)
         assert events[0].kind == AgentEventKind.RESULT
         assert events[0].text == "turn.completed"
+
+    def test_turn_failed_captures_error(self):
+        agent = self._agent()
+        line = json.dumps({
+            "type": "turn.failed",
+            "error": {"message": "credentials expired"},
+        })
+        events = _collect_events(agent, line)
+        assert events[0].kind == AgentEventKind.ERROR
+        assert events[0].text == "credentials expired"
+        assert agent._turn_error == "credentials expired"
 
     def test_item_started_command_execution(self):
         line = json.dumps({
@@ -502,6 +523,38 @@ class TestCodexHandleLine:
         line = json.dumps({"type": "something.new"})
         events = _collect_events(self._agent(), line)
         assert events[0].kind == AgentEventKind.STATUS
+
+
+class TestCodexRunResult:
+    def test_turn_failed_fails_even_when_process_exits_zero(
+        self, tmp_path, monkeypatch
+    ):
+        from autohelix.agents.runner import ProcessRunResult
+
+        agent = CodexAgent(config=AgentConfig(type="codex"))
+
+        def fake_run_process(**kwargs):
+            kwargs["line_callback"](json.dumps({
+                "type": "turn.failed",
+                "error": {"message": "credentials expired"},
+            }))
+            return ProcessRunResult(exit_code=0)
+
+        monkeypatch.setattr(
+            "autohelix.agents.codex.run_process",
+            fake_run_process,
+        )
+        result = agent.run(
+            worktree_path=tmp_path,
+            prompt="test",
+            iteration=1,
+            log_path=tmp_path / "agent.log",
+            event_callback=lambda event: None,
+        )
+
+        assert not result.success
+        assert result.exit_code == 0
+        assert result.error == "credentials expired"
 
 
 class TestOpenCodeHandleLine:

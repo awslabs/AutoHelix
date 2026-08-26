@@ -24,6 +24,7 @@ class CodexAgent:
         self.config = config
         self.heartbeat_seconds = heartbeat_seconds
         self._usage: dict[str, object] = {}
+        self._turn_error: str | None = None
 
     def _command_path(self) -> str:
         return self.config.command or os.environ.get("AUTOHELIX_CODEX_CMD") or "codex"
@@ -119,9 +120,28 @@ class CodexAgent:
             self._emit(event_callback, AgentEventKind.RAW, line)
             return
 
+        if not isinstance(payload, dict):
+            self._emit(event_callback, AgentEventKind.RAW, line)
+            return
+
         event_type = payload.get("type")
         if event_type in {"thread.started", "turn.started"}:
             self._emit(event_callback, AgentEventKind.STATUS, event_type)
+            return
+        if event_type == "turn.failed":
+            error = payload.get("error")
+            if isinstance(error, dict):
+                detail = str(
+                    error.get("message")
+                    or error.get("type")
+                    or json.dumps(error, sort_keys=True)
+                )
+            elif error:
+                detail = str(error)
+            else:
+                detail = "Codex turn failed"
+            self._turn_error = detail
+            self._emit(event_callback, AgentEventKind.ERROR, detail)
             return
         if event_type == "turn.completed":
             usage = payload.get("usage", {})
@@ -175,6 +195,7 @@ class CodexAgent:
         project_path: Path | None = None,
     ) -> AgentRunResult:
         self._usage = {}
+        self._turn_error = None
 
         # Build env with remapped PYTHONPATH for worktree
         env = build_worktree_env(project_path, worktree_path) if project_path else None
@@ -204,4 +225,16 @@ class CodexAgent:
                     text=f"Agent {format_timeout_seconds(self.config.timeout_seconds)}",
                 )
             )
-        return AgentRunResult(success=result.exit_code == 0, exit_code=result.exit_code, usage=self._usage)
+
+        error = self._turn_error
+        if result.timed_out:
+            error = format_timeout_seconds(self.config.timeout_seconds)
+        elif result.exit_code != 0 and error is None:
+            error = f"Codex exited with status {result.exit_code}"
+
+        return AgentRunResult(
+            success=result.exit_code == 0 and error is None,
+            exit_code=result.exit_code,
+            error=error,
+            usage=self._usage,
+        )

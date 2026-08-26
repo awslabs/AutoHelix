@@ -10,7 +10,7 @@ from pathlib import Path
 import click
 
 from autohelix.config import load_config
-from autohelix.harness import Harness
+from autohelix.harness import AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.state import (
     archive_state,
@@ -166,7 +166,10 @@ def run(path: str, iterations: int | None, verbose: bool, config_file: str | Non
         click.echo(f"Error: {e}")
         click.echo("Run 'autohelix init' first, then edit autohelix.yaml.")
         raise SystemExit(1)
-    harness.run(max_iterations=iterations)
+    try:
+        harness.run(max_iterations=iterations)
+    except AutoHelixRunError as e:
+        raise click.ClickException(str(e)) from e
 
 
 @main.command()

@@ -60,4 +60,5 @@ Record what you tried, what worked or failed, and what to try next.
 Notes persist even if your changes are rejected, so they are the only way to pass knowledge to future iterations.
 
 Make changes to improve toward the goal.
+Do not create git commits; AutoHelix commits accepted changes for you.
 When done, write a one-line summary of what you changed and why to {{ worktree }}/.autohelix/commit_summary.txt

@@ -75,6 +75,7 @@ class Worktree:
     branch: str
     iteration: int
     working_dir: Path  # Project directory within worktree (may differ if subdirectory)
+    base_commit: str  # Commit the iteration branched from
 
 
 class Sandbox:
@@ -253,6 +254,7 @@ class Sandbox:
 
         branch = f"{self.branch_prefix}-iter-{iteration}"
         worktree_path = self.worktrees_dir / f"iter-{iteration}"
+        base_commit = self._run_git_checked("rev-parse", "HEAD").stdout.strip()
 
         # Clean up if exists from previous failed run
         if worktree_path.exists():
@@ -267,7 +269,37 @@ class Sandbox:
         # Compute working directory within worktree
         working_dir = worktree_path / self.repo_prefix if self.repo_prefix else worktree_path
 
-        return Worktree(path=worktree_path, branch=branch, iteration=iteration, working_dir=working_dir)
+        return Worktree(
+            path=worktree_path,
+            branch=branch,
+            iteration=iteration,
+            working_dir=working_dir,
+            base_commit=base_commit,
+        )
+
+    def uncommit_agent_changes(self, worktree: Worktree) -> int:
+        """Turn agent-created commits back into ordinary worktree changes.
+
+        AutoHelix must enforce scope and run validation against the complete
+        candidate diff before creating its own iteration commit. An agent that
+        commits inside the worktree would otherwise hide those changes from
+        `git diff HEAD` and could have its accepted work discarded as a no-op.
+        """
+        result = self._run_git_checked(
+            "rev-list",
+            "--count",
+            f"{worktree.base_commit}..HEAD",
+            cwd=worktree.working_dir,
+        )
+        commit_count = int(result.stdout.strip())
+        if commit_count:
+            self._run_git_checked(
+                "reset",
+                "--mixed",
+                worktree.base_commit,
+                cwd=worktree.working_dir,
+            )
+        return commit_count
 
     def remove_worktree(self, worktree_path: Path) -> None:
         """Remove a worktree and its branch."""

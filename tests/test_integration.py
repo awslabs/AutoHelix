@@ -14,8 +14,8 @@ import subprocess
 import pytest
 
 from autohelix.agents import AgentRunResult
-from autohelix.config import Config, load_config
-from autohelix.harness import Harness
+from autohelix.config import Config, ReviewerConfig, load_config
+from autohelix.harness import AutoHelixRunError, Harness
 from autohelix.history import History
 
 
@@ -91,10 +91,17 @@ class TestMockAgentIntegration:
             assert r.iteration == i
             assert r.accepted is True
 
-    def test_agent_failure_rejects_without_validation(
+    def test_agent_failure_stops_without_validation_or_history(
         self, integration_project, monkeypatch
     ):
         harness = Harness(integration_project, verbose=False)
+        head_before = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=integration_project,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
         monkeypatch.setattr(
             harness,
             "run_agent",
@@ -105,12 +112,62 @@ class TestMockAgentIntegration:
             ),
         )
 
-        harness.run(max_iterations=1)
+        with pytest.raises(
+            AutoHelixRunError,
+            match="Iteration 1 agent failed: API Error: invalid model",
+        ):
+            harness.run(max_iterations=1)
 
-        result = History(integration_project).load()[-1]
-        assert not result.accepted
-        assert result.metrics == {}
-        assert result.reason == "agent failed: API Error: invalid model"
+        results = History(integration_project).load()
+        assert [result.iteration for result in results] == [0]
+        assert subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=integration_project,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip() == head_before
+
+    def test_iteration_reviewer_failure_does_not_merge_or_advance(
+        self, integration_project, monkeypatch
+    ):
+        harness = Harness(integration_project, verbose=False)
+        harness.config.reviewer = ReviewerConfig()
+        head_before = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=integration_project,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: False)
+
+        with pytest.raises(
+            AutoHelixRunError,
+            match="Iteration 1 reviewer failed",
+        ):
+            harness.run_iteration(1)
+
+        assert History(integration_project).load() == []
+        assert subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=integration_project,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip() == head_before
+
+    def test_baseline_reviewer_failure_does_not_create_history(
+        self, integration_project, monkeypatch
+    ):
+        harness = Harness(integration_project, verbose=False)
+        harness.config.reviewer = ReviewerConfig()
+        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: False)
+
+        with pytest.raises(AutoHelixRunError, match="Baseline reviewer failed"):
+            harness.run(max_iterations=1)
+
+        assert History(integration_project).load() == []
 
     def test_missing_baseline_metric_aborts_before_agent(self, integration_project):
         (integration_project / "autohelix.yaml").write_text("""
@@ -288,8 +345,10 @@ scope:
         # frozen_file.py should be unchanged
         assert (integration_project / "frozen_file.py").read_text() == "original\n"
 
-    def test_agent_failure_rejects(self, integration_project):
-        """If the agent fails, the iteration should be rejected."""
+    def test_agent_failure_retries_same_iteration_after_recovery(
+        self, integration_project
+    ):
+        """Infrastructure failure should not consume the iteration number."""
         (integration_project / "autohelix.yaml").write_text("""
 goal: Test agent failure
 
@@ -305,14 +364,33 @@ constraints:
         subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=1)
+        with pytest.raises(AutoHelixRunError, match="Iteration 1 agent failed"):
+            harness.run(max_iterations=1)
 
         history = History(integration_project)
-        results = history.load()
+        assert [result.iteration for result in history.load()] == [0]
 
-        # Even with passing constraints, agent failure means no changes to test
-        # The iteration completes but with no code changes
-        assert len(results) == 2
+        config_path = integration_project / "autohelix.yaml"
+        config_path.write_text(config_path.read_text().replace(
+            "    should_fail: true",
+            '    change_file: hello.py\n    change_content: "# recovered"',
+        ))
+        subprocess.run(
+            ["git", "add", "autohelix.yaml"],
+            cwd=integration_project,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "Recover agent"],
+            cwd=integration_project,
+            check=True,
+            capture_output=True,
+        )
+
+        Harness(integration_project, verbose=False).run(max_iterations=1)
+        results = history.load()
+        assert [result.iteration for result in results] == [0, 1]
+        assert results[-1].accepted
 
 
 @pytest.mark.slow

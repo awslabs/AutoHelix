@@ -129,6 +129,7 @@ def run_constraint(
     if on_progress:
         on_progress("constraint", command, 0.0)
 
+    proc: subprocess.Popen | None = None
     try:
         proc = subprocess.Popen(
             command,
@@ -166,6 +167,10 @@ def run_constraint(
             output=stdout + stderr,
             return_code=proc.returncode,
         )
+    except KeyboardInterrupt:
+        if proc is not None:
+            _kill_process_group(proc)
+        raise
     except Exception as e:
         return ConstraintResult(
             command=command,
@@ -276,6 +281,7 @@ def run_observable(
     if on_progress:
         on_progress("observable", mc.command, 0.0)
 
+    proc: subprocess.Popen | None = None
     try:
         proc = subprocess.Popen(
             mc.command,
@@ -331,6 +337,10 @@ def run_observable(
             output=output,
             errors=errors,
         )
+    except KeyboardInterrupt:
+        if proc is not None:
+            _kill_process_group(proc)
+        raise
     except Exception as e:
         errors = {name: str(e) for name in mc.values}
         return ObservableResult(

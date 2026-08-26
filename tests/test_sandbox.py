@@ -193,6 +193,83 @@ class TestRemoveWorktree:
 
 
 class TestMergeWorktree:
+    def test_agent_commit_is_reopened_before_scope_and_merge(self, git_project):
+        sandbox = Sandbox(git_project)
+        wt = sandbox.create_worktree(1)
+
+        (wt.working_dir / "hello.py").write_text("print('agent commit')\n")
+        subprocess.run(["git", "add", "hello.py"], cwd=wt.working_dir, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "agent commits early"],
+            cwd=wt.working_dir,
+            check=True,
+            capture_output=True,
+        )
+
+        assert sandbox.uncommit_agent_changes(wt) == 1
+        assert (
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=wt.working_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            == wt.base_commit
+        )
+        assert "hello.py" in subprocess.run(
+            ["git", "status", "--short"],
+            cwd=wt.working_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+        commit = sandbox.merge_worktree(
+            wt,
+            editable=["hello.py"],
+            message="AutoHelix iteration 1",
+        )
+        assert commit is not None
+        assert (git_project / "hello.py").read_text() == "print('agent commit')\n"
+        assert "AutoHelix iteration 1" in subprocess.run(
+            ["git", "log", "-1", "--format=%B"],
+            cwd=git_project,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    def test_committed_out_of_scope_change_is_reverted(self, git_project):
+        sandbox = Sandbox(git_project)
+        (git_project / "other.py").write_text("original\n")
+        subprocess.run(["git", "add", "other.py"], cwd=git_project, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add other"],
+            cwd=git_project,
+            check=True,
+            capture_output=True,
+        )
+        wt = sandbox.create_worktree(1)
+
+        (wt.working_dir / "hello.py").write_text("print('allowed')\n")
+        (wt.working_dir / "other.py").write_text("out of scope\n")
+        subprocess.run(["git", "add", "-A"], cwd=wt.working_dir, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "agent commits everything"],
+            cwd=wt.working_dir,
+            check=True,
+            capture_output=True,
+        )
+
+        assert sandbox.uncommit_agent_changes(wt) == 1
+        assert sandbox.revert_out_of_scope(wt, ["hello.py"]) == ["other.py"]
+        commit = sandbox.merge_worktree(wt, editable=["hello.py"])
+
+        assert commit is not None
+        assert (git_project / "hello.py").read_text() == "print('allowed')\n"
+        assert (git_project / "other.py").read_text() == "original\n"
+
     def test_merge_with_changes(self, git_project):
         sandbox = Sandbox(git_project)
         wt = sandbox.create_worktree(1)

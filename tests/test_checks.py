@@ -1,8 +1,15 @@
 """Tests for autohelix.checks module."""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from autohelix.checks import parse_metric_output, parse_structured_metrics, run_observable
+import pytest
+
+from autohelix.checks import (
+    parse_metric_output,
+    parse_structured_metrics,
+    run_constraint,
+    run_observable,
+)
 from autohelix.config import ObservableCommand
 
 
@@ -132,3 +139,37 @@ class TestRunObservable:
         result = run_observable(obs, cwd=MagicMock())
         assert result.values == {"throughput": 1500.0}
         assert "latency" in result.errors
+
+
+class TestInterruptCleanup:
+    @patch("autohelix.checks._kill_process_group")
+    @patch("autohelix.checks.subprocess.Popen")
+    def test_constraint_interrupt_kills_process_group(
+        self, mock_popen, mock_kill
+    ):
+        proc = MagicMock()
+        proc.communicate.side_effect = KeyboardInterrupt
+        mock_popen.return_value = proc
+
+        with pytest.raises(KeyboardInterrupt):
+            run_constraint("sleep 60", cwd=MagicMock())
+
+        mock_kill.assert_called_once_with(proc)
+
+    @patch("autohelix.checks._kill_process_group")
+    @patch("autohelix.checks.subprocess.Popen")
+    def test_observable_interrupt_kills_process_group(
+        self, mock_popen, mock_kill
+    ):
+        proc = MagicMock()
+        proc.communicate.side_effect = KeyboardInterrupt
+        mock_popen.return_value = proc
+        observable = ObservableCommand(
+            command="sleep 60",
+            values={"score": "higher"},
+        )
+
+        with pytest.raises(KeyboardInterrupt):
+            run_observable(observable, cwd=MagicMock())
+
+        mock_kill.assert_called_once_with(proc)
