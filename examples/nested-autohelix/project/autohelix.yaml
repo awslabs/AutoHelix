@@ -1,0 +1,33 @@
+goal: |
+  Improve inner-template.yaml and rubric.md so fresh, budget-limited AutoHelix
+  runs produce fast valid implementations across the development task family
+  at low inner-agent cost. Use results/report.json to compare per-task
+  trajectories, accepted diffs, notes, failures, token usage, and wall time.
+  Keep the template task-agnostic: do not include task names, task-specific
+  code, benchmark answers, or complete solutions.
+  Cost reductions should come from making the inner loop more efficient, not
+  from skipping meaningful optimization work. Do not finish with unmeasured
+  template changes; if there is not enough time to evaluate final edits,
+  restore the best previously measured template.
+
+constraints:
+  - python evaluate.py --check
+  - pytest -q
+
+metrics:
+  - command: python evaluate.py
+    timeout: 1200
+    capture:
+      - results/report.json
+    values:
+      speedup: higher
+      cost: lower
+
+scope:
+  editable:
+    - inner-template.yaml
+    - rubric.md
+
+budget:
+  iterations: 3
+  iteration_time: 10m

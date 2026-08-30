@@ -19,6 +19,36 @@ for each iteration:
    11. merge or discard       — accept valid changes, reject failures
 ```
 
+## Designing Your Own Loop
+
+A useful loop answers five questions:
+
+1. **What should improve?** Define the goal and how progress will be observed.
+2. **What may the agent change?** Define the editable surface.
+3. **What must remain true?** Encode non-negotiable requirements as constraints.
+4. **What should carry forward?** Decide which metrics, artifacts, reviews,
+   results, and lessons later iterations need.
+5. **When should the loop stop?** Set an iteration, time, or cost budget, or
+   another clear completion condition.
+
+### Tips
+
+- Keep checks and evaluation criteria outside the editable scope.
+- After `autohelix init`, inspect `.autohelix/prompt.md` to see exactly what the
+  agent will receive. You can edit it before running to customize the agent's
+  instructions. See [Prompt Template](#prompt-template).
+- AutoHelix already retains iteration evidence and agent memory. When findings
+  should also be user-facing and revisable, keep them in an editable,
+  version-controlled file. The [research example](../examples/research/) uses
+  `REPORT.md` for this purpose.
+- The editable content and evaluated result need not be the same. In the
+  [post-training example](../examples/posttrain/), the agent writes training
+  code while the evaluator scores the resulting model. AutoHelix cannot
+  restore artifacts outside git when an iteration is rejected.
+
+See the [examples](../examples/) for concrete loops that can be adapted or
+combined.
+
 ## Git Worktrees
 
 Each iteration runs in a separate [git worktree](https://git-scm.com/docs/git-worktree). This means:

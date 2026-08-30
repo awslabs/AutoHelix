@@ -26,6 +26,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 # environment, agent-written code, etc.) — they aren't copy-and-run, so setup
 # points at their README instead of scaffolding.
 REFERENCE_EXAMPLES = {"posttrain"}
+CUSTOM_SETUP_EXAMPLES = {"nested-autohelix"}
 
 
 def git_init_repo(directory: Path) -> None:
@@ -61,7 +62,7 @@ def list_bundled() -> list[str]:
     return sorted(
         d.name for d in SCRIPT_DIR.iterdir()
         if d.is_dir()
-        and d.name not in REFERENCE_EXAMPLES
+        and d.name not in REFERENCE_EXAMPLES | CUSTOM_SETUP_EXAMPLES
         and (d / "autohelix.yaml").exists()
     )
 
@@ -105,22 +106,23 @@ def setup_bundled(name: str, output_dir: Path) -> bool:
 
 
 def print_list() -> None:
-    bundled = list_bundled()
-    if bundled:
-        print("Bundled examples (copy-and-run):")
-        for name in bundled:
-            print(f"  {name}")
-        print()
+    bundled = set(list_bundled())
+    reference = set(list_reference())
+    entries = {
+        name: (
+            "manual setup - see README"
+            if name in reference
+            else "copy-and-run"
+        )
+        for name in bundled | reference
+    }
+    entries["nested-autohelix"] = "fetch AlgoTune suite - see README"
+    entries["algotune"] = "fetch tasks with examples/algotune/setup.py"
 
-    reference = list_reference()
-    if reference:
-        print("Reference examples (manual setup — see each dir's README):")
-        for name in reference:
-            print(f"  {name}")
-        print()
-
-    print("AlgoTune tasks (fetch a task from an upstream suite):")
-    print("  examples/algotune/setup.py <task>")
+    width = max(len(name) for name in entries)
+    print("Examples:")
+    for name, setup in sorted(entries.items()):
+        print(f"  {name:<{width}}  {setup}")
 
 
 def main() -> int:
@@ -156,6 +158,12 @@ AlgoTune tasks live under examples/algotune/ with their own setup.py:
     if name in REFERENCE_EXAMPLES:
         readme = SCRIPT_DIR / name / "README.md"
         print(f"'{name}' is a reference example that needs manual setup.")
+        print(f"See {readme} for instructions.")
+        return 1
+
+    if name in CUSTOM_SETUP_EXAMPLES:
+        readme = SCRIPT_DIR / name / "README.md"
+        print(f"'{name}' has a dedicated task-suite setup.")
         print(f"See {readme} for instructions.")
         return 1
 

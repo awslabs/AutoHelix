@@ -1,0 +1,32 @@
+goal: |
+  Optimize the LLM workflow in workflow.py.
+  Use captured results/report.json execution traces to guide improvements.
+  Keep changes general; do not hardcode benchmark cases or expected answers.
+
+constraints:
+  - pytest -q
+  - python benchmark.py --mock
+
+metrics:
+  - command: python benchmark.py
+    timeout: 900
+    capture:
+      - results/report.json
+    values:
+      task_success_rate: higher
+      avg_tokens: lower
+
+acceptance:
+  metric_gates:
+    - metric: task_success_rate
+      max_regression_pct: 20
+
+scope:
+  editable:
+    - workflow.py
+    - prompt.md
+    - SKILL.md
+
+budget:
+  iterations: 2
+  iteration_time: 10m

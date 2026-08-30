@@ -1,1 +1,0 @@
-Baseline — the mock agent appends one line per iteration.

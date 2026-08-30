@@ -12,5 +12,6 @@ See the [main README](../README.md) for an overview, quick start, and the config
 - **[Configuration](config.md)** — the full `autohelix.yaml` surface
 - **[CLI Reference](cli.md)** — `init`, `run`, `clear`, `watch`, `report`
 - **[Docker Sandbox](docker.md)** — run the agent with filesystem isolation
-- **[Concepts](concepts.md)** — how iteration, isolation, and verified descent work
+- **[Concepts](concepts.md)** — how iteration, isolation, and verified descent
+  work, and how to design a loop
 - **[ML Experiments](ml-experiments.md)** — patterns for training/eval loops (post-training, benchmarks)

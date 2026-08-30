@@ -1,0 +1,26 @@
+goal: |
+  Advance the research question in PROJECT.md by one defensible step.
+  Update the experiment, results, and report so they agree with the evidence.
+  Preserve useful negative findings and keep the quick experiment reproducible.
+
+constraints:
+  - python validate.py
+
+reviewer:
+  prompt: |
+    Review PROJECT.md, experiment.py, results/latest.json, and REPORT.md.
+    Assess experimental validity, whether claims match evidence, treatment of
+    uncertainty, and preservation of negative findings. Surface strengths,
+    weaknesses, open questions, and possible follow-up directions without
+    prescribing what the researcher must do next. Review the supplied artifacts
+    only; do not run experiments or modify files.
+
+scope:
+  editable:
+    - experiment.py
+    - results/
+    - REPORT.md
+
+budget:
+  iterations: 4
+  iteration_time: 8m

@@ -30,7 +30,9 @@ uv pip install -e ".[dev]"
 - `src/autohelix/display.py` - live Rich display
 - `src/autohelix/prompt_template.py` - agent prompt rendering
 - `tests/` - test suite (pytest)
-- `examples/` - example projects (sorting, ml-recipe, writing, bin-packing, budget-demo, algotune, posttrain)
+- `examples/` - example projects (sorting, ml-recipe, writing,
+  task-queue, research, workflow-optimization, algotune, posttrain,
+  nested-autohelix)
 - `scripts/run_dev_test.sh` - quick real-agent test against a bundled example (supports `--parallel N`)
 - `docs/` - user-facing documentation (plain markdown)
 

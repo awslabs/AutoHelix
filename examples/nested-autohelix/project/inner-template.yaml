@@ -1,0 +1,10 @@
+iterations: 2
+goal: |
+  {{TASK_GOAL}}
+
+  Work deliberately within the fixed total budget. Preserve a valid incumbent,
+  use the supplied checks and measurements, and make the highest-confidence
+  improvement available from the evidence.
+
+  Before ending an iteration, follow this handoff rubric:
+  {{RUBRIC}}

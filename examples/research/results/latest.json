@@ -1,0 +1,88 @@
+{
+  "experiments": [
+    {
+      "bootstrap_replicates": 150,
+      "coverage": 0.916667,
+      "coverage_mc_se": 0.02523,
+      "distribution": "normal",
+      "mean_width": 1.173072,
+      "method": "normal_theory",
+      "sample_size": 10,
+      "trials": 120
+    },
+    {
+      "bootstrap_replicates": 150,
+      "coverage": 0.875,
+      "coverage_mc_se": 0.03019,
+      "distribution": "normal",
+      "mean_width": 1.069364,
+      "method": "percentile_bootstrap",
+      "sample_size": 10,
+      "trials": 120
+    },
+    {
+      "bootstrap_replicates": 150,
+      "coverage": 0.95,
+      "coverage_mc_se": 0.019896,
+      "distribution": "normal",
+      "mean_width": 0.697889,
+      "method": "normal_theory",
+      "sample_size": 30,
+      "trials": 120
+    },
+    {
+      "bootstrap_replicates": 150,
+      "coverage": 0.933333,
+      "coverage_mc_se": 0.022771,
+      "distribution": "normal",
+      "mean_width": 0.664682,
+      "method": "percentile_bootstrap",
+      "sample_size": 30,
+      "trials": 120
+    },
+    {
+      "bootstrap_replicates": 150,
+      "coverage": 0.85,
+      "coverage_mc_se": 0.032596,
+      "distribution": "exponential",
+      "mean_width": 1.101935,
+      "method": "normal_theory",
+      "sample_size": 10,
+      "trials": 120
+    },
+    {
+      "bootstrap_replicates": 150,
+      "coverage": 0.825,
+      "coverage_mc_se": 0.034686,
+      "distribution": "exponential",
+      "mean_width": 1.002718,
+      "method": "percentile_bootstrap",
+      "sample_size": 10,
+      "trials": 120
+    },
+    {
+      "bootstrap_replicates": 150,
+      "coverage": 0.941667,
+      "coverage_mc_se": 0.021395,
+      "distribution": "exponential",
+      "mean_width": 0.696105,
+      "method": "normal_theory",
+      "sample_size": 30,
+      "trials": 120
+    },
+    {
+      "bootstrap_replicates": 150,
+      "coverage": 0.966667,
+      "coverage_mc_se": 0.016387,
+      "distribution": "exponential",
+      "mean_width": 0.662745,
+      "method": "percentile_bootstrap",
+      "sample_size": 30,
+      "trials": 120
+    }
+  ],
+  "mode": "quick",
+  "question": "How do common 95% confidence intervals for a mean behave at small sample sizes under skew?",
+  "schema_version": 1,
+  "seed": 20250814
+}

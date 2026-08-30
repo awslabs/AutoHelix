@@ -1,0 +1,14 @@
+goal: |
+  Work on the first unchecked item in TASKS.md.
+  Keep the code tested and check the item off only when it is complete.
+
+constraints:
+  - pytest -q
+
+scope:
+  editable:
+    - TASKS.md
+    - release_notes/
+
+budget:
+  iterations: 3

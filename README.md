@@ -95,8 +95,10 @@ below. Other commands are described in the [CLI reference](docs/cli.md).
 
 ## Examples
 
-The [`examples/`](examples/) directory has ready-to-run tasks across different domains, from
-a 2-minute [sorting function](examples/sorting/) example to algorithm optimization and model training. To list what's available:
+The [`examples/`](examples/) directory includes concrete tasks ranging from
+reviewer-driven refinement to workflow and algorithm optimization. See
+[Designing Your Own Loop](docs/concepts.md#designing-your-own-loop) for
+adaptation guidance. To list what's available:
 
 ```bash
 python examples/setup_example.py --list
@@ -126,6 +128,13 @@ learning (GRPO) — reaching **93%** accuracy over 8 iterations on one H200. See
   <img alt="GSM8K accuracy climbing from 41% to 93% over AutoHelix iterations"
        src="assets/progression_posttrain_gsm8k.png" width="640">
 </p>
+
+**LLM workflow optimization.** In
+[`examples/workflow-optimization`](examples/workflow-optimization), AutoHelix
+acts as an outer loop around a separate model-powered system. It can tune the
+inner workflow's prompt, skill instructions, context selection, settings, and
+orchestration while a frozen evaluator tracks correctness, safety, model calls,
+tokens, latency, and complete execution traces.
 
 **In the wild.** Beyond the bundled examples, we've used AutoHelix on real projects. In
 [Hybrid Model Factory](https://github.com/awslabs/hybrid-model-factory) — an open-source
