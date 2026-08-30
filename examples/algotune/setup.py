@@ -225,6 +225,7 @@ def setup(task_name: str, output_dir: Path, problem_size: int | None = None) -> 
         "problem_size": problem_size,
         "num_problems": defaults["num_problems"],
         "num_runs": defaults["num_runs"],
+        "num_check": defaults["num_check"],
     }
 
     for tmpl_file in TEMPLATES_DIR.iterdir():

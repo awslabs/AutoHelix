@@ -9,3 +9,4 @@ defaults:
   problem_size: 1000
   num_problems: 20
   num_runs: 5
+  num_check: 50
