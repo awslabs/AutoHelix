@@ -18,6 +18,10 @@ The optimization surface is intentionally compact:
 - `prompt.md` - the task prompt; and
 - `SKILL.md` - reusable instructions supplied to the inner model.
 
+Here, `prompt.md` and `SKILL.md` belong to the inner workflow. The outer
+optimization agent still receives AutoHelix's prompt from
+`.autohelix/prompt.md`.
+
 `benchmark.py` freezes the workload, policies, simulator, provider adapter, and
 evaluator. The baseline router deliberately omits a broadly applicable policy,
 leaving a general improvement for AutoHelix to discover from failed-case

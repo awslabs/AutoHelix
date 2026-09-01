@@ -15,6 +15,8 @@ autohelix run -n 1
 the result schema and reruns the quick experiment to verify reproducibility.
 The reviewer critiques the evidence and may suggest possible follow-ups, but
 does not choose the next action or decide whether an iteration merges.
+This example intentionally has no numeric metric: the constraint enforces
+reproducibility, while reviewer feedback guides later iterations.
 
 Start with one iteration so you can inspect the experiment, report, and review
 before extending the run.

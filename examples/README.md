@@ -17,6 +17,7 @@ guidance.
 |---------|------------------|---------------------------|
 | [**sorting**](sorting/) | Sorting speed | Sorting implementation |
 | [**AlgoTune**](algotune/setup.py) | Solver speed | Solver implementation |
+| [**KernelBench**](kernelbench/setup.py) | GPU kernel speed | PyTorch implementation |
 | [**ml-recipe**](ml-recipe/) | Training recipe | Preprocessing, model choice, and hyperparameters |
 | [**posttrain**](posttrain/) | Trained model | Training code and generated model weights |
 | [**writing**](writing/) | Clarity and quality | Written article |

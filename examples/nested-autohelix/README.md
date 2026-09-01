@@ -22,7 +22,7 @@ AlgoTune suite:
 
 ```bash
 source .venv/bin/activate
-uv pip install -e ".[examples]"
+python -m pip install -e ".[examples]"
 python examples/nested-autohelix/setup.py --dir /tmp/nested-autohelix
 cd /tmp/nested-autohelix
 autohelix run
