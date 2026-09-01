@@ -7,5 +7,5 @@ source:
 defaults:
   evaluation_timeout: 1800
   correctness_trials: 5
-  iterations: 10
+  iterations: 5
   agent_model: us.anthropic.claude-opus-4-8

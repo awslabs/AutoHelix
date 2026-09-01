@@ -114,6 +114,18 @@ the median speedup climbs each iteration, reaching ~8.5× by iteration 5.
 <td><img src="assets/progression_algotune.png" width="400"></td>
 </tr></table>
 
+**GPU kernel optimization.** [`examples/kernelbench`](examples/kernelbench)
+scaffolds any of 270 KernelBench tasks without vendoring the upstream task
+definitions. In a five-iteration run with Claude Opus 4.8 on an H200, median
+best-so-far speedup rose from **1.00× to 3.12×** across the full task set.
+The corrected aggregate replaces infrastructure-failed tasks with fresh runs;
+see the [methodology and per-task results](results/kernelbench/).
+
+<p align="center">
+  <img alt="Median KernelBench speedup rising from 1.0x to 3.12x over five iterations"
+       src="assets/progression_kernelbench.png" width="640">
+</p>
+
 **Model training.** The same loop works when each iteration is a training run rather than a
 code edit: the agent writes the training code and trains a model, and AutoHelix scores the
 result with a frozen eval the agent can't modify. In
