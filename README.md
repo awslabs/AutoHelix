@@ -122,7 +122,9 @@ reaching approximately **8.5× across 154 AlgoTune tasks** and **3.12× across
 Both runs used Claude Opus 4.8; KernelBench ran on an H200. The AlgoTune result
 uses our own evaluation setup, which is not identical to its official harness.
 See the [`examples/algotune`](examples/algotune) and
-[`examples/kernelbench`](examples/kernelbench) setups.
+[`examples/kernelbench`](examples/kernelbench) setups, plus the
+[`results/algotune`](results/algotune) and
+[`results/kernelbench`](results/kernelbench) methodology and per-task results.
 
 **Model training.** The same loop works when each iteration is a training run rather than a
 code edit: the agent writes the training code and trains a model, and AutoHelix scores the

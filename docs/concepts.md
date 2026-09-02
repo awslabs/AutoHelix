@@ -28,8 +28,8 @@ A useful loop answers five questions:
 3. **What must remain true?** Encode non-negotiable requirements as constraints.
 4. **What should carry forward?** Decide which metrics, artifacts, reviews,
    results, and lessons later iterations need.
-5. **When should the loop stop?** Set an iteration, time, or cost budget, or
-   another clear completion condition.
+5. **When should the loop stop?** Set an iteration, time, or cost budget that
+   matches the intended scope.
 
 ### Tips
 

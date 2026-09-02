@@ -22,21 +22,13 @@ baseline  iter 1  iter 2  iter 3  iter 4  iter 5
 
 ## Methodology
 
-Each task starts with a correct passthrough implementation and asks the agent to
-produce a faster `ModelNew` while preserving the reference module's constructor
-and forward output. The evaluator checks correctness over seeded trials and
-measures mean CUDA-event runtime using fixed inputs and a cold-cache protocol.
-Static and runtime checks reject evaluator tampering, output caching, timing
+AutoHelix uses the upstream
+[KernelBench](https://github.com/ScalingIntelligence/KernelBench) task
+definitions and `Model`/`ModelNew` contract, but runs a stricter standalone
+evaluator rather than the official KernelBench runner. It follows the fp32
+correctness tolerance and fixed-input, cold-cache CUDA-event timing protocol,
+while adding checks for evaluator tampering, output caching, timing
 manipulation, and asymmetric precision settings.
-
-The original distributed run contained infrastructure failures, including
-unavailable GPUs, expired credentials, and an invalid Level 4 harness. The
-corrected aggregate replaced affected tasks with fresh five-iteration runs.
-It does not treat infrastructure failures as low benchmark scores.
-
-The run used the KernelBench scaffold lineage at commit `cfb9adf`. The current
-example adds stricter validation for structured outputs while retaining the
-same fixed-input timing metric.
 
 ## Files
 

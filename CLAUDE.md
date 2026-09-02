@@ -32,7 +32,7 @@ uv pip install -e ".[dev]"
 - `tests/` - test suite (pytest)
 - `examples/` - example projects (sorting, ml-recipe, writing,
   task-queue, research, workflow-optimization, algotune, posttrain,
-  nested-autohelix)
+  kernelbench, nested-autohelix)
 - `scripts/run_dev_test.sh` - quick real-agent test against a bundled example (supports `--parallel N`)
 - `docs/` - user-facing documentation (plain markdown)
 
