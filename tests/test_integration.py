@@ -128,7 +128,7 @@ class TestMockAgentIntegration:
             text=True,
         ).stdout.strip() == head_before
 
-    def test_iteration_reviewer_failure_does_not_merge_or_advance(
+    def test_iteration_reviewer_failure_merges_with_placeholder(
         self, integration_project, monkeypatch
     ):
         harness = Harness(integration_project, verbose=False)
@@ -142,32 +142,33 @@ class TestMockAgentIntegration:
         ).stdout.strip()
         monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: False)
 
-        with pytest.raises(
-            AutoHelixRunError,
-            match="Iteration 1 reviewer failed",
-        ):
-            harness.run_iteration(1)
+        result = harness.run_iteration(1)
 
-        assert History(integration_project).load() == []
+        assert result.accepted is True
+        assert [r.iteration for r in History(integration_project).load()] == [1]
         assert subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=integration_project,
             check=True,
             capture_output=True,
             text=True,
-        ).stdout.strip() == head_before
+        ).stdout.strip() != head_before
+        assert (
+            integration_project / ".autohelix" / "reviews" / "iter-1.md"
+        ).read_text() == "# Review\n\nReviewer failed.\n"
 
-    def test_baseline_reviewer_failure_does_not_create_history(
+    def test_baseline_reviewer_failure_continues(
         self, integration_project, monkeypatch
     ):
         harness = Harness(integration_project, verbose=False)
         harness.config.reviewer = ReviewerConfig()
         monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: False)
 
-        with pytest.raises(AutoHelixRunError, match="Baseline reviewer failed"):
-            harness.run(max_iterations=1)
+        harness.run(max_iterations=1)
 
-        assert History(integration_project).load() == []
+        results = History(integration_project).load()
+        assert [result.iteration for result in results] == [0, 1]
+        assert all(result.accepted for result in results)
 
     def test_missing_baseline_metric_aborts_before_agent(self, integration_project):
         (integration_project / "autohelix.yaml").write_text("""

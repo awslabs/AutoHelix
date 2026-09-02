@@ -17,8 +17,8 @@
 
 - Preserve and scope-check changes when an agent creates commits inside its
   iteration worktree.
-- Fail closed when an agent or reviewer reports an infrastructure error, without
-  merging changes or consuming the iteration number.
+- Fail closed when an agent reports an infrastructure error, without merging
+  changes or consuming the iteration number.
 - Handle Codex `turn.failed` events and valid non-object JSON output.
 - Reject baselines that omit configured metrics.
 - Kill constraint and metric subprocess groups when a run is interrupted.

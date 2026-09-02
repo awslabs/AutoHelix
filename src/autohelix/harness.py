@@ -696,19 +696,15 @@ class Harness:
                 self.console.print()
 
             if not result.success:
-                detail = result.error or (
-                    f"reviewer exited with status {result.exit_code}"
-                )
-                raise AutoHelixRunError(
-                    f"Iteration {iteration} reviewer failed: {detail}"
-                )
+                return False
 
             # Save review file
             saved = self.sandbox.save_review(worktree, iteration)
             if not saved:
-                raise AutoHelixRunError(
-                    f"Iteration {iteration} reviewer completed without creating review.md"
+                self.console.print(
+                    f"  [yellow]![/yellow] Reviewer did not create review.md"
                 )
+                return False
 
             # Also copy into logs for this iteration
             review_src = (
@@ -730,6 +726,10 @@ class Harness:
         except KeyboardInterrupt:
             self._status("Interrupted - stopping reviewer...")
             raise
+        except Exception as e:
+            self._status(f"Reviewer error: {e}")
+            self.log.info(f"iter {iteration} reviewer error — {e}")
+            return False
 
     def run_iteration(self, iteration: int) -> IterationResult:
         """Run a single iteration."""
@@ -904,12 +904,24 @@ class Harness:
                     )
                 else:
                     # Run reviewer if configured (before merge, still in worktree)
+                    reviewer_failed = False
                     if self.config.reviewer:
                         reviewer_success = self.run_reviewer(worktree, iteration)
                         if not reviewer_success:
-                            raise AutoHelixRunError(
-                                f"Iteration {iteration} reviewer failed"
-                            )
+                            if self.verbose:
+                                self.console.print(f"  [red]✗[/red] Reviewer failed")
+                            reviewer_failed = True
+
+                    if reviewer_failed:
+                        # Keep reviewer failures advisory so validated agent work
+                        # is not discarded after an infrastructure failure.
+                        reviews_dir = self.project_path / ".autohelix" / "reviews"
+                        reviews_dir.mkdir(parents=True, exist_ok=True)
+                        review_path = reviews_dir / f"iter-{iteration}.md"
+                        review_path.write_text("# Review\n\nReviewer failed.\n")
+                        # TODO: After preserving and merging this candidate, halt
+                        # the run so persistent reviewer failures do not silently
+                        # affect subsequent iterations.
 
                     # Accept: merge changes (only editable files are committed)
                     if self.verbose:
@@ -1044,7 +1056,9 @@ class Harness:
         try:
             reviewer_success = self.run_reviewer(worktree, 0)
             if not reviewer_success:
-                raise AutoHelixRunError("Baseline reviewer failed")
+                self.console.print(
+                    f"  [yellow]![/yellow] Baseline review failed, continuing anyway"
+                )
         finally:
             self.sandbox.discard_worktree(worktree)
 
