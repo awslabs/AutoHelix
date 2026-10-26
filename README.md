@@ -79,19 +79,58 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-Or `pip install autohelix` for just the CLI, without the bundled examples.
+Or `pip install autohelix` for the CLI and portable setup skill, without the
+repository's example projects.
 
 AutoHelix uses Claude Code by default (looks for `claude` on your `PATH`). Codex and
 OpenCode are also supported — see [agent setup](docs/getting-started.md#agent-setup).
 
+To prepare the experiment with your existing coding agent, install the packaged
+skill into the target project:
+
 ```bash
-cd my-project
-autohelix init          # initialize config and state
-autohelix run           # start the loop
+autohelix skill install --agent codex --scope project --path my-project
+# Use --agent claude or --agent opencode for those agents.
 ```
 
-`init` creates a commented `autohelix.yaml` to fill in — see the configuration section
-below. Other commands are described in the [CLI reference](docs/cli.md).
+Your coding agent helps define the experiment. AutoHelix runs repeated attempts
+using the configured scope, checks, measurements, and acceptance rules.
+
+1. **Prepare and review**
+
+   > Set up AutoHelix to improve [goal]. [Optional instructions.]
+
+   The agent proposes the experiment, shows the complete `autohelix.yaml`, and
+   walks through its choices without launching. Review what can change, what
+   must pass, what is measured, and the effective budgets.
+
+2. **Run and manage**
+
+   > Run and manage AutoHelix using the existing config. [Optional changes or budget limits.]
+
+   The agent applies agreed changes to the configuration and supervises the run
+   through termination.
+
+Replace `[goal]` with the desired outcome and add any scope, evaluation, or
+budget preferences. You can also ask the agent to set up and manage the
+experiment in one request.
+
+The complete skill and its references ship with
+pip/wheel installs; no AutoHelix checkout is needed. Installation is explicit,
+and existing skill folders are preserved unless you pass `--force`.
+See the [conversational walkthroughs](docs/getting-started.md#with-your-coding-agent)
+and [skill installation and export](docs/cli.md#autohelix-skill).
+
+For manual setup, create the configuration template:
+
+```bash
+cd my-project
+autohelix init
+```
+
+Edit `autohelix.yaml` using the [configuration reference](#configuration), review
+and commit the intended setup changes, then launch with `autohelix run`. Other
+commands are described in the [CLI reference](docs/cli.md).
 
 ## Examples
 

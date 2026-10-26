@@ -1,6 +1,52 @@
 # CLI Reference
 
-All commands default to the current directory if `--path` / positional path is omitted.
+Project commands default to the current directory if `--path` / positional path
+is omitted.
+
+## `autohelix skill`
+
+Install or export the packaged `autohelix-setup` skill and all its references.
+It helps your coding agent design and verify performance, writing, and research
+experiments using the installed CLI. A source checkout is not required.
+
+```bash
+autohelix skill install --agent claude --scope project --path /path/to/project
+autohelix skill install --agent codex --scope user
+autohelix skill export /path/to/autohelix-setup
+```
+
+`--agent` is required and accepts `claude`, `codex`, or `opencode`. `--scope`
+defaults to `project`. Project installation uses the current directory or
+`--path`; user installation uses your home directory and rejects `--path`.
+Skill installation does not require a git repository or initialize AutoHelix.
+
+| Agent | Project skill folder | User skill folder |
+| --- | --- | --- |
+| Claude Code | `.claude/skills/autohelix-setup/` | `~/.claude/skills/autohelix-setup/` |
+| Codex | `.agents/skills/autohelix-setup/` | `~/.agents/skills/autohelix-setup/` |
+| OpenCode | `.opencode/skills/autohelix-setup/` | `~/.config/opencode/skills/autohelix-setup/` |
+
+Export writes the full skill directly into `DESTINATION`; it does not append
+another `autohelix-setup` directory. Use it for custom discovery directories.
+
+Both commands refuse any existing destination by default, including an empty
+directory. With `--force`, bundled files are replaced and unrelated local files
+are preserved; files removed from a future bundle are not deleted. Symlinks at
+the destination or bundled paths and incompatible file/directory types are
+rejected before copying. Updates replace individual files; an I/O failure can
+leave a partially updated folder. Correct the error and repeat with `--force`.
+
+After installation, ask your agent to use `autohelix-setup` to prepare your
+experiment. It will inspect the project and help configure scope, constraints,
+command observations, optional metric gates or advisory review, and budgets.
+Review the configuration and verification results before starting
+`autohelix run`, unless you already requested a run.
+To request ongoing management, ask the agent to prepare, run, and supervise
+within explicit effort limits. It should monitor saved outcomes through process
+termination and use hints when useful for later iterations. See the
+[setup-only and managed walkthroughs](getting-started.md#with-your-coding-agent).
+
+Installing the Python package does not register skills automatically.
 
 ## `autohelix init`
 

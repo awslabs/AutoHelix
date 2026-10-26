@@ -12,6 +12,7 @@ import click
 from autohelix.config import load_config
 from autohelix.harness import AutoHelixRunError, Harness
 from autohelix.history import History
+from autohelix.skill import skill
 from autohelix.state import (
     archive_state,
     ensure_gitignore_entry,
@@ -65,6 +66,9 @@ def _get_version() -> str:
 @click.version_option(version=_get_version(), prog_name="autohelix")
 def main():
     """AutoHelix - Autonomous code improvement harness."""
+
+
+main.add_command(skill)
 
 
 def _run_git(args: list[str], cwd: Path, error_msg: str) -> subprocess.CompletedProcess:
