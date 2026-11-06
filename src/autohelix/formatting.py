@@ -5,6 +5,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+
+def format_cost(cost: float | None, precision: int = 2) -> str:
+    """Display recorded or calculated dollars without treating absence as zero."""
+    return f"${cost:.{precision}f}" if cost is not None else "cost unavailable"
+
+
+def format_total_cost(usages: Iterable[dict]) -> str:
+    """Describe a total as incomplete when some iterations have no known cost."""
+    costs = [usage.get("cost_usd") for usage in usages]
+    known = [cost for cost in costs if cost is not None]
+    if not known:
+        return "cost unavailable"
+    text = format_cost(sum(known))
+    return f"{text} (incomplete)" if len(known) != len(costs) else text
+
 
 def format_delta(value: float, baseline: float) -> str:
     """Format a metric change from baseline as an arrow + percentage or ratio.

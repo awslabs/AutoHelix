@@ -175,7 +175,8 @@ function bestSoFar() {
 function renderStats() {
   const its = state.iterations.filter((r) => r.iteration > 0);
   const accepted = its.filter((r) => r.accepted).length;
-  const cost = its.reduce((sum, r) => sum + (r.cost || 0), 0);
+  const knownCosts = its.filter((r) => typeof r.cost === 'number');
+  const cost = knownCosts.reduce((sum, r) => sum + r.cost, 0);
   const stats = [
     ['Accepted', `${accepted} of ${its.length}`],
   ];
@@ -184,7 +185,9 @@ function renderStats() {
     const best = [...bestSoFar().values()].at(-1);
     stats.unshift([`Best ${metric}`, fmtNumber(best), deltaEl(best, base)]);
   }
-  if (cost > 0) stats.push(['Cost', fmtCost(cost)]);
+  if (its.length) stats.push(['Cost', knownCosts.length
+    ? fmtCost(cost) + (knownCosts.length < its.length ? ' (incomplete)' : '')
+    : 'unavailable']);
   $('stats').replaceChildren(...stats.map(([k, v, extra]) => el('div', { className: 'stat' },
     el('span', { className: 'stat-label', textContent: k }),
     el('span', { className: 'stat-value', textContent: v }, extra))));
@@ -295,7 +298,7 @@ function renderRows() {
       // Rejected rows get the short reason; the full one is in the iteration's card.
       el('td', { className: 'summary', textContent: (r.accepted === false ? shortReason(r.summary) : r.summary) || '' }),
       el('td', { className: 'num', textContent: r.seconds ? fmtDuration(r.seconds) : '' }),
-      el('td', { className: 'num', textContent: r.cost ? fmtCost(r.cost) : '' }),
+      el('td', { className: 'num', textContent: fmtCost(r.cost) }),
     ]);
   });
   const live = liveIteration();

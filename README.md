@@ -66,7 +66,8 @@ Core features:
 - **Constraints gate changes.** Tests, type-checks, or any command that must exit 0. Break a constraint and the iteration is discarded.
 - **Metrics track progress.** Metrics are captured and shown to the next iteration. Optionally gate on them to reject regressions. Logs and artifacts can be saved too.
 - **Persistent memory.** Each iteration is a fresh session, but the agent reads and writes notes that survive across all iterations, including rejected ones.
-- **Budget control.** Cap the run by iterations, time, or cost.
+- **Budget control.** Cap the run by iterations, time, or cost. Codex cost uses an
+  API-equivalent estimate; see [cost tracking](docs/config.md#cost-tracking).
 
 ## Quick start
 

@@ -25,7 +25,7 @@ from autohelix.display import LiveDisplay
 from autohelix.history import History, IterationResult
 from autohelix.checks import preflight_check, run_constraints, run_observables
 from autohelix.run_status import RunStatus
-from autohelix.formatting import format_delta
+from autohelix.formatting import format_cost, format_delta, format_total_cost
 from autohelix.prompt_template import build_prompt_variables, load_template, render_template
 from autohelix.run_log import RunLog
 from autohelix.sandbox import Sandbox, Worktree
@@ -457,9 +457,9 @@ class Harness:
             tokens = f"{_format_tokens(input_t or 0)}in / {_format_tokens(output_t or 0)}out"
             parts.append(tokens)
         cost = usage.get("cost_usd")
-        if cost is not None:
-            parts.append(f"${cost:.4f}")
-        duration = usage.get("duration_ms")
+        if usage:
+            parts.append(format_cost(cost, precision=4))
+        duration = usage.get("duration_ms", usage.get("wall_clock_ms"))
         if duration is not None:
             secs = duration / 1000
             if secs >= 60:
@@ -769,8 +769,8 @@ class Harness:
             agent_result = self.run_agent(worktree.working_dir, prompt, iteration)
             agent_usage = agent_result.usage or {}
             duration_s = agent_usage.get("duration_ms", 0) / 1000
-            cost = agent_usage.get("cost_usd", 0)
-            self.log.info(f"iter {iteration} agent complete — {duration_s:.0f}s, ${cost:.4f}")
+            cost_text = format_cost(agent_usage.get("cost_usd"), precision=4)
+            self.log.info(f"iter {iteration} agent complete — {duration_s:.0f}s, {cost_text}")
 
             if not agent_result.success and self.verbose:
                 self._status("Agent did not complete successfully")
@@ -1202,7 +1202,7 @@ class Harness:
         if start_iter > 1:
             prior = self.history.load()
             prior_iterations = [r for r in prior if r.iteration > 0]
-            cumulative_cost = sum(r.usage.get("cost_usd", 0) for r in prior_iterations)
+            cumulative_cost = sum(r.usage.get("cost_usd") or 0 for r in prior_iterations)
             # Prefer wall_clock_ms (total iteration time) over duration_ms (agent-only time)
             prior_elapsed_seconds = sum(
                 r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0))
@@ -1214,14 +1214,35 @@ class Harness:
         self.log.info(f"run started — config: {config_name}, max_iter: {max_iter}, resuming from iter {start_iter}")
 
         ran = False
+        cost_warning_shown = False
+        if self.config.max_cost_usd is not None and start_iter > 1:
+            cost_warning_shown = any(r.usage.get("cost_usd") is None for r in prior_iterations)
+            if cost_warning_shown:
+                self.console.print(
+                    "[yellow]Warning: prior iterations have unavailable cost; "
+                    "budget.cost can only track known costs.[/yellow]"
+                )
+
         try:
             for iteration in range(start_iter, max_iter + 1):
+                if self.config.max_cost_usd is not None and cumulative_cost >= self.config.max_cost_usd:
+                    break
                 result = self.run_iteration(iteration)
                 ran = True
                 self._print_iteration_summary(result)
 
                 # Check cost budget
-                cumulative_cost += result.usage.get("cost_usd", 0) if result.usage else 0
+                if (
+                    self.config.max_cost_usd is not None
+                    and result.usage.get("cost_usd") is None
+                    and not cost_warning_shown
+                ):
+                    self.console.print(
+                        "[yellow]Warning: iteration cost is unavailable; "
+                        "budget.cost can only track known costs.[/yellow]"
+                    )
+                    cost_warning_shown = True
+                cumulative_cost += result.usage.get("cost_usd") or 0
                 if self.config.max_cost_usd is not None and cumulative_cost >= self.config.max_cost_usd:
                     break
 
@@ -1245,7 +1266,7 @@ class Harness:
         wall_ms = result.usage.get("wall_clock_ms", result.usage.get("duration_ms", 0))
         wall_secs = int(wall_ms / 1000)
         time_str = _format_time(wall_secs)
-        cost = result.usage.get("cost_usd", 0)
+        cost = result.usage.get("cost_usd")
 
         directions = self.config.metric_directions()
 
@@ -1263,8 +1284,7 @@ class Harness:
 
         # Build line: iter N  time │ cost │ metric │ status
         parts = [f"{time_str:>6}"]
-        if cost:
-            parts.append(f"${cost:.2f}")
+        parts.append(format_cost(cost))
         parts.extend(metric_parts)
         if result.reason and not result.accepted:
             parts.append(result.reason)
@@ -1298,7 +1318,7 @@ class Harness:
         best = self.history.get_best_metrics(directions)
 
         # Cumulative stats
-        total_cost = sum(r.usage.get("cost_usd", 0) for r in iterations)
+        total_cost_text = format_total_cost(r.usage for r in iterations)
         total_wall_ms = sum(
             r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0))
             for r in iterations
@@ -1318,8 +1338,7 @@ class Harness:
 
         table.add_row("Iterations", f"{accepted} merged, {rejected} rejected")
         table.add_row("Duration", total_time_str)
-        if total_cost:
-            table.add_row("Cost", f"${total_cost:.2f}")
+        table.add_row("Cost", total_cost_text)
 
         for name, (best_val, best_iter) in best.items():
             baseline_val = baseline_metrics.get(name)
@@ -1335,4 +1354,4 @@ class Harness:
 
         self.console.print(table)
 
-        self.log.info(f"run complete — {accepted} merged, {rejected} rejected, ${total_cost:.2f}, {total_time_str}")
+        self.log.info(f"run complete — {accepted} merged, {rejected} rejected, {total_cost_text}, {total_time_str}")

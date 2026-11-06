@@ -7,9 +7,12 @@ import json
 import os
 import re
 import subprocess
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback
+from autohelix.agents.codex_cost import TOKEN_FIELDS, estimate_cost, session_metadata
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_worktree_env
 
@@ -25,6 +28,8 @@ class CodexAgent:
         self.heartbeat_seconds = heartbeat_seconds
         self._usage: dict[str, object] = {}
         self._turn_error: str | None = None
+        self._thread_id: str | None = None
+        self._completed = False
 
     def _command_path(self) -> str:
         return self.config.command or os.environ.get("AUTOHELIX_CODEX_CMD") or "codex"
@@ -126,6 +131,8 @@ class CodexAgent:
 
         event_type = payload.get("type")
         if event_type in {"thread.started", "turn.started"}:
+            if event_type == "thread.started":
+                self._thread_id = payload.get("thread_id")
             self._emit(event_callback, AgentEventKind.STATUS, event_type)
             return
         if event_type == "turn.failed":
@@ -144,12 +151,17 @@ class CodexAgent:
             self._emit(event_callback, AgentEventKind.ERROR, detail)
             return
         if event_type == "turn.completed":
+            self._completed = True
             usage = payload.get("usage", {})
+            # Completion usage is a cumulative snapshot, not a per-tool delta.
+            for key in (*TOKEN_FIELDS, "output_includes_reasoning"):
+                self._usage.pop(key, None)
             if isinstance(usage, dict):
-                if usage.get("input_tokens"):
-                    self._usage["input_tokens"] = usage["input_tokens"]
-                if usage.get("output_tokens"):
-                    self._usage["output_tokens"] = usage["output_tokens"]
+                for key in TOKEN_FIELDS:
+                    if key in usage:
+                        self._usage[key] = usage[key]
+                if isinstance(usage.get("output_includes_reasoning"), bool):
+                    self._usage["output_includes_reasoning"] = usage["output_includes_reasoning"]
             if usage:
                 self._emit(event_callback, AgentEventKind.RESULT, json.dumps(usage, sort_keys=True))
             else:
@@ -196,6 +208,10 @@ class CodexAgent:
     ) -> AgentRunResult:
         self._usage = {}
         self._turn_error = None
+        self._thread_id = None
+        self._completed = False
+        started_at = datetime.now(timezone.utc)
+        started = time.monotonic()
 
         # Build env with remapped PYTHONPATH for worktree
         env = build_worktree_env(project_path, worktree_path) if project_path else None
@@ -231,6 +247,40 @@ class CodexAgent:
             error = format_timeout_seconds(self.config.timeout_seconds)
         elif result.exit_code != 0 and error is None:
             error = f"Codex exited with status {result.exit_code}"
+
+        self._usage["duration_ms"] = int((time.monotonic() - started) * 1000)
+        self._usage["usage_complete"] = self._completed and error is None
+        metadata = session_metadata(self._thread_id, started_at)
+        if metadata.get("provider"):
+            self._usage["cost_provider"] = metadata["provider"]
+        if not self._usage["usage_complete"]:
+            self._usage["cost_unavailable_reason"] = "Codex did not report complete successful usage."
+        elif metadata.get("cost_unavailable_reason"):
+            self._usage["cost_unavailable_reason"] = metadata["cost_unavailable_reason"]
+        elif "resume" in self.config.extra_args:
+            self._usage["cost_unavailable_reason"] = "Resumed Codex thread usage is not priced per invocation."
+        else:
+            # Prefer the actual resolved model. Only fall back to explicit
+            # AutoHelix model settings when extra CLI overrides cannot change it.
+            explicit = self.config.model or self.config.settings.get("model")
+            overrides = any(
+                arg in {"-m", "--model", "-c", "--config", "-p", "--profile"}
+                or arg.startswith(("--model=", "--config=", "--profile="))
+                or (not arg.startswith("--") and arg.startswith(("-m", "-c", "-p")))
+                for arg in self.config.extra_args
+            )
+            model = metadata.get("model") or (explicit if not overrides else None)
+            output_includes_reasoning = self._usage.get(
+                "output_includes_reasoning", metadata.get("output_includes_reasoning", True)
+            )
+            self._usage.update(estimate_cost(
+                self._usage, model, output_includes_reasoning=output_includes_reasoning,
+            ))
+        if self._usage.get("cost_unavailable_reason") and error is None:
+            self._emit(
+                event_callback, AgentEventKind.WARNING,
+                f"Cost unavailable: {self._usage['cost_unavailable_reason']}",
+            )
 
         return AgentRunResult(
             success=result.exit_code == 0 and error is None,

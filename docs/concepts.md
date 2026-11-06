@@ -188,7 +188,7 @@ as read-only reference; `reviews/` and `history.jsonl` never enter a worktree.
 
 ## Cost Tracking
 
-Token usage and cost are captured from all agent backends:
+Available token usage and cost are captured from agent backends:
 
 - **Per iteration**: shown after each accepted/rejected result
 - **Cumulative**: shown in the final summary
@@ -197,10 +197,21 @@ Token usage and cost are captured from all agent backends:
 What's available depends on the backend:
 
 - **Claude Code**: input/output tokens, cost (USD), duration
-- **Codex**: input/output tokens
+- **Codex**: input/output and available cached-input, cache-write, and reasoning
+  tokens; calculated API-equivalent cost for recognized models; measured duration
 - **OpenCode**: input/output tokens, cost (per step, accumulated)
 
-Missing fields are simply omitted from the display.
+Every backend uses the same `usage.cost_usd` field and **Cost** display.
+History also records `cost_source`: `backend` for a CLI-supplied amount,
+`calculated` for a Codex estimate. Calculated costs save their model, pricing
+basis, and rates. Codex estimates use Standard OpenAI API prices; they do not
+represent subscription or Bedrock bills. Backend-supplied amounts may also be
+estimates.
+
+Missing costs are unavailable, and totals with missing costs are incomplete.
+`budget.cost` uses the recorded amounts, including Codex estimates, and warns
+if some costs are unavailable. See [Cost Tracking](config.md#cost-tracking) for
+the pricing assumptions and accounting limits.
 
 ## Run page
 

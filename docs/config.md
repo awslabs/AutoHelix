@@ -64,7 +64,7 @@ reviewer:
 # Limit the run (any combination)
 budget:
   iterations: 10       # max iterations
-  # cost: 20           # max spend in USD (needs a cost-reporting backend: Claude Code or OpenCode)
+  # cost: 20           # cumulative agent cost in USD (Codex uses an API-equivalent estimate)
   # time: 2h           # max total wall-clock (duration string: 90m, 2h, 1h30m)
   # iteration_time: 15m  # per-iteration time budget (see below)
 
@@ -274,7 +274,9 @@ The `reviewer.prompt` is the reviewer's entire instruction (it inspects the diff
 Caps how far a run goes. Combine any of:
 
 - `iterations` — maximum number of iterations (default 5).
-- `cost` — maximum spend in USD. Requires a backend that reports cost (Claude Code, OpenCode); ignored otherwise.
+- `cost` — cumulative main-agent cost threshold in USD. Uses backend-reported amounts
+  for Claude Code and OpenCode, and calculated API-equivalent estimates for Codex.
+  The same budget option applies to all three backends.
 - `time` — maximum total wall-clock, as a duration string (`90m`, `2h`, `1h30m`).
 - `iteration_time` — a *per-iteration* time budget. Unlike the others it can interrupt work mid-iteration: it enforces a hard deadline **and** injects the remaining time into the agent's context so it can wrap up and save notes first. See [ML Experiments](ml-experiments.md) for when this matters.
 
@@ -295,8 +297,48 @@ Controls Claude Code's built-in memory system:
 
 ### Cost Tracking
 
-Token usage and cost are captured from all agent backends and shown:
+Available token usage and cost are captured from agent backends and shown:
 
 - Per iteration (after accepted/rejected)
 - Cumulative in the final summary
 - Persisted in `.autohelix/history.jsonl`
+
+The numeric field is `usage.cost_usd` for every backend. `usage.cost_source` is
+`backend` when the CLI supplies the amount, or `calculated` when AutoHelix
+calculates it. Backend-supplied amounts can themselves be estimates; they are
+not necessarily invoice totals. Older history without this metadata still loads.
+
+**Codex costs are estimated** from reported input, cached-input, cache-write,
+and output token counts and a bundled snapshot of the model's published
+[OpenAI API rates](https://developers.openai.com/api/docs/pricing).
+For subscription and Bedrock users, these are API-equivalent amounts, not
+subscription charges or provider bills. The normal display uses the same
+**Cost** label for every backend; provenance is saved in history:
+
+- `cost_model` and, when available, `cost_provider` identify the model and provider.
+- `cost_basis: openai_standard_api` identifies Standard pricing at ordinary
+  context lengths, with 30-minute cache writes.
+- `cost_rates` saves the rates per million tokens, cache-write lifetime, and
+  verification date used for that iteration.
+- `output_includes_reasoning` records whether separately reported reasoning
+  tokens were already included in output. They are not counted twice.
+
+The snapshot was verified on November 6, 2026. It supports listed GPT-6 models
+and common GPT-5 Codex models; unknown names and expiring promotional prices are
+not guessed. The model normally comes from the matching Codex session metadata,
+so omitted `agent.model` works when that metadata is available. For ephemeral
+sessions, an unambiguous explicit `agent.model` or `agent.settings.model` can
+provide the model instead.
+
+Estimates exclude speed-tier and regional premiums, per-request long-context
+surcharges, separately billed tools, and usage outside the captured thread.
+Cache-write lifetimes other than 30 minutes are not inferred. Reviewer, report,
+supervisor, and external evaluator calls are not included in the iteration
+budget. Codex agent duration is measured locally even when usage is unavailable.
+
+Missing, invalid, or interrupted usage remains **unavailable**, not zero.
+Mixed totals are labeled **incomplete**. If an iteration or resumed history has
+unavailable cost, `budget.cost` warns and tracks only the known amounts; retain
+an iteration or time limit as well. The budget uses the saved estimate and is
+checked between iterations, so it is an approximate stopping threshold, not a
+guaranteed spending cap.

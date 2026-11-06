@@ -237,6 +237,7 @@ class ClaudeCodeAgent:
                     self._usage["output_tokens"] = usage["output_tokens"]
             if cost_usd is not None:
                 self._usage["cost_usd"] = cost_usd
+                self._usage["cost_source"] = "backend"
             if duration_ms is not None:
                 self._usage["duration_ms"] = duration_ms
             cost_text = f" ${cost_usd:.4f}" if cost_usd is not None else ""

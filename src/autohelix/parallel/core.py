@@ -308,7 +308,7 @@ def run_parallel(
             # Direction of the first-declared metric (the ranking metric).
             w.direction = next(iter(d.values()))
         hist = History(w.worktree)
-        w.total_cost = sum(r.usage.get("cost_usd", 0) for r in hist.load() if r.iteration > 0)
+        w.total_cost = sum(r.usage.get("cost_usd") or 0 for r in hist.load() if r.iteration > 0)
 
     return workers
 

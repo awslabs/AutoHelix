@@ -98,6 +98,7 @@ class OpenCodeAgent:
                         self._usage[key] = self._usage.get(key, 0) + tokens[key]
             if cost is not None:
                 self._usage["cost_usd"] = self._usage.get("cost_usd", 0) + cost
+                self._usage["cost_source"] = "backend"
             detail = f"reason={reason}"
             if tokens:
                 detail += f" tokens={json.dumps(tokens, sort_keys=True)}"

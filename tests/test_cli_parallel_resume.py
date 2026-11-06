@@ -27,6 +27,35 @@ def _write_marker(repo: Path, configs, sync_every=1, run_args=None):
 
 
 class TestParallelResume:
+    @pytest.mark.parametrize("costs,expected", [
+        ([0.25, None], "cost=$0.25 (incomplete)"),
+        ([0, 0], "cost=$0.00"),
+        ([None, None], "cost unavailable"),
+    ])
+    def test_worker_cost_summary_preserves_missing_cost(self, runner, tmp_path, costs, expected):
+        from autohelix.history import History, IterationResult
+        from autohelix.parallel.core import Worker
+
+        config = tmp_path / "a.yaml"
+        config.write_text("goal: x\n")
+        worktree = tmp_path / "worker"
+        worktree.mkdir()
+        history = History(worktree)
+        for iteration, cost in enumerate(costs, 1):
+            history.append(IterationResult(
+                iteration=iteration, accepted=True, metrics={},
+                usage={"cost_usd": cost} if cost is not None else {},
+            ))
+        worker = Worker(
+            index=1, name="worker-1", config_file=config, worktree=worktree,
+            branch="parallel/worker-1", branch_prefix="autohelix-w1",
+            shared_dir=tmp_path / "shared", budget=2,
+        )
+        with patch("autohelix.parallel.run_parallel", return_value=[worker]):
+            result = runner.invoke(main, ["parallel", "-p", str(tmp_path), "--worker", str(config)])
+        assert result.exit_code == 0, result.output
+        assert expected in result.output
+
     def test_bare_resume_reuses_recorded_configs(self, runner, tmp_path):
         a = tmp_path / "a.yaml"; a.write_text("goal: x\n")
         b = tmp_path / "b.yaml"; b.write_text("goal: y\n")

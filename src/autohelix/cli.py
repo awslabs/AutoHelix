@@ -12,6 +12,7 @@ import click
 from autohelix.config import load_config
 from autohelix.harness import AutoHelixRunError, Harness
 from autohelix.history import History
+from autohelix.formatting import format_total_cost
 from autohelix.skill import skill
 from autohelix.state import (
     archive_state,
@@ -363,12 +364,18 @@ def parallel(worker_configs: tuple[str, ...], path: str, sync_every: int | None,
     console.print(f"\n  [bold]{heading}[/bold]")
     for i, w in enumerate(ranked, start=1):
         prefix = f"   {i}." if is_ranked else "   •"
-        cost = f"  cost=${w.total_cost:.2f}" if w.total_cost else ""
+        hist = History(w.worktree)
+        results = hist.load()
+        usages = [r.usage for r in results if r.iteration > 0]
+        cost_text = format_total_cost(usages) if usages else None
+        cost = (
+            f"  cost={cost_text}" if cost_text and cost_text.startswith("$")
+            else f"  {cost_text}" if cost_text
+            else f"  cost=${w.total_cost:.2f}" if w.total_cost else ""
+        )
         delta = ""
         delta_style = ""
         if w.best_score is not None and w.best_metric:
-            hist = History(w.worktree)
-            results = hist.load()
             baseline_r = next((r for r in results if r.iteration == 0), None)
             if baseline_r and w.best_metric in baseline_r.metrics:
                 baseline_val = baseline_r.metrics[w.best_metric]
