@@ -442,6 +442,37 @@ def hint(message: str, path: str):
 
 
 @main.command()
+@click.argument("path", type=click.Path(exists=True, file_okay=False), default=".")
+@click.option("--port", type=click.IntRange(0, 65535), default=8765, show_default=True)
+@click.option("--config", "-c", "config_file", type=click.Path(exists=True, dir_okay=False),
+              help="Config file (default: from last run, or autohelix.yaml)")
+@click.option("--open", "open_browser", is_flag=True, help="Open the viewer in a browser.")
+def view(path: str, port: int, config_file: str | None, open_browser: bool):
+    """Live web view of a run, served on 127.0.0.1.
+
+    Safe to run alongside `autohelix run`; it only reads .autohelix/.
+    Over SSH: ssh -L 8765:127.0.0.1:8765 host, then open http://localhost:8765.
+    """
+    from autohelix.viewer import make_server
+
+    try:
+        server = make_server(Path(path), port, Path(config_file) if config_file else None)
+    except OSError as exc:
+        raise click.ClickException(f"Cannot listen on port {port}: {exc}") from exc
+    url = f"http://127.0.0.1:{server.server_port}/"
+    click.echo(f"Viewing {Path(path).resolve().name} at {url}  (Ctrl-C to stop)")
+    if open_browser:
+        import webbrowser
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+@main.command()
 @click.argument("path", type=click.Path(exists=True), default=".")
 def watch(path: str):
     """Live-tail the current iteration's agent output.

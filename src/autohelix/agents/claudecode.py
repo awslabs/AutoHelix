@@ -98,7 +98,7 @@ class ClaudeCodeAgent:
         if text:
             event_callback(AgentEvent(kind=kind, text=text, metadata=metadata))
 
-    def _handle_line(self, line: str, event_callback: EventCallback) -> None:
+    def _handle_line(self, line: str, event_callback: EventCallback, *, replay: bool = False) -> None:
         try:
             payload = json.loads(line)
         except json.JSONDecodeError:
@@ -177,8 +177,13 @@ class ClaudeCodeAgent:
                 for block in message.get("content", []):
                     if not isinstance(block, dict):
                         continue
+                    if replay and block.get("type") in {"text", "thinking"}:
+                        kind = AgentEventKind.ASSISTANT_TEXT if block["type"] == "text" else AgentEventKind.THINKING
+                        self._emit(event_callback, kind, str(block.get(block["type"]) or ""))
                     if block.get("type") == "tool_use":
                         name = block.get("name", "Tool")
+                        if replay:
+                            self._emit(event_callback, AgentEventKind.TOOL_USE, name)
                         tool_input = block.get("input", {})
                         text = json.dumps(tool_input, ensure_ascii=False, sort_keys=True)
                         self._emit(event_callback, AgentEventKind.TOOL_INPUT, text, tool_name=name)

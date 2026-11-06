@@ -25,6 +25,7 @@ from autohelix.display import LiveDisplay
 from autohelix.history import History, IterationResult
 from autohelix.checks import preflight_check, run_constraints, run_observables
 from autohelix.dashboard import generate_dashboard
+from autohelix.run_status import RunStatus
 from autohelix.formatting import format_delta
 from autohelix.prompt_template import build_prompt_variables, load_template, render_template
 from autohelix.run_log import RunLog
@@ -123,6 +124,7 @@ class Harness:
         self.sandbox = Sandbox(self.project_path)
         self.verbose = verbose
         self.heartbeat_seconds = heartbeat_seconds
+        self.run_status = RunStatus(project_path)
         self.console = Console()
         self.log = RunLog(self.project_path)
 
@@ -643,6 +645,7 @@ class Harness:
         """
         if not self.config.reviewer:
             return True  # No reviewer configured, nothing to do
+        self.run_status.phase("review", iteration)
 
         # Delete the transient review.md (materialized from the latest prior
         # review for the main agent) so the reviewer writes fresh and can't read
@@ -735,6 +738,7 @@ class Harness:
         """Run a single iteration."""
         iter_start = time.monotonic()
         self.log.info(f"iter {iteration} started")
+        self.run_status.phase("agent", iteration)
 
         # Create worktree
         if self.verbose:
@@ -815,6 +819,7 @@ class Harness:
 
             val_spinner = _IterationSpinner(iteration)
             val_spinner.set_phase("checks")
+            self.run_status.phase("checks")
 
             def _on_check_progress(phase: str, command: str, elapsed: float | None) -> None:
                 val_spinner.set_detail(command)
@@ -842,6 +847,7 @@ class Harness:
                     # Observables
                     val_spinner.set_phase("benchmark")
                     val_spinner.set_detail("")
+                    self.run_status.phase("benchmark")
                     self.log.info(f"iter {iteration} observables started")
 
                     obs_results = run_observables(
@@ -924,6 +930,7 @@ class Harness:
                         # affect subsequent iterations.
 
                     # Accept: merge changes (only editable files are committed)
+                    self.run_status.phase("merge")
                     if self.verbose:
                         self._status("Merging changes...")
                     commit_msg = self._build_commit_message(iteration, metrics, worktree_path=worktree.working_dir)
@@ -984,6 +991,7 @@ class Harness:
 
         # Log result and update dashboard
         self.history.append(result)
+        self.run_status.phase("between iterations")
         try:
             generate_dashboard(self.project_path, self.config.metric_directions())
         except Exception:
@@ -993,6 +1001,7 @@ class Harness:
     def _capture_baseline(self) -> None:
         """Capture baseline observables and run baseline review."""
         self.log.info("baseline capture started")
+        self.run_status.phase("baseline", 0)
         with Status("Running baseline...", console=self.console, spinner="dots"):
             obs_results = run_observables(self.config, self.project_path)
 
@@ -1090,7 +1099,18 @@ class Harness:
         return True
 
     def run(self, max_iterations: int | None = None) -> None:
-        """Run the optimization loop."""
+        """Run the optimization loop, recording live status in runtime/run.json."""
+        try:
+            self._run(max_iterations)
+        except KeyboardInterrupt:
+            self.run_status.stop("interrupted")
+            raise
+        except BaseException:
+            self.run_status.stop("failed")
+            raise
+        self.run_status.stop("finished")
+
+    def _run(self, max_iterations: int | None = None) -> None:
         max_iter = max_iterations or self.config.max_iterations
         start_iter = self.history.get_last_iteration() + 1
 
@@ -1148,6 +1168,8 @@ class Harness:
                 )
                 return
 
+        self.run_status.start(max_iterations=max_iter)
+
         # Capture baseline on first run
         if start_iter == 1 and self.history.get_last_iteration() == 0:
             results = self.history.load()
@@ -1192,6 +1214,7 @@ class Harness:
                 if self.config.max_time_seconds is not None and elapsed >= self.config.max_time_seconds:
                     break
         except KeyboardInterrupt:
+            self.run_status.stop("interrupted")
             self.console.print(f"\n\n[yellow]Interrupted at iteration {iteration}. Progress saved.[/yellow]")
         self._print_summary()
 

@@ -105,6 +105,22 @@ autohelix watch [path]
 
 Shows tool calls, text output, and elapsed time. Automatically switches to new iterations as they start.
 
+## `autohelix view`
+
+Live web view of a run, in your browser.
+
+```bash
+autohelix view [path] [--port 8765] [--open]
+```
+
+A browser view of a run's `.autohelix/` state. The left side shows run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed), the metric over time, and one row per iteration with the agent's one-line summary. The right side has one card per iteration with its notes (`notes/iter-N.md`), agent activity (`logs/iter-N/`, live while it runs), review, changes against the baseline, and captured output (`observations/iter-N/`); click a row or chart point to open that card. Notes that are not tied to an iteration are listed under Shared notes. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
+
+The server listens on `127.0.0.1` only and has no login, so on a shared machine other users of that machine can open it. From another machine, forward the port over SSH:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 user@host   # then open http://localhost:8765
+```
+
 ## `autohelix hint`
 
 Send a hint to a running agent, picked up at the start of its next iteration.

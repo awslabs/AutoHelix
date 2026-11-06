@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoHelix</title>
+  <link rel="icon" href="/logo-light.svg">
+  <link rel="stylesheet" href="/viewer.css">
+  <script src="/viewer.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="heading">
+      <h1 id="title">AutoHelix</h1>
+      <p id="goal" class="goal"></p>
+    </div>
+    <div class="top-right">
+      <span id="status" class="status">Connecting…</span>
+      <button id="theme" class="theme" title="Theme: follow the system, or force light or dark"></button>
+      <img id="logo" src="/logo-light.svg" alt="AutoHelix" class="logo">
+    </div>
+  </header>
+  <details class="config" id="config" hidden>
+    <summary id="config-summary"></summary>
+    <pre id="config-text"></pre>
+  </details>
+
+  <main class="layout">
+    <section class="overview">
+      <div class="stats" id="stats"></div>
+      <div id="chart-box">
+      <div class="chart-head">
+        <span id="scale" class="muted"></span>
+        <select id="metric" aria-label="Metric" hidden></select>
+      </div>
+      <svg id="chart" class="chart" viewBox="0 0 640 200" role="img" aria-label="Metric by iteration"></svg>
+      </div>
+      <table class="iterations">
+        <thead><tr><th>#</th><th>Outcome</th><th id="metric-col">Metric</th><th>Summary</th><th class="num">Time</th><th class="num">Cost</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+
+    <section class="detail">
+      <div id="cards" class="cards"></div>
+      <details id="shared-notes" class="box card" hidden title=".autohelix/notes/">
+        <summary><span class="card-title">Shared notes</span> <span id="shared-count" class="muted"></span></summary>
+        <div id="shared-list" class="card-body note-list"></div>
+      </details>
+    </section>
+  </main>
+</body>
+</html>

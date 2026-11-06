@@ -10,7 +10,7 @@ See the [main README](../README.md) for an overview, quick start, and the config
 
 - **[Getting Started](getting-started.md)** — install, initialize a project, run your first loop
 - **[Configuration](config.md)** — the full `autohelix.yaml` surface
-- **[CLI Reference](cli.md)** — skill installation/export, `init`, `run`, `clear`, `watch`, `report`
+- **[CLI Reference](cli.md)** — skill installation/export, `init`, `run`, `clear`, `watch`, `view`, `report`
 - **[Docker Sandbox](docker.md)** — run the agent with filesystem isolation
 - **[Concepts](concepts.md)** — how iteration, isolation, and verified improvement
   work, and how to design a loop
