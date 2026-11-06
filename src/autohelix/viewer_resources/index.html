@@ -11,6 +11,7 @@
 <body>
   <header class="top">
     <div class="heading">
+      <p id="kind" class="kind" hidden></p>
       <h1 id="title">AutoHelix</h1>
       <p id="goal" class="goal"></p>
     </div>
@@ -40,6 +41,11 @@
         <tbody id="rows"></tbody>
       </table>
     </section>
+
+    <details class="box card report" id="report" hidden title=".autohelix/output/report.md">
+      <summary><span class="card-title">Summary</span> <span id="report-meta" class="muted"></span></summary>
+      <div id="report-body" class="card-body prose"></div>
+    </details>
 
     <section class="detail">
       <div id="cards" class="cards"></div>

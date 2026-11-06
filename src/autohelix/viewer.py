@@ -6,6 +6,9 @@
 The page polls a few JSON routes. There are no write routes. Every file read
 is derived from an iteration number, or is a file name that must match an
 entry in a fixed directory listing (notes/, observations/iter-N/).
+
+`write_static` saves the same page as one file, output/report.html, with the
+route data built in.
 """
 
 import json
@@ -13,11 +16,12 @@ import os
 import re
 import subprocess
 import threading
+import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from markdown_it import MarkdownIt
 
@@ -25,6 +29,7 @@ from autohelix.agents import AgentEventKind
 from autohelix.config import load_config
 from autohelix.history import History
 from autohelix.replay import LogTail
+from autohelix.report import read_report_info
 from autohelix.run_status import read_run_status
 from autohelix.state import read_stored_config_path
 
@@ -135,35 +140,57 @@ class RunData:
             "notes_files": sorted((e.name for e in _files(self.root / "notes")), key=_note_order),
             "artifacts": self._artifacts(),
             "iterations": iterations,
+            "report": self._report(),
         }
 
-    def iteration(self, n: int) -> dict:
+    def _report(self) -> dict | None:
+        html = _markdown(_read_text(self.root / "output" / "report.md"))
+        return {"html": html, **(read_report_info(self.project) or {})} if html else None
+
+    def iteration(self, n: int, logs: bool = True, diff: bool = True) -> dict:
         records = self.history.load()
         record = next((r for r in records if r.iteration == n), None)
         # The baseline is the code the run started from: the parent of the first accepted commit.
         first = next((r.commit for r in records if r.iteration > 0 and r.accepted and r.commit), None)
         base = f"{first}^" if first and COMMIT.fullmatch(first) else None
-        diff = None
-        if record is None:  # Still running: its edits so far, from the worktree.
-            diff = self._live_diff(n, base)
+        changes = None
+        if not diff:
+            pass
+        elif record is None:  # Still running: its edits so far, from the worktree.
+            changes = self._live_diff(n, base)
         elif record.accepted and base and record.commit:
-            diff = self._diff(base, record.commit)
+            changes = self._diff(base, record.commit)
         # While an iteration runs, its own notes live in the worktree; a copy in notes/
         # may be left over from an earlier, failed attempt at the same iteration.
         notes = [self.root / "notes" / f"iter-{n}.md", self._worktree(n) / ".autohelix" / "notes" / f"iter-{n}.md"]
         if record is None:
             notes.reverse()
-        logs = self.root / "logs" / f"iter-{n}"
+        log_dir = self.root / "logs" / f"iter-{n}"
         return {
             "iteration": n,
             "failure_output": record.failure_output if record else None,
             "notes": _markdown(next(filter(None, map(_read_text, notes)), None)),
             "review": _markdown(_read_text(self.root / "reviews" / f"iter-{n}.md")),
-            "diff": diff,
-            "agent": self._events(logs / "agent.log"),
-            "agent_clipped": logs / "agent.log" in self._clipped,
-            "reviewer": self._events(logs / "review.log"),
+            "diff": changes,
+            "agent": self._events(log_dir / "agent.log") if logs else [],
+            "agent_clipped": logs and log_dir / "agent.log" in self._clipped,
+            "reviewer": self._events(log_dir / "review.log") if logs else [],
         }
+
+    def snapshot(self) -> dict:
+        """The page's data keyed by route, for report.html: no logs or captured output,
+        and one diff, baseline to final code, on the last accepted iteration."""
+        state = {**self.state(), "artifacts": {}}
+        accepted = [r["iteration"] for r in state["iterations"] if r["iteration"] > 0 and r["accepted"]]
+        final = accepted[-1] if accepted else None
+        routes = {"/api/state": state}
+        for r in state["iterations"]:
+            n = r["iteration"]
+            routes[f"/api/iteration/{n}"] = self.iteration(n, logs=False, diff=n == final)
+        for name in state["notes_files"]:
+            # The page builds this URL with encodeURIComponent, which leaves !'()* as is.
+            routes["/api/notes/" + quote(name, safe="!'()*")] = self.note(name)
+        return routes
 
     def _worktree(self, n: int) -> Path:
         """Where a running iteration's files live (notes are copied back at the end)."""
@@ -294,6 +321,31 @@ class RunData:
                 diff = f"Could not read diff: {exc}"
             self._diffs[key] = diff[:MAX_TEXT]
         return self._diffs[key]
+
+
+def write_static(project: Path, config_file: Path | None = None) -> Path:
+    """Write output/report.html: the viewer page with this run's data built in."""
+    resources = files("autohelix").joinpath("viewer_resources")
+    read = lambda name: resources.joinpath(name).read_text(encoding="utf-8")  # noqa: E731
+    # Each logo once, in the data; the page's theme code sets the <img> from it.
+    logos = {theme: "data:image/svg+xml," + quote(read(f"autohelix-{theme}.svg"), safe=" =:/-.,;'\"()")
+             for theme in ("light", "dark")}
+    data = {"routes": RunData(project, config_file).snapshot(), "logos": logos, "saved_at": time.time()}
+    # "<" escaped, so no text in the data can close the script element.
+    script = json.dumps(data).replace("<", "\\u003c")
+    page = (read("index.html")
+            .replace('<link rel="stylesheet" href="/viewer.css">', f"<style>\n{read('viewer.css')}</style>")
+            .replace('<script src="/viewer.js" defer></script>', "")
+            .replace('  <link rel="icon" href="/logo-light.svg">\n', "")
+            .replace(' src="/logo-light.svg"', "")
+            .replace("</body>", f"<script>window.AUTOHELIX_SNAPSHOT = {script};</script>\n"
+                                f"<script>\n{read('viewer.js')}</script>\n</body>"))
+    out = project / ".autohelix" / "output" / "report.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".tmp")
+    tmp.write_text(page, encoding="utf-8")
+    tmp.replace(out)
+    return out
 
 
 def make_server(project: Path, port: int = 8765, config_file: Path | None = None) -> ThreadingHTTPServer:

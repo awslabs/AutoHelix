@@ -26,8 +26,8 @@ supervision completed.
 Read `.autohelix/history.jsonl`, the current backend log under
 `.autohelix/logs/iter-N/`, captured observations under
 `.autohelix/observations/iter-N/`, and persistent `.autohelix/notes/iter-N.md`.
-`autohelix watch` provides a terminal view and the existing static dashboard is
-at `.autohelix/output/dashboard.html`. If watch does not present the selected
+`autohelix watch` provides a terminal view; `.autohelix/runtime/run.json` records
+the run's state and phase, and `.autohelix/output/report.html` is saved when it stops. If watch does not present the selected
 backend's activity use its logs and saved records. Infer active execution from
 the launched process, not from the configured iteration count or old logs.
 
@@ -76,5 +76,5 @@ is finished. Explain why this execution ended and what remains uncertain.
 For requested resumption, retain history and configuration and interpret `-n`
 as the total iteration limit, including previous attempts. Do not clear state,
 reset accepted code, or extend the agreed effort without authorization.
-`autohelix report` can produce a narrative snapshot when requested; basic
-results are already available in the console, dashboard, and saved records.
+A run that finishes writes its summary to `.autohelix/output/report.md`; after an
+interrupted run, `autohelix report` writes one when requested.

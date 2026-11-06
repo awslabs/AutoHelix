@@ -59,7 +59,7 @@ DEFAULT_CHECK_TIMEOUT = 1800
 
 KNOWN_TOP_LEVEL_KEYS = {
     "goal", "constraints", "constraint", "metrics", "observables",
-    "scope", "agent", "acceptance", "budget", "reviewer",
+    "scope", "agent", "acceptance", "budget", "reviewer", "report",
 }
 
 
@@ -133,6 +133,7 @@ class Config:
     max_cost_usd: float | None = None
     max_time_seconds: int | None = None
     iteration_time_seconds: int | None = None
+    report: bool = True  # write a summary (output/report.md) when a run finishes
     _parse_errors: dict[str, str] = field(default_factory=dict, repr=False)
 
     def metric_directions(self) -> dict[str, str]:
@@ -422,6 +423,7 @@ class Config:
             max_cost_usd=max_cost_usd,
             max_time_seconds=max_time_seconds,
             iteration_time_seconds=iteration_time_seconds,
+            report=data.get("report") is not False,
             _parse_errors=parse_errors,
         )
 

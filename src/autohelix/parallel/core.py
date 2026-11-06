@@ -197,7 +197,9 @@ def run_worker(worker: Worker, sync_every: int, verbose: bool,
         done = History(worker.worktree).get_last_iteration()
         while done < worker.budget and not _stop_event.is_set():
             upto = min(done + sync_every, worker.budget)
-            _run_segment(worker, upto, verbose, run_args)
+            # Only a worker's last segment writes the run summary.
+            extra = [] if upto == worker.budget else ["--no-report"]
+            _run_segment(worker, upto, verbose, [*(run_args or []), *extra])
             if _stop_event.is_set():
                 break
             sync_own_notes(worker)

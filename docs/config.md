@@ -67,6 +67,9 @@ budget:
   # cost: 20           # max spend in USD (needs a cost-reporting backend: Claude Code or OpenCode)
   # time: 2h           # max total wall-clock (duration string: 90m, 2h, 1h30m)
   # iteration_time: 15m  # per-iteration time budget (see below)
+
+# Write a summary of the run when it finishes (default true)
+# report: false
 ```
 
 ## Example Configs
@@ -276,6 +279,10 @@ Caps how far a run goes. Combine any of:
 - `iteration_time` — a *per-iteration* time budget. Unlike the others it can interrupt work mid-iteration: it enforces a hard deadline **and** injects the remaining time into the agent's context so it can wrap up and save notes first. See [ML Experiments](ml-experiments.md) for when this matters.
 
 `cost` and `time` are **checked after each iteration completes, never mid-iteration** — the loop stops once the cumulative total crosses the limit, so a run can overshoot by up to one iteration's worth of cost or time. For a hard mid-iteration cutoff use `iteration_time` (or `agent.timeout_seconds`).
+
+### Report
+
+When a run finishes (iteration, cost or time budget reached), one more agent call reads the run's history, notes, reviews, logs and commits and writes a short summary to `.autohelix/output/report.md`: what was achieved, which changes mattered, what didn't work, what to try next, and anything worth checking before relying on the results. An interrupted run gets no summary; run [`autohelix report`](cli.md#autohelix-report) to write one. Set `report: false` to skip it. The call uses the same agent backend and model as the run, with a timeout of `agent.timeout_seconds` capped at 15 minutes. Its time and cost are shown next to the summary in `autohelix view` and `report.html`; the cost is not counted against `budget.cost`.
 
 ### Auto Memory
 

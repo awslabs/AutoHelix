@@ -24,7 +24,6 @@ from autohelix.config import load_config
 from autohelix.display import LiveDisplay
 from autohelix.history import History, IterationResult
 from autohelix.checks import preflight_check, run_constraints, run_observables
-from autohelix.dashboard import generate_dashboard
 from autohelix.run_status import RunStatus
 from autohelix.formatting import format_delta
 from autohelix.prompt_template import build_prompt_variables, load_template, render_template
@@ -989,13 +988,8 @@ class Harness:
         else:
             self.log.info(f"iter {iteration} rejected — {result.reason} ({wall_s:.0f}s total)")
 
-        # Log result and update dashboard
         self.history.append(result)
         self.run_status.phase("between iterations")
-        try:
-            generate_dashboard(self.project_path, self.config.metric_directions())
-        except Exception:
-            pass
         return result
 
     def _capture_baseline(self) -> None:
@@ -1044,10 +1038,6 @@ class Harness:
             reason="baseline",
         )
         self.history.append(baseline)
-        try:
-            generate_dashboard(self.project_path, self.config.metric_directions())
-        except Exception:
-            pass
 
     def _run_baseline_review(self) -> None:
         """Run reviewer on the baseline state (before any iterations)."""
@@ -1098,25 +1088,49 @@ class Harness:
         store_config_path(self.project_path, current)
         return True
 
-    def run(self, max_iterations: int | None = None) -> None:
-        """Run the optimization loop, recording live status in runtime/run.json."""
+    def run(self, max_iterations: int | None = None, report: bool = True) -> None:
+        """Run the optimization loop, recording live status in runtime/run.json.
+
+        When the loop finishes normally (not interrupted) after running at least one
+        iteration, writes the run summary unless `report: false` or `report=False`.
+        However a started run stops, it then saves output/report.html.
+        """
+        outcome = "finished"
         try:
-            self._run(max_iterations)
+            if self._run(max_iterations) and report and self.config.report:
+                from autohelix.report import write_report
+
+                self.run_status.phase("report")
+                self.console.print()
+                write_report(self.config, self.project_path, self.console, self.config_file)
         except KeyboardInterrupt:
-            self.run_status.stop("interrupted")
+            outcome = "interrupted"
             raise
         except BaseException:
-            self.run_status.stop("failed")
+            outcome = "failed"
             raise
-        self.run_status.stop("finished")
+        finally:
+            self.run_status.stop(outcome)  # keeps an earlier "interrupted"
+            if self.run_status.data:  # the run started
+                self._write_static()
 
-    def _run(self, max_iterations: int | None = None) -> None:
+    def _write_static(self) -> None:
+        from autohelix.viewer import write_static
+
+        try:
+            path = write_static(self.project_path, self.config_file)
+            self.console.print(f"[dim]Run page saved to {path.relative_to(self.project_path)}[/dim]")
+        except Exception as e:  # noqa: BLE001 - never hide the run's own outcome
+            self.console.print(f"[yellow]Could not save report.html: {e}[/yellow]")
+
+    def _run(self, max_iterations: int | None = None) -> bool:
+        """Returns True if the loop ran at least one iteration and was not interrupted."""
         max_iter = max_iterations or self.config.max_iterations
         start_iter = self.history.get_last_iteration() + 1
 
         # Check active config matches
         if not self._check_active_config():
-            return
+            return False
 
         # Ensure .autohelix/ is gitignored (covers manual config + run path)
         ensure_gitignore_entry(self.project_path, ".autohelix/")
@@ -1140,7 +1154,7 @@ class Harness:
             self.sandbox.ensure_clean_working_tree()
         except RuntimeError as e:
             self.console.print(f"[red]Error:[/red] {e}")
-            return
+            return False
 
         # Check editable files exist and are committed
         try:
@@ -1148,7 +1162,7 @@ class Harness:
         except RuntimeError as e:
             self.console.print(f"[red]Error:[/red] {e}")
             self.console.print("\n[dim]Commit your editable files before running AutoHelix.[/dim]")
-            return
+            return False
 
         # Show header
         self._print_header(max_iter, start_iter)
@@ -1166,7 +1180,7 @@ class Harness:
                 self.console.print(
                     "\n[red]Preflight checks failed.[/red] Fix the issues above before running."
                 )
-                return
+                return False
 
         self.run_status.start(max_iterations=max_iter)
 
@@ -1199,9 +1213,11 @@ class Harness:
         config_name = self._resolve_config_rel_path()
         self.log.info(f"run started — config: {config_name}, max_iter: {max_iter}, resuming from iter {start_iter}")
 
+        ran = False
         try:
             for iteration in range(start_iter, max_iter + 1):
                 result = self.run_iteration(iteration)
+                ran = True
                 self._print_iteration_summary(result)
 
                 # Check cost budget
@@ -1215,8 +1231,11 @@ class Harness:
                     break
         except KeyboardInterrupt:
             self.run_status.stop("interrupted")
-            self.console.print(f"\n\n[yellow]Interrupted at iteration {iteration}. Progress saved.[/yellow]")
+            self.console.print(f"\n\n[yellow]Interrupted at iteration {iteration}. Progress saved.[/yellow] "
+                               "[dim]Run [bold]autohelix report[/bold] for a summary.[/dim]")
+            ran = False
         self._print_summary()
+        return ran
 
     def _print_iteration_summary(self, result: IterationResult) -> None:
         """Print a concise one-liner after each iteration."""
@@ -1315,7 +1334,5 @@ class Harness:
             table.add_row(f"Best {name}", val_text)
 
         self.console.print(table)
-        self.console.print()
-        self.console.print("[dim]Run [bold]autohelix report[/bold] for analysis (uses one agent call).[/dim]")
 
         self.log.info(f"run complete — {accepted} merged, {rejected} rejected, ${total_cost:.2f}, {total_time_str}")

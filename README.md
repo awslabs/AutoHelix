@@ -221,7 +221,7 @@ my-project/
     ├── reviews/         # reviewer feedback per iteration (if a reviewer is set)
     ├── hints.md         # messages from `autohelix hint`
     ├── logs/            # per-iteration prompts and agent output
-    ├── output/          # dashboard.html and reports
+    ├── output/          # run summary (report.md) and run page (report.html)
     └── worktrees/       # temp iteration dirs (recreated each time)
 ```
 
@@ -232,8 +232,9 @@ my-project/
 <details>
 <summary><b>Report</b></summary>
 
-`autohelix report` runs a one-shot agent over the run's history, notes, and git log and
-writes a summary to `.autohelix/output/report.md`. See [CLI → report](docs/cli.md#autohelix-report).
+When a run finishes, an agent reads the run's history, notes, reviews and commits and
+writes a short summary to `.autohelix/output/report.md`. `autohelix report` writes it on
+demand, e.g. after an interrupted run. See [Configuration → Report](docs/config.md#report).
 
 </details>
 
@@ -246,12 +247,13 @@ and the latest one guides the next iteration. See [Concepts → Reviewer](docs/c
 </details>
 
 <details>
-<summary><b>Dashboard</b></summary>
+<summary><b>Viewer and run page</b></summary>
 
-After every iteration, AutoHelix regenerates a self-contained HTML dashboard at
-`.autohelix/output/dashboard.html`. You can open it in a browser
-to watch metrics, outcomes, and per-iteration changes as the run progresses. See
-[Concepts → Dashboard](docs/concepts.md#dashboard).
+`autohelix view` serves a live page for a run on 127.0.0.1: status, metric chart,
+iterations with notes, diffs, reviews and agent activity, and the run summary once it is
+written. When a run stops, AutoHelix saves the same page as one file,
+`.autohelix/output/report.html`, to open in a browser or share. See
+[Concepts → Run page](docs/concepts.md#run-page).
 
 </details>
 

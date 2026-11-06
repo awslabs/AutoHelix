@@ -69,7 +69,7 @@ Requires an existing git repository.
 Start or resume the optimization loop. Requires `autohelix init` to have been run first.
 
 ```bash
-autohelix run [--path PATH] [-n ITERATIONS] [--verbose] [--config PATH]
+autohelix run [--path PATH] [-n ITERATIONS] [--verbose] [--config PATH] [--no-report]
 ```
 
 ### Options
@@ -80,8 +80,11 @@ autohelix run [--path PATH] [-n ITERATIONS] [--verbose] [--config PATH]
 | `--verbose` | Show agent command details, file paths, heartbeats |
 | `--config`, `-c` | Path to config file (default: `autohelix.yaml` in project) |
 | `--path`, `-p` | Project directory (default: current dir) |
+| `--no-report` | Don't write the run summary when the run finishes |
 
-On first run, performs preflight checks and captures baseline observables. After every iteration it refreshes a self-contained dashboard at `.autohelix/output/dashboard.html` (open it in a browser to watch progress) — see [Concepts → Dashboard](concepts.md#dashboard).
+When the run finishes (not when interrupted), it writes a summary to `.autohelix/output/report.md` — see [Configuration → Report](config.md#report).
+
+On first run, performs preflight checks and captures baseline observables. When the run stops, it saves `.autohelix/output/report.html`, a one-file copy of the [`autohelix view`](#autohelix-view) page — see [Concepts → Run page](concepts.md#run-page).
 
 ## `autohelix clear`
 
@@ -133,7 +136,7 @@ Appends a timestamped line to `.autohelix/hints.md`. The agent reads that file (
 
 ## `autohelix report`
 
-Generate an agent-written analysis of the run.
+Write (or rewrite) the run summary.
 
 ```bash
 autohelix report [path] [--config PATH]
@@ -143,7 +146,7 @@ autohelix report [path] [--config PATH]
 |--------|-------------|
 | `--config`, `-c` | Path to config file (default: from last run, or `autohelix.yaml`) |
 
-Uses a one-shot agent call to analyze iteration history, notes, and git log, then writes `.autohelix/output/report.md`.
+`autohelix run` writes the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. One agent call reads the run's history, notes, reviews, logs and commits and writes `.autohelix/output/report.md`. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
 
 ## `autohelix parallel` (alpha)
 

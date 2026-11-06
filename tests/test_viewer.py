@@ -93,6 +93,9 @@ def test_state_lists_iterations_and_status(viewer):
     assert state["config"]["file"] == "autohelix.yaml"
     assert state["config"]["checks"] == ["true"]
     assert "goal: Test the integration" in state["config"]["text"]
+    # The run finished, so it wrote a summary (the mock agent's fixed text).
+    assert state["report"]["html"] == "<p>Mock summary of the run.</p>\n"
+    assert state["report"]["last_iteration"] == 2
 
 
 def test_iteration_detail_has_notes_and_diff(viewer):
@@ -215,3 +218,41 @@ def test_preflight_failure_is_not_recorded_as_a_run(integration_project):  # noq
     harness.run(max_iterations=1)
     assert any("Preflight checks failed" in line for line in preflight)
     assert read_run_status(integration_project) is None
+
+
+def _snapshot(page: str) -> dict:
+    start = page.index("window.AUTOHELIX_SNAPSHOT = ") + len("window.AUTOHELIX_SNAPSHOT = ")
+    return json.loads(page[start:page.index(";</script>", start)])
+
+
+def test_stopped_run_saves_static_page(integration_project):  # noqa: F811
+    (integration_project / "hello.py").write_text('print("</script><b>")\n')  # text that must not break out
+    subprocess.run(["git", "commit", "-qam", "tricky"], cwd=integration_project)
+    Harness(integration_project).run(max_iterations=2)
+    page = (integration_project / ".autohelix/output/report.html").read_text()
+    for ref in ('src="/viewer.js"', 'href="/viewer.css"', 'src="/logo-light.svg"', 'href="/logo-light.svg"'):
+        assert ref not in page  # everything is inlined
+    data = _snapshot(page)
+    routes = data["routes"]
+    assert routes["/api/state"]["status"]["state"] == "finished"
+    assert routes["/api/state"]["report"]["last_iteration"] == 2
+    assert routes["/api/state"]["artifacts"] == {}
+    assert set(routes) >= {"/api/state", "/api/iteration/0", "/api/iteration/1", "/api/iteration/2"}
+    assert all(routes[f"/api/iteration/{n}"]["agent"] == [] for n in (0, 1, 2))
+    # One diff: baseline to the final code, on the last accepted iteration.
+    assert routes["/api/iteration/1"]["diff"] is None
+    assert "hello.py" in routes["/api/iteration/2"]["diff"]
+    assert data["logos"]["dark"].startswith("data:image/svg+xml,%3Csvg")
+    assert data["saved_at"] > 0  # shown as "Run report · saved HH:MM"
+    assert len(page) < 300_000  # mostly the two logos; this run's data is small
+    assert page.count("</script>") == 2  # the data script and the viewer script
+
+
+def test_interrupted_run_still_saves_static_page(integration_project, monkeypatch):  # noqa: F811
+    harness = Harness(integration_project)
+    monkeypatch.setattr(harness, "run_iteration", lambda n: (_ for _ in ()).throw(KeyboardInterrupt))
+    harness.run(max_iterations=1)
+    page = (integration_project / ".autohelix/output/report.html").read_text()
+    state = _snapshot(page)["routes"]["/api/state"]
+    assert state["status"]["state"] == "interrupted"
+    assert state["report"] is None

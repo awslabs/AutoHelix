@@ -140,6 +140,18 @@ def test_run_worker_syncs_every_n(tmp_path, monkeypatch):
     assert w.error is None
 
 
+def test_only_last_segment_writes_report(tmp_path, monkeypatch):
+    """Earlier segments pass --no-report; the worker's last one writes the summary."""
+    repo = _init_repo(tmp_path)
+    workers = P.setup_workers(repo, [repo / "autohelix.yaml"], tmp_path / "shared")
+
+    calls = []
+    monkeypatch.setattr(P, "_run_segment", lambda w, upto, v, r=None: calls.append((upto, r)))
+
+    P.run_worker(workers[0], sync_every=2, verbose=False, run_args=["--verbose"])
+    assert calls == [(2, ["--verbose", "--no-report"]), (4, ["--verbose", "--no-report"]), (6, ["--verbose"])]
+
+
 def test_run_worker_sync_every_1(tmp_path, monkeypatch):
     """sync_every=1 syncs after every iteration."""
     repo = _init_repo(tmp_path)

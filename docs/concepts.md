@@ -174,8 +174,8 @@ as read-only reference; `reviews/` and `history.jsonl` never enter a worktree.
 ├── peer_notes/           # Parallel mode: symlinks to peers' shared notes
 ├── hints.md              # `autohelix hint` messages (read-only reference)
 ├── output/
-│   ├── report.md         # Agent-written run analysis
-│   └── dashboard.html    # Visual dashboard
+│   ├── report.md         # Run summary, written when a run finishes
+│   └── report.html       # Run page: the viewer saved as one file
 ├── logs/                 # Prompts and raw agent output per iteration
 ├── history.jsonl         # Accept/reject, metrics, usage per iteration
 ├── prompt.md             # Customizable prompt template
@@ -202,12 +202,6 @@ What's available depends on the backend:
 
 Missing fields are simply omitted from the display.
 
-## Dashboard
+## Run page
 
-AutoHelix regenerates a self-contained HTML dashboard at `.autohelix/output/dashboard.html` after every iteration — no command or flag required. Open it in a browser (it refreshes on disk as the run progresses):
-
-- Metric trajectories per iteration, with baseline (iter-0) as the reference and direction (↑/↓) taken from your config
-- Accepted vs. rejected iterations, with the rejection reason
-- Cost and token usage over the run
-
-Because it's a single static file with no server, you can open it mid-run to watch progress or share it afterward. For a written narrative of the run instead, use [`autohelix report`](cli.md#autohelix-report).
+To follow a run live, use [`autohelix view`](cli.md#autohelix-view). When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/output/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's notes and review, the changes from the baseline to the final code, and the run summary when there is one (see [Configuration → Report](config.md#report)). It leaves out agent and reviewer activity, per-iteration diffs, and captured output; use `autohelix view` for those. `autohelix report` also rewrites it.

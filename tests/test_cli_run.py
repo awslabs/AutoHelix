@@ -13,7 +13,7 @@ def test_run_returns_nonzero_for_infrastructure_failure(tmp_path, monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        def run(self, max_iterations=None):
+        def run(self, max_iterations=None, report=True):
             raise AutoHelixRunError("Iteration 1 agent failed: credentials expired")
 
     monkeypatch.setattr("autohelix.cli.Harness", FailingHarness)

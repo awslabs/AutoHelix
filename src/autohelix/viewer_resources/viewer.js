@@ -1,8 +1,10 @@
 // AutoHelix live viewer: a browser for a run's .autohelix/ state. Polls /api/state
-// and the details of whichever iteration cards are open.
+// and the details of whichever iteration cards are open. In report.html the same
+// routes come from data built into the file, and nothing is polled.
 'use strict';
 
 const POLL_MS = 2000;
+const SNAPSHOT = window.AUTOHELIX_SNAPSHOT || null;
 const $ = (id) => document.getElementById(id);
 
 let state = null;
@@ -76,7 +78,7 @@ function baselineValue() {
 
 function liveIteration() {
   const s = state?.status;
-  return s?.state === 'running' && s.iteration !== null ? s.iteration : null;
+  return s?.state === 'running' && s.phase !== 'report' && s.iteration !== null ? s.iteration : null;
 }
 
 function renderStatus() {
@@ -88,7 +90,9 @@ function renderStatus() {
     return;
   }
   const now = Date.now() / 1000;
-  if (s.state === 'running') {
+  if (s.state === 'running' && s.phase === 'report') {
+    node.textContent = `Running · writing the summary · ${fmtDuration(now - s.phase_started_at)}`;
+  } else if (s.state === 'running') {
     const where = s.iteration === null ? '' : ` · ${label(s.iteration).toLowerCase()}`;
     node.textContent = `Running${where} · ${s.phase} · ${fmtDuration(now - s.phase_started_at)}`;
   } else {
@@ -97,6 +101,54 @@ function renderStatus() {
     node.textContent = (words[s.state] || s.state) + when;
   }
   node.className = `status ${s.state}`;
+}
+
+// ---------- summary ----------
+
+function renderReport() {
+  const r = state.report;
+  show('report', Boolean(r));
+  if (!r) return;
+  const body = $('report-body');
+  if (body.dataset.html !== r.html) {
+    body.dataset.html = r.html;
+    body.innerHTML = r.html; // rendered by the server from Markdown with raw HTML disabled
+    linkIterations(body);
+  }
+  setText('report-meta', [
+    r.last_iteration && `iterations 1–${r.last_iteration}`,
+    r.written_at && `written ${fmtClock(r.written_at)}`,
+    r.seconds && fmtDuration(r.seconds),
+    r.cost_usd && fmtCost(r.cost_usd),
+  ].filter(Boolean).join(' · '));
+  // Open a new summary, or the summary when the run finishes; fold it while a run is going.
+  // In between, the user's fold wins.
+  const running = state.status?.state === 'running';
+  const box = $('report');
+  const key = `${r.written_at}:${running}`;
+  if (box.dataset.key !== key) {
+    box.dataset.key = key;
+    box.open = !running;
+  }
+}
+
+// "iter N" in the summary links to that iteration's card.
+function linkIterations(root) {
+  const known = new Set(state.iterations.map((r) => r.iteration));
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const texts = [];
+  while (walker.nextNode()) {
+    if (!walker.currentNode.parentElement.closest('a, code, pre')) texts.push(walker.currentNode);
+  }
+  for (const text of texts) {
+    const parts = text.textContent.split(/\b(iter \d+)\b/i);
+    if (parts.length === 1) continue;
+    text.replaceWith(...parts.map((part) => {
+      const n = Number(/^iter (\d+)$/i.exec(part)?.[1]);
+      if (!known.has(n)) return part;
+      return el('a', { href: `#iter-${n}`, textContent: part, onclick: (e) => { e.preventDefault(); select(n); } });
+    }));
+  }
 }
 
 // ---------- overview ----------
@@ -679,6 +731,10 @@ function renderEvents(box, events, expanded) {
 // ---------- polling ----------
 
 async function getJSON(url) {
+  if (SNAPSHOT) {
+    if (url in SNAPSHOT.routes) return SNAPSHOT.routes[url];
+    throw new Error(`${url}: not in this file`);
+  }
   const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return res.json();
@@ -688,10 +744,12 @@ function render() {
   const names = metricNames();
   if (!names.includes(metric)) metric = names[0] || null;
   setText('title', state.title);
-  document.title = `${state.title} · AutoHelix`;
+  document.title = `${state.title} · AutoHelix${SNAPSHOT ? ' report' : ''}`;
+  if (SNAPSHOT) { show('kind', true); setText('kind', `Run report · saved ${fmtClock(SNAPSHOT.saved_at)}`); }
   setText('goal', (state.goal || '').trim());
   renderStatus();
   renderConfig();
+  renderReport();
   renderStats();
   renderMetricSelect(names);
   renderChart();
@@ -729,7 +787,7 @@ async function loop() {
   } catch (err) {
     console.error(err); // a rendering bug; keep polling
   } finally {
-    setTimeout(loop, document.hidden ? POLL_MS * 5 : POLL_MS);
+    if (!SNAPSHOT) setTimeout(loop, document.hidden ? POLL_MS * 5 : POLL_MS);
   }
 }
 
@@ -744,7 +802,8 @@ function applyTheme() {
   if (theme === 'auto') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = theme;
   const dark = theme === 'dark' || (theme === 'auto' && systemDark.matches);
-  $('logo').src = dark ? '/logo-dark.svg' : '/logo-light.svg';
+  const logos = SNAPSHOT?.logos || { light: '/logo-light.svg', dark: '/logo-dark.svg' };
+  $('logo').src = dark ? logos.dark : logos.light;
   $('theme').textContent = THEMES[theme];
 }
 $('theme').addEventListener('click', () => {

@@ -31,6 +31,8 @@ class MockAgent:
             mock exercise the harness cost budget without a real LLM.
         sleep_seconds: Wall-clock seconds to sleep before returning (default: 0).
             Consumes real time so the total-time budget can be exercised offline.
+
+    For a run-summary prompt it writes a fixed summary instead of changing code.
     """
 
     display_name = "Mock Agent"
@@ -53,6 +55,13 @@ class MockAgent:
         # Emit some events for realism
         event_callback(AgentEvent(kind=AgentEventKind.STATUS, text="mock agent starting"))
         event_callback(AgentEvent(kind=AgentEventKind.THINKING, text="Analyzing the codebase..."))
+
+        from autohelix.report import WRITE_TO
+
+        if WRITE_TO in prompt:
+            draft = prompt.rsplit(WRITE_TO, 1)[1].strip().removesuffix(".")
+            Path(draft).write_text("Mock summary of the run.\n")
+            return AgentRunResult(success=True, exit_code=0)
 
         # Check if we should fail
         if settings.get("should_fail", False):
