@@ -100,13 +100,13 @@ Does not touch code — use git directly to roll back.
 
 ## `autohelix watch`
 
-Live-tail agent output in a second terminal.
+Follow a run in a second terminal.
 
 ```bash
 autohelix watch [path]
 ```
 
-Shows tool calls, text output, and elapsed time. Automatically switches to new iterations as they start.
+Shows the live output of whatever the run is doing: the agent during an iteration, the reviewer during a review, and the summary agent at the end (tool calls, text, elapsed time). Below it is a status line with the iteration, phase (agent, checks, review, …) and time in that phase, read from `.autohelix/runtime/run.json`. When the run stops, watch says how and when, and waits for the next run; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs.
 
 ## `autohelix view`
 
@@ -116,7 +116,7 @@ Live web view of a run, in your browser.
 autohelix view [path] [--port 8765] [--open]
 ```
 
-A browser view of a run's `.autohelix/` state. The left side shows run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed), the metric over time, and one row per iteration with the agent's one-line summary. The right side has one card per iteration with its notes (`notes/iter-N.md`), agent activity (`logs/iter-N/`, live while it runs), review, changes against the baseline, and captured output (`observations/iter-N/`); click a row or chart point to open that card. Notes that are not tied to an iteration are listed under Shared notes. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
+A browser view of a run's `.autohelix/` state. The header shows run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed). The left side shows the best metric value with total time and cost, the metric over time, and one row per iteration with the agent's one-line summary. The right side starts with the run summary once one is written (see [Configuration → Report](config.md#report)), then has one card per iteration with its notes (`notes/iter-N.md`), agent activity (`logs/iter-N/`, live while it runs), review, changes against the baseline, and captured output (`observations/iter-N/`); click a row or chart point to open that card. Notes that are not tied to an iteration are listed under Shared notes. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
 
 The server listens on `127.0.0.1` only and has no login, so on a shared machine other users of that machine can open it. From another machine, forward the port over SSH:
 

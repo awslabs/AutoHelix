@@ -38,3 +38,8 @@ class TestFormatDelta:
     def test_moderate_decrease_stays_percentage(self):
         # 100 -> 20 is -80%, below the inverse-ratio threshold.
         assert format_delta(20, 100) == "↓ 80.0%"
+
+
+def test_format_duration_is_compact():
+    from autohelix.formatting import format_duration
+    assert [format_duration(s) for s in (0, 48, 62, 3599, 3700)] == ["0s", "48s", "1m 02s", "59m 59s", "1h 01m"]

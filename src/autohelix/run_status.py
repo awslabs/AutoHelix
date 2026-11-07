@@ -31,9 +31,10 @@ class RunStatus:
     def phase(self, phase: str, iteration: int | None = None) -> None:
         if not self.data:
             return
-        if iteration is not None:
-            self.data["iteration"] = iteration
-        self.data.update(phase=phase, phase_started_at=time.time())
+        now = time.time()
+        if iteration is not None and iteration != self.data.get("iteration"):
+            self.data.update(iteration=iteration, iteration_started_at=now)
+        self.data.update(phase=phase, phase_started_at=now)
         self._write()
 
     def stop(self, state: str = "finished") -> None:

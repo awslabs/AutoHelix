@@ -8,6 +8,16 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 
+def format_duration(seconds: float) -> str:
+    """Compact, at most 7 characters: 48s, 1m 02s, 1h 01m."""
+    s = max(0, int(seconds))
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m {s % 60:02d}s"
+    return f"{s // 3600}h {s % 3600 // 60:02d}m"
+
+
 def format_cost(cost: float | None, precision: int = 2) -> str:
     """Display recorded or calculated dollars without treating absence as zero."""
     return f"${cost:.{precision}f}" if cost is not None else "cost unavailable"

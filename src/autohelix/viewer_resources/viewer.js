@@ -173,21 +173,24 @@ function bestSoFar() {
 }
 
 function renderStats() {
+  // Best metric, then totals over finished iterations (as in the terminal's run summary).
   const its = state.iterations.filter((r) => r.iteration > 0);
-  const accepted = its.filter((r) => r.accepted).length;
   const knownCosts = its.filter((r) => typeof r.cost === 'number');
   const cost = knownCosts.reduce((sum, r) => sum + r.cost, 0);
-  const stats = [
-    ['Accepted', `${accepted} of ${its.length}`],
-  ];
+  const stats = [];
   if (metric) {
-    const base = baselineValue();
     const best = [...bestSoFar().values()].at(-1);
-    stats.unshift([`Best ${metric}`, fmtNumber(best), deltaEl(best, base)]);
+    stats.push([`Best ${metric}`, fmtNumber(best), deltaEl(best, baselineValue())]);
   }
-  if (its.length) stats.push(['Cost', knownCosts.length
-    ? fmtCost(cost) + (knownCosts.length < its.length ? ' (incomplete)' : '')
-    : 'unavailable']);
+  if (its.length) {
+    const timed = its.filter((r) => typeof r.seconds === 'number');
+    stats.push(['Time', timed.length
+      ? fmtDuration(timed.reduce((sum, r) => sum + r.seconds, 0)) + (timed.length < its.length ? ' (incomplete)' : '')
+      : '—']);
+    stats.push(['Cost', knownCosts.length
+      ? fmtCost(cost) + (knownCosts.length < its.length ? ' (incomplete)' : '')
+      : 'unavailable']);
+  }
   $('stats').replaceChildren(...stats.map(([k, v, extra]) => el('div', { className: 'stat' },
     el('span', { className: 'stat-label', textContent: k }),
     el('span', { className: 'stat-value', textContent: v }, extra))));
@@ -298,7 +301,7 @@ function renderRows() {
       // Rejected rows get the short reason; the full one is in the iteration's card.
       el('td', { className: 'summary', textContent: (r.accepted === false ? shortReason(r.summary) : r.summary) || '' }),
       el('td', { className: 'num', textContent: r.seconds ? fmtDuration(r.seconds) : '' }),
-      el('td', { className: 'num', textContent: fmtCost(r.cost) }),
+      el('td', { className: 'num', textContent: fmtCost(r.cost), title: typeof r.cost === 'number' || r.iteration === 0 ? '' : 'Cost unavailable' }),
     ]);
   });
   const live = liveIteration();

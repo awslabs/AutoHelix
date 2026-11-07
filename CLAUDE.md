@@ -46,7 +46,7 @@ autohelix init         # Initialize project (creates .autohelix/ and config temp
 autohelix run          # Start or resume optimization loop
 autohelix parallel     # Run multiple workers in parallel on the same goal
 autohelix clear        # Archive state, start fresh
-autohelix watch        # Live-tail agent output (second terminal)
+autohelix watch        # Follow a run in the terminal (second terminal)
 autohelix view         # Live web view of a run (127.0.0.1)
 autohelix hint         # Send a hint to the running agent (picked up next iteration)
 autohelix report       # Agent-written analysis of the run

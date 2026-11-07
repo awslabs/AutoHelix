@@ -483,88 +483,34 @@ def view(path: str, port: int, config_file: str | None, open_browser: bool):
 @main.command()
 @click.argument("path", type=click.Path(exists=True), default=".")
 def watch(path: str):
-    """Live-tail the current iteration's agent output.
+    """Follow a run in the terminal.
 
-    Run this in a second terminal while `autohelix run` is active.
-    Shows tool calls, text output, and elapsed time in a live panel.
+    Run this in a second terminal while `autohelix run` is active. Shows what the
+    run is doing and the live output of the agent, reviewer or summary agent.
+    Keeps waiting when the run stops; Ctrl-C stops watching (not the run).
     """
-    import time
-
     from rich.console import Console
-    from rich.live import Live
+
+    from autohelix.run_status import read_run_status
+    from autohelix.watch import watch as watch_run
 
     console = Console()
     project_path = Path(path).resolve()
-    logs_dir = project_path / ".autohelix" / "logs"
-
-    if not logs_dir.exists():
-        _warn_if_parallel(project_path, console)
-        console.print("[yellow]No agent logs found. Is autohelix running?[/yellow]")
+    if _parallel_marker_path(project_path).exists() and read_run_status(project_path) is None:
+        _warn_if_parallel(project_path, console)  # lists the workers to watch instead
         raise SystemExit(1)
-
-    def _find_latest_log() -> Path | None:
-        logs = sorted(logs_dir.glob("iter-*/agent.log"), key=lambda p: p.stat().st_mtime)
-        return logs[-1] if logs else None
-
-    log_path = _find_latest_log()
-    if not log_path:
-        console.print("[yellow]No iteration logs found. Waiting...[/yellow]")
-        for _ in range(30):
-            time.sleep(1)
-            log_path = _find_latest_log()
-            if log_path:
-                break
-        if not log_path:
-            console.print("[red]No logs appeared. Is autohelix running?[/red]")
-            raise SystemExit(1)
-
-    # Extract iteration number from parent directory name
-    iter_name = log_path.parent.name.replace("iter-", "Iteration ")
-
-    from autohelix.agents import AgentConfig, AgentEvent
-    from autohelix.agents.claudecode import ClaudeCodeAgent
-    from autohelix.display import LiveDisplay
-
-    display = LiveDisplay(console=console, title=iter_name, verbose=True)
-
-    # Use ClaudeCodeAgent's line parser (same logic as --verbose harness)
-    agent = ClaudeCodeAgent(config=AgentConfig(), heartbeat_seconds=30)
-
-    import json as json_mod
-
-    # Skip event types that duplicate streamed content when replaying logs
-    _SKIP_TYPES = {"assistant", "user"}
-
-    def on_event(event: AgentEvent) -> None:
-        display.handle_event(event)
-
+    if not (project_path / ".autohelix").is_dir():
+        console.print(f"[red]No .autohelix/ in {project_path}.[/red] Run this in an AutoHelix project.")
+        raise SystemExit(1)
     try:
-        with Live(display, console=console, refresh_per_second=4) as live:
-            while True:
-                with open(log_path) as f:
-                    while True:
-                        line = f.readline()
-                        if line:
-                            line = line.strip()
-                            if line:
-                                try:
-                                    if json_mod.loads(line).get("type") in _SKIP_TYPES:
-                                        continue
-                                except (json_mod.JSONDecodeError, ValueError):
-                                    pass
-                                agent._handle_line(line, on_event)
-                        else:
-                            newer = _find_latest_log()
-                            if newer and newer != log_path:
-                                log_path = newer
-                                iter_name = log_path.parent.name.replace("iter-", "Iteration ")
-                                display = LiveDisplay(console=console, title=iter_name, verbose=True)
-                                agent = ClaudeCodeAgent(config=AgentConfig(), heartbeat_seconds=30)
-                                live.update(display)
-                                break
-                            time.sleep(0.3)
+        config, _ = load_config(project_path, config_file=read_stored_config_path(project_path))
+        backend = config.agent.type
+    except Exception:  # noqa: BLE001 - the log parser can tell backends apart on its own
+        backend = None
+    try:
+        watch_run(project_path, backend, console)
     except KeyboardInterrupt:
-        console.print("\n[dim]Stopped watching.[/dim]")
+        console.print("[dim]Stopped watching. The run is unaffected.[/dim]")
 
 
 @main.command()

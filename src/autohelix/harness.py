@@ -25,7 +25,7 @@ from autohelix.display import LiveDisplay
 from autohelix.history import History, IterationResult
 from autohelix.checks import preflight_check, run_constraints, run_observables
 from autohelix.run_status import RunStatus
-from autohelix.formatting import format_cost, format_delta, format_total_cost
+from autohelix.formatting import format_cost, format_delta, format_duration, format_total_cost
 from autohelix.prompt_template import build_prompt_variables, load_template, render_template
 from autohelix.run_log import RunLog
 from autohelix.sandbox import Sandbox, Worktree
@@ -1264,39 +1264,33 @@ class Harness:
 
         iteration = result.iteration
         wall_ms = result.usage.get("wall_clock_ms", result.usage.get("duration_ms", 0))
-        wall_secs = int(wall_ms / 1000)
-        time_str = _format_time(wall_secs)
         cost = result.usage.get("cost_usd")
 
         directions = self.config.metric_directions()
 
-        # Build metric text with delta % from baseline
-        metric_parts = []
+        # Fixed-width columns so successive lines line up:
+        # iter N │ time │ cost │ metric value (delta) … │ outcome │ reason
         baseline_results = [r for r in self.history.load() if r.iteration == 0]
         baseline_metrics = baseline_results[0].metrics if baseline_results else {}
-        for name, value in result.metrics.items():
+        parts = [f"{format_duration(wall_ms / 1000):>7}", f"{'—' if cost is None else format_cost(cost):>6}"]
+        for name in [*directions, *(n for n in result.metrics if n not in directions)]:
+            value = result.metrics.get(name)
+            if value is None:  # e.g. rejected before measuring
+                parts.append(f"{name}: {'—':>9} {'':9}")
+                continue
             baseline_val = baseline_metrics.get(name)
-            delta_str = format_delta(value, baseline_val) if baseline_val is not None else ""
-            if delta_str:
-                metric_parts.append(f"{name}: {value:g} ({delta_str})")
-            else:
-                metric_parts.append(f"{name}: {value:g}")
-
-        # Build line: iter N  time │ cost │ metric │ status
-        parts = [f"{time_str:>6}"]
-        parts.append(format_cost(cost))
-        parts.extend(metric_parts)
-        if result.reason and not result.accepted:
-            parts.append(result.reason)
+            delta = format_delta(value, baseline_val) if baseline_val is not None else ""
+            parts.append(f"{name}: {value:>9g} {f'({delta})' if delta else '':9}")
 
         line = RichText()
         line.append(f"  iter {iteration:<2} ", style="dim")
-        line.append(" │ ".join(parts), style="")
-        line.append(" │ ", style="")
+        line.append(" │ ".join(parts) + " │ ")
         if result.accepted:
             line.append("✓ merged", style="green")
         else:
             line.append("✗ reject", style="red")
+        if result.reason and not result.accepted:
+            line.append(f" │ {result.reason}")
 
         self.console.print(line)
 
