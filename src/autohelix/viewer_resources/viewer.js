@@ -173,10 +173,10 @@ function bestSoFar() {
 }
 
 function renderStats() {
-  // Best metric, then totals over finished iterations (as in the terminal's run summary).
+  // Best metric, then run totals (as in the terminal's run summary): time over finished
+  // iterations; cost also includes baseline reviews.
   const its = state.iterations.filter((r) => r.iteration > 0);
-  const knownCosts = its.filter((r) => typeof r.cost === 'number');
-  const cost = knownCosts.reduce((sum, r) => sum + r.cost, 0);
+  const cost = state.cost;
   const stats = [];
   if (metric) {
     const best = [...bestSoFar().values()].at(-1);
@@ -187,8 +187,10 @@ function renderStats() {
     stats.push(['Time', timed.length
       ? fmtDuration(timed.reduce((sum, r) => sum + r.seconds, 0)) + (timed.length < its.length ? ' (incomplete)' : '')
       : '—']);
-    stats.push(['Cost', knownCosts.length
-      ? fmtCost(cost) + (knownCosts.length < its.length ? ' (incomplete)' : '')
+  }
+  if (its.length || typeof cost?.cost_usd === 'number' || cost?.incomplete) {
+    stats.push(['Cost', typeof cost?.cost_usd === 'number'
+      ? fmtCost(cost.cost_usd) + (cost.incomplete ? ' (incomplete)' : '')
       : 'unavailable']);
   }
   $('stats').replaceChildren(...stats.map(([k, v, extra]) => el('div', { className: 'stat' },
@@ -301,7 +303,8 @@ function renderRows() {
       // Rejected rows get the short reason; the full one is in the iteration's card.
       el('td', { className: 'summary', textContent: (r.accepted === false ? shortReason(r.summary) : r.summary) || '' }),
       el('td', { className: 'num', textContent: r.seconds ? fmtDuration(r.seconds) : '' }),
-      el('td', { className: 'num', textContent: fmtCost(r.cost), title: typeof r.cost === 'number' || r.iteration === 0 ? '' : 'Cost unavailable' }),
+      el('td', { className: 'num', textContent: fmtCost(r.cost) + (typeof r.cost === 'number' && r.cost_incomplete ? ' (incomplete)' : ''),
+        title: !r.cost_incomplete ? '' : state.config?.reviewer ? 'Some agent or reviewer costs are unavailable' : 'Cost unavailable' }),
     ]);
   });
   const live = liveIteration();

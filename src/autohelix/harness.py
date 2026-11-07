@@ -21,6 +21,7 @@ from rich.text import Text
 
 from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, create_agent
 from autohelix.config import load_config
+from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay
 from autohelix.history import History, IterationResult
 from autohelix.checks import preflight_check, run_constraints, run_observables
@@ -637,13 +638,10 @@ class Harness:
         review_path = worktree_path / ".autohelix" / "review.md"
         return f"{prompt}\n\nWrite your review to {review_path}"
 
-    def run_reviewer(self, worktree: Worktree, iteration: int) -> bool:
-        """Run the reviewer agent in the worktree.
-
-        Returns True if review was successful, False otherwise.
-        """
+    def run_reviewer(self, worktree: Worktree, iteration: int) -> AgentRunResult:
+        """Run the reviewer, preserving usage even if the review fails."""
         if not self.config.reviewer:
-            return True  # No reviewer configured, nothing to do
+            return AgentRunResult(success=True)
         self.run_status.phase("review", iteration)
 
         # Delete the transient review.md (materialized from the latest prior
@@ -675,6 +673,7 @@ class Harness:
         def on_event(event: AgentEvent) -> None:
             display.handle_event(event)
 
+        result: AgentRunResult | None = None
         try:
             with Live(
                 display,
@@ -698,7 +697,7 @@ class Harness:
                 self.console.print()
 
             if not result.success:
-                return False
+                return result
 
             # Save review file
             saved = self.sandbox.save_review(worktree, iteration)
@@ -706,7 +705,9 @@ class Harness:
                 self.console.print(
                     f"  [yellow]![/yellow] Reviewer did not create review.md"
                 )
-                return False
+                result.success = False
+                result.error = "Reviewer did not create review.md"
+                return result
 
             # Also copy into logs for this iteration
             review_src = (
@@ -724,14 +725,16 @@ class Harness:
                     f"  [green]✓[/green] Review saved to reviews/iter-{iteration}.md"
                 )
 
-            return True
+            return result
         except KeyboardInterrupt:
             self._status("Interrupted - stopping reviewer...")
             raise
         except Exception as e:
             self._status(f"Reviewer error: {e}")
             self.log.info(f"iter {iteration} reviewer error — {e}")
-            return False
+            return AgentRunResult(
+                success=False, error=str(e), usage=result.usage if result is not None else {},
+            )
 
     def run_iteration(self, iteration: int) -> IterationResult:
         """Run a single iteration."""
@@ -910,9 +913,11 @@ class Harness:
                 else:
                     # Run reviewer if configured (before merge, still in worktree)
                     reviewer_failed = False
+                    reviewer_usage = []
                     if self.config.reviewer:
-                        reviewer_success = self.run_reviewer(worktree, iteration)
-                        if not reviewer_success:
+                        reviewer_result = self.run_reviewer(worktree, iteration)
+                        reviewer_usage.append(reviewer_result.usage or {})
+                        if not reviewer_result.success:
                             if self.verbose:
                                 self.console.print(f"  [red]✗[/red] Reviewer failed")
                             reviewer_failed = True
@@ -941,6 +946,7 @@ class Harness:
                         metrics=metrics,
                         commit=commit,
                         usage=agent_usage,
+                        reviewer_usage=reviewer_usage,
                     )
             elif not all_passed:
                 # Reject: discard worktree
@@ -1026,10 +1032,6 @@ class Harness:
             self.console.print(f"  baseline │ {metric_str}", highlight=False)
             self.log.info(f"baseline: {metric_str}")
 
-        # Run baseline review if reviewer is configured
-        if self.config.reviewer:
-            self._run_baseline_review()
-
         baseline = IterationResult(
             iteration=0,
             accepted=True,
@@ -1038,6 +1040,8 @@ class Harness:
             reason="baseline",
         )
         self.history.append(baseline)
+        if self.config.reviewer:
+            self._run_baseline_review()
 
     def _run_baseline_review(self) -> None:
         """Run reviewer on the baseline state (before any iterations)."""
@@ -1053,8 +1057,13 @@ class Harness:
         notes_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            reviewer_success = self.run_reviewer(worktree, 0)
-            if not reviewer_success:
+            # Preserve an unknown charge if interrupted before usage is returned.
+            attempt = self.history.record_reviewer_usage(0, {})
+            reviewer_result = self.run_reviewer(worktree, 0)
+            self.history.record_reviewer_usage(0, reviewer_result.usage or {}, attempt)
+            review_cost = (reviewer_result.usage or {}).get("cost_usd")
+            self.console.print(f"  baseline review │ {format_cost(review_cost)}", highlight=False)
+            if not reviewer_result.success:
                 self.console.print(
                     f"  [yellow]![/yellow] Baseline review failed, continuing anyway"
                 )
@@ -1185,24 +1194,28 @@ class Harness:
         self.run_status.start(max_iterations=max_iter)
 
         # Capture baseline on first run
+        baseline_captured = False
         if start_iter == 1 and self.history.get_last_iteration() == 0:
             results = self.history.load()
             if not any(r.iteration == 0 for r in results):
                 self._capture_baseline()
+                baseline_captured = True
 
-        # Run baseline review if configured but no review exists yet
-        if self.config.reviewer:
-            reviews_dir = self.project_path / ".autohelix" / "reviews"
-            if not reviews_dir.exists() or not any(reviews_dir.glob("iter-*.md")):
-                self._run_baseline_review()
+        # Run baseline review if configured but no review exists yet (and budget is left)
+        reviews_dir = self.project_path / ".autohelix" / "reviews"
+        if (self.config.reviewer and not baseline_captured
+                and not (reviews_dir.exists() and any(reviews_dir.glob("iter-*.md")))
+                and (self.config.max_cost_usd is None
+                     or (summarize_costs(self.history.cost_usages).cost_usd or 0) < self.config.max_cost_usd)):
+            self._run_baseline_review()
 
         # Load cumulative cost and time from history so budgets persist across resume
-        cumulative_cost = 0.0
+        prior_cost = summarize_costs(self.history.cost_usages)
+        cumulative_cost = prior_cost.cost_usd or 0
         prior_elapsed_seconds = 0.0
         if start_iter > 1:
             prior = self.history.load()
             prior_iterations = [r for r in prior if r.iteration > 0]
-            cumulative_cost = sum(r.usage.get("cost_usd") or 0 for r in prior_iterations)
             # Prefer wall_clock_ms (total iteration time) over duration_ms (agent-only time)
             prior_elapsed_seconds = sum(
                 r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0))
@@ -1215,11 +1228,11 @@ class Harness:
 
         ran = False
         cost_warning_shown = False
-        if self.config.max_cost_usd is not None and start_iter > 1:
-            cost_warning_shown = any(r.usage.get("cost_usd") is None for r in prior_iterations)
+        if self.config.max_cost_usd is not None:
+            cost_warning_shown = prior_cost.incomplete
             if cost_warning_shown:
                 self.console.print(
-                    "[yellow]Warning: prior iterations have unavailable cost; "
+                    "[yellow]Warning: prior agent or reviewer calls have unavailable cost.\n"
                     "budget.cost can only track known costs.[/yellow]"
                 )
 
@@ -1234,7 +1247,7 @@ class Harness:
                 # Check cost budget
                 if (
                     self.config.max_cost_usd is not None
-                    and result.usage.get("cost_usd") is None
+                    and result.cost.incomplete
                     and not cost_warning_shown
                 ):
                     self.console.print(
@@ -1242,7 +1255,7 @@ class Harness:
                         "budget.cost can only track known costs.[/yellow]"
                     )
                     cost_warning_shown = True
-                cumulative_cost += result.usage.get("cost_usd") or 0
+                cumulative_cost += result.cost.cost_usd or 0
                 if self.config.max_cost_usd is not None and cumulative_cost >= self.config.max_cost_usd:
                     break
 
@@ -1264,7 +1277,9 @@ class Harness:
 
         iteration = result.iteration
         wall_ms = result.usage.get("wall_clock_ms", result.usage.get("duration_ms", 0))
-        cost = result.usage.get("cost_usd")
+        cost = result.cost.cost_usd
+        # "+": known part only (some agent or reviewer cost is unavailable); the run total says "(incomplete)".
+        cost_text = "—" if cost is None else format_cost(cost) + ("+" if result.cost.incomplete else "")
 
         directions = self.config.metric_directions()
 
@@ -1272,7 +1287,7 @@ class Harness:
         # iter N │ time │ cost │ metric value (delta) … │ outcome │ reason
         baseline_results = [r for r in self.history.load() if r.iteration == 0]
         baseline_metrics = baseline_results[0].metrics if baseline_results else {}
-        parts = [f"{format_duration(wall_ms / 1000):>7}", f"{'—' if cost is None else format_cost(cost):>6}"]
+        parts = [f"{format_duration(wall_ms / 1000):>7}", f"{cost_text:>7}"]
         for name in [*directions, *(n for n in result.metrics if n not in directions)]:
             value = result.metrics.get(name)
             if value is None:  # e.g. rejected before measuring
@@ -1303,7 +1318,7 @@ class Harness:
         accepted = sum(1 for r in iterations if r.accepted)
         rejected = len(iterations) - accepted
 
-        if not iterations:
+        if not iterations and not self.history.cost_usages:
             return
 
         directions = self.config.metric_directions()
@@ -1312,7 +1327,7 @@ class Harness:
         best = self.history.get_best_metrics(directions)
 
         # Cumulative stats
-        total_cost_text = format_total_cost(r.usage for r in iterations)
+        total_cost_text = format_total_cost(self.history.cost_usages)
         total_wall_ms = sum(
             r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0))
             for r in iterations

@@ -194,6 +194,11 @@ Available token usage and cost are captured from agent backends:
 - **Cumulative**: shown in the final summary
 - **Persisted**: stored in `.autohelix/history.jsonl` for later analysis
 
+Each iteration's cost includes its optimization agent and reviewer. Run totals
+and `budget.cost` also include baseline reviews. History keeps the optimization
+agent's `usage` and a `reviewer_usage` list with one entry per review attempt.
+Report generation has its own separately recorded cost.
+
 What's available depends on the backend:
 
 - **Claude Code**: input/output tokens, cost (USD), duration

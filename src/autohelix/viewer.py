@@ -27,6 +27,7 @@ from markdown_it import MarkdownIt
 
 from autohelix.agents import AgentEventKind
 from autohelix.config import load_config
+from autohelix.costs import summarize_costs
 from autohelix.history import History
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
@@ -121,11 +122,12 @@ class RunData:
     def state(self) -> dict:
         config, config_path = self._config()
         records = self.history.load()
+        total_cost = summarize_costs(self.history.cost_usages)
         subjects = self._subjects([r.commit for r in records if r.commit])
         iterations = [
             {"iteration": r.iteration, "accepted": r.accepted, "metrics": r.metrics,
              "summary": r.reason if r.reason != "baseline" else None,
-             "cost": r.usage.get("cost_usd"),
+             "cost": r.cost.cost_usd, "cost_incomplete": r.cost.incomplete,
              "seconds": (r.usage.get("wall_clock_ms") or 0) / 1000 or None}
             for r in records
         ]
@@ -140,6 +142,10 @@ class RunData:
             "notes_files": sorted((e.name for e in _files(self.root / "notes")), key=_note_order),
             "artifacts": self._artifacts(),
             "iterations": iterations,
+            "cost": {
+                "cost_usd": total_cost.cost_usd,
+                "incomplete": total_cost.incomplete,
+            },
             "report": self._report(),
         }
 

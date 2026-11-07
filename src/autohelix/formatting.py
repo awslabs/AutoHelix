@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from autohelix.costs import summarize_costs
+
 
 def format_duration(seconds: float) -> str:
     """Compact, at most 7 characters: 48s, 1m 02s, 1h 01m."""
@@ -24,13 +26,12 @@ def format_cost(cost: float | None, precision: int = 2) -> str:
 
 
 def format_total_cost(usages: Iterable[dict]) -> str:
-    """Describe a total as incomplete when some iterations have no known cost."""
-    costs = [usage.get("cost_usd") for usage in usages]
-    known = [cost for cost in costs if cost is not None]
-    if not known:
+    """Describe a total as incomplete when some agent calls have no known cost."""
+    total = summarize_costs(usages)
+    if total.cost_usd is None:
         return "cost unavailable"
-    text = format_cost(sum(known))
-    return f"{text} (incomplete)" if len(known) != len(costs) else text
+    text = format_cost(total.cost_usd)
+    return f"{text} (incomplete)" if total.incomplete else text
 
 
 def format_delta(value: float, baseline: float) -> str:

@@ -135,7 +135,10 @@ runtime expects a numeric iteration limit.
 and reviews; initial preflight and baseline work happen before that timer.
 Total time/cost budgets are checked after an iteration finishes, so they can
 overshoot rather than interrupt that iteration. Prior recorded usage counts on
-resume, but an already-exhausted budget can still start another attempt.
+resume. The cost threshold is also checked before starting another iteration;
+an already-exhausted cost budget starts no new attempt. The time budget is only
+checked after an iteration, so an already-exhausted time budget can still start one
+more attempt.
 
 `iteration_time` limits the main-agent call and provides remaining-time feedback,
 not a deadline for the whole evaluation/review cycle. `agent.timeout_seconds`
@@ -143,13 +146,14 @@ defaults to no timeout; when both are set, the earlier deadline applies.
 Checks have per-command timeouts. A reviewer inherits the effective main-agent
 timeout unless `reviewer.timeout_seconds` overrides it.
 
-`budget.cost` compares accumulated main-agent `usage.cost_usd` with the requested
-dollar limit. Claude Code and OpenCode can report dollar costs; Codex reports
-tokens, not a dollar cost. Only rely on this optional budget when authoritative
-dollar usage is actually recorded for the selected backend/configuration;
-missing cost is not evidence of free usage. Reviewer calls, model calls made
-by external commands, and the user's supervising/setup agent are not included.
-A reviewer can also run on the baseline, before the first improvement attempt.
+`budget.cost` compares accumulated optimization-agent and reviewer costs with
+the requested dollar limit, including baseline review attempts. History keeps
+the optimization agent's `usage` and a `reviewer_usage` list. Claude Code and
+OpenCode can report dollar costs; Codex can provide calculated API-equivalent
+estimates. Only rely on this optional budget when usable dollar usage is
+recorded for the selected backend/configuration; missing cost is not evidence
+of free usage. Report generation, model calls made by external commands, and
+the user's supervising/setup agent are separate.
 These boundaries make the budget a run-control threshold, not an absolute
 all-inclusive financial cap.
 

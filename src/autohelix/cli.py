@@ -366,12 +366,11 @@ def parallel(worker_configs: tuple[str, ...], path: str, sync_every: int | None,
         prefix = f"   {i}." if is_ranked else "   •"
         hist = History(w.worktree)
         results = hist.load()
-        usages = [r.usage for r in results if r.iteration > 0]
+        usages = hist.cost_usages
         cost_text = format_total_cost(usages) if usages else None
         cost = (
             f"  cost={cost_text}" if cost_text and cost_text.startswith("$")
-            else f"  {cost_text}" if cost_text
-            else f"  cost=${w.total_cost:.2f}" if w.total_cost else ""
+            else f"  {cost_text}" if cost_text else ""
         )
         delta = ""
         delta_style = ""

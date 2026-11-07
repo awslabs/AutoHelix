@@ -10,6 +10,8 @@ from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
 from typing import Any
 
+from autohelix.costs import CostSummary, summarize_costs
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,6 +26,17 @@ class IterationResult:
     reason: str | None = None
     failure_output: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
+    # One entry per attempted review; baseline reviews may be retried on resume.
+    reviewer_usage: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def cost_usages(self) -> list[dict[str, Any]]:
+        """Usage for billable calls, excluding the baseline's absent main agent."""
+        return ([self.usage] if self.iteration > 0 else []) + self.reviewer_usage
+
+    @property
+    def cost(self) -> CostSummary:
+        return summarize_costs(self.cost_usages)
 
 
 class History:
@@ -76,6 +89,30 @@ class History:
             f.write(json.dumps(asdict(result)) + "\n")
         self._invalidate_cache()
 
+    @property
+    def cost_usages(self) -> list[dict[str, Any]]:
+        """All recorded run calls, including baseline reviews."""
+        return [usage for result in self.load() for usage in result.cost_usages]
+
+    def record_reviewer_usage(
+        self, iteration: int, usage: dict[str, Any], attempt: int | None = None,
+    ) -> int:
+        """Append a review attempt, or update the usage of a pending attempt."""
+        results = self.load()
+        result = next((r for r in results if r.iteration == iteration), None)
+        if result is None:
+            raise ValueError(f"No history record for iteration {iteration} to attach reviewer usage to.")
+        if attempt is None:
+            attempt = len(result.reviewer_usage)
+            result.reviewer_usage.append(usage)
+        else:
+            result.reviewer_usage[attempt] = usage
+        temporary = self.history_path.with_suffix(".tmp")
+        temporary.write_text("".join(json.dumps(asdict(r)) + "\n" for r in results))
+        temporary.replace(self.history_path)
+        self._invalidate_cache()
+        return attempt
+
     def load(self) -> list[IterationResult]:
         """Load all iteration results from history (cached by file mtime)."""
         if not self.history_path.exists():
@@ -97,6 +134,14 @@ class History:
                 try:
                     data = json.loads(line)
                     data.setdefault("usage", {})
+                    # Older histories discarded reviewer usage. Where review
+                    # artifacts survive, report that missing charge as unknown.
+                    if "reviewer_usage" not in data and "iteration" in data:
+                        iteration = data["iteration"]
+                        root = self.history_path.parent
+                        if ((root / "logs" / f"iter-{iteration}" / "review.log").exists()
+                                or (root / "reviews" / f"iter-{iteration}.md").exists()):
+                            data["reviewer_usage"] = [{}]
                     # Tolerate forward-compat fields written by a newer version.
                     data = {k: v for k, v in data.items() if k in known_fields}
                     results.append(IterationResult(**data))

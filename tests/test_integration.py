@@ -140,7 +140,7 @@ class TestMockAgentIntegration:
             capture_output=True,
             text=True,
         ).stdout.strip()
-        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: False)
+        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: AgentRunResult(success=False))
 
         result = harness.run_iteration(1)
 
@@ -162,7 +162,7 @@ class TestMockAgentIntegration:
     ):
         harness = Harness(integration_project, verbose=False)
         harness.config.reviewer = ReviewerConfig()
-        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: False)
+        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: AgentRunResult(success=False))
 
         harness.run(max_iterations=1)
 

@@ -116,7 +116,8 @@ agent to set up and manage the experiment from scratch.
 
 Time thresholds are checked between iterations; per-agent deadlines and check
 timeouts have their own boundaries. Dollar accounting depends on backend
-reporting and currently excludes reviewer and supervisor calls. Missing cost
+reporting and includes optimization-agent and reviewer calls, including the
+baseline review. Report generation and supervisor calls are separate. Missing cost
 is unknown, not zero. See [budget details](config.md) before relying on a cap.
 The console, `autohelix view`, the run summary and run page (`report.md`,
 `report.html`), and saved records already support inspecting results.

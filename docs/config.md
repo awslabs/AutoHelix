@@ -64,7 +64,7 @@ reviewer:
 # Limit the run (any combination)
 budget:
   iterations: 10       # max iterations
-  # cost: 20           # cumulative agent cost in USD (Codex uses an API-equivalent estimate)
+  # cost: 20           # cumulative agent + reviewer cost in USD (Codex uses an API-equivalent estimate)
   # time: 2h           # max total wall-clock (duration string: 90m, 2h, 1h30m)
   # iteration_time: 15m  # per-iteration time budget (see below)
 
@@ -274,13 +274,17 @@ The `reviewer.prompt` is the reviewer's entire instruction (it inspects the diff
 Caps how far a run goes. Combine any of:
 
 - `iterations` — maximum number of iterations (default 5).
-- `cost` — cumulative main-agent cost threshold in USD. Uses backend-reported amounts
+- `cost` — cumulative optimization-agent and reviewer cost threshold in USD,
+  including the baseline review. Uses backend-reported amounts
   for Claude Code and OpenCode, and calculated API-equivalent estimates for Codex.
   The same budget option applies to all three backends.
 - `time` — maximum total wall-clock, as a duration string (`90m`, `2h`, `1h30m`).
 - `iteration_time` — a *per-iteration* time budget. Unlike the others it can interrupt work mid-iteration: it enforces a hard deadline **and** injects the remaining time into the agent's context so it can wrap up and save notes first. See [ML Experiments](ml-experiments.md) for when this matters.
 
 `cost` and `time` are **checked after each iteration completes, never mid-iteration** — the loop stops once the cumulative total crosses the limit, so a run can overshoot by up to one iteration's worth of cost or time. For a hard mid-iteration cutoff use `iteration_time` (or `agent.timeout_seconds`).
+
+The cost threshold is also checked before starting an iteration, including after
+the baseline review and when resuming a run.
 
 ### Report
 
@@ -299,9 +303,16 @@ Controls Claude Code's built-in memory system:
 
 Available token usage and cost are captured from agent backends and shown:
 
-- Per iteration (after accepted/rejected)
+- Per iteration (after accepted/rejected). A `+` after the amount (`$0.10+`) means part of that iteration's cost (agent or reviewer) is unavailable, so the amount is what is known.
 - Cumulative in the final summary
 - Persisted in `.autohelix/history.jsonl`
+
+Iteration costs include the optimization agent and reviewer. Run totals and
+`budget.cost` also include baseline reviews; report generation remains separate.
+History preserves the optimization agent's `usage` and a `reviewer_usage` list
+containing the raw usage for each attempted review, including failed attempts.
+An iteration that is interrupted or fails before it is recorded leaves no record, so
+its agent and reviewer costs are not counted.
 
 The numeric field is `usage.cost_usd` for every backend. `usage.cost_source` is
 `backend` when the CLI supplies the amount, or `calculated` when AutoHelix

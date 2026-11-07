@@ -101,9 +101,10 @@ usage records and backend support rather than making a model call just to check
 accounting. A backend's support for a dollar field alone does not establish that
 the chosen configuration reports it reliably.
 
-Explain that the current dollar counter covers reported main-agent usage and
-is checked between iterations; it may overshoot and excludes reviewer, external,
-and supervising/setup-agent expenditure. If reporting is unsupported, missing,
+Explain that the dollar counter covers optimization-agent and reviewer usage,
+including baseline reviews, and is checked between iterations; it may overshoot.
+Report generation, external calls, and supervising/setup-agent expenditure
+are separate. If reporting is unsupported, missing,
 or unreliable, say that a dollar budget cannot reliably bound spend. Do not
 invent a token price or interpret missing cost as free usage. Use iteration/time
 limits to bound attempts and duration, explain any unmet financial requirement,

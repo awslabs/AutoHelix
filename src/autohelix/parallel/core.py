@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from autohelix.config import load_config
+from autohelix.costs import summarize_costs
 from autohelix.history import History
 
 
@@ -308,7 +309,7 @@ def run_parallel(
             # Direction of the first-declared metric (the ranking metric).
             w.direction = next(iter(d.values()))
         hist = History(w.worktree)
-        w.total_cost = sum(r.usage.get("cost_usd") or 0 for r in hist.load() if r.iteration > 0)
+        w.total_cost = summarize_costs(hist.cost_usages).cost_usd or 0
 
     return workers
 

@@ -273,3 +273,17 @@ class TestUsageField:
         loaded = history.load()
         assert len(loaded) == 1
         assert loaded[0].usage == {}
+
+    def test_legacy_review_charge_is_unknown_when_artifacts_exist(self, history):
+        history.history_path.parent.mkdir(parents=True, exist_ok=True)
+        history.history_path.write_text(json.dumps({
+            "iteration": 1, "accepted": True, "metrics": {},
+            "usage": {"cost_usd": 0.10},
+        }) + "\n")
+        reviews = history.history_path.parent / "reviews"
+        reviews.mkdir()
+        (reviews / "iter-1.md").write_text("Legacy review")
+        result = history.load()[0]
+        assert result.reviewer_usage == [{}]
+        assert result.cost.cost_usd == 0.10
+        assert result.cost.incomplete
