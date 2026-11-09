@@ -140,7 +140,7 @@ class TestMockAgentIntegration:
             capture_output=True,
             text=True,
         ).stdout.strip()
-        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: False)
+        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: AgentRunResult(success=False))
 
         result = harness.run_iteration(1)
 
@@ -162,7 +162,7 @@ class TestMockAgentIntegration:
     ):
         harness = Harness(integration_project, verbose=False)
         harness.config.reviewer = ReviewerConfig()
-        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: False)
+        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: AgentRunResult(success=False))
 
         harness.run(max_iterations=1)
 
@@ -468,6 +468,56 @@ constraints:
 class TestBudgetEnforcement:
     """Tests for cost and time budget enforcement in the harness loop."""
 
+    def test_codex_estimates_persist_and_stop_resumed_run(
+        self, integration_project, monkeypatch, capsys,
+    ):
+        import json
+        from autohelix.agents.runner import ProcessRunResult
+
+        (integration_project / "autohelix.yaml").write_text("""
+goal: Test calculated Codex cost
+report: false
+agent:
+  type: codex
+  model: gpt-6.1-sol
+budget:
+  iterations: 5
+  cost: 0.015
+constraints:
+  - "true"
+""")
+        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Configure Codex"], cwd=integration_project, check=True, capture_output=True)
+        calls = 0
+
+        def fake_run_process(**kwargs):
+            nonlocal calls
+            calls += 1
+            (kwargs["cwd"] / "hello.py").write_text(f"# iteration {calls}\n")
+            kwargs["line_callback"](json.dumps({
+                "type": "turn.completed", "usage": {
+                    "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 1000,
+                },
+            }))
+            return ProcessRunResult(exit_code=0)
+
+        monkeypatch.setattr("autohelix.agents.codex.run_process", fake_run_process)
+        # Codex execution is mocked, so preflight must not require a local CLI.
+        monkeypatch.setattr("autohelix.checks.shutil.which", lambda command: "/mock/codex")
+        Harness(integration_project).run(max_iterations=1)
+        Harness(integration_project).run(max_iterations=5)
+        iterations = [r for r in History(integration_project).load() if r.iteration > 0]
+        assert len(iterations) == 2
+        assert all(r.accepted for r in iterations)
+        assert all(r.usage["cost_usd"] == pytest.approx(0.01) for r in iterations)
+        assert all(r.usage["cost_source"] == "calculated" for r in iterations)
+        assert all(r.usage["cost_rates"]["output"] == 10 for r in iterations)
+        assert "$0.02" in capsys.readouterr().out
+        # The saved cost already exceeds the cap: no new agent invocation.
+        Harness(integration_project).run(max_iterations=5)
+        assert calls == 2
+        assert len([r for r in History(integration_project).load() if r.iteration > 0]) == 2
+
     def test_cost_budget_stops_loop(self, integration_project):
         """Loop should stop when cumulative cost exceeds the budget."""
         # Configure mock agent with cost_usd in usage
@@ -642,8 +692,8 @@ constraints:
         iterations = [r for r in results if r.iteration > 0]
         assert len(iterations) == 1
 
-    def test_zero_cost_iterations_dont_trigger_budget(self, integration_project):
-        """Iterations with zero or missing cost_usd shouldn't trigger cost budget."""
+    def test_zero_cost_iterations_dont_trigger_budget(self, integration_project, capsys):
+        """Unknown costs warn, but preserve existing iteration-limit behavior."""
         (integration_project / "autohelix.yaml").write_text("""
 goal: Test zero cost iterations
 
@@ -669,7 +719,7 @@ constraints:
 
         def patched_run_iteration(iteration):
             result = original_run_iteration(iteration)
-            # Don't set cost_usd at all — should default to 0
+            # Unavailable usage is excluded from the tracked amount with a warning.
             result.usage.pop("cost_usd", None)
             return result
 
@@ -681,6 +731,9 @@ constraints:
         iterations = [r for r in results if r.iteration > 0]
         # All 3 iterations should complete (cost never reaches $1)
         assert len(iterations) == 3
+        output = capsys.readouterr().out
+        assert "budget.cost can only track known costs" in output
+        assert "cost unavailable" in output
 
     def test_cost_budget_persists_across_resume(self, integration_project):
         """Cumulative cost should carry over when resuming from a previous run."""
@@ -1105,3 +1158,6 @@ class TestFormatUsage:
 
     def test_format_usage_empty(self):
         assert Harness._format_usage({}) == ""
+
+    def test_format_usage_uses_saved_wall_clock_when_agent_duration_absent(self):
+        assert "2m 3s" in Harness._format_usage({"wall_clock_ms": 123000})

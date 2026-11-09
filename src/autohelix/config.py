@@ -59,7 +59,7 @@ DEFAULT_CHECK_TIMEOUT = 1800
 
 KNOWN_TOP_LEVEL_KEYS = {
     "goal", "constraints", "constraint", "metrics", "observables",
-    "scope", "agent", "acceptance", "budget", "reviewer",
+    "scope", "agent", "acceptance", "budget", "reviewer", "report", "stop",
 }
 
 
@@ -124,6 +124,9 @@ class Config:
     goal: str
     constraints: list[ConstraintCommand]
     observables: list[ObservableCommand]
+    # Stop commands: the run ends when one exits 0 (checked on the baseline and
+    # after each accepted iteration). Same shape as constraints.
+    stop: list[ConstraintCommand] = field(default_factory=list)
     agent: AgentConfig = field(default_factory=AgentConfig)
     acceptance: AcceptanceConfig = field(default_factory=AcceptanceConfig)
     reviewer: ReviewerConfig | None = None
@@ -133,6 +136,7 @@ class Config:
     max_cost_usd: float | None = None
     max_time_seconds: int | None = None
     iteration_time_seconds: int | None = None
+    report: bool = True  # write a summary (output/report.md) when a run finishes
     _parse_errors: dict[str, str] = field(default_factory=dict, repr=False)
 
     def metric_directions(self) -> dict[str, str]:
@@ -251,6 +255,13 @@ class Config:
                     f"Metric gate references unknown metric '{gate.metric}'"
                 )
 
+        for key in ("constraints", "stop"):
+            if key in self._parse_errors:
+                error(self._parse_errors[key])
+        for c in self.stop:
+            if not c.command.strip():
+                error("Stop command is empty")
+
         # Validate budget cost
         if self.max_cost_usd is not None and self.max_cost_usd <= 0:
             error(self._parse_errors.get("cost", "budget.cost must be a positive number"))
@@ -289,15 +300,11 @@ class Config:
             c = data["constraint"]
             raw_constraints = [c] if isinstance(c, str) else c
 
-        constraints: list[ConstraintCommand] = []
-        for entry in raw_constraints:
-            if isinstance(entry, str):
-                constraints.append(ConstraintCommand(command=entry))
-            elif isinstance(entry, dict):
-                constraints.append(ConstraintCommand(
-                    command=entry.get("command", ""),
-                    timeout=int(entry.get("timeout", DEFAULT_CHECK_TIMEOUT)),
-                ))
+        parse_errors: dict[str, str] = {}
+        constraints = _parse_commands(raw_constraints, "constraints", parse_errors)
+
+        # Stop commands, in the same forms as constraints.
+        stop = _parse_commands(data.get("stop") or [], "stop", parse_errors)
 
         # Parse metrics (canonical key; `observables:` is an accepted alias for
         # the same thing — see the config docs for the two-level model).
@@ -386,7 +393,6 @@ class Config:
                 max_time_seconds = -1  # will fail validation
                 time_parse_error = f"budget.time: '{raw_time}' is not a valid duration ({e})"
 
-        parse_errors: dict[str, str] = {}
         if cost_parse_error:
             parse_errors["cost"] = cost_parse_error
         if time_parse_error:
@@ -413,6 +419,7 @@ class Config:
             goal=goal,
             constraints=constraints,
             observables=observables,
+            stop=stop,
             agent=agent,
             acceptance=acceptance,
             reviewer=reviewer,
@@ -422,8 +429,38 @@ class Config:
             max_cost_usd=max_cost_usd,
             max_time_seconds=max_time_seconds,
             iteration_time_seconds=iteration_time_seconds,
+            report=data.get("report") is not False,
             _parse_errors=parse_errors,
         )
+
+
+def _parse_commands(entries: Any, key: str, parse_errors: dict[str, str]) -> list[ConstraintCommand]:
+    """Parse a command or list of commands, each a string or {command, timeout}.
+
+    Malformed entries are recorded in parse_errors[key] (reported by validate())."""
+    if isinstance(entries, (str, dict)):
+        entries = [entries]
+    if not isinstance(entries, list):
+        parse_errors[key] = f"{key}: expected a command or a list of commands, got {entries!r}"
+        return []
+    commands: list[ConstraintCommand] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            commands.append(ConstraintCommand(command=entry))
+        elif isinstance(entry, dict):
+            command = entry.get("command", "")
+            if not isinstance(command, str):
+                parse_errors[key] = f"{key}: command must be a string, got {command!r}"
+                continue
+            try:
+                timeout = int(entry.get("timeout", DEFAULT_CHECK_TIMEOUT))
+            except (TypeError, ValueError, OverflowError):
+                parse_errors[key] = f"{key}: timeout must be an integer, got {entry.get('timeout')!r}"
+                continue
+            commands.append(ConstraintCommand(command=command, timeout=timeout))
+        else:
+            parse_errors[key] = f"{key}: each entry must be a command string or a mapping, got {entry!r}"
+    return commands
 
 
 def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Config, dict[str, Any]]:

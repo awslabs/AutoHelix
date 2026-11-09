@@ -1,6 +1,17 @@
 """Tests for autohelix.formatting."""
 
-from autohelix.formatting import format_delta
+from autohelix.formatting import format_cost, format_delta, format_total_cost
+
+
+def test_known_zero_is_distinct_from_unknown_cost():
+    assert format_cost(0) == "$0.00"
+    assert format_cost(None) == "cost unavailable"
+
+
+def test_complete_partial_and_unavailable_totals():
+    assert format_total_cost([{"cost_usd": 0.25}, {"cost_usd": 0}]) == "$0.25"
+    assert format_total_cost([{"cost_usd": 0.25}, {}]) == "$0.25 (incomplete)"
+    assert format_total_cost([{}, {"cost_usd": None}]) == "cost unavailable"
 
 
 class TestFormatDelta:
@@ -27,3 +38,8 @@ class TestFormatDelta:
     def test_moderate_decrease_stays_percentage(self):
         # 100 -> 20 is -80%, below the inverse-ratio threshold.
         assert format_delta(20, 100) == "↓ 80.0%"
+
+
+def test_format_duration_is_compact():
+    from autohelix.formatting import format_duration
+    assert [format_duration(s) for s in (0, 48, 62, 3599, 3700)] == ["0s", "48s", "1m 02s", "59m 59s", "1h 01m"]

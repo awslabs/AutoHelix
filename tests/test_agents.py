@@ -197,6 +197,7 @@ class TestClaudeCodeHandleLine:
         assert agent._usage["input_tokens"] == 10000
         assert agent._usage["output_tokens"] == 2000
         assert agent._usage["cost_usd"] == 0.1234
+        assert agent._usage["cost_source"] == "backend"
         assert agent._usage["duration_ms"] == 5000
 
     def test_result_event_no_usage(self):
@@ -633,6 +634,7 @@ class TestOpenCodeHandleLine:
         assert agent._usage["input_tokens"] == 5000
         assert agent._usage["output_tokens"] == 1000
         assert agent._usage["cost_usd"] == 0.05
+        assert agent._usage["cost_source"] == "backend"
 
     def test_step_finish_accumulates_usage(self):
         agent = self._agent()

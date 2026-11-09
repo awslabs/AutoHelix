@@ -174,8 +174,8 @@ as read-only reference; `reviews/` and `history.jsonl` never enter a worktree.
 ├── peer_notes/           # Parallel mode: symlinks to peers' shared notes
 ├── hints.md              # `autohelix hint` messages (read-only reference)
 ├── output/
-│   ├── report.md         # Agent-written run analysis
-│   └── dashboard.html    # Visual dashboard
+│   ├── report.md         # Run summary, written when a run finishes
+│   └── report.html       # Run page: the viewer saved as one file
 ├── logs/                 # Prompts and raw agent output per iteration
 ├── history.jsonl         # Accept/reject, metrics, usage per iteration
 ├── prompt.md             # Customizable prompt template
@@ -188,26 +188,36 @@ as read-only reference; `reviews/` and `history.jsonl` never enter a worktree.
 
 ## Cost Tracking
 
-Token usage and cost are captured from all agent backends:
+Available token usage and cost are captured from agent backends:
 
 - **Per iteration**: shown after each accepted/rejected result
 - **Cumulative**: shown in the final summary
 - **Persisted**: stored in `.autohelix/history.jsonl` for later analysis
 
+Each iteration's cost includes its optimization agent and reviewer. Run totals
+and `budget.cost` also include baseline reviews. History keeps the optimization
+agent's `usage` and a `reviewer_usage` list with one entry per review attempt.
+Report generation has its own separately recorded cost.
+
 What's available depends on the backend:
 
 - **Claude Code**: input/output tokens, cost (USD), duration
-- **Codex**: input/output tokens
+- **Codex**: input/output and available cached-input, cache-write, and reasoning
+  tokens; calculated API-equivalent cost for recognized models; measured duration
 - **OpenCode**: input/output tokens, cost (per step, accumulated)
 
-Missing fields are simply omitted from the display.
+Every backend uses the same `usage.cost_usd` field and **Cost** display.
+History also records `cost_source`: `backend` for a CLI-supplied amount,
+`calculated` for a Codex estimate. Calculated costs save their model, pricing
+basis, and rates. Codex estimates use Standard OpenAI API prices; they do not
+represent subscription or Bedrock bills. Backend-supplied amounts may also be
+estimates.
 
-## Dashboard
+Missing costs are unavailable, and totals with missing costs are incomplete.
+`budget.cost` uses the recorded amounts, including Codex estimates, and warns
+if some costs are unavailable. See [Cost Tracking](config.md#cost-tracking) for
+the pricing assumptions and accounting limits.
 
-AutoHelix regenerates a self-contained HTML dashboard at `.autohelix/output/dashboard.html` after every iteration — no command or flag required. Open it in a browser (it refreshes on disk as the run progresses):
+## Run page
 
-- Metric trajectories per iteration, with baseline (iter-0) as the reference and direction (↑/↓) taken from your config
-- Accepted vs. rejected iterations, with the rejection reason
-- Cost and token usage over the run
-
-Because it's a single static file with no server, you can open it mid-run to watch progress or share it afterward. For a written narrative of the run instead, use [`autohelix report`](cli.md#autohelix-report).
+To follow a run live, use [`autohelix view`](cli.md#autohelix-view). When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/output/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's notes and review, the changes from the baseline to the final code, and the run summary when there is one (see [Configuration → Report](config.md#report)). It leaves out agent and reviewer activity, per-iteration diffs, and captured output; use `autohelix view` for those. `autohelix report` also rewrites it.

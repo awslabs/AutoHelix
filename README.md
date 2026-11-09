@@ -66,7 +66,11 @@ Core features:
 - **Constraints gate changes.** Tests, type-checks, or any command that must exit 0. Break a constraint and the iteration is discarded.
 - **Metrics track progress.** Metrics are captured and shown to the next iteration. Optionally gate on them to reject regressions. Logs and artifacts can be saved too.
 - **Persistent memory.** Each iteration is a fresh session, but the agent reads and writes notes that survive across all iterations, including rejected ones.
-- **Budget control.** Cap the run by iterations, time, or cost.
+- **Budget control.** Cap the run by iterations, time, or cost. Codex cost uses an
+  API-equivalent estimate; see [cost tracking](docs/config.md#cost-tracking).
+- **Stop conditions.** Optional `stop:` commands end the run when one exits 0,
+  checked on the baseline and after accepted iterations. Use a script or
+  `autohelix ask "Is the goal complete?"`; see [stop conditions](docs/config.md#stop-conditions).
 
 ## Quick start
 
@@ -79,19 +83,58 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-Or `pip install autohelix` for just the CLI, without the bundled examples.
+Or `pip install autohelix` for the CLI and portable setup skill, without the
+repository's example projects.
 
 AutoHelix uses Claude Code by default (looks for `claude` on your `PATH`). Codex and
 OpenCode are also supported — see [agent setup](docs/getting-started.md#agent-setup).
 
+To prepare the experiment with your existing coding agent, install the packaged
+skill into the target project:
+
 ```bash
-cd my-project
-autohelix init          # initialize config and state
-autohelix run           # start the loop
+autohelix skill install --agent codex --scope project --path my-project
+# Use --agent claude or --agent opencode for those agents.
 ```
 
-`init` creates a commented `autohelix.yaml` to fill in — see the configuration section
-below. Other commands are described in the [CLI reference](docs/cli.md).
+Your coding agent helps define the experiment. AutoHelix runs repeated attempts
+using the configured scope, checks, measurements, and acceptance rules.
+
+1. **Prepare and review**
+
+   > Set up AutoHelix to improve [goal]. [Optional instructions.]
+
+   The agent proposes the experiment, shows the complete `autohelix.yaml`, and
+   walks through its choices without launching. Review what can change, what
+   must pass, what is measured, and the effective budgets.
+
+2. **Run and manage**
+
+   > Run and manage AutoHelix using the existing config. [Optional changes or budget limits.]
+
+   The agent applies agreed changes to the configuration and supervises the run
+   through termination.
+
+Replace `[goal]` with the desired outcome and add any scope, evaluation, or
+budget preferences. You can also ask the agent to set up and manage the
+experiment in one request.
+
+The complete skill and its references ship with
+pip/wheel installs; no AutoHelix checkout is needed. Installation is explicit,
+and existing skill folders are preserved unless you pass `--force`.
+See the [conversational walkthroughs](docs/getting-started.md#with-your-coding-agent)
+and [skill installation and export](docs/cli.md#autohelix-skill).
+
+For manual setup, create the configuration template:
+
+```bash
+cd my-project
+autohelix init
+```
+
+Edit `autohelix.yaml` using the [configuration reference](#configuration), review
+and commit the intended setup changes, then launch with `autohelix run`. Other
+commands are described in the [CLI reference](docs/cli.md).
 
 ## Examples
 
@@ -182,7 +225,7 @@ my-project/
     ├── reviews/         # reviewer feedback per iteration (if a reviewer is set)
     ├── hints.md         # messages from `autohelix hint`
     ├── logs/            # per-iteration prompts and agent output
-    ├── output/          # dashboard.html and reports
+    ├── output/          # run summary (report.md) and run page (report.html)
     └── worktrees/       # temp iteration dirs (recreated each time)
 ```
 
@@ -193,8 +236,9 @@ my-project/
 <details>
 <summary><b>Report</b></summary>
 
-`autohelix report` runs a one-shot agent over the run's history, notes, and git log and
-writes a summary to `.autohelix/output/report.md`. See [CLI → report](docs/cli.md#autohelix-report).
+When a run finishes, an agent reads the run's history, notes, reviews and commits and
+writes a short summary to `.autohelix/output/report.md`. `autohelix report` writes it on
+demand, e.g. after an interrupted run. See [Configuration → Report](docs/config.md#report).
 
 </details>
 
@@ -207,12 +251,13 @@ and the latest one guides the next iteration. See [Concepts → Reviewer](docs/c
 </details>
 
 <details>
-<summary><b>Dashboard</b></summary>
+<summary><b>Viewer and run page</b></summary>
 
-After every iteration, AutoHelix regenerates a self-contained HTML dashboard at
-`.autohelix/output/dashboard.html`. You can open it in a browser
-to watch metrics, outcomes, and per-iteration changes as the run progresses. See
-[Concepts → Dashboard](docs/concepts.md#dashboard).
+`autohelix view` serves a live page for a run on 127.0.0.1: status, metric chart,
+iterations with notes, diffs, reviews and agent activity, and the run summary once it is
+written. When a run stops, AutoHelix saves the same page as one file,
+`.autohelix/output/report.html`, to open in a browser or share. See
+[Concepts → Run page](docs/concepts.md#run-page).
 
 </details>
 

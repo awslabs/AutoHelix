@@ -8,9 +8,10 @@ from unittest.mock import patch, MagicMock
 import pytest
 from click.testing import CliRunner
 
-from autohelix.cli import main, _build_report_prompt
+from autohelix.cli import main
 from autohelix.config import load_config
 from autohelix.history import History, IterationResult
+from autohelix.report import WRITE_TO, build_report_prompt, read_report_info
 
 
 @pytest.fixture
@@ -37,7 +38,7 @@ def project(tmp_path):
     # Add some history
     history = History(tmp_path)
     history.append(IterationResult(iteration=0, accepted=True, metrics={"speed": 100}))
-    history.append(IterationResult(iteration=1, accepted=True, metrics={"speed": 200}))
+    history.append(IterationResult(iteration=1, accepted=True, metrics={"speed": 200}, commit="abc123"))
     history.append(IterationResult(iteration=2, accepted=False, metrics={}, reason="constraints failed"))
     history.append(IterationResult(iteration=3, accepted=True, metrics={"speed": 350}))
     return tmp_path
@@ -57,19 +58,55 @@ class TestReportCommand:
         assert result.exit_code == 1
         assert "Config not found" in result.output
 
-    def test_invokes_agent(self, runner, project):
-        mock_agent = MagicMock()
-        mock_agent.run.return_value = MagicMock(error=None)
-        mock_agent.display_name = "mock"
+    @staticmethod
+    def _agent(writes: str | None, also=None):
+        """A fake agent that writes `writes` to the draft path named in its prompt."""
+        def run(**kwargs):
+            if writes is not None:
+                draft = kwargs["prompt"].rsplit(WRITE_TO, 1)[1].strip().removesuffix(".")
+                Path(draft).write_text(writes)
+            if also:
+                also()
+            return MagicMock(error=None, usage={"cost_usd": 0.28})
+        agent = MagicMock(display_name="mock")
+        agent.run.side_effect = run
+        return agent
 
-        with patch("autohelix.agents.create_agent", return_value=mock_agent):
+    def test_writes_report(self, runner, project):
+        with patch("autohelix.agents.create_agent", return_value=self._agent("# Summary\nGood run.")):
             result = runner.invoke(main, ["report", str(project)])
-
         assert result.exit_code == 0, result.output
-        mock_agent.run.assert_called_once()
-        call_kwargs = mock_agent.run.call_args[1]
-        assert "prompt" in call_kwargs
-        assert "Make it faster" in call_kwargs["prompt"]
+        assert (project / ".autohelix/output/report.md").read_text() == "# Summary\nGood run."
+        info = read_report_info(project)
+        assert info["last_iteration"] == 3 and info["cost_usd"] == 0.28 and info["seconds"] >= 0
+        assert not (project / ".autohelix/output/report.draft.md").exists()
+
+    def test_warns_when_agent_changes_files(self, runner, project):
+        import subprocess
+        (project / ".gitignore").write_text(".autohelix/\n")
+        for cmd in (["init", "-q"], ["add", "-A"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]):
+            subprocess.run(["git", *cmd], cwd=project, check=True)
+        touch = lambda: (project / "autohelix.yaml").write_text("goal: changed\n")  # noqa: E731
+        with patch("autohelix.agents.create_agent", return_value=self._agent("ok", also=touch)):
+            result = runner.invoke(main, ["report", str(project)])
+        assert "changed files it should only have read" in result.output
+        assert "autohelix.yaml" in result.output
+
+    def test_timeout_is_capped(self, runner, project):
+        config = project / "autohelix.yaml"
+        config.write_text(config.read_text() + "agent:\n  timeout_seconds: 36000\n")
+        with patch("autohelix.agents.create_agent", return_value=self._agent("ok")) as create:
+            runner.invoke(main, ["report", str(project)])
+        assert create.call_args[0][0].timeout_seconds == 15 * 60
+
+    def test_keeps_old_report_when_agent_writes_nothing(self, runner, project):
+        out = project / ".autohelix/output"
+        out.mkdir(parents=True)
+        (out / "report.md").write_text("old")
+        with patch("autohelix.agents.create_agent", return_value=self._agent(None)):
+            result = runner.invoke(main, ["report", str(project)])
+        assert result.exit_code == 1
+        assert (out / "report.md").read_text() == "old"
 
 
 class TestParallelGuard:
@@ -117,56 +154,24 @@ class TestParallelGuard:
 
 
 class TestBuildReportPrompt:
-    def test_includes_goal(self, project):
+    def _prompt(self, project):
         config, _ = load_config(project)
-        history = History(project)
-        prompt = _build_report_prompt(config, history, project)
+        return build_report_prompt(config, project, project / "autohelix.yaml", Path("/tmp/draft.md"))
+
+    def test_goal_coverage_and_output(self, project):
+        prompt = self._prompt(project)
         assert "Make it faster" in prompt
+        assert "iterations 1–3" in prompt
+        assert prompt.rstrip().endswith("Markdown to /tmp/draft.md.")
+        assert "don't reproduce them" in prompt and "No title" in prompt
 
-    def test_includes_iteration_count(self, project):
-        config, _ = load_config(project)
-        history = History(project)
-        prompt = _build_report_prompt(config, history, project)
-        assert "Iterations: 3" in prompt
+    def test_points_at_files_and_baseline(self, project):
+        prompt = self._prompt(project)
+        for path in ("history.jsonl", ".autohelix/notes/", ".autohelix/reviews/", "agent.log", "autohelix.yaml"):
+            assert path in prompt
+        assert "`abc123^`" in prompt
 
-    def test_includes_accepted_rejected(self, project):
-        config, _ = load_config(project)
-        history = History(project)
-        prompt = _build_report_prompt(config, history, project)
-        assert "Accepted: 2" in prompt
-        assert "Rejected: 1" in prompt
-
-    def test_includes_baseline_metrics(self, project):
-        config, _ = load_config(project)
-        history = History(project)
-        prompt = _build_report_prompt(config, history, project)
-        assert "speed: 100" in prompt
-
-    def test_includes_best_metrics(self, project):
-        config, _ = load_config(project)
-        history = History(project)
-        prompt = _build_report_prompt(config, history, project)
-        assert "speed: 350" in prompt
-
-    def test_detects_in_progress(self, project):
-        config, _ = load_config(project)
-        history = History(project)
-        prompt = _build_report_prompt(config, history, project)
-        # 3 iterations out of 5 budget = still in progress
-        assert "in progress" in prompt
-
-    def test_includes_notes(self, project):
-        (project / ".autohelix" / "notes" / "iter-1.md").write_text("Tried quicksort")
-        config, _ = load_config(project)
-        history = History(project)
-        prompt = _build_report_prompt(config, history, project)
-        assert "Tried quicksort" in prompt
-
-    def test_includes_review(self, project):
-        reviews = project / ".autohelix" / "reviews"
-        reviews.mkdir(parents=True)
-        (reviews / "iter-2.md").write_text("Good progress on sorting")
-        config, _ = load_config(project)
-        history = History(project)
-        prompt = _build_report_prompt(config, history, project)
-        assert "Good progress on sorting" in prompt
+    def test_no_accepted_iterations(self, tmp_path):
+        (tmp_path / "autohelix.yaml").write_text("goal: g\nconstraints: [true]\n")
+        History(tmp_path).append(IterationResult(iteration=1, accepted=False, metrics={}))
+        assert "no iteration was accepted" in self._prompt(tmp_path)

@@ -3,6 +3,7 @@
 
 """Mock agent for testing - makes deterministic changes without calling an LLM."""
 
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -31,6 +32,8 @@ class MockAgent:
             mock exercise the harness cost budget without a real LLM.
         sleep_seconds: Wall-clock seconds to sleep before returning (default: 0).
             Consumes real time so the total-time budget can be exercised offline.
+
+    For a run-summary prompt it writes a fixed summary instead of changing code.
     """
 
     display_name = "Mock Agent"
@@ -53,6 +56,16 @@ class MockAgent:
         # Emit some events for realism
         event_callback(AgentEvent(kind=AgentEventKind.STATUS, text="mock agent starting"))
         event_callback(AgentEvent(kind=AgentEventKind.THINKING, text="Analyzing the codebase..."))
+
+        from autohelix.report import WRITE_TO
+
+        if WRITE_TO in prompt:
+            draft = prompt.rsplit(WRITE_TO, 1)[1].strip().removesuffix(".")
+            Path(draft).write_text("Mock summary of the run.\n")
+            return AgentRunResult(success=True, exit_code=0)
+
+        if self.config.read_only:  # a judge call (`autohelix ask`)
+            return self._judge(settings, log_path, prompt)
 
         # Check if we should fail
         if settings.get("should_fail", False):
@@ -114,3 +127,16 @@ class MockAgent:
             usage["cost_usd"] = float(settings["cost_usd"])
 
         return AgentRunResult(success=True, exit_code=0, usage=usage)
+
+    def _judge(self, settings: dict, log_path: Path, prompt: str) -> AgentRunResult:
+        """Answer a judge prompt. Settings: `judge_answer` ("yes"/"no", default "yes"),
+        `judge_reason`, `judge_output` (raw final text, overrides both), `judge_fail`."""
+        log_path.write_text(f"Mock judge\nSystem: {self.config.system_prompt}\nPrompt: {prompt}\n")
+        usage = {"cost_usd": float(settings["cost_usd"])} if settings.get("cost_usd") is not None else {}
+        if settings.get("judge_fail"):
+            return AgentRunResult(success=False, exit_code=1, error="Mock judge failure", usage=usage)
+        if "judge_output" in settings:
+            return AgentRunResult(success=True, exit_code=0, usage=usage, final_text=str(settings["judge_output"]))
+        answer = {"answer": settings.get("judge_answer", "yes"),
+                  "reason": settings.get("judge_reason", "mock judgment")}
+        return AgentRunResult(success=True, exit_code=0, usage=usage, final_text=json.dumps(answer))

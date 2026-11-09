@@ -3,6 +3,7 @@
 
 """Command-line interface."""
 
+import os
 import subprocess
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -12,6 +13,8 @@ import click
 from autohelix.config import load_config
 from autohelix.harness import AutoHelixRunError, Harness
 from autohelix.history import History
+from autohelix.formatting import format_total_cost
+from autohelix.skill import skill
 from autohelix.state import (
     archive_state,
     ensure_gitignore_entry,
@@ -65,6 +68,9 @@ def _get_version() -> str:
 @click.version_option(version=_get_version(), prog_name="autohelix")
 def main():
     """AutoHelix - Autonomous code improvement harness."""
+
+
+main.add_command(skill)
 
 
 def _run_git(args: list[str], cwd: Path, error_msg: str) -> subprocess.CompletedProcess:
@@ -145,7 +151,8 @@ def init(path: str):
 @click.option("--iterations", "-n", type=int, help="Maximum iterations to run")
 @click.option("--verbose", is_flag=True, help="Show agent command details and heartbeat messages")
 @click.option("--config", "-c", "config_file", type=click.Path(exists=True), help="Path to config file (default: autohelix.yaml in project dir)")
-def run(path: str, iterations: int | None, verbose: bool, config_file: str | None):
+@click.option("--no-report", is_flag=True, help="Don't write the run summary when the run finishes")
+def run(path: str, iterations: int | None, verbose: bool, config_file: str | None, no_report: bool):
     """Run the optimization loop.
 
     Reads configuration from autohelix.yaml (or --config).
@@ -167,7 +174,7 @@ def run(path: str, iterations: int | None, verbose: bool, config_file: str | Non
         click.echo("Run 'autohelix init' first, then edit autohelix.yaml.")
         raise SystemExit(1)
     try:
-        harness.run(max_iterations=iterations)
+        harness.run(max_iterations=iterations, report=not no_report)
     except AutoHelixRunError as e:
         raise click.ClickException(str(e)) from e
 
@@ -358,12 +365,17 @@ def parallel(worker_configs: tuple[str, ...], path: str, sync_every: int | None,
     console.print(f"\n  [bold]{heading}[/bold]")
     for i, w in enumerate(ranked, start=1):
         prefix = f"   {i}." if is_ranked else "   •"
-        cost = f"  cost=${w.total_cost:.2f}" if w.total_cost else ""
+        hist = History(w.worktree)
+        results = hist.load()
+        usages = hist.cost_usages
+        cost_text = format_total_cost(usages) if usages else None
+        cost = (
+            f"  cost={cost_text}" if cost_text and cost_text.startswith("$")
+            else f"  {cost_text}" if cost_text else ""
+        )
         delta = ""
         delta_style = ""
         if w.best_score is not None and w.best_metric:
-            hist = History(w.worktree)
-            results = hist.load()
             baseline_r = next((r for r in results if r.iteration == 0), None)
             if baseline_r and w.best_metric in baseline_r.metrics:
                 baseline_val = baseline_r.metrics[w.best_metric]
@@ -411,6 +423,55 @@ def parallel(worker_configs: tuple[str, ...], path: str, sync_every: int | None,
 
 
 @main.command()
+@click.argument("question")
+@click.option("--yes", "yes_means", help='What a "yes" answer means.')
+@click.option("--no", "no_means", help='What a "no" answer means.')
+@click.option("--rubric", type=click.Path(exists=True, dir_okay=False), help="File with criteria for the answer.")
+@click.option("--agent", "agent_type", type=click.Choice(["claude", "codex", "opencode", "mock"]),
+              help="Agent backend (default: agent.type from the config, else claude).")
+@click.option("--model", help="Model (default: agent.model from the config).")
+@click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
+@click.option("--timeout", type=click.IntRange(min=1), help="Seconds before giving up (default 600).")
+def ask(question: str, yes_means: str | None, no_means: str | None, rubric: str | None,
+        agent_type: str | None, model: str | None, effort: str | None, timeout: int | None):
+    """Ask an agent a yes/no question about the current directory.
+
+    Exits 0 for yes, 1 for no, 2 if no valid answer was produced; prints the
+    reason. Use it in stop: or constraints:, or in any script. The agent gets
+    read-only tools and no project settings; agent settings come from
+    $AUTOHELIX_CONFIG or ./autohelix.yaml.
+    """
+    import signal
+
+    from autohelix.formatting import format_cost
+    from autohelix.judge import JudgeError, ask as run_ask, judge_config, load_base_config
+    from autohelix.usage_log import ENV as USAGE_ENV
+
+    def _terminate(signum, frame):  # the harness timed this command out: stop the agent too
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _terminate)
+    cwd = Path.cwd()
+    try:
+        config = judge_config(load_base_config(cwd), agent=agent_type, model=model, effort=effort,
+                              timeout=timeout)
+        answer = run_ask(question, cwd, config, yes=yes_means, no=no_means,
+                         rubric=Path(rubric).read_text() if rubric else None)
+    except JudgeError as e:
+        click.echo(f"autohelix ask: no valid answer: {e}", err=True)
+        raise SystemExit(2)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except Exception as e:  # noqa: BLE001 - exit 1 would read as "no"
+        click.echo(f"autohelix ask: failed: {type(e).__name__}: {e}", err=True)
+        raise SystemExit(2)
+    click.echo(answer.reason)
+    if not os.environ.get(USAGE_ENV):
+        click.echo(f"autohelix ask: {'yes' if answer.yes else 'no'} · {format_cost(answer.cost_usd, precision=4)}", err=True)
+    raise SystemExit(0 if answer.yes else 1)
+
+
+@main.command()
 @click.argument("message")
 @click.option("--path", "-p", type=click.Path(exists=True), default=".", help="Project directory")
 def hint(message: str, path: str):
@@ -438,272 +499,103 @@ def hint(message: str, path: str):
 
 
 @main.command()
+@click.argument("path", type=click.Path(exists=True, file_okay=False), default=".")
+@click.option("--port", type=click.IntRange(0, 65535), default=8765, show_default=True)
+@click.option("--config", "-c", "config_file", type=click.Path(exists=True, dir_okay=False),
+              help="Config file (default: from last run, or autohelix.yaml)")
+@click.option("--open", "open_browser", is_flag=True, help="Open the viewer in a browser.")
+def view(path: str, port: int, config_file: str | None, open_browser: bool):
+    """Live web view of a run, served on 127.0.0.1.
+
+    Safe to run alongside `autohelix run`; it only reads .autohelix/.
+    Over SSH: ssh -L 8765:127.0.0.1:8765 host, then open http://localhost:8765.
+    """
+    from autohelix.viewer import make_server
+
+    try:
+        server = make_server(Path(path), port, Path(config_file) if config_file else None)
+    except OSError as exc:
+        raise click.ClickException(f"Cannot listen on port {port}: {exc}") from exc
+    url = f"http://127.0.0.1:{server.server_port}/"
+    click.echo(f"Viewing {Path(path).resolve().name} at {url}  (Ctrl-C to stop)")
+    if open_browser:
+        import webbrowser
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+@main.command()
 @click.argument("path", type=click.Path(exists=True), default=".")
 def watch(path: str):
-    """Live-tail the current iteration's agent output.
+    """Follow a run in the terminal.
 
-    Run this in a second terminal while `autohelix run` is active.
-    Shows tool calls, text output, and elapsed time in a live panel.
+    Run this in a second terminal while `autohelix run` is active. Shows what the
+    run is doing and the live output of the agent, reviewer or summary agent.
+    Keeps waiting when the run stops; Ctrl-C stops watching (not the run).
     """
-    import time
-
     from rich.console import Console
-    from rich.live import Live
+
+    from autohelix.run_status import read_run_status
+    from autohelix.watch import watch as watch_run
 
     console = Console()
     project_path = Path(path).resolve()
-    logs_dir = project_path / ".autohelix" / "logs"
-
-    if not logs_dir.exists():
-        _warn_if_parallel(project_path, console)
-        console.print("[yellow]No agent logs found. Is autohelix running?[/yellow]")
+    if _parallel_marker_path(project_path).exists() and read_run_status(project_path) is None:
+        _warn_if_parallel(project_path, console)  # lists the workers to watch instead
         raise SystemExit(1)
-
-    def _find_latest_log() -> Path | None:
-        logs = sorted(logs_dir.glob("iter-*/agent.log"), key=lambda p: p.stat().st_mtime)
-        return logs[-1] if logs else None
-
-    log_path = _find_latest_log()
-    if not log_path:
-        console.print("[yellow]No iteration logs found. Waiting...[/yellow]")
-        for _ in range(30):
-            time.sleep(1)
-            log_path = _find_latest_log()
-            if log_path:
-                break
-        if not log_path:
-            console.print("[red]No logs appeared. Is autohelix running?[/red]")
-            raise SystemExit(1)
-
-    # Extract iteration number from parent directory name
-    iter_name = log_path.parent.name.replace("iter-", "Iteration ")
-
-    from autohelix.agents import AgentConfig, AgentEvent
-    from autohelix.agents.claudecode import ClaudeCodeAgent
-    from autohelix.display import LiveDisplay
-
-    display = LiveDisplay(console=console, title=iter_name, verbose=True)
-
-    # Use ClaudeCodeAgent's line parser (same logic as --verbose harness)
-    agent = ClaudeCodeAgent(config=AgentConfig(), heartbeat_seconds=30)
-
-    import json as json_mod
-
-    # Skip event types that duplicate streamed content when replaying logs
-    _SKIP_TYPES = {"assistant", "user"}
-
-    def on_event(event: AgentEvent) -> None:
-        display.handle_event(event)
-
+    if not (project_path / ".autohelix").is_dir():
+        console.print(f"[red]No .autohelix/ in {project_path}.[/red] Run this in an AutoHelix project.")
+        raise SystemExit(1)
     try:
-        with Live(display, console=console, refresh_per_second=4) as live:
-            while True:
-                with open(log_path) as f:
-                    while True:
-                        line = f.readline()
-                        if line:
-                            line = line.strip()
-                            if line:
-                                try:
-                                    if json_mod.loads(line).get("type") in _SKIP_TYPES:
-                                        continue
-                                except (json_mod.JSONDecodeError, ValueError):
-                                    pass
-                                agent._handle_line(line, on_event)
-                        else:
-                            newer = _find_latest_log()
-                            if newer and newer != log_path:
-                                log_path = newer
-                                iter_name = log_path.parent.name.replace("iter-", "Iteration ")
-                                display = LiveDisplay(console=console, title=iter_name, verbose=True)
-                                agent = ClaudeCodeAgent(config=AgentConfig(), heartbeat_seconds=30)
-                                live.update(display)
-                                break
-                            time.sleep(0.3)
+        config, _ = load_config(project_path, config_file=read_stored_config_path(project_path))
+        backend = config.agent.type
+    except Exception:  # noqa: BLE001 - the log parser can tell backends apart on its own
+        backend = None
+    try:
+        watch_run(project_path, backend, console)
     except KeyboardInterrupt:
-        console.print("\n[dim]Stopped watching.[/dim]")
+        console.print("[dim]Stopped watching. The run is unaffected.[/dim]")
 
 
 @main.command()
 @click.argument("path", type=click.Path(exists=True), default=".")
 @click.option("--config", "-c", "config_file", type=click.Path(exists=True), help="Path to config file (default: from last run, or autohelix.yaml)")
 def report(path: str, config_file: str | None):
-    """Generate an agent-written analysis of the run.
+    """Write (or rewrite) the run summary.
 
-    Uses a one-shot agent call to analyze iteration history, notes,
-    and git log, then writes .autohelix/output/report.md with insights on
-    what worked, what failed, and what to try next.
+    One agent call reads the run's history, notes, reviews, logs and commits, and writes
+    .autohelix/output/report.md. `autohelix run` does this automatically when a run
+    finishes; use this after an interrupted run or to regenerate it.
     """
     from rich.console import Console
-    from rich.live import Live
 
-    from autohelix.agents import AgentConfig, AgentEvent, create_agent
-    from autohelix.display import LiveDisplay
+    from autohelix.report import write_report
 
     console = Console()
     project_path = Path(path).resolve()
-
-    # Resolve config: explicit flag > stored path > default
-    if config_file:
-        resolved_config = Path(config_file).resolve()
-    else:
-        resolved_config = read_stored_config_path(project_path)
-
+    resolved_config = Path(config_file).resolve() if config_file else read_stored_config_path(project_path)
     try:
         config, _ = load_config(project_path, config_file=resolved_config)
     except FileNotFoundError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise SystemExit(1)
 
-    history = History(project_path)
-    results = history.load()
-
-    if not results:
+    if History(project_path).get_last_iteration() == 0:
         _warn_if_parallel(project_path, console)
         console.print("[yellow]No iterations run yet. Nothing to report.[/yellow]")
         raise SystemExit(1)
 
-    # Gather context for the report agent
-    report_prompt = _build_report_prompt(config, history, project_path)
+    if not write_report(config, project_path, console, resolved_config):
+        raise SystemExit(1)
+    from autohelix.viewer import write_static
 
-    # Create agent for the report
-    agent_config = AgentConfig(
-        type=config.agent.type,
-        command=config.agent.command,
-        model=config.agent.model,
-        timeout_seconds=config.agent.timeout_seconds or 300,
-        auto_memory=False,
-    )
-    agent = create_agent(agent_config, heartbeat_seconds=30)
-
-    report_path = project_path / ".autohelix" / "output" / "report.md"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    logs_dir = project_path / ".autohelix" / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    log_path = logs_dir / "report.log"
-
-    display = LiveDisplay(console=console, title="preparing report", verbose=False)
-
-    def on_event(event: AgentEvent) -> None:
-        display.handle_event(event)
-
-    with Live(display, console=console, refresh_per_second=10, transient=True) as live:
-        result = agent.run(
-            worktree_path=project_path,
-            prompt=report_prompt,
-            iteration=0,
-            log_path=log_path,
-            event_callback=on_event,
-        )
-        display.flush()
-
-    if report_path.exists():
-        console.print(f"\n[green]Report written to .autohelix/output/report.md[/green]")
-    else:
-        console.print(f"\n[yellow]Agent finished but report.md was not created.[/yellow]")
-
-
-def _build_report_prompt(config, history: History, project_path: Path) -> str:
-    """Build the prompt for the report agent."""
-    results = history.load()
-    iterations = [r for r in results if r.iteration > 0]
-    baseline = next((r for r in results if r.iteration == 0), None)
-    accepted = sum(1 for r in iterations if r.accepted)
-    rejected = len(iterations) - accepted
-
-    directions = config.metric_directions()
-    best = history.get_best_metrics(directions)
-
-    # Detect if run is still in progress
-    max_iter = config.max_iterations
-    in_progress = len(iterations) < max_iter
-
-    lines = [
-        "Analyze this AutoHelix optimization run and write a report.",
-        "",
-        f"Write the report to .autohelix/output/report.md",
-        "",
-        f"## Context",
-        f"- Goal: {config.goal.strip()}",
-        f"- Iterations: {len(iterations)}" + (f" of {max_iter} (run still in progress)" if in_progress else " (complete)"),
-        f"- Accepted: {accepted}, Rejected: {rejected}",
-    ]
-
-    # Baseline and best metrics
-    if baseline and baseline.metrics:
-        lines.append("")
-        lines.append("## Baseline metrics")
-        for name, value in baseline.metrics.items():
-            lines.append(f"- {name}: {value}")
-
-    if best:
-        lines.append("")
-        lines.append("## Best metrics achieved")
-        for name, (value, iter_num) in best.items():
-            direction = directions.get(name, "higher")
-            baseline_val = baseline.metrics.get(name) if baseline and baseline.metrics else None
-            improvement = ""
-            if baseline_val and baseline_val != 0:
-                pct = ((value - baseline_val) / baseline_val) * 100
-                improvement = f" ({pct:+.1f}% from baseline)"
-            lines.append(f"- {name}: {value} (iteration {iter_num}){improvement}")
-
-    # Full iteration history
-    lines.append("")
-    lines.append("## Iteration history")
-    for r in iterations:
-        if r.accepted:
-            metrics_str = ", ".join(f"{k}={v}" for k, v in r.metrics.items())
-            lines.append(f"- iter {r.iteration}: accepted — {metrics_str}")
-        else:
-            lines.append(f"- iter {r.iteration}: rejected — {r.reason or 'constraints failed'}")
-
-    # Notes
-    notes_dir = project_path / ".autohelix" / "notes"
-    if notes_dir.exists():
-        note_files = sorted(f for f in notes_dir.iterdir() if f.is_file() and f.suffix == ".md")
-        if note_files:
-            lines.append("")
-            lines.append("## Agent notes")
-            for note_file in note_files[-10:]:  # last 10 notes
-                content = note_file.read_text().strip()
-                if content:
-                    lines.append(f"\n### {note_file.name}")
-                    lines.append(content)
-
-    # Last review (highest-numbered reviews/iter-N.md)
-    reviews_dir = project_path / ".autohelix" / "reviews"
-    if reviews_dir.exists():
-        review_files = sorted(
-            reviews_dir.glob("iter-*.md"),
-            key=lambda p: int(p.stem.split("-", 1)[1]) if p.stem.split("-", 1)[1].isdigit() else -1,
-        )
-        if review_files:
-            review = review_files[-1].read_text().strip()
-            if review:
-                lines.append("")
-                lines.append("## Last review")
-                lines.append(review)
-
-    # Git log
-    git_log = subprocess.run(
-        ["git", "log", "--oneline", "-20"],
-        cwd=project_path, capture_output=True, text=True,
-    )
-    if git_log.returncode == 0 and git_log.stdout.strip():
-        lines.append("")
-        lines.append("## Recent git history")
-        lines.append(git_log.stdout.strip())
-
-    lines.append("")
-    lines.append("## Instructions")
-    lines.append(
-        "Write a concise report covering: (1) summary, (2) metric progression, "
-        "(3) key changes that worked, (4) failed approaches, (5) suggestions for next steps. "
-        "Be specific — reference iteration numbers and concrete strategies."
-    )
-
-    return "\n".join(lines)
+    write_static(project_path, resolved_config)
+    console.print("[dim]Run page saved to .autohelix/output/report.html[/dim]")
 
 
 if __name__ == "__main__":

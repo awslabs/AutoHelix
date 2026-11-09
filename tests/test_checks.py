@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from autohelix.checks import (
+    CHECK_KILL_GRACE,
     parse_metric_output,
     parse_structured_metrics,
     run_constraint,
@@ -154,7 +155,7 @@ class TestInterruptCleanup:
         with pytest.raises(KeyboardInterrupt):
             run_constraint("sleep 60", cwd=MagicMock())
 
-        mock_kill.assert_called_once_with(proc)
+        mock_kill.assert_called_once_with(proc, grace=CHECK_KILL_GRACE)
 
     @patch("autohelix.checks._kill_process_group")
     @patch("autohelix.checks.subprocess.Popen")
@@ -172,4 +173,4 @@ class TestInterruptCleanup:
         with pytest.raises(KeyboardInterrupt):
             run_observable(observable, cwd=MagicMock())
 
-        mock_kill.assert_called_once_with(proc)
+        mock_kill.assert_called_once_with(proc, grace=CHECK_KILL_GRACE)

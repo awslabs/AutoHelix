@@ -132,6 +132,11 @@ def archive_state(project_path: Path, console) -> None:
         console.print("  [dim]✓[/dim] Archived logs")
         archived_something = True
 
+    # Archive the last run's live status so viewers don't report a cleared run.
+    run_status = autohelix_dir / "runtime" / "run.json"
+    if run_status.exists():
+        shutil.move(str(run_status), str(archive_dir / "run.json"))
+
     # Archive output/
     output_path = autohelix_dir / "output"
     if output_path.exists() and any(output_path.iterdir()):

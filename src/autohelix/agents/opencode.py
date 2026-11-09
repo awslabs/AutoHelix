@@ -22,6 +22,7 @@ class OpenCodeAgent:
         self.config = config
         self.heartbeat_seconds = heartbeat_seconds
         self._usage: dict[str, object] = {}
+        self._final_text: str | None = None
 
     def _command_path(self) -> str:
         if self.config.command:
@@ -47,6 +48,12 @@ class OpenCodeAgent:
             cmd.extend(["--model", self.config.model])
         if self.config.reasoning_effort:
             cmd.extend(["--variant", self.config.reasoning_effort])
+        if self.config.read_only:
+            # OpenCode has no reliable read-only mode or system-prompt flag; the
+            # judge's instructions lead the prompt and nothing else is passed.
+            system = self.config.system_prompt
+            cmd.append(f"{system}\n\n{prompt}" if system else prompt)
+            return cmd
         cmd.extend(self.config.extra_args)
         cmd.append(prompt)
         return cmd
@@ -72,6 +79,7 @@ class OpenCodeAgent:
         if event_type == "text":
             text = part.get("text", "").strip()
             if text:
+                self._final_text = text
                 self._emit(event_callback, AgentEventKind.ASSISTANT_TEXT, text)
             return
 
@@ -98,6 +106,7 @@ class OpenCodeAgent:
                         self._usage[key] = self._usage.get(key, 0) + tokens[key]
             if cost is not None:
                 self._usage["cost_usd"] = self._usage.get("cost_usd", 0) + cost
+                self._usage["cost_source"] = "backend"
             detail = f"reason={reason}"
             if tokens:
                 detail += f" tokens={json.dumps(tokens, sort_keys=True)}"
@@ -118,6 +127,7 @@ class OpenCodeAgent:
         project_path: Path | None = None,
     ) -> AgentRunResult:
         self._usage = {}
+        self._final_text = None
         # Build env with remapped PYTHONPATH for worktree
         env = build_worktree_env(project_path, worktree_path) if project_path else None
 
@@ -141,4 +151,5 @@ class OpenCodeAgent:
 
         if result.timed_out:
             event_callback(AgentEvent(kind=AgentEventKind.WARNING, text=f"Agent {format_timeout_seconds(self.config.timeout_seconds)}"))
-        return AgentRunResult(success=result.exit_code == 0, exit_code=result.exit_code, usage=self._usage)
+        return AgentRunResult(success=result.exit_code == 0, exit_code=result.exit_code, usage=self._usage,
+                              final_text=self._final_text)

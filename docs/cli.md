@@ -1,6 +1,52 @@
 # CLI Reference
 
-All commands default to the current directory if `--path` / positional path is omitted.
+Project commands default to the current directory if `--path` / positional path
+is omitted.
+
+## `autohelix skill`
+
+Install or export the packaged `autohelix-setup` skill and all its references.
+It helps your coding agent design and verify performance, writing, and research
+experiments using the installed CLI. A source checkout is not required.
+
+```bash
+autohelix skill install --agent claude --scope project --path /path/to/project
+autohelix skill install --agent codex --scope user
+autohelix skill export /path/to/autohelix-setup
+```
+
+`--agent` is required and accepts `claude`, `codex`, or `opencode`. `--scope`
+defaults to `project`. Project installation uses the current directory or
+`--path`; user installation uses your home directory and rejects `--path`.
+Skill installation does not require a git repository or initialize AutoHelix.
+
+| Agent | Project skill folder | User skill folder |
+| --- | --- | --- |
+| Claude Code | `.claude/skills/autohelix-setup/` | `~/.claude/skills/autohelix-setup/` |
+| Codex | `.agents/skills/autohelix-setup/` | `~/.agents/skills/autohelix-setup/` |
+| OpenCode | `.opencode/skills/autohelix-setup/` | `~/.config/opencode/skills/autohelix-setup/` |
+
+Export writes the full skill directly into `DESTINATION`; it does not append
+another `autohelix-setup` directory. Use it for custom discovery directories.
+
+Both commands refuse any existing destination by default, including an empty
+directory. With `--force`, bundled files are replaced and unrelated local files
+are preserved; files removed from a future bundle are not deleted. Symlinks at
+the destination or bundled paths and incompatible file/directory types are
+rejected before copying. Updates replace individual files; an I/O failure can
+leave a partially updated folder. Correct the error and repeat with `--force`.
+
+After installation, ask your agent to use `autohelix-setup` to prepare your
+experiment. It will inspect the project and help configure scope, constraints,
+command observations, optional metric gates or advisory review, and budgets.
+Review the configuration and verification results before starting
+`autohelix run`, unless you already requested a run.
+To request ongoing management, ask the agent to prepare, run, and supervise
+within explicit effort limits. It should monitor saved outcomes through process
+termination and use hints when useful for later iterations. See the
+[setup-only and managed walkthroughs](getting-started.md#with-your-coding-agent).
+
+Installing the Python package does not register skills automatically.
 
 ## `autohelix init`
 
@@ -23,7 +69,7 @@ Requires an existing git repository.
 Start or resume the optimization loop. Requires `autohelix init` to have been run first.
 
 ```bash
-autohelix run [--path PATH] [-n ITERATIONS] [--verbose] [--config PATH]
+autohelix run [--path PATH] [-n ITERATIONS] [--verbose] [--config PATH] [--no-report]
 ```
 
 ### Options
@@ -34,8 +80,11 @@ autohelix run [--path PATH] [-n ITERATIONS] [--verbose] [--config PATH]
 | `--verbose` | Show agent command details, file paths, heartbeats |
 | `--config`, `-c` | Path to config file (default: `autohelix.yaml` in project) |
 | `--path`, `-p` | Project directory (default: current dir) |
+| `--no-report` | Don't write the run summary when the run finishes |
 
-On first run, performs preflight checks and captures baseline observables. After every iteration it refreshes a self-contained dashboard at `.autohelix/output/dashboard.html` (open it in a browser to watch progress) — see [Concepts → Dashboard](concepts.md#dashboard).
+When the run finishes (not when interrupted), it writes a summary to `.autohelix/output/report.md` — see [Configuration → Report](config.md#report).
+
+On first run, performs preflight checks and captures baseline observables. When the run stops, it saves `.autohelix/output/report.html`, a one-file copy of the [`autohelix view`](#autohelix-view) page — see [Concepts → Run page](concepts.md#run-page).
 
 ## `autohelix clear`
 
@@ -51,13 +100,29 @@ Does not touch code — use git directly to roll back.
 
 ## `autohelix watch`
 
-Live-tail agent output in a second terminal.
+Follow a run in a second terminal.
 
 ```bash
 autohelix watch [path]
 ```
 
-Shows tool calls, text output, and elapsed time. Automatically switches to new iterations as they start.
+Shows the live output of whatever the run is doing: the agent during an iteration, the reviewer during a review, and the summary agent at the end (tool calls, text, elapsed time). Below it is a status line with the iteration, phase (agent, checks, review, …) and time in that phase, read from `.autohelix/runtime/run.json`. When the run stops, watch says how and when, and waits for the next run; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs.
+
+## `autohelix view`
+
+Live web view of a run, in your browser.
+
+```bash
+autohelix view [path] [--port 8765] [--open]
+```
+
+A browser view of a run's `.autohelix/` state. The header shows run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed). The left side shows the best metric value with total time and cost, the metric over time, and one row per iteration with the agent's one-line summary. The right side starts with the run summary once one is written (see [Configuration → Report](config.md#report)), then has one card per iteration with its notes (`notes/iter-N.md`), agent activity (`logs/iter-N/`, live while it runs), review, changes against the baseline, and captured output (`observations/iter-N/`); click a row or chart point to open that card. Notes that are not tied to an iteration are listed under Shared notes. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
+
+The server listens on `127.0.0.1` only and has no login, so on a shared machine other users of that machine can open it. From another machine, forward the port over SSH:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 user@host   # then open http://localhost:8765
+```
 
 ## `autohelix hint`
 
@@ -69,9 +134,38 @@ autohelix hint "MESSAGE" [--path PATH]
 
 Appends a timestamped line to `.autohelix/hints.md`. The agent reads that file (listed in its "Read before starting" section) each iteration, so a hint lets you steer a run without stopping it. Run it from a second terminal while `autohelix run` is going. Hints accumulate — the file holds the full history for the run.
 
+## `autohelix ask`
+
+Ask an agent a yes/no question about the current directory.
+
+```bash
+autohelix ask "QUESTION" [--yes TEXT] [--no TEXT] [--rubric FILE] [--agent TYPE] [--model MODEL] [--effort LEVEL] [--timeout SECONDS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--yes`, `--no` | What a "yes" or "no" answer means (optional; makes answers more consistent) |
+| `--rubric` | A file with criteria for the answer |
+| `--agent` | `claude` or `codex` (default: `agent.type` from the config) |
+| `--model`, `--effort` | Model and reasoning effort (default: from the config's `agent:`) |
+| `--timeout` | Seconds before giving up, including the retry (default 600) |
+
+Exits **0** for yes, **1** for no and **2** if no valid answer was produced, and prints the reason, so it works anywhere a command does: `stop:`, `constraints:`, or a script.
+
+```yaml
+stop:
+  - autohelix ask "Is every item in SPEC.md implemented and tested?"
+```
+
+- **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run) or `./autohelix.yaml`: backend, command, model and effort only, never `agent.settings` or `extra_args`.
+- **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox; it still reads an `AGENTS.md` in the directory. OpenCode can't be used as a judge yet: it has no read-only mode.
+- **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `budget.cost`, and its transcript is saved as `.autohelix/logs/iter-N/ask-*.log`. Outside a run, the cost is printed to stderr.
+- An invalid answer or failed call is retried once. The command stays inside the timeout of the check that runs it.
+- **Limits.** The judge reads the same directory the agent worked in, including `.autohelix/notes/` and gitignored files, which scope enforcement doesn't revert. Keep criteria files out of `scope.editable`. Running the judge on a clean copy (without notes, gitignored files or agent instruction files) is planned.
+
 ## `autohelix report`
 
-Generate an agent-written analysis of the run.
+Write (or rewrite) the run summary.
 
 ```bash
 autohelix report [path] [--config PATH]
@@ -81,7 +175,7 @@ autohelix report [path] [--config PATH]
 |--------|-------------|
 | `--config`, `-c` | Path to config file (default: from last run, or `autohelix.yaml`) |
 
-Uses a one-shot agent call to analyze iteration history, notes, and git log, then writes `.autohelix/output/report.md`.
+`autohelix run` writes the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. One agent call reads the run's history, notes, reviews, logs and commits and writes `.autohelix/output/report.md`. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
 
 ## `autohelix parallel` (alpha)
 

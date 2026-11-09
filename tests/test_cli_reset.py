@@ -39,9 +39,9 @@ def _setup_autohelix_dir(tmp_path: Path):
     logs.mkdir()
     (logs / "iter-1.log").write_text("log output\n")
 
-    # Output: dashboard
+    # Output: run page
     (ah / "output").mkdir()
-    (ah / "output" / "dashboard.html").write_text("<html>dashboard</html>\n")
+    (ah / "output" / "report.html").write_text("<html>report</html>\n")
 
     return ah
 
@@ -112,20 +112,20 @@ class TestClearArchive:
         assert "Archived logs" in result.output
 
     def test_archives_output(self, runner, tmp_path):
-        """Clear should archive output/ (including dashboard.html)."""
+        """Clear should archive output/ (including report.html)."""
         ah = _setup_autohelix_dir(tmp_path)
 
         result = runner.invoke(main, ["clear", str(tmp_path)], input="y\n")
         assert result.exit_code == 0
 
         # Dashboard should be gone from main location
-        assert not (ah / "output" / "dashboard.html").exists()
+        assert not (ah / "output" / "report.html").exists()
 
         # Should exist in archive with original content
         archive_dirs = list((ah / "archive").iterdir())
-        archived = archive_dirs[0] / "output" / "dashboard.html"
+        archived = archive_dirs[0] / "output" / "report.html"
         assert archived.exists()
-        assert archived.read_text() == "<html>dashboard</html>\n"
+        assert archived.read_text() == "<html>report</html>\n"
         assert "Archived output" in result.output
 
     def test_archive_shows_path(self, runner, tmp_path):

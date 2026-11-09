@@ -61,12 +61,22 @@ reviewer:
   # timeout_seconds: 300       # override timeout for reviewer
   # auto_memory: false         # disabled by default for independent reviews
 
+# Optional: end the run early once one of these exits 0 (see Stop Conditions)
+# stop:
+#   - command: jq -e '.speedup >= 10' "$AUTOHELIX_METRICS"
+#   - command: ./scripts/done.sh
+#     timeout: 120
+#   - autohelix ask "Is every item in SPEC.md implemented and tested?"
+
 # Limit the run (any combination)
 budget:
   iterations: 10       # max iterations
-  # cost: 20           # max spend in USD (needs a cost-reporting backend: Claude Code or OpenCode)
+  # cost: 20           # cumulative agent + reviewer cost in USD (Codex uses an API-equivalent estimate)
   # time: 2h           # max total wall-clock (duration string: 90m, 2h, 1h30m)
   # iteration_time: 15m  # per-iteration time budget (see below)
+
+# Write a summary of the run when it finishes (default true)
+# report: false
 ```
 
 ## Example Configs
@@ -266,16 +276,48 @@ An optional second agent that reviews a change before it merges and writes quali
 
 The `reviewer.prompt` is the reviewer's entire instruction (it inspects the diff itself and is not handed the goal or metrics), so put any context it should consider there. The reviewer never sees the `reviews/` archive, so each review is independent by construction. See [Concepts → Reviewer](concepts.md#reviewer) for the full mechanics.
 
+### Stop Conditions
+
+`stop:` lists commands that end the run early. Each entry takes the same forms as a constraint: a string, or `command` plus an optional `timeout` (seconds). They run after the baseline and after each **accepted** iteration, on the code that was just accepted (rejected iterations don't change it). They run in order until one exits:
+
+- **0** — stop. The run ends after this iteration, and the last line the command printed to stdout is recorded as the reason (`speedup 10.3 ≥ 10`), so print one.
+- **1** — keep going.
+- **anything else, or a timeout** — an error. On the baseline it stops the run before the first iteration (fix the command and run again); later it prints a warning and the run continues.
+
+Each command gets these environment variables (on top of the ones every command the harness runs gets: `AUTOHELIX_CONFIG`, `AUTOHELIX_USAGE_FILE`, `AUTOHELIX_LOG_DIR` and `AUTOHELIX_COMMAND_DEADLINE`):
+
+- `AUTOHELIX_METRICS` — path to a JSON file with the metrics just measured, e.g. `{"speedup": 10.3}`. A metric target is a one-liner: `jq -e '.speedup >= 10' "$AUTOHELIX_METRICS"` (`jq -e` exits 0 when the expression is true, 1 when false).
+- `AUTOHELIX_ITERATION` — the iteration number (0 for the baseline).
+
+For a qualitative condition, use [`autohelix ask`](cli.md#autohelix-ask): it asks an agent a yes/no question and exits 0 for yes, e.g. `autohelix ask "Is every item in SPEC.md implemented and tested?"`. Its cost counts toward the run.
+
+After iterations they run in the iteration's worktree, like constraints; the baseline check runs in the project, like the baseline metrics. Keep stop commands out of `scope.editable`, and don't let them modify files. The agent's prompt lists them.
+
+Stop conditions only end a run early: budgets still apply. If the baseline already meets one, no iterations run. If you interrupt a run while its stop commands are running, the iteration is kept but not checked; the next accepted iteration is. Running `autohelix run` again after a stop continues the run (and stops again after the next accepted iteration if the condition still holds); raise the target or remove the condition first.
+
+Why a run ended is shown at the end of the run, in `autohelix view`, `autohelix watch`, the run summary, and `.autohelix/runtime/run.json` (`stop_reason`).
+
 ### Budget
 
 Caps how far a run goes. Combine any of:
 
 - `iterations` — maximum number of iterations (default 5).
-- `cost` — maximum spend in USD. Requires a backend that reports cost (Claude Code, OpenCode); ignored otherwise.
+- `cost` — cumulative cost threshold in USD for the optimization agent,
+  reviewer, and model calls reported by commands, including baseline commands
+  and reviews. Uses backend-reported amounts
+  for Claude Code and OpenCode, and calculated API-equivalent estimates for Codex.
+  The same budget option applies to all three backends.
 - `time` — maximum total wall-clock, as a duration string (`90m`, `2h`, `1h30m`).
 - `iteration_time` — a *per-iteration* time budget. Unlike the others it can interrupt work mid-iteration: it enforces a hard deadline **and** injects the remaining time into the agent's context so it can wrap up and save notes first. See [ML Experiments](ml-experiments.md) for when this matters.
 
 `cost` and `time` are **checked after each iteration completes, never mid-iteration** — the loop stops once the cumulative total crosses the limit, so a run can overshoot by up to one iteration's worth of cost or time. For a hard mid-iteration cutoff use `iteration_time` (or `agent.timeout_seconds`).
+
+The cost threshold is also checked before starting an iteration, including after
+the baseline review and when resuming a run.
+
+### Report
+
+When a run finishes after at least one iteration (a stop condition is met, or the iteration, cost or time budget is reached), one more agent call reads the run's history, notes, reviews, logs and commits and writes a short summary to `.autohelix/output/report.md`: what was achieved, which changes mattered, what didn't work, what to try next, and anything worth checking before relying on the results. An interrupted run gets no summary; run [`autohelix report`](cli.md#autohelix-report) to write one. Set `report: false` to skip it. The call uses the same agent backend and model as the run, with a timeout of `agent.timeout_seconds` capped at 15 minutes. Its time and cost are shown next to the summary in `autohelix view` and `report.html`; the cost is not counted against `budget.cost`.
 
 ### Auto Memory
 
@@ -288,8 +330,65 @@ Controls Claude Code's built-in memory system:
 
 ### Cost Tracking
 
-Token usage and cost are captured from all agent backends and shown:
+Available token usage and cost are captured from agent backends and shown:
 
-- Per iteration (after accepted/rejected)
+- Per iteration (after accepted/rejected). A `+` after the amount (`$0.10+`) means part of that iteration's cost (agent or reviewer) is unavailable, so the amount is what is known.
 - Cumulative in the final summary
 - Persisted in `.autohelix/history.jsonl`
+
+Iteration costs include the optimization agent, the reviewer, and model calls
+made by the commands the harness runs (such as `autohelix ask` in `stop:`,
+`constraints:` or `metrics:`). Run totals and `budget.cost` also include
+baseline reviews and the baseline's commands; report generation remains separate.
+History preserves the optimization agent's `usage`, a `reviewer_usage` list
+containing the raw usage for each attempted review, including failed attempts,
+and a `command_usage` list with one record per model call made by a command.
+
+A command of your own can report its model calls the same way: append one JSON
+line per call, e.g. `{"id": "...", "source": "my-eval", "cost_usd": 0.12}`, to the
+file named by `$AUTOHELIX_USAGE_FILE` (set for every command the harness runs).
+Lines with the same `id` are one call (the last line wins), so a call can be
+recorded with `"cost_usd": null` when it starts and its cost when it ends.
+An iteration that is interrupted or fails before it is recorded leaves no record, so
+its agent and reviewer costs are not counted.
+
+The numeric field is `usage.cost_usd` for every backend. `usage.cost_source` is
+`backend` when the CLI supplies the amount, or `calculated` when AutoHelix
+calculates it. Backend-supplied amounts can themselves be estimates; they are
+not necessarily invoice totals. Older history without this metadata still loads.
+
+**Codex costs are estimated** from reported input, cached-input, cache-write,
+and output token counts and a bundled snapshot of the model's published
+[OpenAI API rates](https://developers.openai.com/api/docs/pricing).
+For subscription and Bedrock users, these are API-equivalent amounts, not
+subscription charges or provider bills. The normal display uses the same
+**Cost** label for every backend; provenance is saved in history:
+
+- `cost_model` and, when available, `cost_provider` identify the model and provider.
+- `cost_basis: openai_standard_api` identifies Standard pricing at ordinary
+  context lengths, with 30-minute cache writes.
+- `cost_rates` saves the rates per million tokens, cache-write lifetime, and
+  verification date used for that iteration.
+- `output_includes_reasoning` records whether separately reported reasoning
+  tokens were already included in output. They are not counted twice.
+
+The snapshot was verified on November 6, 2026. It supports listed GPT-6 models
+and common GPT-5 Codex models; unknown names and expiring promotional prices are
+not guessed. The model normally comes from the matching Codex session metadata,
+so omitted `agent.model` works when that metadata is available. For ephemeral
+sessions, an unambiguous explicit `agent.model` or `agent.settings.model` can
+provide the model instead.
+
+Estimates exclude speed-tier and regional premiums, per-request long-context
+surcharges, separately billed tools, and usage outside the captured thread.
+Cache-write lifetimes other than 30 minutes are not inferred. Report and
+supervisor calls remain separate; external evaluator calls count when they
+record usage through `$AUTOHELIX_USAGE_FILE`. Codex agent duration is measured
+locally even when usage is unavailable.
+
+Missing, invalid, or interrupted usage remains **unavailable**, not zero.
+Mixed totals are labeled **incomplete**. If an iteration or resumed history has
+unavailable cost, `budget.cost` warns and tracks only the known amounts; retain
+an iteration or time limit as well. The budget uses the saved estimate and is
+checked between iterations, so it is an approximate stopping threshold, not a
+guaranteed spending cap.

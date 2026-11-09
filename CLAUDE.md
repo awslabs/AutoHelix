@@ -28,6 +28,9 @@ uv pip install -e ".[dev]"
 - `src/autohelix/checks.py` - constraint and metric execution
 - `src/autohelix/history.py` - iteration history (JSONL)
 - `src/autohelix/display.py` - live Rich display
+- `src/autohelix/run_status.py` - live run status (`.autohelix/runtime/run.json`)
+- `src/autohelix/viewer.py` + `viewer_resources/` - `autohelix view` web viewer
+- `src/autohelix/replay.py` - parse saved agent logs into events (watch, view)
 - `src/autohelix/prompt_template.py` - agent prompt rendering
 - `tests/` - test suite (pytest)
 - `examples/` - example projects (sorting, ml-recipe, writing,
@@ -43,7 +46,8 @@ autohelix init         # Initialize project (creates .autohelix/ and config temp
 autohelix run          # Start or resume optimization loop
 autohelix parallel     # Run multiple workers in parallel on the same goal
 autohelix clear        # Archive state, start fresh
-autohelix watch        # Live-tail agent output (second terminal)
+autohelix watch        # Follow a run in the terminal (second terminal)
+autohelix view         # Live web view of a run (127.0.0.1)
 autohelix hint         # Send a hint to the running agent (picked up next iteration)
 autohelix report       # Agent-written analysis of the run
 ```

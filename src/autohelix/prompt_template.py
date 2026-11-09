@@ -71,6 +71,7 @@ def build_prompt_variables(
 
     # Constraints
     variables["constraints"] = [c.command for c in config.constraints]
+    variables["stop"] = [c.command for c in config.stop]
 
     # Observables — pass structured data for the template to iterate
     def _format_metric(name: str, direction: str) -> str:
