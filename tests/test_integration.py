@@ -502,6 +502,8 @@ constraints:
             return ProcessRunResult(exit_code=0)
 
         monkeypatch.setattr("autohelix.agents.codex.run_process", fake_run_process)
+        # Codex execution is mocked, so preflight must not require a local CLI.
+        monkeypatch.setattr("autohelix.checks.shutil.which", lambda command: "/mock/codex")
         Harness(integration_project).run(max_iterations=1)
         Harness(integration_project).run(max_iterations=5)
         iterations = [r for r in History(integration_project).load() if r.iteration > 0]
