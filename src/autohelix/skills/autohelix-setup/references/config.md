@@ -108,6 +108,20 @@ advisory: it informs a later iteration and does not itself reject a candidate.
 This configuration does not define agent-produced scalar metrics or multiple
 named reviewers.
 
+## Stop conditions
+
+`stop` lists commands, in the same forms as `constraints`, that end the run
+early. They run after the baseline and after each accepted iteration: exit 0
+stops (the last stdout line is the recorded reason), 1 continues, anything else
+is an error (fatal on the baseline, a warning later). `$AUTOHELIX_METRICS` is a
+JSON file of the metrics just measured, so a target is
+`jq -e '.speedup >= 10' "$AUTOHELIX_METRICS"`; `$AUTOHELIX_ITERATION` is the
+iteration number. For a qualitative condition use
+`autohelix ask "<yes/no question>"` (an agent judgment: exit 0 = yes, 1 = no,
+2 = no valid answer; cost counted toward the run). Use one when the user states
+when the run is done; keep the command and any criteria files outside
+`scope.editable`. Budgets still apply.
+
 ## Budgets and run state
 
 Omitting `budget.iterations` defaults to five attempts, including when `budget`

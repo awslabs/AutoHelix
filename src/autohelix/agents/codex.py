@@ -30,6 +30,8 @@ class CodexAgent:
         self._turn_error: str | None = None
         self._thread_id: str | None = None
         self._completed = False
+        self._final_text: str | None = None
+        self._schema_path: Path | None = None
 
     def _command_path(self) -> str:
         return self.config.command or os.environ.get("AUTOHELIX_CODEX_CMD") or "codex"
@@ -95,16 +97,23 @@ class CodexAgent:
         return None
 
     def _build_command(self, prompt: str) -> list[str]:
-        cmd = [
-            self._command_path(),
-            "exec",
-            "--json",
-            "--dangerously-bypass-approvals-and-sandbox",
-        ]
+        cmd = [self._command_path(), "exec", "--json"]
+        if self.config.read_only:
+            cmd.extend(["--sandbox", "read-only", "--skip-git-repo-check"])
+        else:
+            cmd.append("--dangerously-bypass-approvals-and-sandbox")
         if self.config.model:
             cmd.extend(["--model", self.config.model])
         if self.config.reasoning_effort:
             cmd.extend(["-c", f'model_reasoning_effort="{self.config.reasoning_effort}"'])
+        if self.config.read_only:
+            if self._schema_path:
+                cmd.extend(["--output-schema", str(self._schema_path)])
+            # Codex has no flag to append to its system prompt, so the judge's
+            # instructions lead the prompt.
+            system = self.config.system_prompt
+            cmd.append(f"{system}\n\n{prompt}" if system else prompt)
+            return cmd
         for key, value in self.config.settings.items():
             cmd.extend(["-c", f"{key}={json.dumps(value)}"])
         time_left_hook = self._time_left_hook_path()
@@ -173,7 +182,10 @@ class CodexAgent:
                 return
             item_type = item.get("type")
             if item_type == "agent_message":
-                self._emit(event_callback, AgentEventKind.ASSISTANT_TEXT, str(item.get("text", "")).strip())
+                text = str(item.get("text", "")).strip()
+                if event_type == "item.completed" and text:
+                    self._final_text = text
+                self._emit(event_callback, AgentEventKind.ASSISTANT_TEXT, text)
                 return
             if item_type == "command_execution":
                 command = str(item.get("command", "")).strip()
@@ -210,6 +222,11 @@ class CodexAgent:
         self._turn_error = None
         self._thread_id = None
         self._completed = False
+        self._final_text = None
+        self._schema_path = None
+        if self.config.read_only and self.config.output_schema:
+            self._schema_path = log_path.with_suffix(".schema.json")
+            self._schema_path.write_text(json.dumps(self.config.output_schema))
         started_at = datetime.now(timezone.utc)
         started = time.monotonic()
 
@@ -287,4 +304,5 @@ class CodexAgent:
             exit_code=result.exit_code,
             error=error,
             usage=self._usage,
+            final_text=self._final_text,
         )

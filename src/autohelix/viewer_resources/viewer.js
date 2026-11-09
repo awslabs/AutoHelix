@@ -98,7 +98,8 @@ function renderStatus() {
   } else {
     const when = s.stopped_at ? ` at ${fmtClock(s.stopped_at)}` : '';
     const words = { finished: 'Finished', interrupted: 'Interrupted', failed: 'Failed', crashed: 'Stopped unexpectedly' };
-    node.textContent = (words[s.state] || s.state) + when;
+    const why = s.state === 'finished' && s.stop_reason ? ` · ${s.stop_reason.detail}` : '';
+    node.textContent = (words[s.state] || s.state) + when + why;
   }
   node.className = `status ${s.state}`;
 }

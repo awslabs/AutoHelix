@@ -53,6 +53,10 @@ def build_report_prompt(config: Config, project: Path, config_path: Path | None,
                "an iteration changed from it. Rejected iterations leave no commit.")
     else:
         git = "- Git: no iteration was accepted, so the code is unchanged from the baseline."
+    from autohelix.run_status import read_run_status
+
+    reason = (read_run_status(project) or {}).get("stop_reason")
+    ended = f"\nThe run ended because: {reason['detail']}.\n" if isinstance(reason, dict) and reason.get("detail") else ""
     return f"""\
 Write a summary of this AutoHelix run.
 
@@ -60,7 +64,7 @@ Write a summary of this AutoHelix run.
 {config.goal.strip()}
 
 The summary covers iterations 1–{last} (iteration 0 is the baseline measurement).
-
+{ended}
 ## Where to look
 Paths are relative to {project}.
 - .autohelix/history.jsonl: one record per iteration (accepted, metrics, rejection reason and \

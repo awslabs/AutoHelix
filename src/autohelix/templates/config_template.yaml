@@ -26,6 +26,11 @@ goal: |
 #     - metric: throughput
 #       max_regression_pct: 10
 
+# Optional: end the run early once one of these exits 0 (1 = keep going).
+# $AUTOHELIX_METRICS is a JSON file with the metrics just measured.
+# stop:
+#   - jq -e '.throughput >= 5000' "$AUTOHELIX_METRICS"
+
 # What may the agent modify? (everything else is reverted)
 # scope:
 #   editable: [src/]

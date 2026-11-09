@@ -24,8 +24,9 @@ from autohelix.config import load_config
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay
 from autohelix.history import History, IterationResult
-from autohelix.checks import preflight_check, run_constraints, run_observables
+from autohelix.checks import preflight_check, run_constraints, run_observables, run_stop_checks
 from autohelix.run_status import RunStatus
+from autohelix.usage_log import ENV as USAGE_ENV, read_usage
 from autohelix.formatting import format_cost, format_delta, format_duration, format_total_cost
 from autohelix.prompt_template import build_prompt_variables, load_template, render_template
 from autohelix.run_log import RunLog
@@ -742,6 +743,9 @@ class Harness:
         self.log.info(f"iter {iteration} started")
         self.run_status.phase("agent", iteration)
 
+        self._start_command_usage(iteration)
+        command_env = self._command_env(iteration)
+
         # Create worktree
         if self.verbose:
             self._status("Creating worktree...")
@@ -758,6 +762,7 @@ class Harness:
 
         agent_usage: dict = {}
         result: IterationResult | None = None
+        interrupted_after_merge = False
         try:
             # Build and run agent
             prompt = self.build_prompt(iteration, worktree.working_dir)
@@ -835,6 +840,7 @@ class Harness:
                     self.config, worktree.working_dir,
                     project_path=self.project_path,
                     on_progress=_on_check_progress,
+                    extra_env=command_env,
                 )
 
                 for r in constraint_results:
@@ -856,6 +862,7 @@ class Harness:
                         self.config, worktree.working_dir,
                         project_path=self.project_path,
                         on_progress=_on_obs_progress,
+                        extra_env=command_env,
                     )
 
                     for obs in obs_results:
@@ -948,6 +955,19 @@ class Harness:
                         usage=agent_usage,
                         reviewer_usage=reviewer_usage,
                     )
+
+                    # Stop commands see the merged candidate, i.e. the new head. An
+                    # interrupt here still records the merged iteration (below).
+                    if self.config.stop:
+                        try:
+                            result.stop, _ = self._check_stop(
+                                worktree.working_dir, iteration, metrics, self.project_path,
+                            )
+                        except KeyboardInterrupt:
+                            interrupted_after_merge = True
+                        except Exception as e:  # noqa: BLE001 - the merge already happened
+                            self.console.print(f"  [yellow]![/yellow] Stop check failed: {e}")
+                            self.log.info(f"iter {iteration} stop check failed — {e}")
             elif not all_passed:
                 # Reject: discard worktree
                 failed_results = [r for r in constraint_results if not r.passed]
@@ -994,16 +1014,72 @@ class Harness:
         else:
             self.log.info(f"iter {iteration} rejected — {result.reason} ({wall_s:.0f}s total)")
 
+        result.command_usage = read_usage(self._usage_path(iteration))
         self.history.append(result)
+        if interrupted_after_merge:
+            raise KeyboardInterrupt
         self.run_status.phase("between iterations")
         return result
 
-    def _capture_baseline(self) -> None:
-        """Capture baseline observables and run baseline review."""
+    def _usage_path(self, iteration: int) -> Path:
+        return self.project_path / ".autohelix" / "runtime" / "usage" / f"iter-{iteration}.jsonl"
+
+    def _start_command_usage(self, iteration: int) -> None:
+        """Start an empty usage file for the commands this iteration runs."""
+        path = self._usage_path(iteration)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+
+    def _command_env(self, iteration: int) -> dict[str, str]:
+        """Variables for every command the harness runs (checks, metrics, stop):
+        where to record model usage and logs, and which config to read."""
+        config = self.config_file or self.project_path / "autohelix.yaml"
+        log_dir = self.project_path / ".autohelix" / "logs" / f"iter-{iteration}"
+        return {
+            USAGE_ENV: str(self._usage_path(iteration)),
+            "AUTOHELIX_CONFIG": str(Path(config).resolve()),
+            "AUTOHELIX_LOG_DIR": str(log_dir),
+        }
+
+    def _check_stop(self, cwd: Path, iteration: int, metrics: dict[str, float],
+                    project_path: Path | None) -> tuple[dict[str, str] | None, list]:
+        """Run the stop commands on the current head. Returns (stop, errors): stop is
+        {"command", "reason"} if one exited 0; errors are the results that exited
+        with anything other than 0 or 1 (or timed out)."""
+        self.run_status.phase("stop check", iteration)
+        runtime = self.project_path / ".autohelix" / "runtime"
+        runtime.mkdir(parents=True, exist_ok=True)
+        metrics_path = runtime / "metrics.json"
+        metrics_path.write_text(json.dumps(metrics))
+        env = {**self._command_env(iteration),
+               "AUTOHELIX_METRICS": str(metrics_path), "AUTOHELIX_ITERATION": str(iteration)}
+        with Status("Checking stop conditions...", console=self.console, spinner="dots"):
+            results = run_stop_checks(self.config, cwd, project_path=project_path, extra_env=env)
+        errors = [r for r in results if r.error]
+        for r in errors:
+            code = ("timed out" if r.output.startswith("Timeout after")
+                    else "could not run" if r.return_code == -1 else f"exited {r.return_code}")
+            self.console.print(f"  [yellow]![/yellow] Stop command {code}: {r.command}", highlight=False)
+            tail = "\n".join(r.output.strip().splitlines()[-5:])
+            if tail:
+                self.console.print(f"[dim]{tail}[/dim]", highlight=False)
+            self.log.info(f"iter {iteration} stop command error ({code}): {r.command}")
+        fired = next((r for r in results if r.stop), None)
+        if fired is None:
+            return None, errors
+        self.log.info(f"iter {iteration} stop condition met — {fired.command}: {fired.reason}")
+        return {"command": fired.command, "reason": fired.reason}, errors
+
+    def _capture_baseline(self) -> dict[str, str] | None:
+        """Capture baseline observables, check stop commands, run baseline review.
+
+        Returns the stop condition the baseline already meets, if any."""
         self.log.info("baseline capture started")
         self.run_status.phase("baseline", 0)
+        self._start_command_usage(0)
         with Status("Running baseline...", console=self.console, spinner="dots"):
-            obs_results = run_observables(self.config, self.project_path)
+            obs_results = run_observables(self.config, self.project_path,
+                                          extra_env=self._command_env(0))
 
         # Collect scalar values
         metrics: dict[str, float] = {}
@@ -1039,9 +1115,22 @@ class Harness:
             commit=None,
             reason="baseline",
         )
+        if self.config.stop:
+            # Like the baseline observables, these run in the project checkout. A
+            # broken stop command fails here, before anything is recorded, so a
+            # typo surfaces before the first iteration is paid for.
+            baseline.stop, errors = self._check_stop(self.project_path, 0, metrics, None)
+            if errors:
+                self.log.info("baseline FAILED — stop command error")
+                raise AutoHelixRunError(
+                    f"Stop command failed on the baseline: {errors[0].command} "
+                    "(expected exit 0 to stop or 1 to continue)"
+                )
+        baseline.command_usage = read_usage(self._usage_path(0))
         self.history.append(baseline)
-        if self.config.reviewer:
+        if self.config.reviewer and not baseline.stop:
             self._run_baseline_review()
+        return baseline.stop
 
     def _run_baseline_review(self) -> None:
         """Run reviewer on the baseline state (before any iterations)."""
@@ -1195,10 +1284,11 @@ class Harness:
 
         # Capture baseline on first run
         baseline_captured = False
+        baseline_stop = None
         if start_iter == 1 and self.history.get_last_iteration() == 0:
             results = self.history.load()
             if not any(r.iteration == 0 for r in results):
-                self._capture_baseline()
+                baseline_stop = self._capture_baseline()
                 baseline_captured = True
 
         # Run baseline review if configured but no review exists yet (and budget is left)
@@ -1236,13 +1326,27 @@ class Harness:
                     "budget.cost can only track known costs.[/yellow]"
                 )
 
+        # Why the loop ended; budgets are checked after stop conditions.
+        stop_reason: dict | None = None
+        if baseline_stop:
+            stop_reason = self._condition_stop(baseline_stop, 0)
+        cost_reached = {"kind": "budget", "budget": "cost",
+                        "detail": f"cost budget reached ({format_cost(self.config.max_cost_usd)})"}
+        iteration = start_iter
         try:
             for iteration in range(start_iter, max_iter + 1):
+                if stop_reason:
+                    break
                 if self.config.max_cost_usd is not None and cumulative_cost >= self.config.max_cost_usd:
+                    stop_reason = cost_reached
                     break
                 result = self.run_iteration(iteration)
                 ran = True
                 self._print_iteration_summary(result)
+
+                if result.stop:
+                    stop_reason = self._condition_stop(result.stop, iteration)
+                    break
 
                 # Check cost budget
                 if (
@@ -1257,12 +1361,22 @@ class Harness:
                     cost_warning_shown = True
                 cumulative_cost += result.cost.cost_usd or 0
                 if self.config.max_cost_usd is not None and cumulative_cost >= self.config.max_cost_usd:
+                    stop_reason = cost_reached
                     break
 
                 # Check time budget
                 elapsed = time.monotonic() - loop_start
                 if self.config.max_time_seconds is not None and elapsed >= self.config.max_time_seconds:
+                    stop_reason = {"kind": "budget", "budget": "time",
+                                   "detail": f"time budget reached ({_format_time(self.config.max_time_seconds)})"}
                     break
+            else:
+                stop_reason = stop_reason or {
+                    "kind": "budget", "budget": "iterations",
+                    "detail": f"iteration budget reached ({max_iter})"}
+            self.run_status.note(stop_reason=stop_reason)
+            self.console.print(f"\n[dim]Stopped:[/dim] {stop_reason['detail']}", highlight=False)
+            self.log.info(f"run stopped — {stop_reason['detail']}")
         except KeyboardInterrupt:
             self.run_status.stop("interrupted")
             self.console.print(f"\n\n[yellow]Interrupted at iteration {iteration}. Progress saved.[/yellow] "
@@ -1270,6 +1384,12 @@ class Harness:
             ran = False
         self._print_summary()
         return ran
+
+    @staticmethod
+    def _condition_stop(stop: dict[str, str], iteration: int) -> dict:
+        where = "baseline" if iteration == 0 else f"iteration {iteration}"
+        return {"kind": "condition", "iteration": iteration, **stop,
+                "detail": f"stop condition met at {where}: {stop['reason']}"}
 
     def _print_iteration_summary(self, result: IterationResult) -> None:
         """Print a concise one-liner after each iteration."""

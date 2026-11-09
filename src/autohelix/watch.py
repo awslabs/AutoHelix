@@ -33,7 +33,9 @@ def status_line(status: dict | None, now: float | None = None) -> str:
     if status.get("state") != "running":
         when = time.strftime("%H:%M", time.localtime(status["stopped_at"])) if status.get("stopped_at") else ""
         word = STOPPED.get(status.get("state"), str(status.get("state")))
-        return f"{word}{' at ' + when if when else ''}. Waiting for the next run…"
+        reason = status.get("stop_reason") if status.get("state") == "finished" else None
+        why = f" · {reason['detail']}" if isinstance(reason, dict) and reason.get("detail") else ""
+        return f"{word}{' at ' + when if when else ''}{why}. Waiting for the next run…"
     since = format_duration(now - status.get("phase_started_at", now))
     if status.get("phase") == "report":
         return f"Running · writing the summary · {since}"

@@ -3,6 +3,7 @@
 
 """Command-line interface."""
 
+import os
 import subprocess
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -419,6 +420,55 @@ def parallel(worker_configs: tuple[str, ...], path: str, sync_every: int | None,
             console.print(f"    [cyan]git worktree remove {root / b.split('/')[-1]}[/cyan]", highlight=False)
         console.print(f"    [cyan]git branch -D {' '.join(branches)}[/cyan]", highlight=False)
     console.print()
+
+
+@main.command()
+@click.argument("question")
+@click.option("--yes", "yes_means", help='What a "yes" answer means.')
+@click.option("--no", "no_means", help='What a "no" answer means.')
+@click.option("--rubric", type=click.Path(exists=True, dir_okay=False), help="File with criteria for the answer.")
+@click.option("--agent", "agent_type", type=click.Choice(["claude", "codex", "opencode", "mock"]),
+              help="Agent backend (default: agent.type from the config, else claude).")
+@click.option("--model", help="Model (default: agent.model from the config).")
+@click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
+@click.option("--timeout", type=click.IntRange(min=1), help="Seconds before giving up (default 600).")
+def ask(question: str, yes_means: str | None, no_means: str | None, rubric: str | None,
+        agent_type: str | None, model: str | None, effort: str | None, timeout: int | None):
+    """Ask an agent a yes/no question about the current directory.
+
+    Exits 0 for yes, 1 for no, 2 if no valid answer was produced; prints the
+    reason. Use it in stop: or constraints:, or in any script. The agent gets
+    read-only tools and no project settings; agent settings come from
+    $AUTOHELIX_CONFIG or ./autohelix.yaml.
+    """
+    import signal
+
+    from autohelix.formatting import format_cost
+    from autohelix.judge import JudgeError, ask as run_ask, judge_config, load_base_config
+    from autohelix.usage_log import ENV as USAGE_ENV
+
+    def _terminate(signum, frame):  # the harness timed this command out: stop the agent too
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _terminate)
+    cwd = Path.cwd()
+    try:
+        config = judge_config(load_base_config(cwd), agent=agent_type, model=model, effort=effort,
+                              timeout=timeout)
+        answer = run_ask(question, cwd, config, yes=yes_means, no=no_means,
+                         rubric=Path(rubric).read_text() if rubric else None)
+    except JudgeError as e:
+        click.echo(f"autohelix ask: no valid answer: {e}", err=True)
+        raise SystemExit(2)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except Exception as e:  # noqa: BLE001 - exit 1 would read as "no"
+        click.echo(f"autohelix ask: failed: {type(e).__name__}: {e}", err=True)
+        raise SystemExit(2)
+    click.echo(answer.reason)
+    if not os.environ.get(USAGE_ENV):
+        click.echo(f"autohelix ask: {'yes' if answer.yes else 'no'} · {format_cost(answer.cost_usd, precision=4)}", err=True)
+    raise SystemExit(0 if answer.yes else 1)
 
 
 @main.command()

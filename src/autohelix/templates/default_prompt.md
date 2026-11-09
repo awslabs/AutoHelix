@@ -24,6 +24,13 @@ Metrics (measured after you finish):
 {% endfor %}
 {% endif %}
 
+{% if stop %}
+Stop conditions (the run ends once one of these exits 0 after an accepted iteration):
+{% for c in stop %}
+  {{ c }}
+{% endfor %}
+{% endif %}
+
 {% if editable %}
 Editable (only changes to these files will be kept): {{ editable | join(', ') }}
 {% elif frozen %}

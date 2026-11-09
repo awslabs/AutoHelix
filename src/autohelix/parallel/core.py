@@ -32,6 +32,7 @@ from pathlib import Path
 from autohelix.config import load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History
+from autohelix.run_status import read_run_status
 
 
 @dataclass
@@ -187,6 +188,21 @@ def _run_segment(worker: Worker, upto: int, verbose: bool, run_args: list[str] |
         _procs.remove(proc)
 
 
+def _write_worker_report(worker: Worker) -> None:
+    """Write a worker's run summary (`autohelix report`) in its worktree."""
+    config, _ = load_config(worker.worktree, config_file=worker.config_file)
+    if _stop_event.is_set() or not config.report:
+        return
+    proc = subprocess.Popen(["autohelix", "report", "--config", str(worker.config_file)],
+                            cwd=worker.worktree, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+    with _procs_lock:
+        _procs.append(proc)
+    proc.wait()
+    with _procs_lock:
+        _procs.remove(proc)
+
+
 def run_worker(worker: Worker, sync_every: int, verbose: bool,
                run_args: list[str] | None = None) -> None:
     """Drive a worker to its budget in chunks of sync_every, syncing notes between.
@@ -205,6 +221,13 @@ def run_worker(worker: Worker, sync_every: int, verbose: bool,
                 break
             sync_own_notes(worker)
             done = upto
+            reason = (read_run_status(worker.worktree) or {}).get("stop_reason")
+            if isinstance(reason, dict) and reason.get("kind") == "condition":
+                # The worker is done: don't start another segment. That segment ran
+                # with --no-report unless it was the last, so write the summary now.
+                if "--no-report" in extra and "--no-report" not in (run_args or []):
+                    _write_worker_report(worker)
+                break
     except Exception as e:  # noqa: BLE001
         worker.error = str(e)
 

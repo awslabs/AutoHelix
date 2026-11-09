@@ -30,6 +30,8 @@ class ClaudeCodeAgent:
         self._incremental_input: int = 0
         self._incremental_output: int = 0
         self._result_error: str | None = None
+        self._final_text: str | None = None
+        self._structured_output = None
 
     def _command_path(self) -> str:
         if self.config.command:
@@ -53,12 +55,23 @@ class ClaudeCodeAgent:
             "--output-format",
             "stream-json",
             "--include-partial-messages",
-            "--dangerously-skip-permissions",
         ]
+        if self.config.read_only:
+            # Read-only tools only; no project settings or hooks, no MCP servers.
+            cmd.extend(["--tools", "Read,Grep,Glob", "--setting-sources", "user", "--strict-mcp-config"])
+        else:
+            cmd.append("--dangerously-skip-permissions")
         if self.config.model:
             cmd.extend(["--model", self.config.model])
         if self.config.reasoning_effort:
             cmd.extend(["--effort", self.config.reasoning_effort])
+        if self.config.system_prompt:
+            cmd.extend(["--append-system-prompt", self.config.system_prompt])
+        if self.config.output_schema:
+            cmd.extend(["--json-schema", json.dumps(self.config.output_schema)])
+        if self.config.read_only:
+            cmd.append(prompt)
+            return cmd
         # If autohelix has prepared a settings file with our hooks (e.g. the
         # time_left injector), load it via --settings without touching the user
         # ~/.claude/settings.json.
@@ -216,6 +229,9 @@ class ClaudeCodeAgent:
 
         if event_type == "result":
             subtype = payload.get("subtype", "unknown")
+            if isinstance(payload.get("result"), str):
+                self._final_text = payload["result"]
+            self._structured_output = payload.get("structured_output")
             duration_ms = payload.get("duration_ms")
             duration_text = f" in {duration_ms}ms" if duration_ms is not None else ""
             if payload.get("is_error"):
@@ -279,6 +295,8 @@ class ClaudeCodeAgent:
         self._incremental_input = 0
         self._incremental_output = 0
         self._result_error = None
+        self._final_text = None
+        self._structured_output = None
 
         # Build env with remapped PYTHONPATH for worktree
         env = build_worktree_env(project_path, worktree_path) if project_path else None
@@ -328,4 +346,6 @@ class ClaudeCodeAgent:
             exit_code=result.exit_code,
             error=error,
             usage=self._usage,
+            final_text=self._final_text,
+            structured_output=self._structured_output,
         )

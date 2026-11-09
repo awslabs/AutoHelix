@@ -5,6 +5,7 @@
 
 import glob as globmod
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -111,8 +112,22 @@ class ConstraintResult:
     passed: bool
     output: str
     return_code: int
+    stdout: str = ""
 
 
+# A check command may run its own agent (e.g. `autohelix ask`), which needs up to
+# the agent runner's grace (3 s) plus 2 s to stop it on SIGTERM; wait longer.
+CHECK_KILL_GRACE = 8
+
+
+def _command_env(project_path: Path | None, cwd: Path, timeout: int,
+                 extra_env: dict[str, str] | None) -> dict[str, str]:
+    """Environment for a check command: worktree remapping, harness-provided
+    variables, and the command's deadline (for tools that run their own agents)."""
+    env = build_worktree_env(project_path, cwd) if project_path else os.environ.copy()
+    env.update(extra_env or {})
+    env["AUTOHELIX_COMMAND_DEADLINE"] = str(time.time() + timeout)
+    return env
 
 
 def run_constraint(
@@ -121,9 +136,10 @@ def run_constraint(
     timeout: int = DEFAULT_CHECK_TIMEOUT,
     project_path: Path | None = None,
     on_progress: ProgressCallback | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> ConstraintResult:
     """Run a single constraint command."""
-    env = build_worktree_env(project_path, cwd) if project_path else None
+    env = _command_env(project_path, cwd, timeout, extra_env)
 
     start = time.monotonic()
     if on_progress:
@@ -152,7 +168,7 @@ def run_constraint(
                 if elapsed > timeout:
                     # Kill the whole process group, not just the /bin/sh wrapper,
                     # so a timed-out pytest/benchmark doesn't keep running detached.
-                    _kill_process_group(proc)
+                    _kill_process_group(proc, grace=CHECK_KILL_GRACE)
                     proc.communicate()
                     return ConstraintResult(
                         command=command,
@@ -166,10 +182,11 @@ def run_constraint(
             passed=proc.returncode == 0,
             output=stdout + stderr,
             return_code=proc.returncode,
+            stdout=stdout,
         )
     except KeyboardInterrupt:
         if proc is not None:
-            _kill_process_group(proc)
+            _kill_process_group(proc, grace=CHECK_KILL_GRACE)
         raise
     except Exception as e:
         return ConstraintResult(
@@ -185,14 +202,59 @@ def run_constraints(
     cwd: Path,
     project_path: Path | None = None,
     on_progress: ProgressCallback | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> list[ConstraintResult]:
     """Run all constraints and return results."""
     return [
         run_constraint(
-            c.command, cwd, timeout=c.timeout, project_path=project_path, on_progress=on_progress
+            c.command, cwd, timeout=c.timeout, project_path=project_path, on_progress=on_progress,
+            extra_env=extra_env,
         )
         for c in config.constraints
     ]
+
+
+@dataclass
+class StopCheckResult:
+    """Outcome of one stop command: exit 0 stops the run, 1 continues, anything
+    else (including a timeout) is an error that also continues."""
+
+    command: str
+    return_code: int
+    output: str
+    reason: str  # the last non-empty stdout line, or the command itself
+
+    @property
+    def stop(self) -> bool:
+        return self.return_code == 0
+
+    @property
+    def error(self) -> bool:
+        return self.return_code not in (0, 1)
+
+
+def run_stop_checks(
+    config: Config,
+    cwd: Path,
+    project_path: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> list[StopCheckResult]:
+    """Run stop commands in order until one exits 0; return the results of those run."""
+    results: list[StopCheckResult] = []
+    for c in config.stop:
+        r = run_constraint(
+            c.command, cwd, timeout=c.timeout, project_path=project_path,
+            on_progress=on_progress, extra_env=extra_env,
+        )
+        lines = [line.strip() for line in r.stdout.splitlines() if line.strip()]
+        results.append(StopCheckResult(
+            command=c.command, return_code=r.return_code, output=r.output,
+            reason=lines[-1] if lines else c.command,
+        ))
+        if r.return_code == 0:
+            break
+    return results
 
 
 def parse_structured_metrics(output: str) -> dict[str, float]:
@@ -271,11 +333,12 @@ def run_observable(
     timeout: int | None = None,
     project_path: Path | None = None,
     on_progress: ProgressCallback | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> ObservableResult:
     """Run an observable command and extract all declared metric values from output."""
     timeout = timeout if timeout is not None else mc.timeout
 
-    env = build_worktree_env(project_path, cwd) if project_path else None
+    env = _command_env(project_path, cwd, timeout, extra_env)
 
     start = time.monotonic()
     if on_progress:
@@ -303,7 +366,7 @@ def run_observable(
                     on_progress("observable", mc.command, elapsed)
                 if elapsed > timeout:
                     # Kill the whole process group (see run_constraint).
-                    _kill_process_group(proc)
+                    _kill_process_group(proc, grace=CHECK_KILL_GRACE)
                     proc.communicate()
                     errors = {name: f"Timeout after {timeout}s" for name in mc.values}
                     return ObservableResult(
@@ -339,7 +402,7 @@ def run_observable(
         )
     except KeyboardInterrupt:
         if proc is not None:
-            _kill_process_group(proc)
+            _kill_process_group(proc, grace=CHECK_KILL_GRACE)
         raise
     except Exception as e:
         errors = {name: str(e) for name in mc.values}
@@ -353,11 +416,13 @@ def run_observables(
     cwd: Path,
     project_path: Path | None = None,
     on_progress: ProgressCallback | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> list[ObservableResult]:
     """Run all observable commands and return full results (values + output)."""
     results: list[ObservableResult] = []
     for obs in config.observables:
-        cmd_result = run_observable(obs, cwd, project_path=project_path, on_progress=on_progress)
+        cmd_result = run_observable(obs, cwd, project_path=project_path, on_progress=on_progress,
+                                    extra_env=extra_env)
         results.append(cmd_result)
         for name, error in cmd_result.errors.items():
             logger.warning("Metric '%s' failed: %s", name, error)

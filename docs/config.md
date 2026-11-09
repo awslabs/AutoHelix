@@ -61,6 +61,13 @@ reviewer:
   # timeout_seconds: 300       # override timeout for reviewer
   # auto_memory: false         # disabled by default for independent reviews
 
+# Optional: end the run early once one of these exits 0 (see Stop Conditions)
+# stop:
+#   - command: jq -e '.speedup >= 10' "$AUTOHELIX_METRICS"
+#   - command: ./scripts/done.sh
+#     timeout: 120
+#   - autohelix ask "Is every item in SPEC.md implemented and tested?"
+
 # Limit the run (any combination)
 budget:
   iterations: 10       # max iterations
@@ -269,6 +276,27 @@ An optional second agent that reviews a change before it merges and writes quali
 
 The `reviewer.prompt` is the reviewer's entire instruction (it inspects the diff itself and is not handed the goal or metrics), so put any context it should consider there. The reviewer never sees the `reviews/` archive, so each review is independent by construction. See [Concepts → Reviewer](concepts.md#reviewer) for the full mechanics.
 
+### Stop Conditions
+
+`stop:` lists commands that end the run early. Each entry takes the same forms as a constraint: a string, or `command` plus an optional `timeout` (seconds). They run after the baseline and after each **accepted** iteration, on the code that was just accepted (rejected iterations don't change it). They run in order until one exits:
+
+- **0** — stop. The run ends after this iteration, and the last line the command printed to stdout is recorded as the reason (`speedup 10.3 ≥ 10`), so print one.
+- **1** — keep going.
+- **anything else, or a timeout** — an error. On the baseline it stops the run before the first iteration (fix the command and run again); later it prints a warning and the run continues.
+
+Each command gets these environment variables (on top of the ones every command the harness runs gets: `AUTOHELIX_CONFIG`, `AUTOHELIX_USAGE_FILE`, `AUTOHELIX_LOG_DIR` and `AUTOHELIX_COMMAND_DEADLINE`):
+
+- `AUTOHELIX_METRICS` — path to a JSON file with the metrics just measured, e.g. `{"speedup": 10.3}`. A metric target is a one-liner: `jq -e '.speedup >= 10' "$AUTOHELIX_METRICS"` (`jq -e` exits 0 when the expression is true, 1 when false).
+- `AUTOHELIX_ITERATION` — the iteration number (0 for the baseline).
+
+For a qualitative condition, use [`autohelix ask`](cli.md#autohelix-ask): it asks an agent a yes/no question and exits 0 for yes, e.g. `autohelix ask "Is every item in SPEC.md implemented and tested?"`. Its cost counts toward the run.
+
+After iterations they run in the iteration's worktree, like constraints; the baseline check runs in the project, like the baseline metrics. Keep stop commands out of `scope.editable`, and don't let them modify files. The agent's prompt lists them.
+
+Stop conditions only end a run early: budgets still apply. If the baseline already meets one, no iterations run. If you interrupt a run while its stop commands are running, the iteration is kept but not checked; the next accepted iteration is. Running `autohelix run` again after a stop continues the run (and stops again after the next accepted iteration if the condition still holds); raise the target or remove the condition first.
+
+Why a run ended is shown at the end of the run, in `autohelix view`, `autohelix watch`, the run summary, and `.autohelix/runtime/run.json` (`stop_reason`).
+
 ### Budget
 
 Caps how far a run goes. Combine any of:
@@ -288,7 +316,7 @@ the baseline review and when resuming a run.
 
 ### Report
 
-When a run finishes (iteration, cost or time budget reached), one more agent call reads the run's history, notes, reviews, logs and commits and writes a short summary to `.autohelix/output/report.md`: what was achieved, which changes mattered, what didn't work, what to try next, and anything worth checking before relying on the results. An interrupted run gets no summary; run [`autohelix report`](cli.md#autohelix-report) to write one. Set `report: false` to skip it. The call uses the same agent backend and model as the run, with a timeout of `agent.timeout_seconds` capped at 15 minutes. Its time and cost are shown next to the summary in `autohelix view` and `report.html`; the cost is not counted against `budget.cost`.
+When a run finishes after at least one iteration (a stop condition is met, or the iteration, cost or time budget is reached), one more agent call reads the run's history, notes, reviews, logs and commits and writes a short summary to `.autohelix/output/report.md`: what was achieved, which changes mattered, what didn't work, what to try next, and anything worth checking before relying on the results. An interrupted run gets no summary; run [`autohelix report`](cli.md#autohelix-report) to write one. Set `report: false` to skip it. The call uses the same agent backend and model as the run, with a timeout of `agent.timeout_seconds` capped at 15 minutes. Its time and cost are shown next to the summary in `autohelix view` and `report.html`; the cost is not counted against `budget.cost`.
 
 ### Auto Memory
 
@@ -307,10 +335,19 @@ Available token usage and cost are captured from agent backends and shown:
 - Cumulative in the final summary
 - Persisted in `.autohelix/history.jsonl`
 
-Iteration costs include the optimization agent and reviewer. Run totals and
-`budget.cost` also include baseline reviews; report generation remains separate.
-History preserves the optimization agent's `usage` and a `reviewer_usage` list
-containing the raw usage for each attempted review, including failed attempts.
+Iteration costs include the optimization agent, the reviewer, and model calls
+made by the commands the harness runs (such as `autohelix ask` in `stop:`,
+`constraints:` or `metrics:`). Run totals and `budget.cost` also include
+baseline reviews and the baseline's commands; report generation remains separate.
+History preserves the optimization agent's `usage`, a `reviewer_usage` list
+containing the raw usage for each attempted review, including failed attempts,
+and a `command_usage` list with one record per model call made by a command.
+
+A command of your own can report its model calls the same way: append one JSON
+line per call, e.g. `{"id": "...", "source": "my-eval", "cost_usd": 0.12}`, to the
+file named by `$AUTOHELIX_USAGE_FILE` (set for every command the harness runs).
+Lines with the same `id` are one call (the last line wins), so a call can be
+recorded with `"cost_usd": null` when it starts and its cost when it ends.
 An iteration that is interrupted or fails before it is recorded leaves no record, so
 its agent and reviewer costs are not counted.
 

@@ -50,6 +50,11 @@ class AgentConfig:
     extra_args: list[str] = field(default_factory=list)
     auto_memory: bool = False  # Disabled by default; set true to enable Claude Code's built-in memory
     require_notes: RequireNotesConfig | None = None
+    # Judge mode (`autohelix ask`), set in code, never from YAML: no edit tools, no
+    # project settings/hooks/MCP, no extra_args or settings pass-through.
+    read_only: bool = False
+    system_prompt: str | None = None  # appended to the backend's system prompt
+    output_schema: dict[str, Any] | None = None  # JSON Schema for the final answer
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "AgentConfig":
@@ -109,6 +114,8 @@ class AgentRunResult:
     exit_code: int | None = None
     error: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
+    final_text: str | None = None  # the agent's last message
+    structured_output: Any = None  # schema-constrained answer, where the backend supports it
 
 
 EventCallback = Callable[[AgentEvent], None]

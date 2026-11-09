@@ -40,8 +40,8 @@ def format_timeout_seconds(timeout_seconds: int | None) -> str:
     return f"timed out after {' '.join(parts)}"
 
 
-def _kill_process_group(process: subprocess.Popen) -> None:
-    """Kill a process and its entire process group."""
+def _kill_process_group(process: subprocess.Popen, grace: float = 3) -> None:
+    """Kill a process and its entire process group (SIGTERM, then SIGKILL after `grace` s)."""
     if process.poll() is not None:
         return
 
@@ -53,7 +53,7 @@ def _kill_process_group(process: subprocess.Popen) -> None:
         return
 
     try:
-        process.wait(timeout=3)
+        process.wait(timeout=grace)
         return
     except subprocess.TimeoutExpired:
         pass

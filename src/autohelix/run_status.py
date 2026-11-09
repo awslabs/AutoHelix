@@ -37,6 +37,13 @@ class RunStatus:
         self.data.update(phase=phase, phase_started_at=now)
         self._write()
 
+    def note(self, **info) -> None:
+        """Record extra fields (e.g. stop_reason) on a started run."""
+        if not self.data:
+            return
+        self.data.update(info)
+        self._write()
+
     def stop(self, state: str = "finished") -> None:
         if self.data.get("state") != "running":
             return

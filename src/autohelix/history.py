@@ -28,11 +28,16 @@ class IterationResult:
     usage: dict[str, Any] = field(default_factory=dict)
     # One entry per attempted review; baseline reviews may be retried on resume.
     reviewer_usage: list[dict[str, Any]] = field(default_factory=list)
+    # Set when a stop command exited 0 after this iteration: {"command", "reason"}.
+    stop: dict[str, str] | None = None
+    # Model calls made by commands the harness ran (e.g. `autohelix ask`), one
+    # record per call, from $AUTOHELIX_USAGE_FILE.
+    command_usage: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def cost_usages(self) -> list[dict[str, Any]]:
         """Usage for billable calls, excluding the baseline's absent main agent."""
-        return ([self.usage] if self.iteration > 0 else []) + self.reviewer_usage
+        return ([self.usage] if self.iteration > 0 else []) + self.reviewer_usage + self.command_usage
 
     @property
     def cost(self) -> CostSummary:

@@ -134,6 +134,35 @@ autohelix hint "MESSAGE" [--path PATH]
 
 Appends a timestamped line to `.autohelix/hints.md`. The agent reads that file (listed in its "Read before starting" section) each iteration, so a hint lets you steer a run without stopping it. Run it from a second terminal while `autohelix run` is going. Hints accumulate — the file holds the full history for the run.
 
+## `autohelix ask`
+
+Ask an agent a yes/no question about the current directory.
+
+```bash
+autohelix ask "QUESTION" [--yes TEXT] [--no TEXT] [--rubric FILE] [--agent TYPE] [--model MODEL] [--effort LEVEL] [--timeout SECONDS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--yes`, `--no` | What a "yes" or "no" answer means (optional; makes answers more consistent) |
+| `--rubric` | A file with criteria for the answer |
+| `--agent` | `claude` or `codex` (default: `agent.type` from the config) |
+| `--model`, `--effort` | Model and reasoning effort (default: from the config's `agent:`) |
+| `--timeout` | Seconds before giving up, including the retry (default 600) |
+
+Exits **0** for yes, **1** for no and **2** if no valid answer was produced, and prints the reason, so it works anywhere a command does: `stop:`, `constraints:`, or a script.
+
+```yaml
+stop:
+  - autohelix ask "Is every item in SPEC.md implemented and tested?"
+```
+
+- **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run) or `./autohelix.yaml`: backend, command, model and effort only, never `agent.settings` or `extra_args`.
+- **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox; it still reads an `AGENTS.md` in the directory. OpenCode can't be used as a judge yet: it has no read-only mode.
+- **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `budget.cost`, and its transcript is saved as `.autohelix/logs/iter-N/ask-*.log`. Outside a run, the cost is printed to stderr.
+- An invalid answer or failed call is retried once. The command stays inside the timeout of the check that runs it.
+- **Limits.** The judge reads the same directory the agent worked in, including `.autohelix/notes/` and gitignored files, which scope enforcement doesn't revert. Keep criteria files out of `scope.editable`. Running the judge on a clean copy (without notes, gitignored files or agent instruction files) is planned.
+
 ## `autohelix report`
 
 Write (or rewrite) the run summary.
