@@ -67,6 +67,8 @@ only-include = ["src/autohelix"]
 "pyproject.toml" = "pyproject.toml"
 
 [tool.pytest.ini_options]
+testpaths = ["tests", "examples"]
+addopts = "-m 'not slow'"
 markers = [
     "slow: marks tests as slow (run with: pytest -m slow)",
 ]

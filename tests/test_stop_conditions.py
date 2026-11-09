@@ -239,6 +239,18 @@ def test_bad_command_shapes_are_config_errors():
         assert any("expected a command" in m or "each entry must be" in m for m in messages), raw
 
 
+@pytest.mark.parametrize("key", ["constraints", "stop"])
+@pytest.mark.parametrize("entry,message", [
+    ({"command": 1}, "command must be a string"),
+    ({"command": None}, "command must be a string"),
+    ({"command": "true", "timeout": None}, "timeout must be an integer"),
+    ({"command": "true", "timeout": "invalid"}, "timeout must be an integer"),
+])
+def test_bad_command_fields_are_config_errors(key, entry, message):
+    config = Config.from_dict({"goal": "g", key: [entry]})
+    assert any(issue.level == "error" and message in issue.message for issue in config.validate())
+
+
 def test_constraint_mapping_parses_as_one_command():
     config = Config.from_dict({"goal": "g", "constraint": {"command": "pytest", "timeout": 5}})
     assert [(c.command, c.timeout) for c in config.constraints] == [("pytest", 5)]
@@ -285,7 +297,13 @@ def test_report_prompt_says_why_the_run_ended(project):
     assert "The run ended because: stop condition met at iteration 1: done enough." in prompt
 
 
-def test_parallel_worker_stops_after_a_condition_and_writes_its_summary(tmp_path, monkeypatch):
+@pytest.mark.parametrize("reason", [
+    {"kind": "condition"},
+    {"kind": "budget", "budget": "cost"},
+    {"kind": "budget", "budget": "time"},
+])
+@pytest.mark.parametrize("no_report", [False, True])
+def test_parallel_worker_stops_early_and_respects_report_option(tmp_path, monkeypatch, reason, no_report):
     segments, reports = [], []
     worker = parallel.Worker(index=1, name="w", config_file=tmp_path / "c.yaml", worktree=tmp_path,
                              branch="b", branch_prefix="p", shared_dir=tmp_path, budget=5)
@@ -293,8 +311,9 @@ def test_parallel_worker_stops_after_a_condition_and_writes_its_summary(tmp_path
     monkeypatch.setattr(parallel, "sync_own_notes", lambda w: None)
     monkeypatch.setattr(parallel, "_write_worker_report", lambda w: reports.append(w.name))
     monkeypatch.setattr(parallel, "read_run_status",
-                        lambda p: {"stop_reason": {"kind": "condition"}} if len(segments) >= 2 else {})
-    parallel.run_worker(worker, sync_every=1, verbose=False)
+                        lambda p: {"stop_reason": reason} if len(segments) >= 2 else {})
+    parallel.run_worker(worker, sync_every=1, verbose=False,
+                        run_args=["--no-report"] if no_report else None)
     assert worker.error is None
     assert segments == [1, 2]
-    assert reports == ["w"]
+    assert reports == ([] if no_report else ["w"])

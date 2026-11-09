@@ -202,7 +202,7 @@ function renderStats() {
 function renderMetricSelect(names) {
   const select = $('metric'); // only shown when there is more than one metric
   select.hidden = names.length < 2;
-  if (select.options.length !== names.length) {
+  if (JSON.stringify(Array.from(select.options, (option) => option.value)) !== JSON.stringify(names)) {
     select.replaceChildren(...names.map((n) => el('option', { value: n, textContent: n })));
   }
   select.value = metric;
@@ -481,7 +481,7 @@ async function refreshCards() {
   for (const [i, card] of cards) {
     if (!card.node.open) continue;
     const r = state.iterations.find((x) => x.iteration === i);
-    const key = i === liveIteration() && !r ? null
+    const key = i === liveIteration() ? null
       : JSON.stringify([r, state.notes_files.includes(`iter-${i}.md`), state.artifacts[i]]);
     if (key !== null && key === card.key) continue;
     try {

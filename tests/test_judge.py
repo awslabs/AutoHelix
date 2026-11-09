@@ -38,6 +38,20 @@ def test_parse_answer_from_structured_output_or_final_text():
         parse_answer('{"answer": "maybe", "reason": "x"}')
 
 
+@pytest.mark.parametrize("reason", [
+    "The default argument is {}.",
+    'The fixture contains {"answer": "no", "reason": "example"}.',
+])
+def test_braces_in_reason_do_not_replace_the_answer(reason):
+    text = json.dumps({"answer": "yes", "reason": reason})
+    assert parse_answer(text) == (True, reason)
+
+
+def test_parse_answer_uses_the_last_complete_object():
+    text = '{"answer":"no","reason":"first"}\n{"answer":"yes","reason":"final {}"}'
+    assert parse_answer(text) == (True, "final {}")
+
+
 def test_system_prompt_carries_question_and_optional_criteria():
     prompt = build_system_prompt("Is SPEC.md done?", yes="every item tested", rubric="- a\n- b\n")
     assert "Question: Is SPEC.md done?" in prompt

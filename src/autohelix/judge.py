@@ -15,7 +15,6 @@ the judged agent wrote can't configure the judge.
 
 import json
 import os
-import re
 import tempfile
 import time
 from dataclasses import dataclass, replace
@@ -139,10 +138,12 @@ def parse_answer(final_text: str | None, structured: object = None) -> tuple[boo
 def _last_json_object(text: str) -> dict | None:
     decoder = json.JSONDecoder(strict=False)  # tolerate raw newlines in strings
     found = None
-    for match in re.finditer(r"\{", text):
+    cursor = 0
+    while (start := text.find("{", cursor)) != -1:
         try:
-            value, _ = decoder.raw_decode(text, match.start())
+            value, cursor = decoder.raw_decode(text, start)
         except ValueError:
+            cursor = start + 1
             continue
         if isinstance(value, dict):
             found = value

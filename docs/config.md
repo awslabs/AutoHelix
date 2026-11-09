@@ -302,8 +302,9 @@ Why a run ended is shown at the end of the run, in `autohelix view`, `autohelix 
 Caps how far a run goes. Combine any of:
 
 - `iterations` — maximum number of iterations (default 5).
-- `cost` — cumulative optimization-agent and reviewer cost threshold in USD,
-  including the baseline review. Uses backend-reported amounts
+- `cost` — cumulative cost threshold in USD for the optimization agent,
+  reviewer, and model calls reported by commands, including baseline commands
+  and reviews. Uses backend-reported amounts
   for Claude Code and OpenCode, and calculated API-equivalent estimates for Codex.
   The same budget option applies to all three backends.
 - `time` — maximum total wall-clock, as a duration string (`90m`, `2h`, `1h30m`).
@@ -380,9 +381,10 @@ provide the model instead.
 
 Estimates exclude speed-tier and regional premiums, per-request long-context
 surcharges, separately billed tools, and usage outside the captured thread.
-Cache-write lifetimes other than 30 minutes are not inferred. Reviewer, report,
-supervisor, and external evaluator calls are not included in the iteration
-budget. Codex agent duration is measured locally even when usage is unavailable.
+Cache-write lifetimes other than 30 minutes are not inferred. Report and
+supervisor calls remain separate; external evaluator calls count when they
+record usage through `$AUTOHELIX_USAGE_FILE`. Codex agent duration is measured
+locally even when usage is unavailable.
 
 Missing, invalid, or interrupted usage remains **unavailable**, not zero.
 Mixed totals are labeled **incomplete**. If an iteration or resumed history has

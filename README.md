@@ -68,6 +68,9 @@ Core features:
 - **Persistent memory.** Each iteration is a fresh session, but the agent reads and writes notes that survive across all iterations, including rejected ones.
 - **Budget control.** Cap the run by iterations, time, or cost. Codex cost uses an
   API-equivalent estimate; see [cost tracking](docs/config.md#cost-tracking).
+- **Stop conditions.** Optional `stop:` commands end the run when one exits 0,
+  checked on the baseline and after accepted iterations. Use a script or
+  `autohelix ask "Is the goal complete?"`; see [stop conditions](docs/config.md#stop-conditions).
 
 ## Quick start
 

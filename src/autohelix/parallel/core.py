@@ -222,7 +222,10 @@ def run_worker(worker: Worker, sync_every: int, verbose: bool,
             sync_own_notes(worker)
             done = upto
             reason = (read_run_status(worker.worktree) or {}).get("stop_reason")
-            if isinstance(reason, dict) and reason.get("kind") == "condition":
+            if isinstance(reason, dict) and (
+                reason.get("kind") == "condition"
+                or (reason.get("kind") == "budget" and reason.get("budget") in {"cost", "time"})
+            ):
                 # The worker is done: don't start another segment. That segment ran
                 # with --no-report unless it was the last, so write the summary now.
                 if "--no-report" in extra and "--no-report" not in (run_args or []):

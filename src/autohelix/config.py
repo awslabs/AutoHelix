@@ -448,10 +448,16 @@ def _parse_commands(entries: Any, key: str, parse_errors: dict[str, str]) -> lis
         if isinstance(entry, str):
             commands.append(ConstraintCommand(command=entry))
         elif isinstance(entry, dict):
-            commands.append(ConstraintCommand(
-                command=entry.get("command", ""),
-                timeout=int(entry.get("timeout", DEFAULT_CHECK_TIMEOUT)),
-            ))
+            command = entry.get("command", "")
+            if not isinstance(command, str):
+                parse_errors[key] = f"{key}: command must be a string, got {command!r}"
+                continue
+            try:
+                timeout = int(entry.get("timeout", DEFAULT_CHECK_TIMEOUT))
+            except (TypeError, ValueError, OverflowError):
+                parse_errors[key] = f"{key}: timeout must be an integer, got {entry.get('timeout')!r}"
+                continue
+            commands.append(ConstraintCommand(command=command, timeout=timeout))
         else:
             parse_errors[key] = f"{key}: each entry must be a command string or a mapping, got {entry!r}"
     return commands
