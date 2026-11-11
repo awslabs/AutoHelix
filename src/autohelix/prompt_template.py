@@ -96,14 +96,20 @@ def build_prompt_variables(
     # Peer notes from parallel workers. The parallel wrapper symlinks peer
     # dirs into .autohelix/peer_notes/<worker>/; prepare_worktree carries
     # them into each iteration worktree.
-    peers_dir = history.project_path / ".autohelix" / "peer_notes"
+    peers_dir = history.paths.peer_notes
     peers: list[str] = []
     if peers_dir.exists():
         peers = sorted(p.name for p in peers_dir.iterdir() if p.is_dir())
     variables["peers"] = peers
+    import json
+    import os
+    try:
+        variables["peer_runs"] = json.loads(os.environ.get("AUTOHELIX_PEER_RUNS", "{}"))
+    except ValueError:
+        variables["peer_runs"] = {}
 
     # Hints from `autohelix hint` command
-    hints_path = history.project_path / ".autohelix" / "hints.md"
+    hints_path = history.paths.hints
     variables["has_hints"] = hints_path.exists() and hints_path.stat().st_size > 0
 
     return variables

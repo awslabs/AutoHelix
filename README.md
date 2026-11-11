@@ -10,7 +10,7 @@
 
 <p align="center">
   Set <b>constraints</b> and <b>metrics</b>; the agent proposes changes in a loop. <br>
-  Only changes that pass checks get merged. Improvements compound across iterations.
+  Only changes that pass checks are accepted. Improvements compound across iterations.
 </p>
 
 <p align="center">
@@ -218,16 +218,26 @@ A run is defined by a single `autohelix.yaml`. Every field is documented in
 my-project/
 ├── autohelix.yaml       # your config
 └── .autohelix/          # runtime state (gitignored)
-    ├── prompt.md        # the prompt the agent gets each iteration (editable)
-    ├── history.jsonl    # per-iteration results
-    ├── notes/           # agent's persistent notes (the only agent-owned state)
-    ├── observations/    # per-iteration captured metrics output and artifacts
-    ├── reviews/         # reviewer feedback per iteration (if a reviewer is set)
-    ├── hints.md         # messages from `autohelix hint`
-    ├── logs/            # per-iteration prompts and agent output
-    ├── output/          # run summary (report.md) and run page (report.html)
-    └── worktrees/       # temp iteration dirs (recreated each time)
+    ├── prompt.md        # customizable project prompt
+    ├── current          # selected run id
+    ├── runs/<id>/       # one persistent state directory per run
+    │   ├── run.json     # identity, starting commit, target branch
+    │   ├── history.jsonl # results and each model call's usage/log
+    │   ├── notes/       # agent's persistent notes
+    │   ├── observations/ # captured command output and artifacts
+    │   ├── reviews/     # reviewer feedback
+    │   ├── hints.md     # messages from `autohelix hint`
+    │   ├── logs/        # iter-N/call-*/ prompts and transcripts
+    │   ├── output/      # report.md and report.html
+    │   └── runtime/     # live status and per-run settings
+    └── worktrees/<id>/  # temporary detached iteration checkouts
 ```
+
+Runs resume by config path. Use `autohelix run --new` for a separate experiment,
+`--run ID` to select one, or `--land manual` to keep validated commits on the run's
+`refs/autohelix/<id>` until `autohelix land`. By default, accepted changes land on
+the starting branch when a run segment (one invocation) ends. A resumed run can coexist with
+unrelated dirty checkout files. See [CLI reference](docs/cli.md#autohelix-run).
 
 <!-- ───────────────────── OTHER FEATURES ───────────────────── -->
 
@@ -237,7 +247,7 @@ my-project/
 <summary><b>Report</b></summary>
 
 When a run finishes, an agent reads the run's history, notes, reviews and commits and
-writes a short summary to `.autohelix/output/report.md`. `autohelix report` writes it on
+writes a short summary to `.autohelix/runs/<id>/output/report.md`. `autohelix report` writes it on
 demand, e.g. after an interrupted run. See [Configuration → Report](docs/config.md#report).
 
 </details>
@@ -245,7 +255,7 @@ demand, e.g. after an interrupted run. See [Configuration → Report](docs/confi
 <details>
 <summary><b>Reviewer</b></summary>
 
-Beyond quantitative metrics, you can add a `reviewer:` block with a custom prompt to get qualitative feedback from an LLM. Each review is archived to `.autohelix/reviews/iter-N.md`,
+Beyond quantitative metrics, you can add a `reviewer:` block with a custom prompt to get qualitative feedback from an LLM. Each review is archived to `.autohelix/runs/<id>/reviews/iter-N.md`,
 and the latest one guides the next iteration. See [Concepts → Reviewer](docs/concepts.md#reviewer).
 
 </details>
@@ -256,7 +266,7 @@ and the latest one guides the next iteration. See [Concepts → Reviewer](docs/c
 `autohelix view` serves a live page for a run on 127.0.0.1: status, metric chart,
 iterations with notes, diffs, reviews and agent activity, and the run summary once it is
 written. When a run stops, AutoHelix saves the same page as one file,
-`.autohelix/output/report.html`, to open in a browser or share. See
+`.autohelix/runs/<id>/output/report.html`, to open in a browser or share. See
 [Concepts → Run page](docs/concepts.md#run-page).
 
 </details>
@@ -365,7 +375,7 @@ constraint and re-run.
 AutoHelix isolates the agent at two levels:
 
 1. **Git worktree** (default) — each iteration runs in a separate working copy.
-   Rejected iterations are deleted entirely; accepted ones merge back cleanly.
+   Rejected iterations are deleted entirely; accepted ones are recorded on the run ref and landed separately.
 2. **Docker sandbox** (optional) — filesystem isolation: the agent can't access your
    home directory, SSH keys, or other projects. (Network is not isolated, since the
    agent needs it to reach the model API.)

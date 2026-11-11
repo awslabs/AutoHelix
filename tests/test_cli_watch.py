@@ -14,7 +14,9 @@ from autohelix.run_status import RunStatus
 def _status(**info) -> dict:
     now = time.time()
     return {"state": "running", "iteration": 2, "phase": "agent", "phase_started_at": now - 5,
-            "iteration_started_at": now - 65, **info}
+            "iteration_started_at": now - 65,
+            "calls": [{"role": "agent", "log": "logs/iter-2/call-001-agent/agent.log"},
+                      {"role": "reviewer", "log": "logs/iter-2/call-002-reviewer/review.log"}], **info}
 
 
 def test_status_line():
@@ -27,23 +29,23 @@ def test_status_line():
     assert finished.startswith("Finished at ") and finished.endswith("Waiting for the next run…")
 
 
-def test_log_for_follows_phases(tmp_path):
-    logs = tmp_path / ".autohelix" / "logs"
-    agent = logs / "iter-2" / "agent.log"
+def test_log_for_follows_phases(tmp_path, run_paths):
+    logs = run_paths.logs
+    agent = logs / "iter-2" / "call-001-agent" / "agent.log"
     assert W.log_for(tmp_path, _status(), None)[:2] == (agent, "Iteration 2 · agent")
-    assert W.log_for(tmp_path, _status(phase="review"), agent)[:2] == (logs / "iter-2" / "review.log", "Iteration 2 · reviewer")
+    assert W.log_for(tmp_path, _status(phase="review"), agent)[:2] == (logs / "iter-2" / "call-002-reviewer" / "review.log", "Iteration 2 · reviewer")
     assert W.log_for(tmp_path, _status(phase="report"), agent)[:2] == (logs / "report.log", "Summary")
     assert W.log_for(tmp_path, _status(iteration=0, phase="review"), None)[1] == "Baseline · reviewer"
     # Between phases the panel stays put; a watcher started then shows the agent log.
-    review = logs / "iter-2" / "review.log"
-    assert W.log_for(tmp_path, _status(phase="merge"), review) is None
+    review = logs / "iter-2" / "call-002-reviewer" / "review.log"
+    assert W.log_for(tmp_path, _status(phase="accept"), review) is None
     assert W.log_for(tmp_path, _status(phase="checks"), None)[0] == agent
     # Agent panel time counts from the iteration's start, not the phase's.
     assert W.log_for(tmp_path, _status(phase="checks"), None)[2] == pytest.approx(time.time() - 65, abs=2)
     assert W.log_for(tmp_path, _status(iteration=None, phase="starting"), None) is None
 
 
-def test_run_status_records_iteration_start(tmp_path):
+def test_run_status_records_iteration_start(tmp_path, run_paths):
     status = RunStatus(tmp_path)
     status.start()
     status.phase("agent", 1)
@@ -64,12 +66,13 @@ def _watch_once(tmp_path, monkeypatch, polls=1) -> str:
     return out.getvalue()
 
 
-def test_watch_shows_the_running_agent_log(tmp_path, monkeypatch):
+def test_watch_shows_the_running_agent_log(tmp_path, monkeypatch, run_paths):
     status = RunStatus(tmp_path)
     status.start()
     status.phase("agent", 1)
-    log = tmp_path / ".autohelix" / "logs" / "iter-1" / "agent.log"
+    log = run_paths.call_dir(1, "agent") / "agent.log"
     log.parent.mkdir(parents=True)
+    status.note(log=str(log), calls=[{"role": "agent", "log": str(log.relative_to(run_paths.run_dir))}])
     log.write_text(json.dumps({"type": "assistant", "message": {"content": [
         {"type": "text", "text": "Profiling the sort first"}]}}) + "\n")
     out = _watch_once(tmp_path, monkeypatch)
@@ -101,13 +104,14 @@ def test_watch_exits_with_hints_instead_of_waiting(tmp_path):
     assert result.exit_code == 1 and "/tmp/w1" in result.output
 
 
-def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch):
+def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, run_paths):
     """Resuming reruns an unfinished iteration: same log path, new start time."""
     status = RunStatus(tmp_path)
     status.start()
     status.phase("agent", 1)
-    log = tmp_path / ".autohelix" / "logs" / "iter-1" / "agent.log"
+    log = run_paths.call_dir(1, "agent") / "agent.log"
     log.parent.mkdir(parents=True)
+    status.note(log=str(log), calls=[{"role": "agent", "log": str(log.relative_to(run_paths.run_dir))}])
     log.write_text("")
     created = []
     real = W.LiveDisplay
@@ -119,7 +123,8 @@ def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch):
             raise KeyboardInterrupt
         status.stop("interrupted")
         status.start()
-        status.phase("agent", 1)  # rerun: new iteration_started_at
+        status.phase("agent", 1)
+        status.note(log=str(log), calls=[{"role": "agent", "log": str(log.relative_to(run_paths.run_dir))}])  # rerun: new iteration_started_at
     monkeypatch.setattr(W.time, "sleep", sleep)
     with pytest.raises(KeyboardInterrupt):
         W.watch(tmp_path, "claude", Console(file=io.StringIO()))

@@ -21,6 +21,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from autohelix.agents import AgentConfig, AgentEvent, create_agent
+from autohelix.checkpoint import CandidateChanged, ContentGuard
+from autohelix.runs import allocate_call
 from autohelix.usage_log import append_usage, new_call_id
 
 DEFAULT_TIMEOUT = 600
@@ -153,10 +155,8 @@ def _last_json_object(text: str) -> dict | None:
 def _log_path(name: str) -> Path:
     directory = Path(os.environ[LOG_DIR_ENV]) if os.environ.get(LOG_DIR_ENV) else Path(tempfile.gettempdir()) / "autohelix-ask"
     directory.mkdir(parents=True, exist_ok=True)
-    n = 1
-    while (directory / f"{name}-{n}.log").exists():
-        n += 1
-    return directory / f"{name}-{n}.log"
+    call_dir = allocate_call(directory, "command")
+    return call_dir / f"{name}.log"
 
 
 def _deadline_timeout(timeout: int) -> int:
@@ -194,14 +194,30 @@ def ask(question: str, cwd: Path, config: AgentConfig, *, yes: str | None = None
             "Reply with only the JSON object.")
         call_id = new_call_id()
         log_path = _log_path("ask")
+        run_dir = os.environ.get("AUTOHELIX_RUN_DIR")
+        stored_log = str(log_path.resolve().relative_to(Path(run_dir).resolve())) if run_dir else str(log_path)
         record = {"id": call_id, "source": "ask", "question": question[:200], "agent": config.type,
-                  "model": config.model, "log": str(log_path)}
+                  "model": config.model, "log": stored_log}
         append_usage({**record, "status": "started", "cost_usd": None})
         started = time.monotonic()
-        result = create_agent(config).run(
-            worktree_path=cwd, prompt=prompt, iteration=0, log_path=log_path,
-            event_callback=_ignore_event,
-        )
+        result = None
+        usage_path = os.environ.get("AUTOHELIX_USAGE_FILE")
+        allowed = (log_path, *((Path(usage_path),) if usage_path else ()))
+        try:
+            with ContentGuard(cwd, allowed=allowed):
+                result = create_agent(config).run(
+                    worktree_path=cwd, prompt=prompt, iteration=0, log_path=log_path,
+                    event_callback=_ignore_event,
+                )
+        except BaseException as e:
+            usage = dict(result.usage or {}) if result else {}
+            usage.setdefault("duration_ms", int((time.monotonic() - started) * 1000))
+            invalidated = isinstance(e, CandidateChanged) or bool(getattr(e, "candidate_changed", False))
+            append_usage({**record, **usage, "status": "error", "error": str(e),
+                          "candidate_changed": invalidated})
+            if invalidated and not isinstance(e, KeyboardInterrupt):
+                raise JudgeError(str(e)) from e
+            raise
         usage = dict(result.usage or {})
         usage.setdefault("duration_ms", int((time.monotonic() - started) * 1000))
         cost = usage.get("cost_usd")

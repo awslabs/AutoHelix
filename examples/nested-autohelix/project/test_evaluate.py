@@ -133,27 +133,21 @@ def test_history_summary_tracks_final_accepted_speedup_and_cost():
             "iteration": 0,
             "accepted": True,
             "metrics": {"speedup": 1.0},
-            "usage": {},
+            "calls": [],
         },
         {
             "iteration": 1,
             "accepted": True,
             "metrics": {"speedup": 3.0},
-            "usage": {
-                "input_tokens": 100,
-                "output_tokens": 20,
-                "cost_usd": 0.1,
-            },
+            "calls": [{"role": "agent", "usage": {
+                "input_tokens": 100, "output_tokens": 20, "cost_usd": 0.1}}],
         },
         {
             "iteration": 2,
             "accepted": False,
             "metrics": {"speedup": 4.0},
-            "usage": {
-                "input_tokens": 50,
-                "output_tokens": 10,
-                "cost_usd": 0.05,
-            },
+            "calls": [{"role": "agent", "usage": {
+                "input_tokens": 50, "output_tokens": 10, "cost_usd": 0.05}}],
         },
     ]
 
@@ -190,3 +184,44 @@ def test_aggregate_exposes_two_headline_metrics_and_keeps_diagnostics():
     assert metrics["valid_task_rate"] == 1.0
     assert metrics["inner_tokens"] == 40
     assert metrics["wall_seconds"] == 5
+
+
+def test_history_summary_includes_baseline_judges_and_all_call_roles():
+    history = [
+        {"iteration": 0, "accepted": True, "metrics": {"speedup": 1},
+         "calls": [{"role": "reviewer", "usage": {"cost_usd": 0.2, "input_tokens": 10}}]},
+        {"iteration": 1, "accepted": True, "metrics": {"speedup": 3},
+         "usage": {"cost_usd": 99}, "calls": [
+             {"role": "agent", "usage": {"cost_usd": 0.1, "output_tokens": 20}},
+             {"role": "command", "usage": {"cost_usd": 0.05, "input_tokens": 5}},
+         ]},
+    ]
+    summary = summarize_history(history)
+    assert summary["cost_usd"] == pytest.approx(0.35)
+    assert summary["tokens"] == 35
+
+
+def test_persisted_project_evaluates_unlanded_run_ref(tmp_path):
+    from autohelix.harness import Harness
+    from autohelix.runs import git
+    from evaluate import collect_diff, read_history
+
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.com")
+    git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "solver.py").write_text("VALUE = 1\n")
+    (tmp_path / "check.py").write_text("print('ok')\n")
+    (tmp_path / "benchmark.py").write_text("from solver import VALUE\nprint(f'speedup: {VALUE}')\n")
+    (tmp_path / "autohelix.yaml").write_text(yaml.safe_dump({
+        "goal": "Improve", "report": False, "agent": {"type": "mock", "settings": {
+            "change_file": "solver.py", "change_content": "VALUE = 3\n",
+        }},
+    }))
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "baseline")
+    harness = Harness(tmp_path, land_mode="manual")
+    harness.run(max_iterations=1, report=False)
+    assert (tmp_path / "solver.py").read_text() == "VALUE = 1\n"
+    assert evaluate_persisted_project(tmp_path)["speedup"] == 3
+    assert "+VALUE = 3" in collect_diff(tmp_path)
+    assert len(read_history(tmp_path)) == 2

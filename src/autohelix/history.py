@@ -5,12 +5,14 @@
 
 import json
 import logging
+import os
 import shutil
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
 from typing import Any
 
 from autohelix.costs import CostSummary, summarize_costs
+from autohelix.runs import RunPaths, SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -21,23 +23,34 @@ class IterationResult:
 
     iteration: int
     accepted: bool
-    metrics: dict[str, float]
+    metrics: dict[str, float] = field(default_factory=dict)
     commit: str | None = None
     reason: str | None = None
     failure_output: str | None = None
-    usage: dict[str, Any] = field(default_factory=dict)
-    # One entry per attempted review; baseline reviews may be retried on resume.
-    reviewer_usage: list[dict[str, Any]] = field(default_factory=list)
-    # Set when a stop command exited 0 after this iteration: {"command", "reason"}.
+    # Set when a stop command exited 0 after this iteration.
     stop: dict[str, str] | None = None
-    # Model calls made by commands the harness ran (e.g. `autohelix ask`), one
-    # record per call, from $AUTOHELIX_USAGE_FILE.
-    command_usage: list[dict[str, Any]] = field(default_factory=list)
+    schema: int = SCHEMA
+    started_at: float | None = None
+    ended_at: float | None = None
+    calls: list[dict[str, Any]] = field(default_factory=list)
+    constraints: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def usage(self):
+        """Main-agent usage, derived from the authoritative calls."""
+        return next((call.get("usage") or {} for call in self.calls if call["role"] == "agent"), {})
+
+    @property
+    def reviewer_usage(self):
+        return [call.get("usage") or {} for call in self.calls if call["role"] == "reviewer"]
+
+    @property
+    def command_usage(self):
+        return [call.get("usage") or {} for call in self.calls if call["role"] == "command"]
 
     @property
     def cost_usages(self) -> list[dict[str, Any]]:
-        """Usage for billable calls, excluding the baseline's absent main agent."""
-        return ([self.usage] if self.iteration > 0 else []) + self.reviewer_usage + self.command_usage
+        return [call.get("usage") or {} for call in self.calls]
 
     @property
     def cost(self) -> CostSummary:
@@ -47,10 +60,11 @@ class IterationResult:
 class History:
     """Manages iteration history in .autohelix/."""
 
-    def __init__(self, project_path: Path):
+    def __init__(self, project_path: Path, run_id: str | None = None):
         self.project_path = project_path
-        self.history_path = project_path / ".autohelix" / "history.jsonl"
-        self._observations_dir = project_path / ".autohelix" / "observations"
+        self.paths = RunPaths(project_path, run_id)
+        self.history_path = self.paths.history
+        self._observations_dir = self.paths.observations
         self._cache: list[IterationResult] | None = None
         self._cache_mtime: float | None = None
 
@@ -87,11 +101,33 @@ class History:
         self._cache = None
         self._cache_mtime = None
 
+    @staticmethod
+    def _record(result: IterationResult) -> dict:
+        return {**asdict(result), "cost": asdict(result.cost)}
+
     def append(self, result: IterationResult) -> None:
         """Append an iteration result to history."""
         self.history_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.history_path, "a") as f:
-            f.write(json.dumps(asdict(result)) + "\n")
+            f.write(json.dumps(self._record(result)) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        self._invalidate_cache()
+
+    def update(self, result: IterationResult) -> None:
+        """Replace one existing record, preserving postaccept stop calls."""
+        results = self.load()
+        if not any(r.iteration == result.iteration for r in results):
+            raise ValueError(f"No history record for iteration {result.iteration}")
+        self._rewrite([result if r.iteration == result.iteration else r for r in results])
+
+    def _rewrite(self, results: list[IterationResult]) -> None:
+        temporary = self.history_path.with_suffix(".tmp")
+        with temporary.open("w") as stream:
+            stream.write("".join(json.dumps(self._record(r)) + "\n" for r in results))
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(self.history_path)
         self._invalidate_cache()
 
     @property
@@ -101,21 +137,20 @@ class History:
 
     def record_reviewer_usage(
         self, iteration: int, usage: dict[str, Any], attempt: int | None = None,
+        *, log: str | None = None,
     ) -> int:
         """Append a review attempt, or update the usage of a pending attempt."""
         results = self.load()
         result = next((r for r in results if r.iteration == iteration), None)
         if result is None:
             raise ValueError(f"No history record for iteration {iteration} to attach reviewer usage to.")
+        reviews = [call for call in result.calls if call["role"] == "reviewer"]
         if attempt is None:
-            attempt = len(result.reviewer_usage)
-            result.reviewer_usage.append(usage)
+            attempt = len(reviews)
+            result.calls.append({"role": "reviewer", "usage": usage, "log": log})
         else:
-            result.reviewer_usage[attempt] = usage
-        temporary = self.history_path.with_suffix(".tmp")
-        temporary.write_text("".join(json.dumps(asdict(r)) + "\n" for r in results))
-        temporary.replace(self.history_path)
-        self._invalidate_cache()
+            reviews[attempt]["usage"] = usage
+        self._rewrite(results)
         return attempt
 
     def load(self) -> list[IterationResult]:
@@ -132,31 +167,24 @@ class History:
         known_fields = {f.name for f in fields(IterationResult)}
         results = []
         with open(self.history_path) as f:
-            for lineno, line in enumerate(f, start=1):
+            lines = f.readlines()
+            for lineno, line in enumerate(lines, start=1):
+                terminated = line.endswith("\n")
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     data = json.loads(line)
-                    data.setdefault("usage", {})
-                    # Older histories discarded reviewer usage. Where review
-                    # artifacts survive, report that missing charge as unknown.
-                    if "reviewer_usage" not in data and "iteration" in data:
-                        iteration = data["iteration"]
-                        root = self.history_path.parent
-                        if ((root / "logs" / f"iter-{iteration}" / "review.log").exists()
-                                or (root / "reviews" / f"iter-{iteration}.md").exists()):
-                            data["reviewer_usage"] = [{}]
+                    if (not isinstance(data, dict) or type(data.get("iteration")) is not int
+                            or data["iteration"] < 0 or type(data.get("accepted")) is not bool):
+                        raise ValueError("invalid iteration record")
                     # Tolerate forward-compat fields written by a newer version.
                     data = {k: v for k, v in data.items() if k in known_fields}
                     results.append(IterationResult(**data))
                 except (json.JSONDecodeError, TypeError, ValueError) as e:
-                    # A crash mid-write can leave one partial line; skipping it lets
-                    # the run resume and `report` work instead of failing outright.
-                    logger.warning(
-                        "Skipping malformed history line %d in %s: %s",
-                        lineno, self.history_path, e,
-                    )
+                    if lineno != len(lines) or terminated:
+                        raise RuntimeError(f"Corrupt history record {lineno}: {self.history_path}") from e
+                    logger.warning("Incomplete final history record in %s: %s", self.history_path, e)
         self._cache = results
         self._cache_mtime = current_mtime
         return results

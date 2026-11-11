@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from autohelix.checks import parse_metric_output
+from autohelix.runs import RunPaths, git, run_tip
 
 
 HERE = Path(__file__).resolve().parent
@@ -168,7 +169,7 @@ def scaffold_task(
 
 
 def read_history(project: Path) -> list[dict[str, Any]]:
-    path = project / ".autohelix" / "history.jsonl"
+    path = RunPaths(project).history
     if not path.exists():
         return []
     return [
@@ -191,12 +192,13 @@ def summarize_history(history: list[dict[str, Any]]) -> dict[str, Any]:
     cost = 0.0
     curve = [final_speedup]
     for row in history:
+        usages = [call.get("usage") or {} for call in row.get("calls", [])]
+        for usage in usages:
+            tokens += int(usage.get("input_tokens") or 0)
+            tokens += int(usage.get("output_tokens") or 0)
+            cost += float(usage.get("cost_usd") or 0)
         if row.get("iteration") == 0:
             continue
-        usage = row.get("usage") or {}
-        tokens += int(usage.get("input_tokens") or 0)
-        tokens += int(usage.get("output_tokens") or 0)
-        cost += float(usage.get("cost_usd") or 0)
         metrics = row.get("metrics") or {}
         if row.get("accepted") and "speedup" in metrics:
             final_speedup = float(metrics["speedup"])
@@ -212,7 +214,7 @@ def summarize_history(history: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def collect_notes(project: Path) -> dict[str, str]:
-    notes_dir = project / ".autohelix" / "notes"
+    notes_dir = RunPaths(project).notes
     if not notes_dir.exists():
         return {}
     return {
@@ -222,49 +224,46 @@ def collect_notes(project: Path) -> dict[str, str]:
 
 
 def collect_diff(project: Path) -> str:
-    root = subprocess.run(
-        ["git", "rev-list", "--max-parents=0", "HEAD"],
-        cwd=project,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    return subprocess.run(
-        ["git", "diff", root, "HEAD", "--", "solver.py"],
-        cwd=project,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout[:24000]
+    paths = RunPaths(project)
+    if paths.identity.exists():
+        base = paths.read_identity()["base_commit"]
+        tip = run_tip(paths)
+    else:
+        base = git(project, "rev-list", "--max-parents=0", "HEAD").stdout.strip()
+        tip = "HEAD"
+    return git(project, "diff", base, tip, "--", "solver.py").stdout[:24000]
 
 
-def evaluate_persisted_project(project: Path) -> dict[str, Any]:
+def _evaluate_checkout(project: Path) -> dict[str, Any]:
     validation = subprocess.run(
-        ["python", "check.py"],
-        cwd=project,
-        capture_output=True,
-        text=True,
+        ["python", "check.py"], cwd=project, capture_output=True, text=True,
     )
     benchmark = subprocess.run(
-        ["python", "benchmark.py"],
-        cwd=project,
-        capture_output=True,
-        text=True,
+        ["python", "benchmark.py"], cwd=project, capture_output=True, text=True,
     )
     benchmark_output = benchmark.stdout + benchmark.stderr
     speedup = parse_metric_output(benchmark_output, metric_name="speedup")
     return {
-        "valid": (
-            validation.returncode == 0
-            and benchmark.returncode == 0
-            and speedup is not None
-        ),
+        "valid": validation.returncode == 0 and benchmark.returncode == 0 and speedup is not None,
         "speedup": speedup,
-        "validation_output": (
-            validation.stdout + validation.stderr
-        )[-4000:],
+        "validation_output": (validation.stdout + validation.stderr)[-4000:],
         "benchmark_output": benchmark_output[-4000:],
     }
+
+
+def evaluate_persisted_project(project: Path) -> dict[str, Any]:
+    # A killed inner harness may not have landed its last accepted commit. Read
+    # the run ref in a temporary checkout rather than benchmarking stale HEAD.
+    paths = RunPaths(project)
+    if not paths.identity.exists():
+        return _evaluate_checkout(project)
+    with tempfile.TemporaryDirectory(prefix="autohelix-inner-check-") as temporary:
+        checkout = Path(temporary) / "candidate"
+        git(project, "worktree", "add", "--detach", str(checkout), run_tip(paths))
+        try:
+            return _evaluate_checkout(checkout)
+        finally:
+            git(project, "worktree", "remove", "--force", str(checkout))
 
 
 def run_task(
@@ -285,13 +284,17 @@ def run_task(
     )
 
     started = time.monotonic()
-    process = subprocess.run(
-        ["autohelix", "run", "-n", str(template.iterations)],
-        cwd=project,
-        capture_output=True,
-        text=True,
-        timeout=total_seconds + 180,
-    )
+    try:
+        process = subprocess.run(
+            ["autohelix", "run", "-n", str(template.iterations)],
+            cwd=project, capture_output=True, text=True, timeout=total_seconds + 180,
+        )
+    except subprocess.TimeoutExpired as error:
+        def text(value):
+            return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+        process = subprocess.CompletedProcess(
+            error.cmd, 124, text(error.stdout), text(error.stderr) + "\nInner run timed out.",
+        )
     persisted = evaluate_persisted_project(project)
     history = read_history(project)
     summary = summarize_history(history)

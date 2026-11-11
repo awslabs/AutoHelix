@@ -390,6 +390,7 @@ function cardEl(i) {
   const changes = section('Changes vs baseline', null);
   const output = section('Captured output', `observations/iter-${i}/`);
   const reviewer = section('Reviewer activity', `logs/iter-${i}/review.log`);
+  const phases = section('Call activity', `logs/iter-${i}/call-*/`);
   notes.body.className = review.body.className = 'prose';
   activity.body.className = 'log';
   reviewer.body.className = 'log';
@@ -398,8 +399,8 @@ function cardEl(i) {
   const node = el('details', { className: 'box card', open: i === selected }, summary,
     // Outcome first, then the agent's account, the evidence, the review, and raw logs last.
     el('div', { className: 'card-body' }, failure.node, notes.node, changes.node, output.node,
-      review.node, activity.node, reviewer.node));
-  const card = { i, node, summary, failure, notes, activity, review, changes, output, reviewer,
+      review.node, activity.node, reviewer.node, phases.node));
+  const card = { i, node, summary, failure, notes, activity, review, changes, output, reviewer, phases,
                  key: undefined, expanded: { activity: new Set(), reviewer: new Set() } };
   node.addEventListener('toggle', () => {
     if (!node.open) return;
@@ -537,6 +538,21 @@ function fillCard(card, d) {
 
   show(card.reviewer.node, d.reviewer.length > 0);
   renderEvents(card.reviewer.body, d.reviewer, card.expanded.reviewer);
+  const phases = (d.calls || []).filter((call) => call.events.length > 0);
+  show(card.phases.node, phases.length > 0);
+  if (phases.length) {
+    show(card.activity.node, false);
+    show(card.reviewer.node, false);
+    card.phases.body.replaceChildren(...phases.map((call, index) => {
+      const heading = el('h4', { textContent: `Call ${index + 1} · ${call.role}` });
+      const log = el('div', { className: 'log' });
+      card.expanded.phases ||= new Map();
+      const key = call.log || call.id || `${call.role}-${index}`;
+      if (!card.expanded.phases.has(key)) card.expanded.phases.set(key, new Set());
+      renderEvents(log, call.events, card.expanded.phases.get(key));
+      return el('div', {}, heading, log);
+    }));
+  }
 }
 
 function fmtSize(bytes) {

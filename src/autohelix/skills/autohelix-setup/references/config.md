@@ -162,7 +162,7 @@ timeout unless `reviewer.timeout_seconds` overrides it.
 
 `budget.cost` compares accumulated optimization-agent and reviewer costs with
 the requested dollar limit, including baseline review attempts. History keeps
-the optimization agent's `usage` and a `reviewer_usage` list. Claude Code and
+each actual model call in the `calls` list, including its role, usage and relative log path. Claude Code and
 OpenCode can report dollar costs; Codex can provide calculated API-equivalent
 estimates. Only rely on this optional budget when usable dollar usage is
 recorded for the selected backend/configuration; missing cost is not evidence
@@ -175,7 +175,8 @@ Run with `autohelix run --path PROJECT -n 3`. `-n` selects the total iteration
 limit for that run, including iterations already in history; it does not add
 three iterations to an existing run.
 
-`autohelix clear` archives runtime state but preserves accepted code changes.
+`autohelix clear` abandons the current run, retaining its history and unlanded commits.
+It leaves code unchanged; use `autohelix run --new` to start a separate run.
 Resuming, clearing history, and resetting code or external artifacts are
 different operations. Explain the intended operation before changing state.
 

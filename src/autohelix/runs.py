@@ -1,0 +1,419 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Run identity, file layout, ownership, recovery, and fast-forward landing."""
+
+import fcntl
+import json
+import os
+import re
+import secrets
+import shutil
+import signal
+import threading
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+
+SCHEMA = 1
+_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,36}\Z")
+_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}\Z")
+_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
+
+
+def git(project: Path, *args: str, check: bool = True):
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "-c", "gc.auto=0", *args], cwd=project, capture_output=True,
+        text=True, start_new_session=True,
+    )
+    if check and result.returncode:
+        raise RuntimeError(f"git {' '.join(args)} failed: {(result.stderr or result.stdout).strip()}")
+    return result
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(data) + "\n")
+    temporary.replace(path)
+
+
+def allocate_call(directory: Path, role: str) -> Path:
+    """Reserve one numbered directory per actual call, including concurrent asks."""
+    directory.mkdir(parents=True, exist_ok=True)
+    index = 1
+    while True:
+        if any(directory.glob(f"call-{index:03d}-*")):
+            index += 1
+            continue
+        path = directory / f"call-{index:03d}-{role}"
+        try:
+            path.mkdir()
+            return path
+        except FileExistsError:
+            index += 1
+
+
+@dataclass(frozen=True)
+class RunPaths:
+    """The sole definition of project and per-run state paths.
+
+    Without an explicit id, observers follow current. The root remains useful
+    for project setup, but observers must not treat it as a run without an id.
+    """
+
+    project: Path
+    run_id: str | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "project", Path(self.project).resolve())
+        run_id = self.run_id
+        if run_id in (None, "current"):
+            try:
+                run_id = (self.root / "current").read_text().strip()
+            except FileNotFoundError:
+                run_id = None
+        if run_id is not None and not _ID.fullmatch(run_id):
+            raise RuntimeError(f"Invalid run id: {run_id!r}")
+        object.__setattr__(self, "run_id", run_id)
+
+    @property
+    def root(self): return self.project / ".autohelix"
+    @property
+    def runs(self): return self.root / "runs"
+    @property
+    def run_dir(self): return self.runs / self.run_id if self.run_id else self.root
+    @property
+    def identity(self): return self.run_dir / "run.json"
+    @property
+    def history(self): return self.run_dir / "history.jsonl"
+    @property
+    def notes(self): return self.run_dir / "notes"
+    @property
+    def logs(self): return self.run_dir / "logs"
+    @property
+    def reviews(self): return self.run_dir / "reviews"
+    @property
+    def observations(self): return self.run_dir / "observations"
+    @property
+    def hints(self): return self.run_dir / "hints.md"
+    @property
+    def output(self): return self.run_dir / "output"
+    @property
+    def runtime(self): return self.run_dir / "runtime"
+    @property
+    def status(self): return self.runtime / "status.json"
+    @property
+    def project_runtime(self): return self.root / "runtime"
+    @property
+    def worktrees(self): return self.root / "worktrees" / self.run_id if self.run_id else self.root / "worktrees"
+    @property
+    def ref(self): return f"refs/autohelix/{self.run_id}"
+    @property
+    def prompt(self): return self.root / "prompt.md"
+    @property
+    def peer_notes(self): return self.root / "peer_notes"
+    @property
+    def lock(self): return self.project_runtime / "locks" / f"{self.run_id}.lock"
+
+    def call_dir(self, iteration: int, role: str, index: int = 1) -> Path:
+        return self.logs / f"iter-{iteration}" / f"call-{index:03d}-{role}"
+
+    def relative_log(self, value) -> str | None:
+        """Normalize untrusted log metadata, retaining usage without unsafe logs."""
+        if not self.run_id or not isinstance(value, (str, Path)) or not value:
+            return None
+        try:
+            path = Path(value)
+            path = (path if path.is_absolute() else self.run_dir / path).resolve()
+            root = self.run_dir.resolve()
+            logs = self.logs.resolve()
+            if not logs.is_relative_to(root) or not path.is_relative_to(logs):
+                return None
+            return str(path.relative_to(root))
+        except (OSError, ValueError, RuntimeError):
+            return None
+
+    def read_identity(self) -> dict:
+        try:
+            data = json.loads(self.identity.read_text())
+        except (OSError, ValueError) as e:
+            raise RuntimeError(f"Could not read run {self.run_id}: {e}") from e
+        if data.get("schema") != SCHEMA or data.get("id") != self.run_id:
+            raise RuntimeError(f"Unsupported or inconsistent run identity: {self.identity}")
+        return data
+
+
+class RunLock:
+    """Nonblocking, process-held ownership; the persistent inode is never removed."""
+
+    def __init__(self, path: Path, *, blocking=False):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = path.open("a+")
+        try:
+            fcntl.flock(self._file, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            self._file.close()
+            raise RuntimeError(f"Run is live (ownership lock held): {path.stem}") from None
+
+    def close(self):
+        if not self._file.closed:
+            fcntl.flock(self._file, fcntl.LOCK_UN)
+            self._file.close()
+
+    def __enter__(self): return self
+    def __exit__(self, *_): self.close()
+    def __del__(self):
+        if hasattr(self, "_file"):
+            self.close()
+
+
+@dataclass
+class RunState:
+    paths: RunPaths
+    data: dict
+    expected_tip: str
+
+
+@contextmanager
+def critical_section():
+    """Defer Ctrl-C until the commit, ref update, and durable record agree."""
+    pending = []
+    main = threading.current_thread() is threading.main_thread()
+    previous = signal.getsignal(signal.SIGINT) if main else None
+    if main:
+        signal.signal(signal.SIGINT, lambda *args: pending.append(args))
+    failed = False
+    try:
+        yield
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        if main:
+            signal.signal(signal.SIGINT, previous)
+        if pending and not failed:
+            if callable(previous):
+                previous(*pending[0])
+            elif previous != signal.SIG_IGN:
+                raise KeyboardInterrupt
+
+
+def config_relative(project: Path, config: Path) -> str:
+    try:
+        return str(config.resolve().relative_to(project.resolve()))
+    except ValueError:
+        return str(config.resolve())
+
+
+def select_run(project: Path, config: Path, *, name: str | None = None,
+               new: bool = False, run_id: str | None = None) -> tuple[RunPaths, dict, RunLock]:
+    """Select and own a run atomically before creating any per-run state."""
+    root = RunPaths(project).root
+    if (root / "history.jsonl").exists():
+        raise RuntimeError("Legacy AutoHelix state: move or delete .autohelix/, then run git worktree prune.")
+    # Serialize selection/creation for this project. The per-run lock remains
+    # authoritative throughout the invocation, including final landing.
+    with RunLock(root / "runtime" / "locks" / "selection.lock", blocking=True):
+        config_path = config_relative(project, config)
+        if run_id:
+            paths = RunPaths(project, run_id)
+            data = paths.read_identity()
+        else:
+            candidates = []
+            if not new:
+                for identity in (root / "runs").glob("*/run.json"):
+                    try:
+                        data = json.loads(identity.read_text())
+                    except (OSError, ValueError):
+                        continue
+                    if data.get("lifecycle") == "open" and data.get("config_path") == config_path:
+                        candidates.append(data)
+            data = max(candidates, key=lambda d: d["created_at"]) if candidates else None
+            paths = RunPaths(project, data["id"]) if data else None
+        if paths is not None:
+            lock = RunLock(paths.lock)
+            try:
+                data = paths.read_identity()
+                if data.get("lifecycle") != "open":
+                    raise RuntimeError(f"Run {paths.run_id} is abandoned; use --new.")
+            except BaseException:
+                lock.close()
+                raise
+            return paths, data, lock
+        if name is None:
+            stem = config.stem
+            name = None if stem == "autohelix" else re.sub(r"[^a-z0-9-]", "-", stem.lower()).strip("-")[:32] or None
+        if name is not None and not _NAME.fullmatch(name):
+            raise RuntimeError("name must use lowercase letters, digits or hyphens, with at most 32 characters.")
+        # Refused first starts must not leave an identity, owned ref or pointer.
+        dirty = git(project, "status", "--porcelain", "--untracked-files=no").stdout
+        if dirty:
+            raise RuntimeError("Uncommitted changes in tracked files. Commit them before starting a run:\n" + dirty)
+        base = git(project, "rev-parse", "HEAD").stdout.strip()
+        target = git(project, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip().removeprefix("refs/heads/") or None
+        while True:
+            suffix = "".join(secrets.choice(_ALPHABET) for _ in range(4))
+            candidate = f"{name}-{suffix}" if name else suffix
+            paths = RunPaths(project, candidate)
+            paths.runs.mkdir(parents=True, exist_ok=True)
+            try:
+                paths.run_dir.mkdir()
+            except FileExistsError:
+                continue
+            lock = RunLock(paths.lock)
+            created = git(project, "update-ref", "--no-deref", "--create-reflog", "-m", "AutoHelix create run",
+                          paths.ref, base, "0" * len(base), check=False)
+            if created.returncode:
+                lock.close()
+                paths.run_dir.rmdir()
+                if git(project, "rev-parse", "--verify", paths.ref, check=False).returncode == 0:
+                    continue
+                raise RuntimeError(created.stderr.strip())
+            data = {"schema": SCHEMA, "id": candidate, "name": name, "config_path": config_path,
+                    "created_at": time.time(), "base_commit": base, "target_branch": target,
+                    "ref": paths.ref, "lifecycle": "open"}
+            try:
+                write_json(paths.identity, data)
+            except BaseException:
+                lock.close()
+                raise
+            return paths, data, lock
+
+
+def repair_history(path: Path) -> None:
+    """Repair only a torn final JSON record, under run ownership."""
+    if not path.exists():
+        return
+    raw = path.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    offset = 0
+    for index, line in enumerate(lines):
+        try:
+            record = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            if index != len(lines) - 1 or line.endswith(b"\n"):
+                raise RuntimeError(f"Corrupt history record {index + 1}: {path}") from None
+            with path.open("r+b") as stream:
+                stream.truncate(offset)
+            return
+        if (not isinstance(record, dict) or type(record.get("iteration")) is not int
+                or record["iteration"] < 0 or type(record.get("accepted")) is not bool):
+            raise RuntimeError(f"Invalid history record {index + 1}: {path}")
+        offset += len(line)
+    if raw and not raw.endswith(b"\n"):
+        with path.open("ab") as stream:
+            stream.write(b"\n")
+
+
+def reconcile(paths: RunPaths, data: dict, history, land_mode: str) -> tuple[str, str | None]:
+    """Recover a ref advance without its record, then pick up target commits."""
+    from autohelix.history import IterationResult
+
+    repair_history(paths.history)
+    history._invalidate_cache()
+    tip = git(paths.project, "rev-parse", paths.ref).stdout.strip()
+    commits = git(paths.project, "log", "--format=%H%x00%B%x00",
+                  f"{data['base_commit']}..{tip}").stdout.split("\x00")
+    for index in range(0, len(commits) - 1, 2):
+        commit, message = commits[index].strip(), commits[index + 1]
+        if re.search(rf"^AutoHelix-Run: {re.escape(paths.run_id)}$", message, re.MULTILINE):
+            iteration = re.search(r"^AutoHelix-Iteration: (\d+)$", message, re.MULTILINE)
+            if iteration and int(iteration[1]) > history.get_last_iteration():
+                history.append(IterationResult(
+                    iteration=int(iteration[1]), accepted=True, reason="recovered", commit=commit,
+                    calls=[{"role": "agent", "usage": {}, "log": None}],
+                ))
+            break
+    warning = None
+    target = data.get("target_branch")
+    baseline_captured = any(row.iteration == 0 and row.accepted for row in history.load())
+    if target:
+        branch = git(paths.project, "rev-parse", f"refs/heads/{target}", check=False)
+        if branch.returncode == 0:
+            target_tip = branch.stdout.strip()
+            if baseline_captured and git(paths.project, "merge-base", "--is-ancestor", tip, target_tip, check=False).returncode == 0:
+                if tip != target_tip:
+                    git(paths.project, "update-ref", "--no-deref", "-m", "AutoHelix resume from target", paths.ref, target_tip, tip)
+                    tip = target_tip
+            elif land_mode == "auto":
+                if git(paths.project, "merge-base", "--is-ancestor", target_tip, tip, check=False).returncode == 0:
+                    warning = (f"Target {target} is behind run {paths.run_id}; auto landing will reapply accepted code. "
+                               f"To discard the run after a reset, use autohelix abandon {paths.run_id}.")
+                else:
+                    warning = (f"Target {target} diverged; continuing run {paths.run_id} from its accepted tip. "
+                               "Landing requires a branch that can fast-forward.")
+    return tip, warning
+
+
+def land(paths: RunPaths, data: dict, expected_tip: str, into: str | None = None) -> None:
+    """Fast-forward the target to the harness's validated tip, never a moving ref."""
+    target = into or data.get("target_branch")
+    if not target:
+        raise RuntimeError("This run started detached; land requires --into <branch>.")
+    ref = f"refs/heads/{target}"
+    old = git(paths.project, "rev-parse", "--verify", ref).stdout.strip()
+    if git(paths.project, "merge-base", "--is-ancestor", expected_tip, old, check=False).returncode == 0:
+        return
+    hint = f"Run {paths.run_id} remains available: git merge autohelix/{paths.run_id}"
+    if git(paths.project, "merge-base", "--is-ancestor", old, expected_tip, check=False).returncode:
+        raise RuntimeError(f"Cannot land: {target} diverged (including commits made during this segment). {hint}")
+    checkout = None
+    for record in git(paths.project, "worktree", "list", "--porcelain").stdout.split("\n\n"):
+        lines = record.splitlines()
+        if f"branch {ref}" in lines:
+            checkout = Path(lines[0].removeprefix("worktree ")).resolve()
+            break
+    root = Path(git(paths.project, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
+    with critical_section():
+        if checkout == root:
+            result = git(root, "merge", "--ff-only", expected_tip, check=False)
+            if result.returncode:
+                raise RuntimeError(f"Cannot land (checkout would be overwritten). {hint}")
+        elif checkout:
+            raise RuntimeError(f"Cannot land: {target} is checked out in another worktree ({checkout}). {hint}")
+        else:
+            result = git(paths.project, "fetch", "--no-write-fetch-head", "--no-tags",
+                         "--recurse-submodules=no", ".", f"{expected_tip}:{ref}", check=False)
+            if result.returncode:
+                raise RuntimeError(f"Cannot land {target}: branch is busy or changed. {hint}")
+
+
+def abandon(paths: RunPaths, *, purge: bool = False) -> None:
+    with RunLock(paths.lock):
+        data = paths.read_identity()
+        data["lifecycle"] = "abandoned"
+        tip = git(paths.project, "rev-parse", "--verify", paths.ref, check=False)
+        if tip.returncode == 0:
+            data["abandoned_tip"] = tip.stdout.strip()
+        write_json(paths.identity, data)
+        for worktree in paths.worktrees.glob("*"):
+            git(paths.project, "worktree", "remove", "--force", str(worktree), check=False)
+        if paths.worktrees.exists():
+            shutil.rmtree(paths.worktrees)
+        target = data.get("target_branch")
+        landed = target and git(paths.project, "merge-base", "--is-ancestor", paths.ref,
+                                f"refs/heads/{target}", check=False).returncode == 0
+        if purge or landed:
+            tip = git(paths.project, "rev-parse", paths.ref, check=False)
+            if tip.returncode == 0:
+                git(paths.project, "update-ref", "--no-deref", "-d", paths.ref, tip.stdout.strip())
+        if purge:
+            shutil.rmtree(paths.run_dir)
+
+
+def run_tip(paths: RunPaths, data: dict | None = None) -> str:
+    """Read accepted code even after abandonment removed a fully landed ref."""
+    result = git(paths.project, "rev-parse", "--verify",
+                 paths.ref if paths.run_id else "HEAD", check=False)
+    if result.returncode == 0:
+        return result.stdout.strip()
+    from autohelix.history import History
+
+    records = History(paths.project, paths.run_id).load()
+    commit = next((r.commit for r in reversed(records) if r.accepted and r.commit), None)
+    identity = data or paths.read_identity()
+    return identity.get("abandoned_tip") or commit or identity["base_commit"]

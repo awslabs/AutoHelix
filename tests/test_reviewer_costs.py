@@ -90,6 +90,7 @@ def test_baseline_and_iteration_reviews_count_toward_budget_on_resume(
     history = History(integration_project)
     assert summarize_costs(history.cost_usages).cost_usd == pytest.approx(0.18)
 
+    harness.close()
     resumed, calls = _harness(integration_project, monkeypatch)
     resumed.config.max_cost_usd = 0.30
     resumed.run(max_iterations=10)
@@ -109,6 +110,7 @@ def test_baseline_review_alone_can_exhaust_budget(integration_project, monkeypat
     state = RunData(integration_project).state()
     assert state["cost"] == {"cost_usd": 0.25, "incomplete": False}
 
+    harness.close()
     resumed, calls = _harness(integration_project, monkeypatch, reviewer_cost=0.25)
     resumed.config.max_cost_usd = 0.20
     assert not resumed.run(max_iterations=10)
@@ -119,6 +121,7 @@ def test_failed_baseline_retry_preserves_every_charge(integration_project, monke
     harness, calls = _harness(integration_project, monkeypatch, success=False, write_review=False)
     harness._capture_baseline()
     assert calls == [0]
+    harness.close()
     resumed, calls = _harness(integration_project, monkeypatch, success=False, write_review=False)
     resumed.config.max_cost_usd = 0.08
     assert not resumed.run(max_iterations=10)
@@ -142,6 +145,7 @@ def test_interrupted_baseline_review_preserves_unknown_charge(integration_projec
     assert history.load()[0].reviewer_usage == [{}]
     assert summarize_costs(history.cost_usages).incomplete
 
+    harness.close()
     resumed, calls = _harness(integration_project, monkeypatch)
     resumed.run(max_iterations=1)
     assert calls == [0, 1]
@@ -165,16 +169,11 @@ def test_unknown_review_cost_warns_but_known_spend_still_enforces_budget(
     assert "$0.20 (incomplete)" in output
 
 
-def test_report_generation_cost_remains_separate(tmp_path):
+def test_report_generation_cost_remains_separate(tmp_path, run_paths):
     history = History(tmp_path)
-    history.append(IterationResult(
-        iteration=0, accepted=True, metrics={}, reviewer_usage=[{"cost_usd": 0.04}],
-    ))
-    history.append(IterationResult(
-        iteration=1, accepted=True, metrics={}, usage={"cost_usd": 0.10},
-        reviewer_usage=[{"cost_usd": 0.04}],
-    ))
-    output = tmp_path / ".autohelix" / "output"
+    history.append(IterationResult(iteration=0, accepted=True, metrics={}, calls=[{'role': 'reviewer', 'usage': {'cost_usd': 0.04}}]))
+    history.append(IterationResult(iteration=1, accepted=True, metrics={}, calls=[{'role': 'agent', 'usage': {'cost_usd': 0.1}}, {'role': 'reviewer', 'usage': {'cost_usd': 0.04}}]))
+    output = run_paths.output
     output.mkdir()
     (output / "report.md").write_text("Summary")
     (output / "report.json").write_text(json.dumps({"cost_usd": 0.99}))

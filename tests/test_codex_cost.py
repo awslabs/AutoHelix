@@ -323,7 +323,7 @@ def test_duration_is_measured_even_without_backend_duration(tmp_path, monkeypatc
 def test_cost_and_provenance_survive_history_round_trip(tmp_path, monkeypatch):
     result, _ = run_agent(tmp_path, monkeypatch)
     history = History(tmp_path)
-    history.append(IterationResult(iteration=1, accepted=True, metrics={}, usage=result.usage))
+    history.append(IterationResult(iteration=1, accepted=True, metrics={}, calls=[{'role': 'agent', 'usage': result.usage}]))
     usage = history.load()[0].usage
     assert usage["cost_usd"] == pytest.approx(1.77)
     assert usage["cost_source"] == "calculated"

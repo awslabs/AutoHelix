@@ -9,13 +9,14 @@ so users can tail -f or review after the fact.
 
 from datetime import datetime, timezone
 from pathlib import Path
+from autohelix.runs import RunPaths
 
 
 class RunLog:
     """Appends structured log lines to a per-run log file."""
 
-    def __init__(self, project_path: Path):
-        self._logs_dir = project_path / ".autohelix" / "logs"
+    def __init__(self, project_path: Path, run_id: str | None = None):
+        self._logs_dir = RunPaths(project_path, run_id).logs
         self._logs_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._path = self._logs_dir / f"run-{ts}.log"

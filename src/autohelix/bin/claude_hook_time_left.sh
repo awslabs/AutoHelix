@@ -8,9 +8,9 @@ INPUT="$(cat)"
 
 if [ -n "$AUTOHELIX_HOOK_AUDIT_LOG" ]; then
     AUDIT_LOG="$AUTOHELIX_HOOK_AUDIT_LOG"
-elif [ -n "$AUTOHELIX_PROJECT" ] && [ -d "$AUTOHELIX_PROJECT/.autohelix" ]; then
-    mkdir -p "$AUTOHELIX_PROJECT/.autohelix/logs" 2>/dev/null || true
-    AUDIT_LOG="$AUTOHELIX_PROJECT/.autohelix/logs/hook_audit.log"
+elif [ -n "$AUTOHELIX_RUN_DIR" ] && [ -d "$AUTOHELIX_RUN_DIR" ]; then
+    mkdir -p "$AUTOHELIX_RUN_DIR/logs" 2>/dev/null || true
+    AUDIT_LOG="$AUTOHELIX_RUN_DIR/logs/hook_audit.log"
 else
     AUDIT_LOG="/tmp/autohelix_hook_audit.log"
 fi

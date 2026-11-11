@@ -5,6 +5,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
@@ -59,7 +60,7 @@ DEFAULT_CHECK_TIMEOUT = 1800
 
 KNOWN_TOP_LEVEL_KEYS = {
     "goal", "constraints", "constraint", "metrics", "observables",
-    "scope", "agent", "acceptance", "budget", "reviewer", "report", "stop",
+    "scope", "agent", "acceptance", "budget", "reviewer", "report", "stop", "name", "land",
 }
 
 
@@ -137,6 +138,8 @@ class Config:
     max_time_seconds: int | None = None
     iteration_time_seconds: int | None = None
     report: bool = True  # write a summary (output/report.md) when a run finishes
+    name: str | None = None
+    land: str = "auto"
     _parse_errors: dict[str, str] = field(default_factory=dict, repr=False)
 
     def metric_directions(self) -> dict[str, str]:
@@ -168,6 +171,12 @@ class Config:
 
         def warning(msg: str) -> None:
             issues.append(ConfigIssue("warning", msg))
+
+        if self.name is not None and (not isinstance(self.name, str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", self.name)):
+            error("name must use lowercase letters, digits or hyphens, with at most 32 characters")
+        if self.land not in ("auto", "manual"):
+            error("land must be auto or manual")
 
         # Check for unknown keys (typo detection)
         if raw_data is not None:
@@ -430,6 +439,8 @@ class Config:
             max_time_seconds=max_time_seconds,
             iteration_time_seconds=iteration_time_seconds,
             report=data.get("report") is not False,
+            name=data.get("name"),
+            land=data.get("land", "auto"),
             _parse_errors=parse_errors,
         )
 

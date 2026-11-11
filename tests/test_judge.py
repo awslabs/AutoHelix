@@ -1,6 +1,7 @@
 """`autohelix ask`: yes/no judgments by an agent, as exit codes."""
 
 import json
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -18,6 +19,7 @@ from autohelix.judge import (
     ANSWER_SCHEMA, JudgeError, ask, build_system_prompt, judge_config, parse_answer,
 )
 from autohelix.run_status import read_run_status
+from autohelix.runs import RunPaths
 from autohelix.usage_log import append_usage, read_usage
 
 
@@ -119,7 +121,7 @@ def test_ask_answers_and_records_one_call(tmp_path, usage_file):
     assert (answer.yes, answer.reason, answer.cost_usd) == (False, "item 3", 0.02)
     [call] = read_usage(usage_file)
     assert call["status"] == "ok" and call["answer"] == "no" and call["cost_usd"] == 0.02
-    assert call["source"] == "ask" and (tmp_path / "logs" / "ask-1.log").exists()
+    assert call["source"] == "ask" and Path(call["log"]).exists()
 
 
 def test_invalid_answer_is_retried_once_then_fails(tmp_path, usage_file):
@@ -216,7 +218,8 @@ stop:
     [call] = records[1].command_usage
     assert call["source"] == "ask" and call["cost_usd"] == 0.10
     assert records[1].cost.cost_usd == pytest.approx(0.20)  # agent + judge
-    assert (project / ".autohelix" / "logs" / "iter-1" / "ask-1.log").exists()
+    [command_call] = [call for call in records[1].calls if call["role"] == "command"]
+    assert (RunPaths(project).run_dir / command_call["log"]).exists()
     assert read_run_status(project)["stop_reason"]["kind"] == "condition"
 
 

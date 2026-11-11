@@ -12,12 +12,13 @@ from autohelix.agents import AgentRunResult
 from autohelix.harness import AutoHelixRunError, Harness
 from autohelix.run_status import RunStatus, read_run_status
 from autohelix.viewer import make_server
+from autohelix.runs import RunPaths
 from tests.test_integration import integration_project  # noqa: F401  (fixture)
 
 
 # ---------- run status ----------
 
-def test_run_status_lifecycle(tmp_path):
+def test_run_status_lifecycle(tmp_path, run_paths):
     status = RunStatus(tmp_path)
     status.phase("agent", 1)  # Before start: ignored, writes nothing.
     assert read_run_status(tmp_path) is None
@@ -32,7 +33,7 @@ def test_run_status_lifecycle(tmp_path):
     assert read_run_status(tmp_path)["state"] == "interrupted"
 
 
-def test_dead_process_reads_as_crashed(tmp_path):
+def test_dead_process_reads_as_crashed(tmp_path, run_paths):
     status = RunStatus(tmp_path)
     status.start()
     data = json.loads(status.path.read_text())
@@ -63,7 +64,7 @@ def test_harness_records_failed_run(integration_project, monkeypatch):  # noqa: 
 @pytest.fixture
 def viewer(integration_project):  # noqa: F811
     Harness(integration_project).run(max_iterations=2)
-    root = integration_project / ".autohelix"
+    root = RunPaths(integration_project).run_dir
     (root / "notes" / "iter-2.md").write_text("Tried **the obvious** thing.\n\n<script>alert(1)</script>")
     server = make_server(integration_project, port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -140,7 +141,7 @@ def test_notes_list_and_note_route(viewer):
 
 
 def test_artifacts_listed_and_served_safely(viewer, integration_project):  # noqa: F811
-    obs = integration_project / ".autohelix" / "observations" / "iter-2"
+    obs = RunPaths(integration_project).observations / "iter-2"
     obs.mkdir(parents=True, exist_ok=True)
     (obs / "page.html").write_text("<script>alert(1)</script>")
     (obs / "plot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -163,7 +164,7 @@ def test_diff_is_relative_to_baseline(viewer):
 
 
 def test_running_iteration_shows_worktree_diff(viewer, integration_project):  # noqa: F811
-    worktree = integration_project / ".autohelix" / "worktrees" / "iter-3"
+    worktree = RunPaths(integration_project).worktrees / "iter-3"
     subprocess.run(["git", "worktree", "add", "--detach", str(worktree)], cwd=integration_project,
                    check=True, capture_output=True)
     (worktree / "hello.py").write_text('print("work in progress")\n')
@@ -173,13 +174,16 @@ def test_running_iteration_shows_worktree_diff(viewer, integration_project):  # 
     assert "+NEW = 1" in diff
 
 
-def test_long_logs_are_clipped_visibly(tmp_path, monkeypatch):
+def test_long_logs_are_clipped_visibly(tmp_path, monkeypatch, run_paths):
     import autohelix.viewer as viewer_module
     monkeypatch.setattr(viewer_module, "MAX_EVENTS", 5)
-    log = tmp_path / ".autohelix" / "logs" / "iter-1" / "agent.log"
+    log = run_paths.call_dir(1, "agent") / "agent.log"
     log.parent.mkdir(parents=True)
     line = json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}})
     log.write_text("\n".join([json.dumps({"type": "system", "subtype": "init"})] + [line] * 8) + "\n")
+    from autohelix.history import History, IterationResult
+    History(tmp_path).append(IterationResult(1, True, calls=[{"role": "agent", "usage": {},
+                                                           "log": str(log.relative_to(run_paths.run_dir))}]))
     detail = viewer_module.RunData(tmp_path).iteration(1)
     assert len(detail["agent"]) == 5  # status events are skipped, oldest results dropped
     assert all(e["kind"] == "tool_result" for e in detail["agent"])
@@ -197,11 +201,11 @@ def test_idle_connection_does_not_block_other_requests(viewer):
 
 
 def test_tampered_commit_is_never_passed_to_git(viewer, integration_project):  # noqa: F811
-    history = integration_project / ".autohelix" / "history.jsonl"
+    history = RunPaths(integration_project).history
     rows = [json.loads(line) for line in history.read_text().splitlines()]
     rows[1]["commit"] = "--output=PWNED"
     history.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    (integration_project / ".autohelix" / "worktrees" / "iter-9").mkdir(parents=True)
+    (RunPaths(integration_project).worktrees / "iter-9").mkdir(parents=True)
     get(viewer + "/api/iteration/9")
     get(viewer + "/api/iteration/2")
     assert not list(integration_project.rglob("PWNED*"))
@@ -229,7 +233,7 @@ def test_stopped_run_saves_static_page(integration_project):  # noqa: F811
     (integration_project / "hello.py").write_text('print("</script><b>")\n')  # text that must not break out
     subprocess.run(["git", "commit", "-qam", "tricky"], cwd=integration_project)
     Harness(integration_project).run(max_iterations=2)
-    page = (integration_project / ".autohelix/output/report.html").read_text()
+    page = (RunPaths(integration_project).output / "report.html").read_text()
     for ref in ('src="/viewer.js"', 'href="/viewer.css"', 'src="/logo-light.svg"', 'href="/logo-light.svg"'):
         assert ref not in page  # everything is inlined
     data = _snapshot(page)
@@ -252,7 +256,7 @@ def test_interrupted_run_still_saves_static_page(integration_project, monkeypatc
     harness = Harness(integration_project)
     monkeypatch.setattr(harness, "run_iteration", lambda n: (_ for _ in ()).throw(KeyboardInterrupt))
     harness.run(max_iterations=1)
-    page = (integration_project / ".autohelix/output/report.html").read_text()
+    page = (RunPaths(integration_project).output / "report.html").read_text()
     state = _snapshot(page)["routes"]["/api/state"]
     assert state["status"]["state"] == "interrupted"
     assert state["report"] is None

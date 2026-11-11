@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,12 @@ constraints:
   - "true"
 """)
 
+    # Run identity reserves its hidden ref before per-run agent setup.
+    for args in (["init", "-q"], ["config", "user.email", "test@example.com"],
+                 ["config", "user.name", "Test"], ["add", "autohelix.yaml"],
+                 ["commit", "-qm", "initial config"]):
+        subprocess.run(["git", *args], cwd=project, check=True, capture_output=True)
+
     monkeypatch.setattr(
         CodexAgent,
         "_validate_time_left_hook_support",
@@ -131,20 +138,25 @@ CLAUDE_HOOK = Path(__file__).parent.parent / "src" / "autohelix" / "bin" / "clau
 def run_time_left(start_offset: int | None = None, budget: int | None = None) -> str:
     env = os.environ.copy()
     if start_offset is not None and budget is not None:
-        import time as _time
-
-        env["AUTOHELIX_ITERATION_START"] = str(int(_time.time()) - start_offset)
+        env["AUTOHELIX_ITERATION_START"] = str(1000 - start_offset)
         env["AUTOHELIX_ITERATION_BUDGET"] = str(budget)
     else:
         env.pop("AUTOHELIX_ITERATION_START", None)
         env.pop("AUTOHELIX_ITERATION_BUDGET", None)
-    result = subprocess.run(
-        [str(TIME_LEFT)],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
+    # Freeze Bash's date as well as the start timestamp; crossing a second
+    # between the two must not change exact formatting assertions.
+    with tempfile.TemporaryDirectory() as directory:
+        date = Path(directory) / "date"
+        date.write_text("#!/bin/sh\necho 1000\n")
+        date.chmod(0o755)
+        env["PATH"] = f"{directory}{os.pathsep}{env['PATH']}"
+        result = subprocess.run(
+            [str(TIME_LEFT)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
     return result.stdout.strip()
 
 
@@ -162,14 +174,12 @@ def _asserts_system_facts(out: str) -> None:
 
 def test_time_left_normal():
     out = run_time_left(start_offset=270, budget=3600)
-    # ~55m remaining; allow a minute either way for sub-second clock drift between
-    # the test stamping START and the script reading `date` (truncating math).
-    assert any(f"{m}m left" in out for m in (54, 55, 56))
+    assert "55m left" in out
     _asserts_system_facts(out)
 
 
 def test_time_left_hours_and_minutes():
-    # 4h budget, 20m in → ~3h39m left, shown as hours + minutes.
+    # 4h budget, 20m in → 3h40m left, shown as hours + minutes.
     out = run_time_left(start_offset=1200, budget=14400)
     assert "3h" in out and "left of 4h budget" in out
     _asserts_system_facts(out)
