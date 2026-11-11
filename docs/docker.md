@@ -26,6 +26,8 @@ alias autohelix-docker='path/to/docker/run.sh --env ~/autohelix-env.sh'
 autohelix-docker run -n 10
 ```
 
+With [Colima](https://github.com/abiosoft/colima), the project must be under your home folder: Colima shares only `~` with its VM by default, so a project elsewhere (such as `/tmp`) appears empty in the container.
+
 ## What's isolated
 
 - Agent cannot see files outside your project directory

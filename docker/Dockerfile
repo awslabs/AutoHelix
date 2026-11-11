@@ -23,7 +23,8 @@ RUN pip install --no-cache-dir /tmp/autohelix-src/ \
 
 # Git identity for commits inside container
 RUN git config --system user.email "autohelix@container" && \
-    git config --system user.name "AutoHelix"
+    git config --system user.name "AutoHelix" && \
+    git config --system --add safe.directory /workspace
 
 # Workspace accessible by any UID
 RUN mkdir -p /workspace /home/user && chmod 777 /workspace /home/user
