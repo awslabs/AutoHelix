@@ -18,6 +18,8 @@ def runner():
 def git_project(tmp_path):
     """A project with git initialized."""
     subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     (tmp_path / "main.py").write_text("x = 1\n")
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
