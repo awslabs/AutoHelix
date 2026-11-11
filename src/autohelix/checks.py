@@ -122,7 +122,7 @@ CHECK_KILL_GRACE = 8
 
 def _command_env(project_path: Path | None, cwd: Path, timeout: int,
                  extra_env: dict[str, str] | None) -> dict[str, str]:
-    """Environment for a check command: worktree remapping, harness-provided
+    """Environment for a check command: sys.path remapped to the copy, harness-provided
     variables, and the command's deadline (for tools that run their own agents)."""
     env = build_worktree_env(project_path, cwd) if project_path else os.environ.copy()
     env.update(extra_env or {})

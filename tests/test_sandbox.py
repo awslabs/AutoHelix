@@ -83,7 +83,7 @@ class TestBuildWorktreeEnv:
 
         fake_sys_path = [
             str(project / "src"),
-            str(project / ".autohelix" / "worktrees" / "iter-1"),
+            str(project / ".autohelix" / "runtime" / "bin"),
         ]
         with patch.object(sys, "path", fake_sys_path), \
              patch.dict(os.environ, {"PYTHONPATH": ""}, clear=False):
@@ -111,6 +111,42 @@ class TestBuildWorktreeEnv:
 
         parts = [p for p in env.get("PYTHONPATH", "").split(":") if p]
         assert str(worktree / ".autohelix-backup" / "src") in parts
+
+    def test_matches_only_on_a_path_boundary(self, tmp_path):
+        project = tmp_path / "project"
+        worktree = tmp_path / "worktree"
+        with patch.object(sys, "path", [str(tmp_path / "project2" / "src"), str(project)]), \
+             patch.dict(os.environ, {"PYTHONPATH": ""}):
+            env = build_worktree_env(project, worktree)
+        assert env["PYTHONPATH"] == str(worktree)
+
+    def test_skips_installed_packages_and_relative_entries(self, tmp_path):
+        project = tmp_path / "project"
+        worktree = tmp_path / "worktree"
+        fake_sys_path = ["", "src", str(project / ".venv" / "lib" / "python3.12" / "site-packages"),
+                         str(project / "usr" / "lib" / "python3" / "dist-packages"), str(project / "src")]
+        with patch.object(sys, "path", fake_sys_path), patch.dict(os.environ, {"PYTHONPATH": ""}):
+            env = build_worktree_env(project, worktree)
+        assert env["PYTHONPATH"] == str(worktree / "src")
+
+    def test_project_inside_another_projects_state_is_remapped(self, tmp_path):
+        """A nested project may itself sit under some .autohelix/ folder."""
+        project = tmp_path / "outer" / ".autohelix" / "inner"
+        worktree = tmp_path / "worktree"
+        with patch.object(sys, "path", [str(project / "src"), str(project / ".autohelix" / "x")]), \
+             patch.dict(os.environ, {"PYTHONPATH": ""}):
+            env = build_worktree_env(project, worktree)
+        assert env["PYTHONPATH"] == str(worktree / "src")
+
+    def test_unresolved_entries_of_a_resolved_project(self, tmp_path):
+        real = tmp_path / "real"
+        (real / "src").mkdir(parents=True)
+        (tmp_path / "link").symlink_to(real)
+        worktree = tmp_path / "worktree"
+        with patch.object(sys, "path", [str(tmp_path / "link" / "src")]), \
+             patch.dict(os.environ, {"PYTHONPATH": ""}):
+            env = build_worktree_env(real.resolve(), worktree)
+        assert env["PYTHONPATH"] == str(worktree / "src")
 
     def test_preserves_existing_pythonpath(self, tmp_path):
         project = tmp_path / "project"
@@ -200,8 +236,7 @@ class TestPrepareWorktree:
         (ah / "history.jsonl").write_text("{}\n")
         (ah / "notes").mkdir()
         (ah / "notes" / "iter-1.md").write_text("test note\n")
-        # logs/ should be copied; worktrees/runtime/output should NOT
-        (ah / "worktrees").mkdir(exist_ok=True)
+        # logs/ should be copied; runtime/output should NOT
         (ah / "runtime").mkdir(exist_ok=True)
         (ah / "logs").mkdir(exist_ok=True)
         (ah / "logs" / "iter-1").mkdir()
@@ -215,7 +250,6 @@ class TestPrepareWorktree:
         assert (wt_ah / "history.jsonl").exists()
         assert (wt_ah / "notes" / "iter-1.md").exists()
         assert (wt_ah / "logs" / "iter-1" / "agent.log").exists()
-        assert not (wt_ah / "worktrees").exists()
         assert not (wt_ah / "runtime").exists()
         assert not (wt_ah / "output").exists()
 

@@ -32,8 +32,8 @@ def repo_dir(tmp_path):
 
 
 @pytest.fixture
-def copies(repo_dir):
-    root = repo_dir / ".autohelix" / "worktrees" / "run"
+def copies(tmp_path):
+    root = tmp_path / "copies" / "run"  # outside the repository, as in a run
     root.mkdir(parents=True)
     return root.resolve()
 
@@ -340,7 +340,7 @@ def test_linked_worktree_project(repo_dir, tmp_path):
     git(repo_dir, "worktree", "add", "-q", "-b", "side", str(linked))
     repo = Repo(linked)
     assert repo.objects == (repo_dir / ".git" / "objects").resolve()
-    copies = linked.resolve() / ".autohelix" / "worktrees" / "run"
+    copies = tmp_path.resolve() / "copies" / "run"
     copies.mkdir(parents=True)
     head = git(linked, "rev-parse", "HEAD").stdout.strip()
     copy = Copy.create(repo, copies / "c", files=head, head=head)

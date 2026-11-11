@@ -228,7 +228,7 @@ def abandon(run_id: str | None, path: str, purge: bool):
         paths = RunPaths(Path(path), run_id)
         if not paths.run_id:
             raise RuntimeError("No current run.")
-        abandon_run(paths, purge=purge)
+        abandon_run(paths, purge=purge, warn=lambda message: click.echo(f"Warning: {message}", err=True))
         click.echo(f"Abandoned {paths.run_id}{' and purged its state' if purge else ''}.")
         if not purge and git(paths.project, "rev-parse", "--verify", paths.ref, check=False).returncode == 0:
             click.echo(f"Unlanded commits remain on {paths.ref}. Recover with git merge autohelix/{paths.run_id}.")

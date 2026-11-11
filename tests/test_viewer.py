@@ -164,11 +164,12 @@ def test_diff_is_relative_to_baseline(viewer):
 
 
 def test_running_iteration_shows_copy_diff(viewer, integration_project):  # noqa: F811
+    from autohelix.runs import ensure_copies
     from autohelix.workspace import Copy, Repo
 
     paths = RunPaths(integration_project)
-    paths.worktrees.mkdir(parents=True, exist_ok=True)
-    copy = Copy.create(Repo(integration_project), paths.worktrees / "iter-3-agent",
+    ensure_copies(paths.copies)
+    copy = Copy.create(Repo(integration_project), paths.copies / "iter-3-agent",
                        files="HEAD", head="HEAD")
     private_index = (copy.path / ".git" / "index").read_bytes()
     (copy.path / "hello.py").write_text('print("work in progress")\n')
@@ -211,7 +212,7 @@ def test_tampered_commit_is_never_passed_to_git(viewer, integration_project):  #
     rows = [json.loads(line) for line in history.read_text().splitlines()]
     rows[1]["commit"] = "--output=PWNED"
     history.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    (RunPaths(integration_project).worktrees / "iter-9").mkdir(parents=True)
+    (RunPaths(integration_project).copies / "iter-9").mkdir(parents=True)
     get(viewer + "/api/iteration/9")
     get(viewer + "/api/iteration/2")
     assert not list(integration_project.rglob("PWNED*"))

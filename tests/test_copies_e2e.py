@@ -120,7 +120,7 @@ def test_copies_are_gone_after_a_run_and_abandon_drops_the_pin(project):  # noqa
 
     harness = Harness(project, land_mode="manual")
     harness.run(max_iterations=2, report=False)
-    assert not list(harness.paths.worktrees.glob("*"))
+    assert not list(harness.paths.copies.glob("*"))
     pin = harness.paths.pin
     assert git(project, "rev-parse", "--verify", pin, check=False).returncode == 0
     abandon(harness.paths)
@@ -129,13 +129,13 @@ def test_copies_are_gone_after_a_run_and_abandon_drops_the_pin(project):  # noqa
 
 def test_stale_copies_are_removed_at_segment_start(project):  # noqa: F811
     harness = Harness(project, land_mode="manual")
-    stale = harness.paths.worktrees / "iter-7-agent"
+    stale = harness.paths.copies / "iter-7-agent"
     (stale / "pkg").mkdir(parents=True)
     (stale / "pkg" / "x").write_text("x")
     (stale / "pkg").chmod(0o555)
-    harness.paths.worktrees.joinpath("iter-7-agent.index").write_text("")
+    harness.paths.copies.joinpath("iter-7-agent.index").write_text("")
     harness.run(max_iterations=1, report=False)
-    assert not stale.exists() and not harness.paths.worktrees.joinpath("iter-7-agent.index").exists()
+    assert not stale.exists() and not harness.paths.copies.joinpath("iter-7-agent.index").exists()
     harness.close()
 
 

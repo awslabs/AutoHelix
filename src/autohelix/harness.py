@@ -26,8 +26,9 @@ from autohelix.config import load_config
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay
 from autohelix.history import History, IterationResult
-from autohelix.runs import RunPaths, RunLock, RunState, select_run, reconcile, land, git, allocate_call
-from autohelix.iteration import IterationWorkspace, remove_stale_copies
+from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git, allocate_call,
+                            claim_copies, remove_copies, write_text)
+from autohelix.iteration import IterationWorkspace
 from autohelix.checks import preflight_check, run_constraints, run_observables, run_stop_checks
 from autohelix.run_status import RunStatus
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
@@ -166,17 +167,11 @@ class Harness:
             self.history = History(self.project_path, self.paths.run_id)
             tip, warning = reconcile(self.paths, self.run_info, self.history, self.land_mode)
             self.run_state = RunState(self.paths, self.run_info, tip)
-            current = self.paths.root / f"current.{os.getpid()}.tmp"
-            current.write_text(self.paths.run_id + "\n")
-            current.replace(self.paths.root / "current")
-            # Every child (agent, checks, judges, reviewer): a process that deletes its
-            # copy's .git must not climb into the user's repository.
-            ceiling = os.environ.get("GIT_CEILING_DIRECTORIES")
-            os.environ["GIT_CEILING_DIRECTORIES"] = (
-                str(self.paths.worktrees) + (os.pathsep + ceiling if ceiling else ""))
+            write_text(self.paths.root / "current", self.paths.run_id + "\n")
             self.repo = Repo(self.project_path)
             self.run_status = RunStatus(self.project_path, self.paths.run_id)
             self.log = RunLog(self.project_path, self.paths.run_id)
+            self.run_state.copies_root = claim_copies(self.paths, self.log.warn)
             self._land_attempted = False
             self._segment_started = False
             self._usage_starts: set = set()
@@ -1244,7 +1239,10 @@ class Harness:
                     if self._segment_started:
                         self._write_static()
             finally:
-                self.close()
+                try:
+                    remove_copies(self.run_state.copies_root, self.log.warn)
+                finally:
+                    self.close()
 
     def close(self) -> None:
         if hasattr(self, "_ownership"):
@@ -1332,7 +1330,7 @@ class Harness:
 
         # Show header
         self._print_header(max_iter, start_iter)
-        remove_stale_copies(self.paths.worktrees, self.log.warn)
+        remove_copies(self.run_state.copies_root, self.log.warn)  # left by a segment that crashed
         if not self.repo.attr_source:
             self.console.print(f"  [yellow]WARN[/yellow] {ATTR_SOURCE_LIMITATION}")
 
