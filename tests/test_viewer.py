@@ -1,6 +1,8 @@
 """Tests for live run status and the `autohelix view` server."""
 
+import hashlib
 import json
+import os
 import subprocess
 import threading
 import urllib.error
@@ -181,6 +183,32 @@ def test_running_iteration_shows_copy_diff(viewer, integration_project):  # noqa
     copy.remove()
 
 
+def test_viewer_index_is_private_and_one_per_run(viewer, integration_project):  # noqa: F811
+    from autohelix.runs import ensure_copies
+    from autohelix.workspace import Copy, Repo, _private_index_dir
+
+    paths = RunPaths(integration_project)
+    ensure_copies(paths.copies)
+    for n in (3, 4):
+        copy = Copy.create(Repo(integration_project), paths.copies / f"iter-{n}-agent", files="HEAD", head="HEAD")
+        get(viewer + f"/api/iteration/{n}")
+        copy.remove()
+    # Removed at process exit with the harness indexes; an earlier iteration's is dropped.
+    run = hashlib.sha256(os.fsencode(paths.copies)).hexdigest()[:16]
+    assert [p.name for p in _private_index_dir().glob(f"view-{run}-*")] == [f"view-{run}-iter-4-agent.index"]
+
+
+@pytest.mark.parametrize("phase, shown", [("preparing checks", True), ("checks", True), ("review", True),
+                                           ("agent", False), ("between iterations", False)])
+def test_frozen_candidate_diff_only_once_this_iteration_froze(viewer, integration_project, phase, shown):  # noqa: F811
+    # After the run, the pin holds iteration 2's tree; iteration 3 has no copy yet.
+    paths = RunPaths(integration_project)
+    status = json.loads(paths.status.read_text())
+    paths.status.write_text(json.dumps({**status, "iteration": 3, "phase": phase}))
+    diff = json.loads(get(viewer + "/api/iteration/3")[1])["diff"]
+    assert (diff is not None and "Modified in iteration 2" in diff) is shown
+
+
 def test_long_logs_are_clipped_visibly(tmp_path, monkeypatch, run_paths):
     import autohelix.viewer as viewer_module
     monkeypatch.setattr(viewer_module, "MAX_EVENTS", 5)
@@ -289,7 +317,8 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
         assert one["landing"] == {"commits": 0, "fast_forward": True}  # auto-landed at the end of its segment
         assert two["landing"] == {"commits": 1, "fast_forward": True}  # manual: ready to land
         assert two["accepted"] == 1 and two["metrics"] is None
-        assert two["config"]["file"] == "autohelix.yaml"
+        assert two["config_file"] == "autohelix.yaml" and two["goal"] == "Test the integration"
+        assert listing["schema"] == 1 and listing["path"] == str(integration_project.resolve())
 
         # A user commit on the target: the manual run can no longer fast-forward.
         (integration_project / "user.txt").write_text("mine\n")
@@ -344,3 +373,133 @@ def test_dashboard_metrics_are_the_latest_accepted_not_the_best():
         ("mem", 40, 50), ("speed", 200, 100), ("extra", 1, None)]  # declared order first
     assert ProjectRuns._metrics(records[:1], {})["iteration"] == 0
     assert ProjectRuns._metrics([], {}) is None
+
+
+# ---------- --json / --print ----------
+
+def _cli(*args):
+    from click.testing import CliRunner
+    from autohelix.cli import main
+
+    return CliRunner().invoke(main, list(map(str, args)))
+
+
+@pytest.fixture
+def measured_project(integration_project):  # noqa: F811
+    """Two runs with a metric: one finished and landed, one manual and unlanded, one abandoned."""
+    config = integration_project / "autohelix.yaml"
+    config.write_text(config.read_text() + """
+metrics:
+  - command: python -c "import pathlib; print('##autohelix[speed=%d]' % (100 + 10 * pathlib.Path('hello.py').read_text().count('iteration')))"
+    values:
+      speed: higher
+""")
+    subprocess.run(["git", "commit", "-qam", "metric"], cwd=integration_project, check=True)
+    first = Harness(integration_project)
+    first.run(max_iterations=2, report=False)
+    second = Harness(integration_project, new=True, land_mode="manual")
+    second.run(max_iterations=1, report=False)
+    gone = Harness(integration_project, new=True, land_mode="manual")
+    gone.run(max_iterations=1, report=False)
+    abandon = _cli("abandon", gone.paths.run_id, "-p", integration_project)
+    assert abandon.exit_code == 0, abandon.output
+    return integration_project, first.paths.run_id, second.paths.run_id, gone.paths.run_id
+
+
+def test_dashboard_json_and_print(measured_project):
+    from autohelix.viewer import ProjectRuns
+
+    project, first, second, gone = measured_project
+    data = json.loads(_cli("dashboard", project, "--json").output)
+    assert data.keys() == ProjectRuns(project).runs().keys()  # the page's payload, schema 1 (checked above)
+    runs = {r["id"]: r for r in data["runs"]}
+    assert set(runs) == {first, second, gone}  # abandoned runs included
+    assert runs[first]["metrics"]["values"] == [
+        {"name": "speed", "value": 120, "baseline": 100, "direction": "higher"}]
+    assert runs[second]["landing"] == {"commits": 1, "fast_forward": True}
+
+    result = _cli("dashboard", project, "--print")
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[0].startswith(f"test_project  ") and lines[0].endswith(" @ " + subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip())
+    assert lines[1].startswith("2 open runs") and lines[1].endswith("1 abandoned (not listed; see --json)")
+    assert lines[3].split() == ["RUN", "STATUS", "ITER", "speed", "LANDING", "ACTIVE"]
+    rows = {line.split()[0]: line for line in lines[4:] if not line.startswith(" ")}
+    assert set(rows) == {first, second}
+    assert rows[first].split()[1:5] == ["finished", "2/2", "120.0", "landed"]
+    assert rows[second].split()[1:7] == ["finished", "1/1", "130.0", "1", "commit", "to"]
+    assert "  autohelix.yaml" in result.output
+
+    assert "no run has metric" in _cli("dashboard", project, "--print", "--metric", "nope").output.lower()
+    assert _cli("dashboard", project, "--metric", "speed").exit_code == 2
+    assert _cli("dashboard", project, "--json", "--print").exit_code == 2
+
+
+def test_view_json_and_print(measured_project, monkeypatch):
+    project, first, second, gone = measured_project
+    data = json.loads(_cli("view", project, "--json", "--run", first).output)
+    assert data["project"] == "test_project"
+    run = data["run"]
+    assert run["id"] == first and run["goal"] == "Test the integration"
+    assert [(r["iteration"], r["accepted"], r["metrics"]) for r in run["iterations"]] == [
+        (0, True, {"speed": 100}), (1, True, {"speed": 110}), (2, True, {"speed": 120})]
+    # The default run is the selected one.
+    assert json.loads(_cli("view", project, "--json").output)["run"]["id"] == RunPaths(project).run_id
+
+    text = _cli("view", project, "--print", "--run", first).output
+    lines = text.splitlines()
+    assert lines[0] == f"{first} · finished"
+    assert lines[1].startswith("autohelix.yaml · ") and lines[1].endswith(f"iterations 2/2 · landed ({data['branch']})")
+    assert "Stopped: iteration budget reached (2)" in text
+    assert "Goal: Test the integration" in text
+    assert "Latest accepted (iteration 2): speed 120.0 ↑ 20.0%" in text
+    table = lines[lines.index("") + 1:]
+    assert table[0].split() == ["ITER", "OK", "speed", "COST", "TIME", "SUMMARY"]
+    assert table[1].split()[:3] == ["0", "✓", "100.0"] and table[1].endswith("baseline")
+
+    missing = _cli("view", project, "--json", "--run", "missing-zzzz")
+    assert missing.exit_code == 1 and "missing-zzzz" in missing.output
+
+    # --config is relative to the shell's folder, shown relative to the project.
+    other = project / "other.yaml"
+    other.write_text((project / "autohelix.yaml").read_text().replace("Test the integration", "  Other goal\n"))
+    monkeypatch.chdir(project.parent)
+    run = json.loads(_cli("view", project.name, "--json", "--run", first, "--config", f"{project.name}/other.yaml").output)["run"]
+    assert (run["config_file"], run["goal"]) == ("other.yaml", "Other goal")
+    assert run["metrics"]["values"][0]["direction"] == "higher"
+
+    other.write_text((project / "autohelix.yaml").read_text().replace("Test the integration", '" "'))
+    printed = _cli("view", project.name, "--print", "--run", first, "--config", f"{project.name}/other.yaml")
+    assert printed.exit_code == 0 and "Goal:" not in printed.output
+
+
+def test_print_shows_the_iteration_under_way():
+    from autohelix.run_table import format_run, format_runs
+
+    run = {"id": "r1", "lifecycle": "open", "config_file": "a.yaml", "accepted": 1, "target_branch": None,
+           "landing": None, "last_activity": 990, "metrics": None, "goal": None,
+           "status": {"state": "running", "phase": "checks", "iteration": 3,
+                      "iteration_started_at": 900, "phase_started_at": 970},
+           "progress": {"iterations": 2, "max_iterations": 5, "cost_usd": 1.5, "cost_incomplete": True,
+                        "seconds": 60, "max_cost_usd": None, "max_seconds": None},
+           "iterations": [{"iteration": 0, "accepted": True, "metrics": {}, "summary": None,
+                           "cost": None, "cost_incomplete": False, "seconds": None}]}
+    header = {"schema": 1, "project": "p", "host": "h", "path": "/x", "path_display": "/x", "branch": None,
+              "commit": "abc1234"}
+    listing = format_runs({**header, "runs": [run]}, now=1000).splitlines()
+    assert listing[0] == "p  h:/x · detached @ abc1234"
+    assert listing[4].split() == ["r1", "running", "·", "checks", "30s", "3/5", "—", "now"]
+    assert listing[5].split() == ["a.yaml", "2m", "40s", "·", "$1.50+"]  # 60s done + 100s under way
+    one = format_run({**header, "run": run}, now=1000).splitlines()
+    assert one[0] == "r1 · running · checks 30s · iteration 3"
+    assert one[-1].split() == ["3", "…", "running", "·", "checks", "30s"]
+
+
+def test_pin_is_announced_before_the_checks_copy(integration_project, monkeypatch):  # noqa: F811
+    phases = []
+    original = RunStatus.phase
+    monkeypatch.setattr(RunStatus, "phase", lambda self, phase, iteration=None: (
+        phases.append(phase), original(self, phase, iteration))[1])
+    Harness(integration_project).run(max_iterations=1, report=False)
+    assert phases.index("agent") < phases.index("preparing checks") < phases.index("checks")

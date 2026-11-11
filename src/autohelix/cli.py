@@ -3,6 +3,7 @@
 
 """Command-line interface."""
 
+import json
 import os
 import subprocess
 from importlib.resources import files as pkg_files
@@ -15,6 +16,7 @@ from autohelix.harness import Harness
 from autohelix.history import History
 from autohelix.runs import RunPaths, RunLock, abandon as abandon_run, land as land_run, run_tip, git
 from autohelix.formatting import format_total_cost
+from autohelix import run_table
 from autohelix.skill import skill
 from autohelix.state import (
     GitExcludeError,
@@ -501,39 +503,88 @@ def hint(message: str, path: str, run_id: str | None):
     click.echo(f"Hint added: {message}")
 
 
+_JSON_HELP = "Print once as JSON and exit (for scripts and agents; fields are only ever added)."
+_PRINT_HELP = "Print once as a plain-text table and exit."
+
+
+def _snapshot(as_json: bool, as_print: bool) -> bool:
+    if as_json and as_print:
+        raise click.UsageError("Use either --json or --print, not both.")
+    return as_json or as_print
+
+
 @main.command()
-@click.argument("path", type=click.Path(exists=True, file_okay=False), default=".")
+@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
+@click.option("--json", "as_json", is_flag=True, help=_JSON_HELP)
+@click.option("--print", "as_print", is_flag=True, help=_PRINT_HELP)
 @click.option("--port", type=click.IntRange(0, 65535), default=8765, show_default=True)
-@click.option("--config", "-c", "config_file", type=click.Path(exists=True, dir_okay=False),
+@click.option("--config", "-c", "config_file", type=click.Path(exists=True, dir_okay=False, path_type=Path),
               help="Config file (default: from last run, or autohelix.yaml)")
 @click.option("--open", "open_browser", is_flag=True, help="Open the viewer in a browser.")
 @click.option("--run", "run_id", help="Run id (default current).")
-def view(path: str, port: int, config_file: str | None, open_browser: bool, run_id: str | None):
-    """Live web view of a run, served on 127.0.0.1.
+def view(path: Path, as_json: bool, as_print: bool, port: int, config_file: Path | None,
+         open_browser: bool, run_id: str | None):
+    """One run: --json or --print a snapshot, else a live web page.
 
-    Safe to run alongside `autohelix run`; it only reads .autohelix/.
-    The same server also lists all runs at / (see `autohelix dashboard`).
+    --json and --print show the run's status, budgets, latest accepted
+    metrics, landing state and one row per iteration, then exit.
+
+    Without them, serves a live page on 127.0.0.1. Safe to run alongside
+    `autohelix run`; it only reads .autohelix/. The same server also lists
+    all runs at / (see `autohelix dashboard`).
     Over SSH: ssh -L 8765:127.0.0.1:8765 host, then open http://localhost:8765.
     """
     try:
-        selected = RunPaths(Path(path), run_id).run_id
+        selected = RunPaths(path, run_id).run_id
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
-    _serve(Path(path), port, open_browser, f"/run/{selected}/" if selected else "/",
-           config_file=Path(config_file) if config_file else None, run_id=run_id)
+    if _snapshot(as_json, as_print):
+        from autohelix.viewer import ProjectRuns
+
+        runs = ProjectRuns(path)
+        if not selected or not runs.exists(selected):
+            raise click.ClickException(f"No run {run_id!r} in {path.resolve()}" if run_id else
+                                       "No current run; start one with `autohelix run` or pick one with --run.")
+        try:
+            data = runs.run(selected, config_file)
+        except RuntimeError as error:
+            raise click.ClickException(str(error)) from error
+        click.echo(json.dumps(data, indent=2) if as_json else run_table.format_run(data), nl=as_json)
+        return
+    _serve(path, port, open_browser, f"/run/{selected}/" if selected else "/",
+           config_file=config_file, run_id=run_id)
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True, file_okay=False), default=".")
+@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
+@click.option("--json", "as_json", is_flag=True, help=_JSON_HELP)
+@click.option("--print", "as_print", is_flag=True, help=_PRINT_HELP)
+@click.option("--metric", help="With --print: the metric column (default: the most recent run's first).")
 @click.option("--port", type=click.IntRange(0, 65535), default=8765, show_default=True)
 @click.option("--open", "open_browser", is_flag=True, help="Open the dashboard in a browser.")
-def dashboard(path: str, port: int, open_browser: bool):
-    """Live list of this project's runs, served on 127.0.0.1.
+def dashboard(path: Path, as_json: bool, as_print: bool, metric: str | None, port: int, open_browser: bool):
+    """This project's runs: --json or --print a snapshot, else a live web page.
 
-    Each run links to its `autohelix view` page; one server serves both.
-    Over SSH: ssh -L 8765:127.0.0.1:8765 host, then open http://localhost:8765.
+    --json and --print list every run with its status, iterations of the
+    budget, latest accepted metrics, landing state and last activity, then
+    exit. --print leaves abandoned runs out (--json has them).
+
+    Without them, serves a live page on 127.0.0.1; each run links to its
+    `autohelix view` page. Over SSH: ssh -L 8765:127.0.0.1:8765 host, then
+    open http://localhost:8765.
     """
-    _serve(Path(path), port, open_browser, "/")
+    if metric and not as_print:
+        raise click.UsageError("--metric applies to --print (the web page has a menu).")
+    if not _snapshot(as_json, as_print):
+        _serve(path, port, open_browser, "/")
+        return
+    from autohelix.viewer import ProjectRuns
+
+    data = ProjectRuns(path).runs()
+    names = run_table.metric_names([r for r in data["runs"] if r.get("lifecycle") != "abandoned"])
+    if metric and metric not in names:
+        raise click.ClickException(f"No run has metric {metric!r}" + (f"; known: {', '.join(names)}" if names else ""))
+    click.echo(json.dumps(data, indent=2) if as_json else run_table.format_runs(data, metric=metric), nl=as_json)
 
 
 def _serve(project: Path, port: int, open_browser: bool, page: str, **options) -> None:

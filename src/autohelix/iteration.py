@@ -100,14 +100,16 @@ class IterationWorkspace:
         (self.agent.working_dir / ".autohelix" / "notes").mkdir(parents=True, exist_ok=True)
         return self.agent
 
-    def freeze(self, scope: Scope) -> list[str]:
+    def freeze(self, scope: Scope, pinned=None) -> list[str]:
         """Snapshot the agent's copy to T, then save its notes and delete it.
-        Returns the discarded out-of-scope names."""
+        Returns the discarded out-of-scope names; `pinned()` runs once the pin holds T."""
         copy = self.agent
         try:
             tree, discarded = copy.snapshot(scope)
             # One pin keeps the frozen tree alive; the next freeze overwrites it.
             self.repo.git("update-ref", self._run.paths.pin, tree)
+            if pinned:
+                pinned()
             summary = copy.working_dir / ".autohelix" / "commit_summary.txt"
             if summary.is_file() and not summary.is_symlink():
                 self.summary = summary.read_text(errors="replace").strip().split("\n")[0] or None

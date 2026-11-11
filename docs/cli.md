@@ -156,13 +156,16 @@ Shows the live output of whatever the run is doing: the agent during an iteratio
 
 ## `autohelix view`
 
-Live web view of a run, in your browser.
+One run: a snapshot in the terminal, or a live web view in your browser.
 
 ```bash
+autohelix view [path] [--json | --print] [--run ID] [--config FILE]
 autohelix view [path] [--port 8765] [--open] [--run ID]
 ```
 
-A browser view of a run's `.autohelix/` state. The header shows run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed). The left side shows the best metric value with total time and cost, the metric over time, and one row per iteration with the agent's one-line summary. The right side starts with the run summary once one is written (see [Configuration → Report](config.md#report)), then has one card per iteration with its notes (`notes/iter-N.md`), agent activity (`logs/iter-N/`, live while it runs), review, changes against the baseline, and captured output (`observations/iter-N/`); click a row or chart point to open that card. Notes that are not tied to an iteration are listed under Shared notes. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
+`--json` prints the run once and exits, for scripts and agents managing runs: the run's row from [`dashboard --json`](#json-output) under `run`, plus `iterations`, one entry per iteration with `iteration`, `accepted`, `metrics`, `summary` (the commit subject, or why it was rejected), `cost`, `cost_incomplete` and `seconds`. `--print` shows the same as text: status, time and cost, landing, the latest accepted metrics against the baseline, and one row per iteration.
+
+Without either, it serves a browser view of a run's `.autohelix/` state. The header shows run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed). The left side shows the best metric value with total time and cost, the metric over time, and one row per iteration with the agent's one-line summary. The right side starts with the run summary once one is written (see [Configuration → Report](config.md#report)), then has one card per iteration with its notes (`notes/iter-N.md`), agent activity (`logs/iter-N/`, live while it runs), review, changes against the baseline, and captured output (`observations/iter-N/`); click a row or chart point to open that card. Notes that are not tied to an iteration are listed under Shared notes. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
 
 The server listens on `127.0.0.1` only and has no login, so on a shared machine other users of that machine can open it. From another machine, forward the port over SSH:
 
@@ -174,13 +177,31 @@ The page lives at `/run/<id>/`; the server's root (`/`) is the run list describe
 
 ## `autohelix dashboard`
 
-Live list of the project's runs, in your browser.
+The project's runs: a snapshot in the terminal, or a live list in your browser.
 
 ```bash
+autohelix dashboard [path] [--json | --print [--metric NAME]]
 autohelix dashboard [path] [--port 8765] [--open]
 ```
 
-One row per run in `.autohelix/runs/`, kept to the essentials: the id; the status (with the phase while running), with time and cost so far underneath; iterations of the run's budget; one metric from the latest accepted iteration (the code a land would deliver; its change against the run's own baseline is in the tooltip), picked from a menu in the column header; and landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; and when the run was last active. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel) and shows the project's total cost, including abandoned runs. Live runs come first; abandoned runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view`](#autohelix-view) page. It is the same server as `autohelix view`, with the same `127.0.0.1`-only binding.
+`--json` prints every run once and exits (see [JSON output](#json-output)); `--print` shows the same columns as the web page as a table, with one metric (`--metric`, default the first one of the most recently active run) and without abandoned runs, which it only counts.
+
+Without either, it serves one row per run in `.autohelix/runs/`, kept to the essentials: the id; the status (with the phase while running), with time and cost so far underneath; iterations of the run's budget; one metric from the latest accepted iteration (the code a land would deliver; its change against the run's own baseline is in the tooltip), picked from a menu in the column header; and landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; and when the run was last active. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel) and shows the project's total cost, including abandoned runs. Live runs come first; abandoned runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view`](#autohelix-view) page. It is the same server as `autohelix view`, with the same `127.0.0.1`-only binding.
+
+### JSON output
+
+`dashboard --json` prints the same data the web page reads. Fields are only ever added, never renamed or removed; `schema` changes only if that promise has to be broken. Times are Unix seconds, costs are US dollars, and absent values are `null`.
+
+- `schema` (1), `project` (folder name), `host`, `path` (absolute), `path_display` (with `~` for your home folder), and the checkout's `branch` (`null` when detached) and short `commit`.
+- `runs`, most recently active first. Each run has:
+  - `id`, `name`, `lifecycle` (`open` or `abandoned`), `created_at`, `last_activity`;
+  - `config_file` and `goal`, read from the config file as it is now in the checkout;
+  - `status`: the last segment's `state` (`running`, `finished`, `interrupted`, `failed`, or `crashed` when its process is gone), `phase`, `iteration`, `iteration_started_at`, `phase_started_at`, `stopped_at`, `stop_reason` (`kind`, `detail`, …) and `max_iterations`; `null` before the first segment;
+  - `accepted`: the number of accepted iterations;
+  - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
+  - `progress`: `iterations` attempted, `max_iterations`, `cost_usd`, `cost_incomplete`, `max_cost_usd`, `seconds` (iteration wall-clock, as the time budget counts it) and `max_seconds`;
+  - `target_branch` and `landing`: `commits` the target lacks and whether it can `fast_forward`, or `null` when either side is unavailable.
+  - A run that can't be read has only `id` and `error`.
 
 ## `autohelix hint`
 

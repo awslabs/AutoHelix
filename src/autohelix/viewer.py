@@ -14,6 +14,7 @@ server's default run.
 route data built in.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -46,6 +47,8 @@ COMMIT = re.compile(r"[0-9a-f]{7,64}")
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
+# Phases after the agent copy is frozen, when the pin holds this iteration's tree.
+FROZEN_PHASES = {"preparing checks", "checks", "benchmark", "review", "accept", "stop check"}
 ASSETS = {
     "/": ("dashboard.html", "text/html; charset=utf-8"),
     "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
@@ -102,7 +105,6 @@ class RunData:
         self._diffs: dict[str, str] = {}
         self._clipped: set[Path] = set()  # logs whose oldest events were dropped
         self._subject_cache: dict[str, str | None] = {}
-        self._index_dir: str | None = None
         self._repository = None
 
     def _refresh_current(self):
@@ -138,21 +140,23 @@ class RunData:
             )
         return summary
 
+    def iterations(self, records) -> list[dict]:
+        """One row per iteration; the summary is the commit subject, or the rejection reason."""
+        subjects = self._subjects([r.commit for r in records if r.commit])
+        return [
+            {"iteration": r.iteration, "accepted": r.accepted, "metrics": r.metrics,
+             "summary": (r.reason if r.reason != "baseline" else None) or subjects.get(r.commit),
+             "cost": r.cost.cost_usd, "cost_incomplete": r.cost.incomplete,
+             "seconds": (r.usage.get("wall_clock_ms") or 0) / 1000 or None}
+            for r in records
+        ]
+
     def state(self) -> dict:
         self._refresh_current()
         config, config_path = self._config()
         records = self.history.load() if self.paths.run_id else []
         total_cost = summarize_costs([usage for row in records for usage in row.cost_usages])
-        subjects = self._subjects([r.commit for r in records if r.commit])
-        iterations = [
-            {"iteration": r.iteration, "accepted": r.accepted, "metrics": r.metrics,
-             "summary": r.reason if r.reason != "baseline" else None,
-             "cost": r.cost.cost_usd, "cost_incomplete": r.cost.incomplete,
-             "seconds": (r.usage.get("wall_clock_ms") or 0) / 1000 or None}
-            for r in records
-        ]
-        for item, record in zip(iterations, records):
-            item["summary"] = item["summary"] or subjects.get(record.commit)
+        iterations = self.iterations(records)
         return {
             "title": getattr(config, "title", None) or self.project.name,
             "project": self.project.name,
@@ -362,14 +366,19 @@ class RunData:
         try:
             repo = self._repo()
             if not copy.is_dir() or copy.is_symlink():
+                # The pin holds an earlier iteration's tree until this one is frozen.
+                status = read_run_status(self.project, self.paths.run_id) or {}
+                if status.get("iteration") != n or status.get("phase") not in FROZEN_PHASES:
+                    return None
                 diff = repo.git("diff", "--no-ext-diff", "--no-textconv", base, self.paths.pin, "--", timeout=5)
             else:
-                if self._index_dir is None:
-                    import tempfile
+                from autohelix.workspace import _private_index_dir
 
-                    self._index_dir = tempfile.mkdtemp(prefix="autohelix-view-")
-                index = Path(self._index_dir) / f"{self.paths.run_id}-{copy.name}.index"
+                run, folder = hashlib.sha256(os.fsencode(copy.parent)).hexdigest()[:16], _private_index_dir()
+                index = folder / f"view-{run}-{copy.name}.index"
                 if not index.exists():
+                    for old in folder.glob(f"view-{run}-*.index"):
+                        old.unlink(missing_ok=True)  # an earlier iteration's copy
                     repo.git("read-tree", base, index=index, timeout=5)
                 repo.git("add", "-A", "--", ".", work_tree=copy, index=index, timeout=5)
                 diff = repo.git("diff", "--cached", "--no-ext-diff", "--no-textconv", base, "--",
@@ -400,6 +409,8 @@ class RunData:
 
 
 RUN_ID = r"[a-z0-9][a-z0-9-]{0,36}"
+# `dashboard --json` / `view --json` (and /api/runs): fields are only ever added.
+JSON_SCHEMA = 1
 
 
 class ProjectRuns:
@@ -415,6 +426,7 @@ class ProjectRuns:
         return bool(re.fullmatch(RUN_ID, run_id)) and (RunPaths(self.project).runs / run_id / "run.json").is_file()
 
     def runs(self) -> dict:
+        """The run list: `/api/runs` and `dashboard --json` (add-only, see JSON_SCHEMA)."""
         root = RunPaths(self.project)
         refs = self._refs()
         rows = []
@@ -427,13 +439,22 @@ class ProjectRuns:
             except Exception as exc:  # one unreadable run must not hide the others
                 rows.append({"id": run_id, "error": str(exc)})
         rows.sort(key=lambda r: r.get("last_activity") or 0, reverse=True)
-        home = Path.home()
-        path = f"~/{self.project.relative_to(home)}" if self.project.is_relative_to(home) else str(self.project)
+        return {**self._header(), "runs": rows}
+
+    def run(self, run_id: str, config_file: Path | None = None) -> dict:
+        """One run for `view --json`: its list row, plus the goal and every iteration."""
+        row = self._run(run_id, self._refs(), config_file)
+        data = RunData(self.project, config_file, run_id)
+        return {**self._header(), "run": {**row, "iterations": data.iterations(data.history.load())}}
+
+    def _header(self) -> dict:
         # What the checkout is on: the reference point for each run's landing state.
         branch = git(self.project, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip() or None
         commit = git(self.project, "rev-parse", "--short", "HEAD", check=False).stdout.strip() or None
-        return {"project": self.project.name, "host": socket.gethostname().split(".")[0],
-                "path": path, "path_full": str(self.project), "branch": branch, "commit": commit, "runs": rows}
+        home = Path.home()
+        display = f"~/{self.project.relative_to(home)}" if self.project.is_relative_to(home) else str(self.project)
+        return {"schema": JSON_SCHEMA, "project": self.project.name, "host": socket.gethostname().split(".")[0],
+                "path": str(self.project), "path_display": display, "branch": branch, "commit": commit}
 
     def _refs(self) -> dict[str, str]:
         try:
@@ -456,7 +477,7 @@ class ProjectRuns:
             return cached[1]
         try:
             config = load_config(self.project, config_file=path)[0]
-            summary = {"file": relative,
+            summary = {"file": relative, "goal": (config.goal.strip() or None) if isinstance(config.goal, str) else None,
                        "directions": config.metric_directions(),
                        "max_iterations": config.max_iterations, "max_cost_usd": config.max_cost_usd,
                        "max_time_seconds": config.max_time_seconds}
@@ -492,13 +513,17 @@ class ProjectRuns:
             {"name": n, "value": latest.metrics[n], "baseline": baseline.get(n), "direction": directions.get(n)}
             for n in names]}
 
-    def _run(self, run_id: str, refs: dict[str, str]) -> dict:
+    def _run(self, run_id: str, refs: dict[str, str], config_file: Path | None = None) -> dict:
         paths = RunPaths(self.project, run_id)
         data = paths.read_identity()
         status = read_run_status(self.project, run_id)
         history = self._histories.setdefault(run_id, History(self.project, run_id))
         records = history.load()
-        config = self._config(data.get("config_path"))
+        if config_file:  # as typed, from the shell's folder; shown relative to the project when inside it
+            config_file = config_file.resolve()
+            config_file = config_file.relative_to(self.project) if config_file.is_relative_to(self.project) else config_file
+        # Read from the checkout's current file (phase 2: the segment's config snapshot).
+        config = self._config(str(config_file) if config_file else data.get("config_path"))
 
         attempts = [r for r in records if r.iteration > 0]
         cost = summarize_costs([usage for r in records for usage in r.cost_usages])
@@ -516,7 +541,8 @@ class ProjectRuns:
             "lifecycle": data.get("lifecycle"),
             "created_at": data.get("created_at"),
             "last_activity": max((t for t in activity if isinstance(t, (int, float))), default=None),
-            "config": {"file": config.get("file")},
+            "config_file": config.get("file"),
+            "goal": config.get("goal"),
             "status": status and {k: status.get(k) for k in (
                 "state", "phase", "iteration", "iteration_started_at", "phase_started_at", "stopped_at",
                 "stop_reason", "max_iterations")},

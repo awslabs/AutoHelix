@@ -854,7 +854,9 @@ class Harness:
             raise AutoHelixRunError(f"Iteration {iteration} agent failed: {detail}")
 
         # Freeze the candidate: out-of-scope changes never reach the tree.
-        discarded = workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen)))
+        # The viewer shows the pin from "preparing checks" on (viewer.FROZEN_PHASES).
+        discarded = workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen)),
+                                     pinned=lambda: self.run_status.phase("preparing checks"))
         self.run_status.note(worktree=None)
         if discarded and self.verbose:
             reverted = [name.removeprefix(self.repo.prefix) for name in discarded]
