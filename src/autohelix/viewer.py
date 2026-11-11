@@ -34,7 +34,7 @@ from autohelix.agents import AgentEventKind
 from autohelix.config import load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History
-from autohelix.runs import RunPaths, git
+from autohelix.runs import RunPaths, git, is_archived, last_activity
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
 from autohelix.run_status import read_run_status
@@ -408,7 +408,7 @@ class RunData:
         return self._diffs[key]
 
 
-RUN_ID = r"[a-z0-9][a-z0-9-]{0,36}"
+RUN_ID = r"[a-z0-9][a-z0-9-]{0,50}"
 # `dashboard --json` / `view --json` (and /api/runs): fields are only ever added.
 JSON_SCHEMA = 1
 
@@ -530,17 +530,12 @@ class ProjectRuns:
         tip = refs.get(paths.ref) or data.get("abandoned_tip")
         target = data.get("target_branch")
         target_tip = refs.get(f"refs/heads/{target}") if target else None
-        try:
-            history_mtime = paths.history.stat().st_mtime
-        except OSError:
-            history_mtime = None
-        activity = [data.get("created_at"), history_mtime, (status or {}).get("updated_at")]
         return {
             "id": run_id,
             "name": data.get("name"),
-            "lifecycle": data.get("lifecycle"),
+            "archived": is_archived(data),
             "created_at": data.get("created_at"),
-            "last_activity": max((t for t in activity if isinstance(t, (int, float))), default=None),
+            "last_activity": last_activity(paths, data, status or {}),
             "config_file": config.get("file"),
             "goal": config.get("goal"),
             "status": status and {k: status.get(k) for k in (

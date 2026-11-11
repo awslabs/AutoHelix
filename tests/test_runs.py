@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -16,7 +17,7 @@ from autohelix.judge import DirectoryGuard
 from autohelix.cli import main
 from autohelix.harness import AutoHelixRunError, Harness
 from autohelix.history import History
-from autohelix.runs import RunLock, RunPaths, abandon, git, land, repair_history
+from autohelix.runs import RunLock, RunPaths, archive, delete, git, land, repair_history, short_id
 from click.testing import CliRunner
 
 
@@ -57,7 +58,7 @@ def test_identity_selection_new_and_explicit_config(project):
     assert second.paths.run_id == run_id
     second.close()
     named = Harness(project, new=True, name="second")
-    assert named.paths.run_id.startswith("second-")
+    assert re.fullmatch(r"\d{8}-\d{4}-second-[0-9a-z]{4}", named.paths.run_id)
     assert named.paths.run_id != run_id
     named.close()
     other = project / "other.yaml"
@@ -65,7 +66,7 @@ def test_identity_selection_new_and_explicit_config(project):
     git(project, "add", ".")
     git(project, "commit", "-qm", "other config")
     third = Harness(project, config_file=other)
-    assert third.paths.run_id.startswith("other-")
+    assert re.fullmatch(r"\d{8}-\d{4}-other-[0-9a-z]{4}", third.paths.run_id)
     third.close()
     explicit = Harness(project, run_id=run_id)
     assert explicit.paths.run_id == run_id
@@ -73,7 +74,7 @@ def test_identity_selection_new_and_explicit_config(project):
     explicit.close()
 
 
-def test_directory_and_common_ref_id_collisions(project, monkeypatch):
+def test_suffixes_are_unique_across_run_folders_and_refs(project, monkeypatch):
     import autohelix.runs as runs
 
     suffixes = iter("aaaaaaaa" "bbbb" "cccc")
@@ -82,7 +83,7 @@ def test_directory_and_common_ref_id_collisions(project, monkeypatch):
     retained.mkdir(parents=True)
     git(project, "update-ref", "refs/autohelix/bbbb", "HEAD")
     harness = Harness(project)
-    assert harness.paths.run_id == "cccc"
+    assert short_id(harness.paths.run_id) == "cccc"  # aaaa and bbbb are taken
     harness.close()
     assert retained.exists()
 
@@ -106,15 +107,15 @@ def test_accept_moves_only_run_ref_and_dirty_resume_preserves_index(project):
     assert all(r.accepted for r in resumed.history.load())
 
 
-def test_lock_is_atomic_advisory_status_and_purge_keep_lock_inode(project):
+def test_lock_is_atomic_advisory_status_and_delete_keep_lock_inode(project):
     harness = Harness(project)
     paths = harness.paths
-    with pytest.raises(RuntimeError, match="ownership lock"):
+    with pytest.raises(RuntimeError, match="is running"):
         RunLock(paths.lock)
     runner = CliRunner()
-    for command in ("land", "abandon"):
-        result = runner.invoke(main, [command, "--path", str(project)])
-        assert result.exit_code == 1 and "ownership lock" in result.output
+    for args in (["land"], ["delete", short_id(paths.run_id)], ["archive", short_id(paths.run_id)]):
+        result = runner.invoke(main, [*args, "--path", str(project)])
+        assert result.exit_code == 1 and "is running" in result.output
     harness.close()
     inode = paths.lock.stat().st_ino
     paths.runtime.mkdir(parents=True, exist_ok=True)
@@ -122,7 +123,7 @@ def test_lock_is_atomic_advisory_status_and_purge_keep_lock_inode(project):
     resumed = Harness(project)
     assert resumed.paths.run_id == paths.run_id
     resumed.close()
-    abandon(paths, purge=True)
+    delete(paths, force=True)
     assert paths.lock.exists() and paths.lock.stat().st_ino == inode
     with RunLock(paths.lock):
         pass
@@ -140,7 +141,7 @@ def test_process_death_releases_run_lock(project):
     )
     try:
         assert process.stdout.readline().strip() == "owned"
-        with pytest.raises(RuntimeError, match="ownership lock"):
+        with pytest.raises(RuntimeError, match="is running"):
             RunLock(path)
     finally:
         process.kill()
@@ -520,14 +521,14 @@ def test_legacy_layout_refuses_cli(project):
     assert "Legacy AutoHelix state" in result.output
 
 
-def test_abandon_symbolic_ref_does_not_delete_user_branch(project):
+def test_delete_symbolic_ref_does_not_delete_user_branch(project):
     harness = Harness(project)
     paths = harness.paths
     target = f"refs/heads/{harness.run_info['target_branch']}"
     harness.close()
     old = git(project, "rev-parse", target).stdout.strip()
     git(project, "symbolic-ref", paths.ref, target)
-    abandon(paths)
+    delete(paths)
     assert git(project, "rev-parse", target).stdout.strip() == old
     assert git(project, "rev-parse", "--verify", paths.ref, check=False).returncode != 0
 
@@ -600,7 +601,7 @@ def test_report_owns_run_and_restores_ref_before_removal(project, monkeypatch):
     from autohelix.report import write_report
 
     harness = Harness(project, land_mode="manual")
-    with pytest.raises(RuntimeError, match="live"):
+    with pytest.raises(RuntimeError, match="is running"):
         write_report(harness.config, project, Console(), run_id=harness.paths.run_id)
     harness.run(max_iterations=1, report=False)
     expected = harness.run_state.expected_tip
@@ -615,7 +616,7 @@ def test_report_owns_run_and_restores_ref_before_removal(project, monkeypatch):
     assert not harness.paths.copies.exists()
 
 
-def test_abandoned_noop_retains_user_commit_tip(project, monkeypatch):
+def test_archived_noop_retains_user_commit_tip(project, monkeypatch):
     from autohelix.runs import run_tip
 
     harness = Harness(project)
@@ -628,7 +629,7 @@ def test_abandoned_noop_retains_user_commit_tip(project, monkeypatch):
     monkeypatch.setattr(resumed, "run_agent", lambda *a, **k: AgentRunResult(success=True))
     resumed.run(max_iterations=2, report=False)
     assert resumed.history.load()[-1].commit is None
-    abandon(resumed.paths)
+    archive(resumed.paths)
     assert run_tip(resumed.paths) == user_tip
     # Readers must not chase subsequent movement of the user's target branch.
     git(project, "reset", "--hard", harness.run_info["base_commit"])
@@ -656,7 +657,7 @@ def test_viewer_calls_containment_and_current_alias(project):
     assert row["metrics"] == {} and row["cost"]["cost_usd"] == 0.1
 
 
-def test_selection_reloads_lifecycle_under_run_lock(project, monkeypatch):
+def test_selection_rereads_the_run_under_its_lock(project, monkeypatch):
     import autohelix.runs as runs
 
     harness = Harness(project)
@@ -666,14 +667,12 @@ def test_selection_reloads_lifecycle_under_run_lock(project, monkeypatch):
 
     def acquire(path, **kwargs):
         lease = original(path, **kwargs)
-        if path == paths.lock:
-            identity = paths.read_identity()
-            identity["lifecycle"] = "abandoned"
-            runs.write_json(paths.identity, identity)
+        if path == paths.lock:  # the ref went away while we waited
+            git(project, "update-ref", "-d", paths.ref)
         return lease
 
     monkeypatch.setattr(runs, "RunLock", acquire)
-    with pytest.raises(RuntimeError, match="abandoned"):
+    with pytest.raises(RuntimeError, match="no ref left"):
         Harness(project, run_id=paths.run_id)
     with original(paths.lock):
         pass  # failed selection explicitly closed the acquired lease
@@ -683,8 +682,11 @@ def test_real_worker_failure_includes_subprocess_stderr(project):
     from autohelix.parallel.core import Worker, _run_segment
 
     configure(project, agent={"type": "mock", "settings": {"should_fail": True}})
+    created = Harness(project, new=True)
+    created.close()
     worker = Worker(index=1, name="worker-1", config_file=project / "autohelix.yaml", worktree=project,
-                    branch="unused", shared_dir=project / ".autohelix" / "peers", budget=1)
+                    branch="unused", shared_dir=project / ".autohelix" / "peers", budget=1,
+                    run_id=created.paths.run_id)
     with pytest.raises(RuntimeError, match="Worker exited 1.*Mock failure"):
         _run_segment(worker, 1, False)
 

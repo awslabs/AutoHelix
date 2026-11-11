@@ -51,9 +51,9 @@ def _under_way(run: dict) -> int | None:
 
 
 def _state(run: dict, now: float) -> str:
-    """One word for the row's state (abandoned wins over the last segment's outcome), with the phase while running."""
+    """One word for the row's state (archived wins over the last segment's outcome), with the phase while running."""
     if not _live(run):
-        kind = "abandoned" if run.get("lifecycle") == "abandoned" else (run.get("status") or {}).get("state") or "idle"
+        kind = "archived" if run.get("archived") else (run.get("status") or {}).get("state") or "idle"
         return WORDS.get(kind, kind)
     status = run["status"]
     phase = "baseline" if status.get("iteration") == 0 else status.get("phase")
@@ -112,22 +112,22 @@ def _where(data: dict) -> str:
 
 
 def format_runs(data: dict, metric: str | None = None, now: float | None = None) -> str:
-    """The dashboard: live runs first, then by last activity; abandoned runs are counted, not listed."""
+    """The dashboard: live runs first, then by last activity; archived runs are counted, not listed."""
     now = time.time() if now is None else now
     runs = data["runs"]
-    abandoned = [r for r in runs if r.get("lifecycle") == "abandoned"]
-    shown = sorted((r for r in runs if r.get("lifecycle") != "abandoned"),
+    archived = [r for r in runs if r.get("archived")]
+    shown = sorted((r for r in runs if not r.get("archived")),
                    key=lambda r: (not _live(r), -(r.get("last_activity") or 0)))
     progress = [r["progress"] for r in runs if "progress" in r]  # not on unreadable runs
     costs = [p["cost_usd"] for p in progress if p["cost_usd"] is not None]
-    summary = [f"{len(shown)} open run{'' if len(shown) == 1 else 's'}"]
+    summary = [f"{len(shown)} run{'' if len(shown) == 1 else 's'}"]
     if costs:
         summary.append(f"{_money(sum(costs), any(p['cost_incomplete'] for p in progress))} spent")
-    if abandoned:
-        summary.append(f"{len(abandoned)} abandoned (not listed; see --json)")
+    if archived:
+        summary.append(f"{len(archived)} archived (not listed; see --json)")
     lines = [f"{data['project']}  {_where(data)}", " · ".join(summary)]
     if not shown:
-        return "\n".join(lines + ["", "No runs yet." if not runs else "No open runs."]) + "\n"
+        return "\n".join(lines + ["", "No runs yet." if not runs else "All runs are archived."]) + "\n"
 
     metric = metric or next(iter(metric_names(shown)), None)
     head = ["RUN", "STATUS", "ITER"] + ([metric] if metric else []) + ["LANDING", "ACTIVE"]

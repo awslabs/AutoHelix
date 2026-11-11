@@ -3,7 +3,7 @@
 
 """Parallel exploration: run N AutoHelix workers concurrently on the same goal.
 
-Thin orchestration layer around `autohelix run`. Each worker is a normal
+Thin orchestration layer around `autohelix resume`. Each worker is a normal
 AutoHelix run in its own git worktree (branch `parallel/worker-{i}`), with its
 own config, history, and `.autohelix/` state. Coordination is note sharing only:
 each worker's notes are mirrored to a flat shared dir, and every worker symlinks
@@ -12,8 +12,8 @@ peers' shared dirs into `.autohelix/peer_notes/`.
 Workers run fully async: a worker only ever writes its OWN branch and its OWN
 shared-notes dir, and only ever reads peers' dirs. No locks needed.
 
-Worktrees and branches persist across runs: like a plain `autohelix run`, a
-re-run resumes each worker from its recorded history rather than starting over.
+Worktrees and branches persist across runs: a re-run resumes each worker's run
+from its recorded history rather than starting over.
 Nothing is deleted automatically — the branches are the deliverable, left for
 the user to merge or discard.
 """
@@ -34,7 +34,7 @@ from autohelix.config import load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History
 from autohelix.run_status import read_run_status
-from autohelix.runs import RunPaths, select_run
+from autohelix.runs import RunPaths, config_relative, is_archived, project_runs, select_run
 from autohelix.state import ensure_runtime_ignored
 
 
@@ -87,7 +87,7 @@ def setup_workers(
 
     Worktrees and branches PERSIST across runs. If a worker's worktree already
     exists it is reused as-is, so a re-run resumes from its recorded history
-    (exactly like re-running a plain `autohelix run`). Nothing is force-deleted.
+    (each worker resumes its latest run). Nothing is force-deleted.
     """
     repo = repo.resolve()
     root = repo.parent / f"{repo.name}-parallel"
@@ -116,13 +116,16 @@ def setup_workers(
         budget = _resolve_budget(cfg, worktree)
         ensure_runtime_ignored(worktree)
         config, _ = load_config(worktree, config_file=cfg)
-        paths, _, lock = select_run(worktree, cfg, name=config.name)
-        try:
-            current = paths.root / "current.tmp"
-            current.write_text(paths.run_id + "\n")
-            current.replace(paths.root / "current")
-        finally:
+        # The worker's latest run (even one that never captured its baseline), else a new one.
+        existing = [p for p, d in project_runs(worktree, config_relative(worktree, cfg)) if not is_archived(d)]
+        if existing:
+            paths = existing[0]
+        else:
+            paths, _, lock, _ = select_run(worktree, cfg, name=config.name, new=True)
             lock.close()
+        current = paths.root / "current.tmp"
+        current.write_text(paths.run_id + "\n")
+        current.replace(paths.root / "current")
         workers.append(Worker(
             index=i, name=name, config_file=cfg, worktree=worktree, branch=branch,
             shared_dir=shared_dir, budget=budget, run_id=paths.run_id,
@@ -183,18 +186,16 @@ def _kill_tree(pid: int) -> None:
 
 
 def _run_segment(worker: Worker, upto: int, verbose: bool, run_args: list[str] | None = None) -> None:
-    """Run `autohelix run -n <upto>` in the worker's worktree."""
+    """Run `autohelix resume <id> --until <upto>` in the worker's worktree."""
     if _stop_event.is_set():
         return
     env = os.environ.copy()
     env["AUTOHELIX_PEER_RUNS"] = json.dumps(worker.peers)
-    cmd = ["autohelix", "run", "-n", str(upto), "--config", str(worker.config_file)]
+    cmd = ["autohelix", "resume", worker.run_id, "--until", str(upto), "--config", str(worker.config_file)]
     if verbose:
         cmd.append("--verbose")
     if run_args:
         cmd.extend(run_args)
-    if worker.run_id:
-        cmd.extend(["--run", worker.run_id])
     cmd.extend(["--land", "auto"])
     proc = subprocess.Popen(cmd, cwd=worker.worktree, env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
@@ -233,7 +234,7 @@ def run_worker(worker: Worker, sync_every: int, verbose: bool,
     prior run are not re-run.
     """
     try:
-        done = History(worker.worktree).get_last_iteration()
+        done = History(worker.worktree, worker.run_id).get_last_iteration()
         while done < worker.budget and not _stop_event.is_set():
             upto = min(done + sync_every, worker.budget)
             # Only a worker's last segment writes the run summary.
@@ -243,7 +244,7 @@ def run_worker(worker: Worker, sync_every: int, verbose: bool,
                 break
             sync_own_notes(worker)
             done = upto
-            reason = (read_run_status(worker.worktree) or {}).get("stop_reason")
+            reason = (read_run_status(worker.worktree, worker.run_id) or {}).get("stop_reason")
             if isinstance(reason, dict) and (
                 reason.get("kind") == "condition"
                 or (reason.get("kind") == "budget" and reason.get("budget") in {"cost", "time"})
@@ -266,7 +267,7 @@ def _worker_best(worker: Worker) -> tuple[float, str] | None:
     # preserves YAML declaration order, so this is "first declared wins" by design —
     # to rank on a different metric, declare it first in the config.
     metric = next(iter(directions))
-    best = History(worker.worktree).get_best_metrics(directions)
+    best = History(worker.worktree, worker.run_id).get_best_metrics(directions)
     entry = best.get(metric)
     if entry is None:
         return None

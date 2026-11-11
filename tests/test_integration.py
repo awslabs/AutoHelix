@@ -826,7 +826,7 @@ agent:
 
 budget:
   iterations: 10
-  time: 30s
+  time: 35s  # 28s used: room to resume (checked before each iteration)
 
 constraints:
   - "true"
@@ -906,7 +906,7 @@ agent:
     change_content: "# iteration {iteration}"
 budget:
   iterations: 10
-  time: 30s
+  time: 35s  # 28s used: room to resume (checked before each iteration)
 constraints:
   - "true"
 """)

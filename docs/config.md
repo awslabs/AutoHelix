@@ -85,13 +85,14 @@ budget:
 
 ## Run identity and landing
 
-`name` is an optional readable prefix for newly generated run ids; it does not
-select an existing run. It accepts lowercase letters, digits and hyphens, with
+`name` is an optional readable part of newly generated run ids
+(`20261111-1432-<name>-k3f9`); it does not select an existing run. It accepts lowercase letters, digits and hyphens, with
 at most 32 characters. Without a name, nondefault config filename stems supply
-the prefix. `land` is optional: `auto` (default) fast-forwards accepted code to the
+the name. `land` is optional: `auto` (default) fast-forwards accepted code to the
 starting branch when a run segment ends, while `manual` keeps it on the run ref
-until `autohelix land`. CLI `--name` and `--land` override these values. Resume is
-keyed by config path or exact `--run`, independently of those optional fields.
+until `autohelix land`. CLI `--name` and `--land` override these values. A bare
+`autohelix resume` picks the config path's most recently active run, or name one;
+neither depends on those optional fields.
 
 ## Example Configs
 
@@ -307,7 +308,7 @@ For a qualitative condition, use [`autohelix ask`](cli.md#autohelix-ask): it ask
 
 They run in a fresh copy of the accepted code (HEAD at the accepted commit), after iterations and on the baseline. Keep stop commands out of `scope.editable`, and don't let them modify files: a change is reported as an error (the acceptance stays recorded), and on the baseline it stops the run. The agent's prompt lists them.
 
-Stop conditions only end a run early: budgets still apply. If the baseline already meets one, no iterations run. If you interrupt a run while its stop commands are running, the iteration is kept but not checked; the next accepted iteration is. Running `autohelix run` again after a stop continues the run (and stops again after the next accepted iteration if the condition still holds); raise the target or remove the condition first.
+Stop conditions only end a run early: budgets still apply. If the baseline already meets one, no iterations run. If you interrupt a run while its stop commands are running, the iteration is kept but not checked; the next accepted iteration is. A stop pauses the run: `autohelix resume` continues it (and it stops again after the next accepted iteration if the condition still holds); raise the target or remove the condition first.
 
 Why a run ended is shown at the end of the run, in `autohelix view`, `autohelix watch`, the run summary, and `.autohelix/runs/<id>/runtime/status.json` (`stop_reason`).
 
@@ -324,10 +325,11 @@ Caps how far a run goes. Combine any of:
 - `time` — maximum total wall-clock, as a duration string (`90m`, `2h`, `1h30m`).
 - `iteration_time` — a *per-iteration* time budget. Unlike the others it can interrupt work mid-iteration: it enforces a hard deadline **and** injects the remaining time into the agent's context so it can wrap up and save notes first. See [ML Experiments](ml-experiments.md) for when this matters.
 
-`cost` and `time` are **checked after each iteration completes, never mid-iteration** — the loop stops once the cumulative total crosses the limit, so a run can overshoot by up to one iteration's worth of cost or time. For a hard mid-iteration cutoff use `iteration_time` (or `agent.timeout_seconds`).
+`cost` and `time` are **checked between iterations, never mid-iteration** — the loop stops once the cumulative total crosses the limit, so a run can overshoot by up to one iteration's worth of cost or time. For a hard mid-iteration cutoff use `iteration_time` (or `agent.timeout_seconds`).
 
-The cost threshold is also checked before starting an iteration, including after
-the baseline review and when resuming a run.
+Both are also checked before starting an iteration, including after the
+baseline review and when resuming a run: a run past its budget stops at once
+(`resume -n` extends only the iteration budget; raise `cost` or `time` here).
 
 ### Report
 

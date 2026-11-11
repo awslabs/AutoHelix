@@ -11,6 +11,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import stat
 import threading
 import time
@@ -19,10 +20,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SCHEMA = 1
-_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,36}\Z")
+_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}\Z")
 _ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
 COPIES_ENV = "AUTOHELIX_COPIES_ROOT"
+PROJECT_RECORD = "project.json"  # in each project's copies folder: which checkout it serves
+
+
+def short_id(run_id: str) -> str:
+    """The random suffix: what messages print and every command accepts."""
+    return run_id.rsplit("-", 1)[-1]
 
 
 def git(project: Path, *args: str, check: bool = True):
@@ -233,13 +240,13 @@ def ensure_copies(root: Path) -> Path:
 
     try:
         return make()
-    except FileNotFoundError:  # another run of the project removed its empty folder
+    except FileNotFoundError:  # the sweep of another checkout removed the project's folder
         return make()
 
 
 def remove_copies(root: Path, warn=None) -> None:
-    """Delete a run's copies folder, then its project folder once empty. Errors raise
-    unless `warn` is given."""
+    """Delete a run's copies folder (the project's folder and its record stay, for
+    the sweep). Errors raise unless `warn` is given."""
     from autohelix.workspace import _check_root, remove_copy
 
     try:
@@ -254,11 +261,51 @@ def remove_copies(root: Path, warn=None) -> None:
             raise
         warn(f"Could not remove copies in {root}: {e}")
         return
-    for folder in (root, root.parent):
+    try:
+        root.rmdir()
+    except OSError:
+        pass
+
+
+def sweep_copies(project: Path) -> None:
+    """Remove copies left by processes that died before their cleanup (SIGKILL, a
+    crash): this project's runs whose lock is free, and other projects' folders on
+    this host whose checkout is gone for over a day (a shared base may be on NFS or
+    in a container, where a missing path can be temporary). Best effort."""
+    base = copies_base()
+    if not base.is_dir():
+        return
+    own = base / project_key(project)
+    if own.is_dir():
+        for entry in own.iterdir():
+            if not _ID.fullmatch(entry.name) or not entry.is_dir():
+                continue
+            try:
+                lock = RunLock(RunPaths(project, entry.name).lock)
+            except RuntimeError:  # live
+                continue
+            with lock:
+                remove_copies(entry, warn=lambda message: None)
+    host = socket.gethostname()
+    for folder in base.iterdir():
+        record = folder / PROJECT_RECORD
         try:
-            folder.rmdir()
-        except OSError:  # not empty: other runs of the project
-            break
+            data = json.loads(record.read_text())
+            old = time.time() - record.stat().st_mtime > 86400
+        except (OSError, ValueError):
+            continue
+        if folder == own or data.get("host") != host or not old or os.path.lexists(data.get("path") or "/"):
+            continue
+        try:
+            _own_dir(folder, create=False)
+            for entry in folder.iterdir():
+                if entry.is_dir():
+                    remove_copies(entry)
+            if [entry.name for entry in folder.iterdir()] == [PROJECT_RECORD]:  # else keep the record
+                record.unlink()
+                folder.rmdir()
+        except Exception:  # noqa: BLE001 - someone else's folder, or in use: leave it
+            continue
 
 
 def claim_copies(paths: "RunPaths", warn=None) -> Path:
@@ -272,6 +319,10 @@ def claim_copies(paths: "RunPaths", warn=None) -> Path:
     previous = paths.copies
     if previous != root:  # the base changed since the last segment
         remove_copies(previous, warn)
+    # The sweep removes other projects' folders by this record once their checkout is gone.
+    _own_dir(root.parent, create=True)
+    # Rewritten each segment: its age is the time since the project was last used here.
+    write_json(root.parent / PROJECT_RECORD, {"path": str(paths.project), "host": socket.gethostname()})
     write_text(paths.copies_record, f"{base}\n")
     ceiling = os.environ.get("GIT_CEILING_DIRECTORIES", "")
     if str(root) not in ceiling.split(os.pathsep):
@@ -289,7 +340,7 @@ class RunLock:
             fcntl.flock(self._file, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         except BlockingIOError:
             self._file.close()
-            raise RuntimeError(f"Run is live (ownership lock held): {path.stem}") from None
+            raise RuntimeError(f"Run {short_id(path.stem)} is running.") from None
 
     def close(self):
         if not self._file.closed:
@@ -342,44 +393,185 @@ def config_relative(project: Path, config: Path) -> str:
         return str(config.resolve())
 
 
-def select_run(project: Path, config: Path, *, name: str | None = None,
-               new: bool = False, run_id: str | None = None, ready=None) -> tuple[RunPaths, dict, RunLock]:
+class NoRunToResume(RuntimeError):
+    """A bare `resume` found nothing to continue."""
+
+
+def is_archived(data: dict) -> bool:
+    return bool(data.get("archived")) or data.get("lifecycle") == "abandoned"  # pre-archive runs
+
+
+def is_live(paths: RunPaths) -> bool:
+    """Whether a process holds the run's lock (a brief probe: advisory)."""
+    try:
+        RunLock(paths.lock).close()
+    except RuntimeError:
+        return True
+    return False
+
+
+def last_activity(paths: RunPaths, data: dict, status: dict | None = None) -> float | None:
+    """When the run last did something: created, recorded an iteration, or reported status."""
+    if status is None:
+        try:
+            status = json.loads(paths.status.read_text())
+        except (OSError, ValueError):
+            status = {}
+    try:
+        history = paths.history.stat().st_mtime
+    except OSError:
+        history = None
+    times = [data.get("created_at"), history, (status or {}).get("updated_at")]
+    return max((t for t in times if isinstance(t, (int, float))), default=None)
+
+
+def has_baseline(paths: RunPaths) -> bool:
+    from autohelix.history import History
+
+    return any(r.iteration == 0 and r.accepted for r in History(paths.project, paths.run_id).load())
+
+
+def unlanded(paths: RunPaths, data: dict) -> int:
+    """Accepted commits beyond the base that the target branch lacks (all of them
+    without a target branch). Squash-merged or cherry-picked work counts."""
+    tip = git(paths.project, "rev-parse", "--verify", f"{paths.ref}^{{commit}}", check=False)
+    if tip.returncode:
+        return 0
+    exclude = [f"^{data['base_commit']}"] if data.get("base_commit") else []
+    target = data.get("target_branch")
+    if target and git(paths.project, "rev-parse", "--verify", f"refs/heads/{target}", check=False).returncode == 0:
+        exclude.append(f"^refs/heads/{target}")
+    return int(git(paths.project, "rev-list", "--count", tip.stdout.strip(), *exclude).stdout.strip() or 0)
+
+
+def project_runs(project: Path, config_path: str | None = None) -> list[tuple[RunPaths, dict]]:
+    """The project's readable runs (for one config path, if given), most recently active first."""
+    found = []
+    for identity in RunPaths(project).runs.glob("*/run.json"):
+        if not _ID.fullmatch(identity.parent.name):
+            continue
+        paths = RunPaths(project, identity.parent.name)
+        try:
+            data = paths.read_identity()
+        except RuntimeError:
+            continue
+        if config_path is None or data.get("config_path") == config_path:
+            found.append((paths, data, last_activity(paths, data) or 0))
+    found.sort(key=lambda item: item[2], reverse=True)
+    return [(paths, data) for paths, data, _ in found]
+
+
+def resolve_run(project: Path, value: str) -> str:
+    """A run id as typed: the full id, or its last part (`k3f9`)."""
+    runs = RunPaths(project).runs  # folders, not run.json: `delete --force` reaches a torn one
+    if _ID.fullmatch(value) and (runs / value).is_dir():
+        return value
+    matches = sorted(p.name for p in runs.glob("*") if p.is_dir() and short_id(p.name) == value)
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        raise RuntimeError(f"{value!r} matches several runs ({', '.join(matches)}); use the full id.")
+    folder = f" ({value} is a folder: use -p {value})" if Path(value).is_dir() else ""
+    raise RuntimeError(f"No run {value!r} in {Path(project).resolve()}{folder}. Use a run id or its last "
+                       "part, e.g. k3f9 (names aren't ids); `autohelix dashboard --print` lists runs.")
+
+
+def _ago(seconds: float) -> str:
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{int(seconds // size)}{unit} ago"
+    return "just now"
+
+
+def _resuming(paths: RunPaths, data: dict) -> str:
+    from autohelix.history import History
+
+    last = History(paths.project, paths.run_id).get_last_iteration()
+    when = last_activity(paths, data)
+    ago = f", last active {_ago(time.time() - when)}" if when else ""
+    return f"Resuming {short_id(paths.run_id)}: {last} iteration{'s' * (last != 1)}{ago}."
+
+
+def _new_run_notices(project: Path, config_path: str, target: str | None) -> list[tuple[str, str]]:
+    """What `run` says about this config's other runs: it never refuses."""
+    notices = []
+    runs = project_runs(project, config_path)
+    for paths, _ in runs:
+        if is_live(paths):
+            notices.append(("warn", f"{short_id(paths.run_id)} is also running for this config. Both land on "
+                            f"{target or 'their branch'}; whichever finishes second may not fast-forward "
+                            f"(its commits stay on autohelix/{paths.run_id})."))
+    latest = next(((p, d) for p, d in runs if not is_archived(d)), None)
+    if latest and not is_live(latest[0]):
+        paths, data = latest
+        short = short_id(paths.run_id)
+        count = unlanded(paths, data)
+        if count:
+            notices.append(("warn", f"{short} has {count} unlanded commit{'s' * (count != 1)}; this run starts "
+                            f"from {target or 'HEAD'} without them. `autohelix resume {short}` to continue it "
+                            f"instead, or `autohelix archive {short}` if it was merged another way."))
+        elif not notices:
+            notices.append(("info", f"Previous run for this config: {short} "
+                            f"(`autohelix resume {short}` to continue it)."))
+    return notices
+
+
+def _owned(paths: RunPaths, config_path: str) -> tuple[dict, RunLock, list[tuple[str, str]]]:
+    """Take an existing run's lock for a segment."""
+    lock = RunLock(paths.lock)
+    try:
+        data = paths.read_identity()
+        if git(paths.project, "rev-parse", "--verify", paths.ref, check=False).returncode:
+            raise RuntimeError(f"Run {short_id(paths.run_id)} has no ref left to resume; "
+                               f"remove it with `autohelix delete {short_id(paths.run_id)}`.")
+        notices = [("info", _resuming(paths, data))]
+        if data.get("config_path") != config_path:
+            notices.append(("warn", f"Run {short_id(paths.run_id)} was started with {data.get('config_path')}; "
+                            f"this segment uses {config_path}."))
+        return data, lock, notices
+    except BaseException:
+        lock.close()
+        raise
+
+
+def select_run(project: Path, config: Path, *, name: str | None = None, new: bool = False,
+               run_id: str | None = None, create: bool = True, ready=None
+               ) -> tuple[RunPaths, dict, RunLock, list[tuple[str, str]]]:
     """Select and own a run atomically before creating any per-run state.
 
-    `ready` runs the caller's readiness checks before a new run is allocated;
-    raising refuses the start without leaving an identity, ref or pointer."""
+    `run_id` resumes that run; `new` creates one (`autohelix run`); otherwise the
+    config's most recently active run that isn't archived resumes, preferring
+    runs with a baseline (`autohelix resume`), else one is created unless
+    `create` is false.
+    Returns notices, `(level, text)`, for the caller to print. `ready` runs the
+    caller's readiness checks before a new run is allocated; raising refuses the
+    start without leaving an identity, ref or pointer."""
     root = RunPaths(project).root
     if (root / "history.jsonl").exists():
         raise RuntimeError("Legacy AutoHelix state: move or delete .autohelix/, then run git worktree prune.")
     # Serialize selection/creation for this project. The per-run lock remains
     # authoritative throughout the invocation, including final landing.
     with RunLock(root / "runtime" / "locks" / "selection.lock", blocking=True):
+        try:
+            sweep_copies(project)
+        except Exception:  # noqa: BLE001 - a backstop; never blocks a run
+            pass
         config_path = config_relative(project, config)
         if run_id:
             paths = RunPaths(project, run_id)
-            data = paths.read_identity()
-        else:
-            candidates = []
-            if not new:
-                for identity in (root / "runs").glob("*/run.json"):
-                    try:
-                        data = json.loads(identity.read_text())
-                    except (OSError, ValueError):
-                        continue
-                    if data.get("lifecycle") == "open" and data.get("config_path") == config_path:
-                        candidates.append(data)
-            data = max(candidates, key=lambda d: d["created_at"]) if candidates else None
-            paths = RunPaths(project, data["id"]) if data else None
-        if paths is not None:
-            lock = RunLock(paths.lock)
-            try:
-                data = paths.read_identity()
-                if data.get("lifecycle") != "open":
-                    raise RuntimeError(f"Run {paths.run_id} is abandoned; use --new.")
-            except BaseException:
-                lock.close()
-                raise
-            return paths, data, lock
+            return (paths, *_owned(paths, config_path))
+        if not new:
+            # Runs that captured a baseline first: an empty run (`run` typed by mistake and
+            # interrupted) must not shadow the real one, but is resumed when it is all there is.
+            candidates = [p for p, d in project_runs(project, config_path) if not is_archived(d)]
+            candidates.sort(key=has_baseline, reverse=True)  # stable: by activity within each
+            if candidates:
+                paths = candidates[0]
+                if is_live(paths):  # never fall back to an older run behind the user's back
+                    raise RuntimeError(f"Run {short_id(paths.run_id)} is running; name another run to resume it.")
+                return (paths, *_owned(paths, config_path))
+            if not create:
+                raise NoRunToResume(f"No run to resume for {config_path}; start one with `autohelix run`.")
         if name is None:
             stem = config.stem
             name = None if stem == "autohelix" else re.sub(r"[^a-z0-9-]", "-", stem.lower()).strip("-")[:32] or None
@@ -393,9 +585,16 @@ def select_run(project: Path, config: Path, *, name: str | None = None,
             ready()
         base = git(project, "rev-parse", "HEAD").stdout.strip()
         target = git(project, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip().removeprefix("refs/heads/") or None
+        notices = _new_run_notices(project, config_path, target)
+        # Suffixes are unique across the repository: parallel workers share its refs.
+        taken = {short_id(ref) for ref in git(project, "for-each-ref", "--format=%(refname:lstrip=2)",
+                                              "refs/autohelix/").stdout.split()}
+        taken |= {short_id(p.name) for p in RunPaths(project).runs.glob("*")}
         while True:
             suffix = "".join(secrets.choice(_ALPHABET) for _ in range(4))
-            candidate = f"{name}-{suffix}" if name else suffix
+            if suffix in taken:
+                continue
+            candidate = "-".join(part for part in (time.strftime("%Y%m%d-%H%M"), name, suffix) if part)
             paths = RunPaths(project, candidate)
             paths.runs.mkdir(parents=True, exist_ok=True)
             try:
@@ -413,13 +612,13 @@ def select_run(project: Path, config: Path, *, name: str | None = None,
                 raise RuntimeError(created.stderr.strip())
             data = {"schema": SCHEMA, "id": candidate, "name": name, "config_path": config_path,
                     "created_at": time.time(), "base_commit": base, "target_branch": target,
-                    "ref": paths.ref, "lifecycle": "open"}
+                    "ref": paths.ref}
             try:
                 write_json(paths.identity, data)
             except BaseException:
                 lock.close()
                 raise
-            return paths, data, lock
+            return paths, data, lock, notices
 
 
 def repair_history(path: Path) -> None:
@@ -480,11 +679,11 @@ def reconcile(paths: RunPaths, data: dict, history, land_mode: str) -> tuple[str
             git(paths.project, "update-ref", "--no-deref", "-m", "AutoHelix resume from target", paths.ref, target_tip, tip)
             tip = target_tip
         elif not ancestor(target_tip, tip):
-            warning = (f"Target {target} diverged; continuing run {paths.run_id} from its accepted tip. "
+            warning = (f"Target {target} diverged; continuing run {short_id(paths.run_id)} from its accepted tip. "
                        "Landing requires a branch that can fast-forward.")
         elif land_mode == "auto":  # in manual mode, behind just means not landed yet
-            warning = (f"Target {target} is behind run {paths.run_id}; auto landing will reapply accepted code. "
-                       f"To discard the run after a reset, use autohelix abandon {paths.run_id}.")
+            warning = (f"Target {target} is behind run {short_id(paths.run_id)}; auto landing will reapply accepted code. "
+                       f"If a reset meant to discard the run, press Ctrl-C and `autohelix archive {short_id(paths.run_id)}`.")
     return tip, warning
 
 
@@ -521,30 +720,56 @@ def land(paths: RunPaths, data: dict, expected_tip: str, into: str | None = None
                 raise RuntimeError(f"Cannot land {target}: branch is busy or changed. {hint}")
 
 
-def abandon(paths: RunPaths, *, purge: bool = False, warn=None) -> None:
+def archive(paths: RunPaths, *, undo: bool = False) -> None:
+    """Set a run aside (hidden from the run list, skipped by a bare `resume`), or bring it back."""
     with RunLock(paths.lock):
         data = paths.read_identity()
-        data["lifecycle"] = "abandoned"
+        data.pop("lifecycle", None)
+        if undo:
+            data.pop("archived", None)
+        else:
+            data["archived"] = True
+        write_json(paths.identity, data)
+
+
+def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
+    """Remove a run's state, ref, pin and copies. Refuses while it runs, and, unless
+    forced, while it has unlanded commits (they'd become unreachable)."""
+    short = short_id(paths.run_id)
+    with RunLock(paths.lock):
+        try:
+            data = paths.read_identity()
+        except RuntimeError:
+            if not force:
+                raise
+            data = {}
+        count = unlanded(paths, data) if data else 0
+        if count and not force:
+            raise RuntimeError(f"Run {short} has {count} unlanded commit{'s' * (count != 1)} on "
+                               f"autohelix/{paths.run_id}: land them first (`autohelix land {short}`), "
+                               f"or `autohelix delete --force {short}` to discard them.")
+        remove_copies(paths.copies, warn or (lambda message: None))
+        git(paths.project, "update-ref", "-d", paths.pin, check=False)
         tip = git(paths.project, "rev-parse", "--verify", paths.ref, check=False)
         if tip.returncode == 0:
-            data["abandoned_tip"] = tip.stdout.strip()
-        write_json(paths.identity, data)
-        remove_copies(paths.copies, warn or (lambda message: None))
-        target = data.get("target_branch")
-        landed = target and git(paths.project, "merge-base", "--is-ancestor", paths.ref,
-                                f"refs/heads/{target}", check=False).returncode == 0
-        # The candidate pin keeps the last frozen tree alive; it's never needed again.
-        git(paths.project, "update-ref", "-d", paths.pin, check=False)
-        if purge or landed:
-            tip = git(paths.project, "rev-parse", paths.ref, check=False)
-            if tip.returncode == 0:
-                git(paths.project, "update-ref", "--no-deref", "-d", paths.ref, tip.stdout.strip())
-        if purge:
-            shutil.rmtree(paths.run_dir)
+            git(paths.project, "update-ref", "--no-deref", "-d", paths.ref, tip.stdout.strip())
+        shutil.rmtree(paths.run_dir)
+    current = paths.root / "current"
+    try:
+        pointed = current.read_text().strip()
+    except OSError:
+        return
+    if pointed == paths.run_id:  # follow the most recently active remaining run
+        remaining = project_runs(paths.project)
+        remaining.sort(key=lambda item: is_archived(item[1]))  # stable: activity order within each
+        if remaining:
+            write_text(current, remaining[0][0].run_id + "\n")
+        else:
+            current.unlink(missing_ok=True)
 
 
 def run_tip(paths: RunPaths, data: dict | None = None) -> str:
-    """Read accepted code even after abandonment removed a fully landed ref."""
+    """Read accepted code even after an earlier `abandon` removed a fully landed ref."""
     result = git(paths.project, "rev-parse", "--verify",
                  paths.ref if paths.run_id else "HEAD", check=False)
     if result.returncode == 0:

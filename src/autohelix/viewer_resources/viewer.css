@@ -204,12 +204,12 @@ pre { white-space: pre-wrap; word-break: break-word; }
 .run-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; color: var(--text); text-decoration: none; }
 .run-id:hover { color: var(--accent); }
 .run-config { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.runs tr.abandoned { opacity: 0.55; }
+.runs tr.archived { opacity: 0.55; }
 .runs .warn { color: var(--bad); }
 .runs th select { font-size: 12px; color: var(--muted); padding: 0 4px; }
 .pill.finished { color: var(--good); }
 .pill.failed, .pill.crashed, .pill.error { color: var(--bad); }
-.pill.interrupted, .pill.abandoned, .pill.idle { color: var(--muted); }
+.pill.interrupted, .pill.archived, .pill.idle { color: var(--muted); }
 .empty { padding: 24px 8px; }
 
 .yaml-key { color: var(--accent); }

@@ -198,7 +198,7 @@ def test_only_last_segment_writes_report(tmp_path, monkeypatch):
     separate_reports = []
     monkeypatch.setattr(P, "_run_segment", lambda w, upto, v, r=None: calls.append((upto, r)))
     monkeypatch.setattr(P, "read_run_status",
-                        lambda p: {"stop_reason": {"kind": "budget", "budget": "iterations"}})
+                        lambda *a: {"stop_reason": {"kind": "budget", "budget": "iterations"}})
     monkeypatch.setattr(P, "_write_worker_report", lambda w: separate_reports.append(w.name))
 
     P.run_worker(workers[0], sync_every=2, verbose=False, run_args=["--verbose"])
@@ -242,7 +242,7 @@ def test_run_args_forwarded_to_subprocess(tmp_path, monkeypatch):
     monkeypatch.setattr(P.subprocess, "Popen", FakePopen)
     P.run_worker(workers[0], sync_every=6, verbose=False, run_args=["--timeout", "600"])
 
-    assert captured["cmd"][:2] == ["autohelix", "run"]
+    assert captured["cmd"][:5] == ["autohelix", "resume", workers[0].run_id, "--until", "6"]
     assert "--timeout" in captured["cmd"] and "600" in captured["cmd"]
     assert json.loads(captured["peers"]) == {}
 

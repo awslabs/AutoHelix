@@ -71,37 +71,36 @@ negation rules in your `.gitignore`, then retry. AutoHelix leaves that file unch
 
 ## `autohelix run`
 
-Start or resume the optimization loop. Requires `autohelix init` to have been run first.
+Start a new run of the optimization loop. Requires `autohelix init` to have been run first.
 
 ```bash
-autohelix run [--path PATH] [-n ITERATIONS] [--verbose] [--config PATH] [--no-report] [--new | --run ID] [--name NAME] [--land auto|manual]
+autohelix run [-p PATH] [-c CONFIG] [-n ITERATIONS] [--name NAME] [--land auto|manual] [--verbose] [--no-report]
 ```
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
-| `-n`, `--iterations` | Maximum iterations (overrides `budget.iterations`) |
-| `--verbose` | Show agent command details, file paths, heartbeats |
+| `-n`, `--iterations` | Iterations to run (overrides `budget.iterations`) |
 | `--config`, `-c` | Path to config file (default: `autohelix.yaml` in project) |
 | `--path`, `-p` | Project directory (default: current dir) |
+| `--name NAME` | Readable part of the new run's id, lowercase letters/digits/hyphens, up to 32 characters (default: the config file's name, none for `autohelix.yaml`) |
+| `--land auto\|manual` | Land accepted code at segment end (default auto, or `land:` in the config), or retain it only on the run ref |
+| `--verbose` | Show agent command details, file paths, heartbeats |
 | `--no-report` | Don't write the run summary when the run finishes |
-| `--new` | Create separate run state even for a previously used config path |
-| `--run ID` | Resume exactly this open run (`current` selects the pointer) |
-| `--name NAME` | Readable prefix for a new run id, lowercase letters/digits/hyphens, up to 32 characters |
-| `--land auto\|manual` | Land accepted code at segment end (default auto), or retain it only on the run ref |
+
+`run` always starts a **new** run, with its own budget, notes and history; to
+continue one, use [`autohelix resume`](#autohelix-resume). It never refuses
+because of other runs, but says what it sees: a run of the same config that is
+still running (both will land on the same branch, and whichever finishes second
+may not fast-forward), a previous run with commits that haven't landed (this
+run starts from your branch without them), or otherwise just which run came
+before. Scripts that want to continue where they left off should call
+`resume`, not `run`.
 
 When the run finishes (not when interrupted), it writes a summary to `.autohelix/runs/<id>/output/report.md` — see [Configuration → Report](config.md#report).
 
-On first run, performs preflight checks and captures baseline observables. When the run stops, it saves `.autohelix/runs/<id>/output/report.html`, a one-file copy of the [`autohelix view`](#autohelix-view) page — see [Concepts → Run page](concepts.md#run-page).
-
-Runs are identified independently of the checkout branch. Without `--new` or
-`--run`, the most recent open run for the config path resumes. `--run` without
-`--config` loads that run's stored config path; an explicit config can override
-settings without changing the original run identity. `-n` is a total run limit.
-An actual main-agent failure records a rejected attempt and consumes its number;
-resuming starts at the next number. Setup failures before a call do not consume
-an iteration. Failed baseline attempts remain iteration 0 and retain their costs.
+On first start, performs preflight checks and captures baseline observables. When the run stops, it saves `.autohelix/runs/<id>/output/report.html`, a one-file copy of the [`autohelix view`](#autohelix-view) page — see [Concepts → Run page](concepts.md#run-page).
 
 A refused dirty first start creates no run. The first valid baseline requires
 a clean checkout at the run's starting commit. Resumes use the run's accepted
@@ -110,17 +109,57 @@ commits advance `refs/autohelix/<id>` first, then auto landing fast-forwards the
 starting branch before report generation. If dirty files would be overwritten,
 the target diverged, or the target is checked out elsewhere, landing is refused
 and the run ref retains the accepted code. Resolve that condition and land later.
-One invocation of `run` is a segment; its iteration/time/cost limits still apply
-to the whole run. Only one writing lifecycle operation can own a run at a time; a PID in the viewer
-is advisory, while a process-held file lock enforces ownership.
+One invocation of `run` or `resume` is a segment; its iteration/time/cost limits
+still apply to the whole run. Only one process can own a run at a time; a PID in
+the viewer is advisory, while a process-held file lock enforces ownership.
+
+An actual main-agent failure records a rejected attempt and consumes its number;
+resuming starts at the next number. Setup failures before a call do not consume
+an iteration. Failed baseline attempts remain iteration 0 and retain their costs.
 
 Legacy `.autohelix/history.jsonl` state is not migrated: move or delete the old
 `.autohelix/` directory and run `git worktree prune` before starting a new run.
 
+### Run ids
+
+A run's id is the local date and time it started, its name if it has one, and
+four random characters: `20261111-1432-k3f9`, or `20261111-1432-perf-k3f9`. So
+`.autohelix/runs/` lists runs in the order they started. Every command that
+takes a run id also takes just the last part (`k3f9`), which is unique in the
+repository; git commands need the full id (`git merge autohelix/20261111-1432-k3f9`).
+
+## `autohelix resume`
+
+Continue a run.
+
+```bash
+autohelix resume [RUN_ID] [-n MORE | --until N] [-p PATH] [-c CONFIG] [--land auto|manual] [--verbose] [--no-report]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-n`, `--iterations` | How many **more** iterations to run |
+| `--until N` | Run up to iteration N (a total: running it twice does nothing the second time) |
+| `--config`, `-c` | Config file (default: the one the run started with; another one is used for this segment, with a warning) |
+
+Other options as for `run`. Without `RUN_ID`, resumes the most recently active
+run of the config that isn't [archived](#autohelix-archive), preferring runs
+that captured their baseline; it says which ("Resuming k3f9: 12 iterations,
+last active 2h ago"). If that run is running in another terminal, `resume`
+says so rather than picking an older one. With no run to resume it exits
+with status 3.
+
+`-n` and `--until` override `budget.iterations` only. Cost and time budgets
+stay run totals from the config: a run that reached `budget.cost` stops at once
+until you raise it there. `--until` with a number already reached runs an empty
+segment: it lands what is unlanded and saves `report.html`, but writes no new summary. A run stopped by a
+[stop condition](config.md#stop) is paused, not ended: `resume` continues it,
+and the condition is checked again after the next accepted iteration.
+
 ## `autohelix land`
 
 ```bash
-autohelix land [RUN_ID] [--path PATH] [--into BRANCH]
+autohelix land [RUN_ID] [-p PATH] [--into BRANCH]
 ```
 
 Fast-forward the run's starting branch to its accepted tip, preserving unrelated
@@ -130,26 +169,37 @@ detached checkout requires `--into BRANCH`. Landing also refuses branches that
 are being rebased. If the target moved during a segment, review it and land
 explicitly; AutoHelix never rewinds user commits.
 
-## `autohelix abandon` and `autohelix clear`
+## `autohelix archive`
 
 ```bash
-autohelix abandon [RUN_ID] [--path PATH] [--purge]
-autohelix clear [path]
+autohelix archive RUN_ID... [-p PATH] [--undo]
 ```
 
-Abandon prevents further resume and retains the run's evidence/current selection.
-Fully landed refs can be removed; unlanded accepted commits stay on the run ref.
-`--purge` permanently deletes the ref and run directory. `clear` aliases abandon
-for the current run. Code, external artifacts, `.claudeignore`, and the project
-prompt stay intact. Use `run --new` for fresh state and git directly to roll code
-back when desired.
+Sets runs aside: they are hidden from the [dashboard](#autohelix-dashboard)
+(behind a count) and skipped by a bare `resume`. Their history, notes, logs and
+commits stay; `autohelix resume RUN_ID` resumes one and brings it back, and
+`--undo` brings it back without running it. A running run can't be archived.
+Use it for runs that are done or didn't work out, and for runs you merged some
+other way (squash, cherry-pick): those keep looking unlanded to git.
+
+## `autohelix delete`
+
+```bash
+autohelix delete RUN_ID... [-p PATH] [--force]
+```
+
+Deletes runs: their `.autohelix/runs/<id>/` folder (history, notes, logs,
+reports), their ref and any leftover copies. Refuses a running run, and a run
+with accepted commits that its target branch lacks (they would be lost) unless
+`--force`. Code on your branch, external artifacts, `.claudeignore` and the
+project prompt stay intact. To keep a run but hide it, use `archive`.
 
 ## `autohelix watch`
 
 Follow a run in a second terminal.
 
 ```bash
-autohelix watch [path] [--run ID]
+autohelix watch [RUN_ID] [-p PATH]
 ```
 
 Shows the live output of whatever the run is doing: the agent during an iteration, the reviewer during a review, and the summary agent at the end (tool calls, text, elapsed time). Below it is a status line with the iteration, phase (agent, checks, review, …) and time in that phase, read from `.autohelix/runs/<id>/runtime/status.json`. When the run stops, watch says how and when, and waits for the next run; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs.
@@ -159,8 +209,8 @@ Shows the live output of whatever the run is doing: the agent during an iteratio
 One run: a snapshot in the terminal, or a live web view in your browser.
 
 ```bash
-autohelix view [path] [--json | --print] [--run ID] [--config FILE]
-autohelix view [path] [--port 8765] [--open] [--run ID]
+autohelix view [RUN_ID] [-p PATH] [--json | --print] [--config FILE]
+autohelix view [RUN_ID] [-p PATH] [--port 8765] [--open]
 ```
 
 `--json` prints the run once and exits, for scripts and agents managing runs: the run's row from [`dashboard --json`](#json-output) under `run`, plus `iterations`, one entry per iteration with `iteration`, `accepted`, `metrics`, `summary` (the commit subject, or why it was rejected), `cost`, `cost_incomplete` and `seconds`. `--print` shows the same as text: status, time and cost, landing, the latest accepted metrics against the baseline, and one row per iteration.
@@ -180,13 +230,13 @@ The page lives at `/run/<id>/`; the server's root (`/`) is the run list describe
 The project's runs: a snapshot in the terminal, or a live list in your browser.
 
 ```bash
-autohelix dashboard [path] [--json | --print [--metric NAME]]
-autohelix dashboard [path] [--port 8765] [--open]
+autohelix dashboard [-p PATH] [--json | --print [--metric NAME]]
+autohelix dashboard [-p PATH] [--port 8765] [--open]
 ```
 
-`--json` prints every run once and exits (see [JSON output](#json-output)); `--print` shows the same columns as the web page as a table, with one metric (`--metric`, default the first one of the most recently active run) and without abandoned runs, which it only counts.
+`--json` prints every run once and exits (see [JSON output](#json-output)); `--print` shows the same columns as the web page as a table, with one metric (`--metric`, default the first one of the most recently active run) and without archived runs, which it only counts.
 
-Without either, it serves one row per run in `.autohelix/runs/`, kept to the essentials: the id; the status (with the phase while running), with time and cost so far underneath; iterations of the run's budget; one metric from the latest accepted iteration (the code a land would deliver; its change against the run's own baseline is in the tooltip), picked from a menu in the column header; and landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; and when the run was last active. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel) and shows the project's total cost, including abandoned runs. Live runs come first; abandoned runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view`](#autohelix-view) page. It is the same server as `autohelix view`, with the same `127.0.0.1`-only binding.
+Without either, it serves one row per run in `.autohelix/runs/`, kept to the essentials: the id; the status (with the phase while running), with time and cost so far underneath; iterations of the run's budget; one metric from the latest accepted iteration (the code a land would deliver; its change against the run's own baseline is in the tooltip), picked from a menu in the column header; and landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; and when the run was last active. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel) and shows the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view`](#autohelix-view) page. It is the same server as `autohelix view`, with the same `127.0.0.1`-only binding.
 
 ### JSON output
 
@@ -194,7 +244,7 @@ Without either, it serves one row per run in `.autohelix/runs/`, kept to the ess
 
 - `schema` (1), `project` (folder name), `host`, `path` (absolute), `path_display` (with `~` for your home folder), and the checkout's `branch` (`null` when detached) and short `commit`.
 - `runs`, most recently active first. Each run has:
-  - `id`, `name`, `lifecycle` (`open` or `abandoned`), `created_at`, `last_activity`;
+  - `id`, `name`, `archived` (true or false), `created_at`, `last_activity`;
   - `config_file` and `goal`, read from the config file as it is now in the checkout;
   - `status`: the last segment's `state` (`running`, `finished`, `interrupted`, `failed`, or `crashed` when its process is gone), `phase`, `iteration`, `iteration_started_at`, `phase_started_at`, `stopped_at`, `stop_reason` (`kind`, `detail`, …) and `max_iterations`; `null` before the first segment;
   - `accepted`: the number of accepted iterations;
@@ -208,7 +258,7 @@ Without either, it serves one row per run in `.autohelix/runs/`, kept to the ess
 Send a hint to a running agent, picked up at the start of its next iteration.
 
 ```bash
-autohelix hint "MESSAGE" [--path PATH] [--run ID]
+autohelix hint "MESSAGE" [-p PATH] [--run RUN_ID]
 ```
 
 Requires a selected run (start one first). Appends a timestamped line to `.autohelix/runs/<id>/hints.md`. The agent reads that file (listed in its "Read before starting" section) each iteration, so a hint lets you steer a run without stopping it. Run it from a second terminal while `autohelix run` is going. Hints accumulate — the file holds the full history for the run.
@@ -250,14 +300,14 @@ stop:
 Write (or rewrite) the run summary.
 
 ```bash
-autohelix report [path] [--config PATH] [--run ID]
+autohelix report [RUN_ID] [-p PATH] [--config PATH]
 ```
 
 | Option | Description |
 |--------|-------------|
-| `--config`, `-c` | Path to config file (default: from last run, or `autohelix.yaml`) |
+| `--config`, `-c` | Path to config file (default: the run's own) |
 
-`autohelix run` writes the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. One agent call reads the run's history, notes, reviews, logs and commits and writes `.autohelix/runs/<id>/output/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
+`autohelix run` and `resume` write the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. One agent call reads the run's history, notes, reviews, logs and commits and writes `.autohelix/runs/<id>/output/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
 
 ## `autohelix parallel` (alpha)
 
@@ -265,7 +315,7 @@ Run multiple workers concurrently, each with its own config file and git worktre
 
 ```bash
 autohelix parallel --worker A.yaml --worker B.yaml [--sync-notes-every N]
-autohelix parallel                                 # resume this repo's previous run
+autohelix parallel                                 # resume this repo's previous workers
 ```
 
 | Option | Description |
@@ -279,6 +329,6 @@ Per-worker settings (model, timeout, agent, budget) come from each worker's own 
 
 Each worker runs fully async in a worktree on its own branch (`parallel/worker-N`), driven to its config's `budget.iterations`. Workers only ever write their own branch, so they never conflict. Every `--sync-notes-every` iterations, each worker's notes are mirrored to a shared directory that peers symlink into `.autohelix/peer_notes/` — so agents can read what the others have tried, but not overwrite it. Peers' accepted code is visible from an agent's copy as `autohelix/<peer-run-id>` (e.g. `git show autohelix/<id>:file`); those refs are a snapshot taken when the iteration starts.
 
-Worktrees and branches **persist** across runs and nothing is deleted automatically: re-running `autohelix parallel` (or a bare invocation with no `--worker`) resumes each worker from where it stopped, reusing the recorded configs and sync interval. When workers share a single metric, results are shown as a leaderboard ranked by that metric (the first metric declared in each config); the branches are the deliverable, left for you to `git merge` the winner and remove the rest.
+Worktrees and branches **persist** across runs and nothing is deleted automatically: re-running `autohelix parallel` (or a bare invocation with no `--worker`) resumes each worker's run from where it stopped (each worker segment is an `autohelix resume <id> --until N`), reusing the recorded configs and sync interval. When workers share a single metric, results are shown as a leaderboard ranked by that metric (the first metric declared in each config); the branches are the deliverable, left for you to `git merge` the winner and remove the rest.
 
 Iterations come from each worker's `budget.iterations`; model, timeout, agent backend, and all other per-worker settings live in each worker's config file.

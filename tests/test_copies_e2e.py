@@ -115,16 +115,11 @@ def test_land_refuses_target_checked_out_in_another_worktree(project, tmp_path):
     harness.close()
 
 
-def test_copies_are_gone_after_a_run_and_abandon_drops_the_pin(project):  # noqa: F811
-    from autohelix.runs import abandon
-
+def test_copies_and_the_pin_are_gone_after_a_segment(project):  # noqa: F811
     harness = Harness(project, land_mode="manual")
     harness.run(max_iterations=2, report=False)
-    assert not list(harness.paths.copies.glob("*"))
-    pin = harness.paths.pin
-    assert git(project, "rev-parse", "--verify", pin, check=False).returncode == 0
-    abandon(harness.paths)
-    assert git(project, "rev-parse", "--verify", pin, check=False).returncode != 0
+    assert not harness.paths.copies.exists()
+    assert git(project, "rev-parse", "--verify", harness.paths.pin, check=False).returncode != 0
 
 
 def test_stale_copies_are_removed_at_segment_start(project):  # noqa: F811

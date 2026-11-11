@@ -236,11 +236,12 @@ my-project/
 Temporary per-phase candidate copies live outside the project, in
 `${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/` (set `AUTOHELIX_COPIES_ROOT` to move them).
 
-Runs resume by config path. Use `autohelix run --new` for a separate experiment,
-`--run ID` to select one, or `--land manual` to keep validated commits on the run's
-`refs/autohelix/<id>` until `autohelix land`. By default, accepted changes land on
-the starting branch when a run segment (one invocation) ends. A resumed run can coexist with
-unrelated dirty checkout files. See [CLI reference](docs/cli.md#autohelix-run).
+Each `autohelix run` starts a new run; `autohelix resume [<id>] [-n MORE]` continues
+one, `autohelix archive <id>` sets one aside and `autohelix delete <id>` removes it.
+Use `--land manual` to keep validated commits on the run's `refs/autohelix/<id>` until
+`autohelix land`. By default, accepted changes land on the starting branch when a run
+segment (one invocation) ends. A resumed run can coexist with unrelated dirty checkout
+files. See [CLI reference](docs/cli.md#autohelix-run).
 
 <!-- ───────────────────── OTHER FEATURES ───────────────────── -->
 

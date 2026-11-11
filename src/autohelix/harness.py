@@ -27,7 +27,7 @@ from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git, allocate_call,
-                            claim_copies, remove_copies, write_text)
+                            claim_copies, remove_copies, short_id, write_json, write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.checks import preflight_check, run_constraints, run_observables, run_stop_checks
 from autohelix.run_status import RunStatus
@@ -136,7 +136,10 @@ class Harness:
     def __init__(self, project_path: Path, verbose: bool = False, heartbeat_seconds: int = 30,
                  config_file: Path | None = None, *, new: bool = False,
                  run_id: str | None = None, name: str | None = None,
-                 land_mode: str | None = None):
+                 land_mode: str | None = None, create: bool = True):
+        """Own one run: `run_id`, a new one (`new`, as `autohelix run`), or the config's
+        most recently active run (as `autohelix resume`; created if there is none,
+        unless `create` is false)."""
         self.project_path = Path(project_path).resolve()
         if run_id and config_file is None:
             selected = RunPaths(self.project_path, run_id).read_identity()
@@ -158,11 +161,13 @@ class Harness:
             os.environ.pop(key, None)
         self.land_mode = land_mode or self.config.land
         self._preflight_done = False
-        self.paths, self.run_info, self._ownership = select_run(
+        self.paths, self.run_info, self._ownership, notices = select_run(
             self.project_path, config_file or self.project_path / "autohelix.yaml",
             new=new, run_id=run_id, name=name if name is not None else self.config.name,
-            ready=self._first_start_ready,
+            create=create, ready=self._first_start_ready,
         )
+        for level, text in notices:
+            self.console.print(f"[yellow]{text}[/yellow]" if level == "warn" else f"[dim]{text}[/dim]", highlight=False)
         try:
             self.history = History(self.project_path, self.paths.run_id)
             tip, warning = reconcile(self.paths, self.run_info, self.history, self.land_mode)
@@ -1207,8 +1212,6 @@ class Harness:
             if self._ownership._file.closed:
                 self._ownership = RunLock(self.paths.lock)
                 self.run_info = self.paths.read_identity()
-                if self.run_info["lifecycle"] != "open":
-                    raise AutoHelixRunError(f"Run {self.paths.run_id} is abandoned; use --new.")
                 tip, warning = reconcile(self.paths, self.run_info, self.history, self.land_mode)
                 self.run_state.data = self.run_info
                 self.run_state.expected_tip = tip
@@ -1242,6 +1245,8 @@ class Harness:
                         self._write_static()
             finally:
                 try:
+                    # Only the live view reads the pin, while an iteration is judged.
+                    git(self.project_path, "update-ref", "-d", self.paths.pin, check=False)
                     remove_copies(self.run_state.copies_root, self.log.warn)
                 finally:
                     self.close()
@@ -1291,14 +1296,14 @@ class Harness:
                 if self.land_mode == "auto":
                     raise AutoHelixRunError(
                         f"Target {target} changed during this segment; leaving user commits untouched. "
-                        f"Review them, then use autohelix land {self.paths.run_id} explicitly.")
+                        f"Review them, then use autohelix land {short_id(self.paths.run_id)} explicitly.")
                 message = (f"Target {target} changed during this segment. Review those commits "
-                           f"before autohelix land {self.paths.run_id}.")
+                           f"before autohelix land {short_id(self.paths.run_id)}.")
                 self.console.print(f"[yellow]{message}[/yellow]", highlight=False)
                 self.log.warn(message)
             if self.land_mode == "auto":
                 land(self.paths, self.run_info, self.run_state.expected_tip)
-                self.console.print(f"[dim]Landed run {self.paths.run_id} into {target}.[/dim]")
+                self.console.print(f"[dim]Landed run {short_id(self.paths.run_id)} into {target}.[/dim]")
         except Exception as e:
             self.console.print(f"[yellow]{e}[/yellow]", highlight=False)
             self.log.warn(f"auto-land: {e}")
@@ -1327,7 +1332,9 @@ class Harness:
         if needs_baseline:
             ensure_clean_working_tree(self.repo, self.project_path)
             if git(self.project_path, "rev-parse", "HEAD").stdout.strip() != self.run_state.expected_tip:
-                raise AutoHelixRunError("Baseline checkout moved since this run started. Restore its original commit or abandon this run and start --new.")
+                raise AutoHelixRunError("Baseline checkout moved since this run started. Restore its original commit, "
+                                        "or start a new run with `autohelix run` (and `autohelix delete "
+                                        f"{short_id(self.paths.run_id)}` this one).")
             ensure_editable_files_ready(self.repo, self.project_path, self.config.editable)
 
         # Show header
@@ -1344,6 +1351,9 @@ class Harness:
         self.run_status.start(max_iterations=max_iter, run_id=self.paths.run_id)
         self._segment_started = True
         self._segment_target_tip = self._target_tip()
+        flags = [self.run_info.pop("archived", None), self.run_info.pop("lifecycle", None)]
+        if any(flags):
+            write_json(self.paths.identity, self.run_info)  # resuming brings an archived run back
 
         # Capture baseline on first run
         baseline_stop = None
@@ -1370,7 +1380,7 @@ class Harness:
                 r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0))
                 for r in prior_iterations
             ) / 1000.0
-        loop_start = max(0.0, time.monotonic() - prior_elapsed_seconds)
+        loop_start = time.monotonic()  # monotonic counts from boot: never subtract prior time from it
 
         config_name = self._resolve_config_rel_path()
         self.log.info(f"run started — config: {config_name}, max_iter: {max_iter}, resuming from iter {start_iter}")
@@ -1391,6 +1401,8 @@ class Harness:
             stop_reason = self._condition_stop(baseline_stop, 0)
         cost_reached = {"kind": "budget", "budget": "cost",
                         "detail": f"cost budget reached ({format_cost(self.config.max_cost_usd)})"}
+        time_reached = {"kind": "budget", "budget": "time",
+                        "detail": f"time budget reached ({_format_time(self.config.max_time_seconds or 0)})"}
         iteration = start_iter
         try:
             for iteration in range(start_iter, max_iter + 1):
@@ -1398,6 +1410,10 @@ class Harness:
                     break
                 if self.config.max_cost_usd is not None and cumulative_cost >= self.config.max_cost_usd:
                     stop_reason = cost_reached
+                    break
+                if (self.config.max_time_seconds is not None
+                        and prior_elapsed_seconds + time.monotonic() - loop_start >= self.config.max_time_seconds):
+                    stop_reason = time_reached
                     break
                 result = self.run_iteration(iteration)
                 ran = True
@@ -1424,10 +1440,9 @@ class Harness:
                     break
 
                 # Check time budget
-                elapsed = time.monotonic() - loop_start
+                elapsed = prior_elapsed_seconds + time.monotonic() - loop_start
                 if self.config.max_time_seconds is not None and elapsed >= self.config.max_time_seconds:
-                    stop_reason = {"kind": "budget", "budget": "time",
-                                   "detail": f"time budget reached ({_format_time(self.config.max_time_seconds)})"}
+                    stop_reason = time_reached
                     break
             else:
                 stop_reason = stop_reason or {
@@ -1443,7 +1458,7 @@ class Harness:
             ran = False
         self._land()
         if self.land_mode == "manual":
-            self.console.print(f"[dim]Accepted code remains on {self.paths.ref}. Land with autohelix land {self.paths.run_id}.[/dim]")
+            self.console.print(f"[dim]Accepted code remains on {self.paths.ref}. Land with autohelix land {short_id(self.paths.run_id)}.[/dim]")
         self._print_summary()
         return ran
 

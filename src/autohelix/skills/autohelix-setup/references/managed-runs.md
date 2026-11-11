@@ -23,7 +23,7 @@ session tools when available. If the environment cannot support continued
 monitoring, explain that limit and give a concrete handoff; do not claim that
 supervision completed.
 
-Read the id from `.autohelix/current` (or select `--run ID`), then read `.autohelix/runs/<id>/history.jsonl`, the current backend log under
+Read the id from `.autohelix/current` (or pass a run id to `view`, `watch` and `report`), then read `.autohelix/runs/<id>/history.jsonl`, the current backend log under
 `.autohelix/runs/<id>/logs/iter-N/`, captured observations under
 `.autohelix/runs/<id>/observations/iter-N/`, and persistent `.autohelix/runs/<id>/notes/iter-N.md`.
 `autohelix watch` provides a terminal view; `.autohelix/runs/<id>/runtime/status.json` records
@@ -73,8 +73,12 @@ records suffice.
 
 An invocation ending is a checkpoint, not proof that an open-ended experiment
 is finished. Explain why this execution ended and what remains uncertain.
-For requested resumption, retain history and configuration and interpret `-n`
-as the total iteration limit, including previous attempts. A failed actual main-agent call consumes its number; resume at the next iteration. Do not abandon state,
-reset accepted code, or extend the agreed effort without authorization.
+For requested resumption, use `autohelix resume <id>`, never `autohelix run`:
+`run` always starts a new run with fresh notes and a fresh budget. Prefer
+`--until N` (stop at iteration N, safe to repeat) over `-n` (N more
+iterations) in scripts and retries. `resume` exits 3 when there is no run to
+resume. A failed actual main-agent call consumes its number; resume at the next
+iteration. Do not archive or delete runs, reset accepted code, or extend the
+agreed effort without authorization.
 A run that finishes writes its summary to `.autohelix/runs/<id>/output/report.md`; after an
 interrupted run, `autohelix report` writes one when requested.

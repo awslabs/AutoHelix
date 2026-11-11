@@ -4,10 +4,13 @@
 
 ### Changed (breaking)
 
-- **Runs.** Each `autohelix run` belongs to a run with its own id and state in
-  `.autohelix/runs/<id>/`. A bare `autohelix run` resumes the most recent open
-  run for the same config; `--new` starts another, `--run ID` picks one, and
-  `--name` names it. State from earlier versions is refused: move or delete
+- **Runs.** Each `autohelix run` starts a new run, with its own id and state
+  in `.autohelix/runs/<id>/` (ids sort by start: `20261111-1432-k3f9`, with
+  `--name` or the config's name in the middle; commands accept the last part,
+  `k3f9`). `autohelix resume [<id>]` continues one (`-n` more iterations,
+  `--until` up to an iteration; exit 3 when there is none); `run` never
+  refuses, but warns about a run of the same config that is live or has
+  unlanded commits. State from earlier versions is refused: move or delete
   `.autohelix/` first. There is no migration.
 - **Your branch moves only when a run lands.** Accepted iterations are commits
   on a hidden ref, `refs/autohelix/<id>` (`git log autohelix/<id>`). With
@@ -19,8 +22,16 @@
   run on exactly the code that would be accepted; a check, reviewer or
   `autohelix ask` call that changes it rejects the iteration, and the baseline
   runs the constraints once to catch a check that edits files.
-- `autohelix abandon [--purge]` ends a run and keeps its evidence; `clear` is
-  now an alias for abandoning the current run (it no longer archives state).
+- `autohelix archive` hides runs from the dashboard and a bare `resume`,
+  keeping everything; `autohelix delete` removes a run's state and ref
+  (`--force` with unlanded commits). `clear` is gone.
+- Run ids are positional and the project folder is `-p` for every command:
+  `autohelix view k3f9 -p PATH` (was `view PATH --run ID`); likewise `watch`,
+  `report` and `dashboard -p`. `hint` takes `--run`.
+- `budget.time` is also checked before an iteration starts, so a resumed run
+  past its time budget starts no new iteration.
+- `dashboard --json`: `lifecycle` is replaced by `archived` (schema 1 was not
+  in a release yet; it is on `main`).
 - `.autohelix/` is excluded through `.git/info/exclude` instead of a
   committed `.gitignore` change.
 
@@ -31,7 +42,7 @@
 - `--json` and `--print` on `autohelix dashboard` and `autohelix view`: a
   one-time snapshot for scripts (versioned with a `schema` field; fields are
   only ever added) or for the terminal.
-- `autohelix land` and `autohelix view --run`.
+- `autohelix land`.
 - From #16: the live run viewer (`autohelix view`), run summaries and
   `report.html`, stop commands and `autohelix ask`, and cost accounting
   across agents, reviewers and resumed runs.

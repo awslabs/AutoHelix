@@ -53,16 +53,16 @@ function formatDelta(value, baseline) {
 
 const live = (run) => run.status?.state === 'running';
 
-// One word for the row's state; abandoned wins over the last segment's outcome.
+// One word for the row's state; archived wins over the last segment's outcome.
 function outcome(run) {
   if (run.error) return 'error';
   if (live(run)) return 'running';
-  if (run.lifecycle === 'abandoned') return 'abandoned';
+  if (run.archived) return 'archived';
   return run.status?.state || 'idle';
 }
 
 const WORDS = { finished: 'finished', interrupted: 'interrupted', failed: 'failed', crashed: 'stopped unexpectedly',
-                idle: 'not started', abandoned: 'abandoned', running: 'running', error: 'unreadable' };
+                idle: 'not started', archived: 'archived', running: 'running', error: 'unreadable' };
 
 const fmtMoney = (v) => `$${Number.isInteger(v) ? v : v.toFixed(2)}`;
 
@@ -159,7 +159,7 @@ function lastActiveCell(run) {
 function runRow(run) {
   const href = `/run/${encodeURIComponent(run.id)}/`;
   const file = run.config_file;
-  const tr = el('tr', { className: run.lifecycle === 'abandoned' ? 'abandoned' : '', tabIndex: 0 },
+  const tr = el('tr', { className: run.archived ? 'archived' : '', tabIndex: 0 },
     el('td', {}, el('a', { className: 'run-id', href, textContent: run.id }),
       file ? el('div', { className: 'status-sub run-config', textContent: file, title: 'Config file' }) : null),
     statusCell(run),
@@ -182,31 +182,31 @@ function renderMetricMenu(names) {
   select.value = metric;
 }
 
-let showAbandoned = false;
+let showArchived = false;
 
-// "5 open runs · $2.95 spent · 1 abandoned (show)": the count toggles abandoned rows.
+// "5 runs · $2.95 spent · 1 archived (show)": the count toggles archived rows.
 function renderSubtitle(runs) {
-  const abandoned = runs.filter((r) => r.lifecycle === 'abandoned').length;
-  const open = runs.length - abandoned;
-  // Total spend includes abandoned runs: that money was spent.
+  const archived = runs.filter((r) => r.archived).length;
+  const open = runs.length - archived;
+  // Total spend includes archived runs: that money was spent.
   const costs = runs.map((r) => r.progress?.cost_usd).filter((c) => typeof c === 'number');
   const incomplete = runs.some((r) => r.progress?.cost_incomplete || (r.progress && r.progress.cost_usd === null && r.progress.iterations));
-  const parts = [`${open} open run${open === 1 ? '' : 's'}`];
+  const parts = [`${open} run${open === 1 ? '' : 's'}`];
   if (costs.length) {
-    parts.push(el('span', { title: incomplete ? 'Some call costs are unavailable, so this is a lower bound' : 'All runs, including abandoned ones',
+    parts.push(el('span', { title: incomplete ? 'Some call costs are unavailable, so this is a lower bound' : 'All runs, including archived ones',
       textContent: `$${costs.reduce((a, b) => a + b, 0).toFixed(2)}${incomplete ? '+' : ''} spent` }));
   }
-  if (abandoned) {
-    parts.push(el('button', { className: 'link', textContent: `${abandoned} abandoned (${showAbandoned ? 'hide' : 'show'})`,
-      onclick: () => { showAbandoned = !showAbandoned; render(); } }));
+  if (archived) {
+    parts.push(el('button', { className: 'link', textContent: `${archived} archived (${showArchived ? 'hide' : 'show'})`,
+      onclick: () => { showArchived = !showArchived; render(); } }));
   }
   $('subtitle').replaceChildren(...parts.flatMap((part, i) => (i ? [' · ', part] : [part])));
 }
 
 function render() {
   const runs = data.runs;
-  const order = (r) => (live(r) ? 0 : r.lifecycle === 'abandoned' ? 2 : 1);
-  const shown = runs.filter((r) => showAbandoned || r.lifecycle !== 'abandoned')
+  const order = (r) => (live(r) ? 0 : r.archived ? 2 : 1);
+  const shown = runs.filter((r) => showArchived || !r.archived)
     .sort((a, b) => order(a) - order(b) || (b.last_activity || 0) - (a.last_activity || 0));
   $('title').textContent = data.project;
   document.title = `${data.project} · AutoHelix dashboard`;
