@@ -3,7 +3,7 @@
 
 """`autohelix watch`: follow a run in the terminal.
 
-The run's status (.autohelix/runtime/run.json) says what is happening; watch shows
+The run's status (.autohelix/runtime/status.json) says what is happening; watch shows
 the log being written for it: the agent's during an iteration, the reviewer's
 during a review, the summary agent's while the summary is written.
 """
@@ -19,6 +19,7 @@ from autohelix.display import LiveDisplay
 from autohelix.formatting import format_duration
 from autohelix.replay import LogTail
 from autohelix.run_status import read_run_status
+from autohelix.runs import RunPaths
 
 POLL_SECONDS = 0.3
 STOPPED = {"finished": "Finished", "interrupted": "Interrupted", "failed": "Failed",
@@ -46,7 +47,7 @@ def status_line(status: dict | None, now: float | None = None) -> str:
     return f"Running{where} · {status.get('phase')} · {since}"
 
 
-def log_for(project: Path, status: dict | None, current: Path | None) -> tuple[Path, str, float] | None:
+def log_for(project: Path, status: dict | None, current: Path | None, run_id: str | None = None) -> tuple[Path, str, float] | None:
     """The log to show for this status: (path, panel title, when it started).
 
     Between the agent, review and summary phases (checks, merge, …) the panel stays
@@ -54,25 +55,37 @@ def log_for(project: Path, status: dict | None, current: Path | None) -> tuple[P
     """
     if not status:
         return None
-    logs = project / ".autohelix" / "logs"
+    paths = RunPaths(project, run_id)
+    if not paths.run_id:
+        return None
+    logs = paths.logs
     phase, n = status.get("phase"), status.get("iteration")
     phase_start = status.get("phase_started_at", time.time())
+    if phase in {"agent", "review"} and status.get("log"):
+        label = "Baseline" if n == 0 else f"Iteration {n}"
+        return Path(status["log"]), f"{label} · {'reviewer' if phase == 'review' else 'agent'}", phase_start
     if phase == "report":
         return logs / "report.log", "Summary", phase_start
     if n is None:
         return None
     label = "Baseline" if n == 0 else f"Iteration {n}"
     if phase == "review":
-        return logs / f"iter-{n}" / "review.log", f"{label} · reviewer", phase_start
+        review = next((call for call in reversed(status.get("calls", [])) if call["role"] == "reviewer"), None)
+        if review and review.get("log"):
+            return paths.run_dir / review["log"], f"{label} · reviewer", phase_start
+        return None
     if n == 0:
         return None  # the baseline only runs commands; the status line covers it
-    agent_log = logs / f"iter-{n}" / "agent.log"
-    if phase == "agent" or current is None or current.parent.name != f"iter-{n}":
+    agent = next((call for call in status.get("calls", []) if call["role"] == "agent"), None)
+    if not agent or not agent.get("log"):
+        return None
+    agent_log = paths.run_dir / agent["log"]
+    if phase == "agent" or current is None or f"iter-{n}" not in (current.parent.name, current.parent.parent.name):
         return agent_log, f"{label} · agent", status.get("iteration_started_at", phase_start)
     return None  # keep the current panel
 
 
-def watch(project: Path, backend: str | None = None, console: Console | None = None) -> None:
+def watch(project: Path, backend: str | None = None, console: Console | None = None, *, run_id: str | None = None) -> None:
     console = console or Console()
     current: Path | None = None
     tail: LogTail | None = None
@@ -80,12 +93,12 @@ def watch(project: Path, backend: str | None = None, console: Console | None = N
     started = 0.0
     with Live(console=console, refresh_per_second=4) as live:
         while True:
-            status = read_run_status(project)
+            status = read_run_status(project, run_id)
             running = bool(status) and status.get("state") == "running"
             if not status or (running and status.get("iteration") is None):
                 current = tail = display = None  # cleared, or a new run is starting
             # While a run is going, follow its phases; otherwise show where it stopped, once.
-            choice = log_for(project, status, current) if running or current is None else None
+            choice = log_for(project, status, current, run_id) if running or current is None else None
             # A new start time on the same log means the iteration is being rerun (resume).
             if choice and (choice[0], choice[2]) != (current, started):
                 current, title, started = choice

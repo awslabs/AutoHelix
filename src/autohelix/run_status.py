@@ -1,29 +1,30 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Live run status: the harness writes .autohelix/runtime/run.json, observers read it."""
+"""Live run status: the harness writes .autohelix/runtime/status.json, observers read it."""
 
 import json
 import os
 import socket
 import time
 from pathlib import Path
+from autohelix.runs import RunPaths, SCHEMA
 
 
-def _path(project: Path) -> Path:
-    return project / ".autohelix" / "runtime" / "run.json"
+def _path(project: Path, run_id: str | None = None) -> Path:
+    return RunPaths(project, run_id).status
 
 
 class RunStatus:
     """Records what the harness is doing right now (iteration and phase)."""
 
-    def __init__(self, project: Path):
-        self.path = _path(project)
+    def __init__(self, project: Path, run_id: str | None = None):
+        self.path = _path(project, run_id)
         self.data: dict = {}
 
     def start(self, **info) -> None:
         now = time.time()
-        self.data = {"state": "running", "pid": os.getpid(), "host": socket.gethostname(),
+        self.data = {"schema": SCHEMA, "state": "running", "pid": os.getpid(), "host": socket.gethostname(),
                      "started_at": now, "iteration": None, "phase": "starting",
                      "phase_started_at": now, **info}
         self._write()
@@ -60,10 +61,13 @@ class RunStatus:
             pass  # Status is best-effort; never break a run over it.
 
 
-def read_run_status(project: Path) -> dict | None:
+def read_run_status(project: Path, run_id: str | None = None) -> dict | None:
     """Return the last recorded status, with state corrected if the process died."""
+    paths = RunPaths(project, run_id)
+    if paths.run_id is None:
+        return None
     try:
-        data = json.loads(_path(project).read_text())
+        data = json.loads(paths.status.read_text())
     except (OSError, ValueError):
         return None
     if data.get("state") == "running" and data.get("host") == socket.gethostname():

@@ -155,7 +155,7 @@ class TestCreateWorktree:
         wt = sandbox.create_worktree(1)
 
         assert wt.path.exists()
-        assert wt.branch == "autohelix-iter-1"
+        assert wt.branch == ""
         assert wt.iteration == 1
         # The worktree should contain our initial file
         assert (wt.working_dir / "hello.py").exists()
@@ -168,7 +168,7 @@ class TestCreateWorktree:
         # Creating same iteration again should clean up old one
         wt2 = sandbox.create_worktree(1)
         assert wt2.path.exists()
-        assert wt2.branch == "autohelix-iter-1"
+        assert wt2.branch == ""
 
 
 class TestRemoveWorktree:
@@ -192,7 +192,7 @@ class TestRemoveWorktree:
 # ── Sandbox: merge worktree ─────────────────────────────────────────────
 
 
-class TestMergeWorktree:
+class TestCommitWorktree:
     def test_agent_commit_is_reopened_before_scope_and_merge(self, git_project):
         sandbox = Sandbox(git_project)
         wt = sandbox.create_worktree(1)
@@ -206,7 +206,7 @@ class TestMergeWorktree:
             capture_output=True,
         )
 
-        assert sandbox.uncommit_agent_changes(wt) == 1
+        assert sandbox.normalize(wt, wt.base_commit)[0] == 1
         assert (
             subprocess.run(
                 ["git", "rev-parse", "HEAD"],
@@ -225,16 +225,16 @@ class TestMergeWorktree:
             text=True,
         ).stdout
 
-        commit = sandbox.merge_worktree(
+        commit = sandbox.commit_worktree(
             wt,
             editable=["hello.py"],
             message="AutoHelix iteration 1",
         )
         assert commit is not None
-        assert (git_project / "hello.py").read_text() == "print('agent commit')\n"
+        assert (wt.working_dir / "hello.py").read_text() == "print('agent commit')\n"
         assert "AutoHelix iteration 1" in subprocess.run(
-            ["git", "log", "-1", "--format=%B"],
-            cwd=git_project,
+            ["git", "show", "-s", "--format=%B", commit],
+            cwd=wt.working_dir,
             check=True,
             capture_output=True,
             text=True,
@@ -262,12 +262,12 @@ class TestMergeWorktree:
             capture_output=True,
         )
 
-        assert sandbox.uncommit_agent_changes(wt) == 1
+        assert sandbox.normalize(wt, wt.base_commit)[0] == 1
         assert sandbox.revert_out_of_scope(wt, ["hello.py"]) == ["other.py"]
-        commit = sandbox.merge_worktree(wt, editable=["hello.py"])
+        commit = sandbox.commit_worktree(wt, editable=["hello.py"])
 
         assert commit is not None
-        assert (git_project / "hello.py").read_text() == "print('allowed')\n"
+        assert (wt.working_dir / "hello.py").read_text() == "print('allowed')\n"
         assert (git_project / "other.py").read_text() == "original\n"
 
     def test_merge_with_changes(self, git_project):
@@ -277,11 +277,11 @@ class TestMergeWorktree:
         # Make a change in the worktree
         (wt.working_dir / "hello.py").write_text("print('modified')\n")
 
-        commit = sandbox.merge_worktree(wt)
+        commit = sandbox.commit_worktree(wt)
         assert commit is not None
 
         # Verify the change is in the main branch
-        content = (git_project / "hello.py").read_text()
+        content = (wt.working_dir / "hello.py").read_text()
         assert content == "print('modified')\n"
 
     def test_merge_no_changes_returns_none(self, git_project):
@@ -289,7 +289,7 @@ class TestMergeWorktree:
         wt = sandbox.create_worktree(1)
 
         # No changes made
-        commit = sandbox.merge_worktree(wt)
+        commit = sandbox.commit_worktree(wt)
         assert commit is None
 
     def test_merge_with_editable_scope(self, git_project):
@@ -307,11 +307,12 @@ class TestMergeWorktree:
         (wt.working_dir / "other.py").write_text("x = 2\n")
 
         # Only hello.py is editable
-        commit = sandbox.merge_worktree(wt, editable=["hello.py"])
+        sandbox.revert_out_of_scope(wt, ["hello.py"])
+        commit = sandbox.commit_worktree(wt, editable=["hello.py"])
         assert commit is not None
 
         # hello.py should be merged, other.py should be unchanged
-        assert (git_project / "hello.py").read_text() == "print('changed')\n"
+        assert (wt.working_dir / "hello.py").read_text() == "print('changed')\n"
         assert (git_project / "other.py").read_text() == "x = 1\n"
 
     def test_merge_with_custom_message(self, git_project):
@@ -321,13 +322,13 @@ class TestMergeWorktree:
         (wt.working_dir / "hello.py").write_text("print('v2')\n")
 
         message = "AutoHelix iteration 1\n\nspeed: 100 -> 150 (+50.0%)"
-        commit = sandbox.merge_worktree(wt, message=message)
+        commit = sandbox.commit_worktree(wt, message=message)
         assert commit is not None
 
         # Verify the commit message
         result = subprocess.run(
-            ["git", "log", "-1", "--format=%B"],
-            cwd=git_project,
+            ["git", "show", "-s", "--format=%B", commit],
+            cwd=wt.working_dir,
             capture_output=True,
             text=True,
         )
@@ -341,8 +342,11 @@ class TestMergeWorktree:
         (git_project / "hello.py").write_text("dirty\n")
         subprocess.run(["git", "add", "hello.py"], cwd=git_project, capture_output=True)
 
-        with pytest.raises(RuntimeError, match="uncommitted changes"):
-            sandbox.merge_worktree(wt)
+        (wt.working_dir / "hello.py").write_text("candidate\n")
+        staged = subprocess.check_output(["git", "diff", "--cached"], cwd=git_project)
+        assert sandbox.commit_worktree(wt)
+        assert subprocess.check_output(["git", "diff", "--cached"], cwd=git_project) == staged
+        assert (git_project / "hello.py").read_text() == "dirty\n"
 
     def test_merge_conflict_aborts_and_leaves_clean_tree(self, git_project):
         # A conflicting merge must abort so the main tree is left clean —
@@ -357,8 +361,8 @@ class TestMergeWorktree:
         # Worktree edits the same line differently -> conflict on merge.
         (wt.working_dir / "hello.py").write_text("worktree change\n")
 
-        with pytest.raises(RuntimeError, match="Failed to merge"):
-            sandbox.merge_worktree(wt)
+        assert sandbox.commit_worktree(wt)
+        assert (git_project / "hello.py").read_text() == "main change\n"
 
         # No merge left in progress, and main content is intact (not a marker mess).
         assert not (git_project / ".git" / "MERGE_HEAD").exists()
@@ -666,34 +670,23 @@ class TestRevertOutOfScope:
         assert "hello.py" in reverted
         assert not any("src/" in f or f == "src/foo.py" for f in reverted)
 
-    def test_raises_when_revert_checkout_fails(self, git_project, monkeypatch):
-        """A failed revert checkout must raise, not silently report success.
-
-        Finding #2: the revert checkout used to be unchecked, so a failed
-        `git checkout` (bad pathspec, locked index, odd filename) would leave the
-        out-of-scope change live while the caller printed "Reverted N files".
-        """
+    def test_restore_write_failure_propagates(self, git_project, monkeypatch):
+        """Failed restoration must reject, never claim protected files reverted."""
         sandbox = Sandbox(git_project)
-
         (git_project / "other.py").write_text("original\n")
-        subprocess.run(["git", "add", "-A"], cwd=git_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "add other"], cwd=git_project, capture_output=True)
-
+        subprocess.run(["git", "add", "-A"], cwd=git_project, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "add other"], cwd=git_project, check=True, capture_output=True)
         wt = sandbox.create_worktree(1)
         (wt.working_dir / "other.py").write_text("out of scope\n")
+        write = Path.write_bytes
 
-        real_run_git = sandbox._run_git
+        def fail(path, value):
+            if path == wt.working_dir / "other.py":
+                raise OSError("simulated restoration failure")
+            return write(path, value)
 
-        def fake_run_git(*args, cwd=None):
-            result = real_run_git(*args, cwd=cwd)
-            if args and args[0] == "checkout":
-                result.returncode = 1
-                result.stderr = "simulated checkout failure"
-            return result
-
-        monkeypatch.setattr(sandbox, "_run_git", fake_run_git)
-
-        with pytest.raises(RuntimeError, match="checkout"):
+        monkeypatch.setattr(Path, "write_bytes", fail)
+        with pytest.raises(OSError, match="restoration failure"):
             sandbox.revert_out_of_scope(wt, ["hello.py"])
 
 
@@ -790,10 +783,10 @@ class TestSubdirRootedProject:
         # frozen file reverted in the worktree
         assert (wt.working_dir / "tests" / "test_it.py").read_text() == "assert True\n"
 
-        commit = sandbox.merge_worktree(wt, editable=effective, message="iter1")
+        commit = sandbox.commit_worktree(wt, editable=effective, message="iter1")
         assert commit is not None
         # in-scope change committed to main; frozen file untouched
-        assert (subdir_project / "src" / "good.py").read_text() == "v=2\n"
+        assert (wt.working_dir / "src" / "good.py").read_text() == "v=2\n"
         assert (subdir_project / "tests" / "test_it.py").read_text() == "assert True\n"
 
     def test_merge_whitelist_scope(self, subdir_project):
@@ -803,8 +796,9 @@ class TestSubdirRootedProject:
         (wt.working_dir / "src" / "good.py").write_text("v=2\n")
         (wt.working_dir / "other.py").write_text("keep=1\nHACKED=1\n")
 
-        commit = sandbox.merge_worktree(wt, editable=["src/"], message="iter1")
+        sandbox.revert_out_of_scope(wt, ["src/"])
+        commit = sandbox.commit_worktree(wt, editable=["src/"], message="iter1")
         assert commit is not None
         # only the in-scope file reached main
-        assert (subdir_project / "src" / "good.py").read_text() == "v=2\n"
+        assert (wt.working_dir / "src" / "good.py").read_text() == "v=2\n"
         assert (subdir_project / "other.py").read_text() == "keep=1\n"

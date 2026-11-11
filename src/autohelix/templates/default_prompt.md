@@ -53,7 +53,7 @@ Read before starting:
 {% endif %}
 
 {% if peers %}
-To see a peer's accepted code (not just their notes): `git show parallel/<peer>:<file>` (peers: {{ peers | join(', ') }}). Build on it or explore a different approach.
+To see a peer's accepted code: `git show autohelix/<run-id>:<file>` (peer runs: {% for peer, run_id in peer_runs.items() %}{{ peer }}={{ run_id }}{% if not loop.last %}, {% endif %}{% endfor %}). Build on it or explore a different approach.
 {% endif %}
 
 {% if iteration_time %}

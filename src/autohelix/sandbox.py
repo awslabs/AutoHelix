@@ -3,7 +3,6 @@
 
 """Git worktree management for isolated iterations."""
 
-import fnmatch
 import os
 import shutil
 import subprocess
@@ -11,26 +10,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-
-def path_in_scope(path: str, patterns: list[str]) -> bool:
-    """Return True if `path` (relative, posix) is covered by any editable pattern.
-
-    Matching is path-boundary aware, not raw string prefix: `src` covers
-    `src/eval.py` but NOT `src_vendor/eval.py`. `.` / `./` mean "the whole
-    project" (matches everything). Glob patterns (e.g. `src/*.py`) are honored
-    via fnmatch.
-    """
-    for pattern in patterns:
-        if pattern in (".", "./"):
-            return True
-        # Directory/prefix match on path boundaries: normalize the trailing slash
-        # and require an exact hit or a `pattern/`-prefixed descendant.
-        prefix = pattern.rstrip("/")
-        if path == prefix or path.startswith(prefix + "/"):
-            return True
-        if fnmatch.fnmatch(path, pattern):
-            return True
-    return False
+from autohelix.runs import RunPaths
+from autohelix.checkpoint import ContentCheckpoint, PinnedGit, Scope, path_in_scope
 
 
 def build_worktree_env(project_path: Path, worktree_path: Path) -> dict[str, str]:
@@ -76,39 +57,44 @@ class Worktree:
     iteration: int
     working_dir: Path  # Project directory within worktree (may differ if subdirectory)
     base_commit: str  # Commit the iteration branched from
+    git: PinnedGit
+    checkpoint: ContentCheckpoint
 
 
 class Sandbox:
     """Manages git worktrees for isolated iterations."""
 
-    def __init__(self, project_path: Path):
+    def __init__(self, project_path: Path, paths: RunPaths | None = None):
         self.project_path = project_path
-        # Named "worktrees" to match git's convention (.git/worktrees/).
-        self.worktrees_dir = project_path / ".autohelix" / "worktrees"
-        # Branch namespace for iteration worktrees. Defaults to "autohelix" so
-        # solo runs are byte-identical. The parallel wrapper sets a per-worker
-        # value (e.g. "autohelix-w2") so concurrent workers sharing one .git ref
-        # store never collide on branch names or clobber each other's branches
-        # during the stale-branch cleanup in create_worktree().
-        self.branch_prefix = os.environ.get("AUTOHELIX_BRANCH_PREFIX", "autohelix")
+        self.paths = paths or RunPaths(project_path)
+        self.git = PinnedGit.discover(project_path, inherit=False)
+        self._contexts = {}
+        self.worktrees_dir = self.paths.worktrees
         # Get subdirectory path relative to repo root (empty string if at root)
         result = self._run_git("rev-parse", "--show-prefix")
         self.repo_prefix = result.stdout.strip() if result.returncode == 0 else ""
 
     def _run_git(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
         """Run a git command."""
-        return subprocess.run(
-            ["git", *args],
-            cwd=cwd or self.project_path,
-            capture_output=True,
-            text=True,
-        )
+        context = self.context(cwd or self.project_path)
+        return context.run(*args, cwd=cwd or self.project_path, check=False)
+
+    def context(self, cwd: Path) -> PinnedGit:
+        # Select the saved context lexically. Resolving an agent-replaced
+        # worktree symlink here could select the user's checkout instead.
+        cwd = Path(cwd).absolute()
+        for root, context in self._contexts.items():
+            if cwd.is_relative_to(root):
+                return context
+        if cwd.is_relative_to(self.worktrees_dir.resolve()):
+            raise RuntimeError(f"No saved Git context for worktree {cwd}")
+        return self.git
 
     def _run_git_checked(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
         """Run a git command and raise on failure."""
         result = self._run_git(*args, cwd=cwd)
         if result.returncode != 0:
-            command = " ".join(["git", *args])
+            command = " ".join(["git", "-c", "gc.auto=0", *args])
             error = (result.stderr or result.stdout).strip()
             raise RuntimeError(f"{command} failed: {error}")
         return result
@@ -141,29 +127,18 @@ class Sandbox:
         if not frozen:
             return None
 
-        # Blacklist mode: find all files changed by the agent, exclude frozen ones
         target = cwd or self.project_path
-        # Get all changed files (staged + unstaged + untracked new files).
-        # `--relative` reports paths relative to cwd (project-relative) rather than
-        # repo-root-relative, so they match the user's frozen/editable patterns and
-        # ls-files' frame even when the project sits in a subdirectory of the repo.
-        result = self._run_git("diff", "--relative", "--name-only", "HEAD", cwd=target)
-        changed = set(result.stdout.strip().splitlines()) if result.stdout.strip() else set()
-        # Also include untracked files (new files the agent created)
-        result = self._run_git("ls-files", "--others", "--exclude-standard", cwd=target)
-        untracked = set(result.stdout.strip().splitlines()) if result.stdout.strip() else set()
-        all_changed = changed | untracked
+        checkpoint = self._checkpoint(target)
+        scope = Scope(Path(target).resolve(), checkpoint.root, frozen=tuple(frozen))
+        return [str((checkpoint.root / name).relative_to(target))
+                for name in checkpoint.changed() if scope.allows(name)]
 
-        # Filter out frozen files. Use path_in_scope (not raw fnmatch) so frozen
-        # patterns match with the same directory-prefix semantics as editable —
-        # e.g. `frozen: [tests/]` freezes everything under tests/, matching how
-        # `editable: [tests/]` behaves. Raw fnmatch would silently freeze nothing
-        # for a bare-directory pattern.
-        non_frozen = []
-        for f in sorted(all_changed):
-            if not path_in_scope(f, frozen):
-                non_frozen.append(f)
-        return non_frozen if non_frozen else []
+    def _checkpoint(self, cwd):
+        context = self.context(cwd)
+        for checkpoint in getattr(self, "_checkpoints", {}).values():
+            if checkpoint.git == context:
+                return checkpoint
+        return ContentCheckpoint(cwd, git=context)
 
     def revert_out_of_scope(
         self, worktree: Worktree, effective_editable: list[str],
@@ -172,38 +147,14 @@ class Sandbox:
 
         Returns list of reverted file paths (relative to worktree).
         """
-        cwd = worktree.working_dir
-        # Get all changed files (tracked modifications). `--relative` keeps paths
-        # project-relative (matching the editable/frozen patterns and ls-files'
-        # frame) so subdirectory-rooted projects classify and revert correctly.
-        result = self._run_git("diff", "--relative", "--name-only", "HEAD", cwd=cwd)
-        changed = set(result.stdout.strip().splitlines()) if result.stdout.strip() else set()
-        # Also include untracked files
-        result = self._run_git("ls-files", "--others", "--exclude-standard", cwd=cwd)
-        untracked = set(result.stdout.strip().splitlines()) if result.stdout.strip() else set()
-
-        # Determine which files are in scope
-        in_scope = set()
-        for f in changed | untracked:
-            if path_in_scope(f, effective_editable):
-                in_scope.add(f)
-
-        # Revert tracked files outside scope. Use the checked variant: a failed
-        # revert is safety-relevant (the out-of-scope change would otherwise stay
-        # live for constraints/metrics), so it must reject the iteration loudly
-        # rather than being reported as reverted when it was not.
-        out_of_scope_tracked = sorted(changed - in_scope)
-        if out_of_scope_tracked:
-            self._run_git_checked("checkout", "HEAD", "--", *out_of_scope_tracked, cwd=cwd)
-
-        # Remove untracked files outside scope
-        out_of_scope_untracked = sorted(untracked - in_scope)
-        for f in out_of_scope_untracked:
-            filepath = cwd / f
-            if filepath.exists():
-                filepath.unlink()
-
-        return out_of_scope_tracked + out_of_scope_untracked
+        scope = Scope(worktree.working_dir.resolve(), worktree.path.resolve(),
+                      editable=tuple(effective_editable))
+        # An explicitly empty editable list means no writes (resolved frozen scope).
+        names = (worktree.checkpoint.changed() if not effective_editable
+                 else worktree.checkpoint.outside(scope))
+        worktree.checkpoint.restore(names)
+        return [str((worktree.path / name).relative_to(worktree.working_dir))
+                for name in names]
 
     def ensure_clean_working_tree(self) -> None:
         """Ensure the main repo has no uncommitted changes to tracked files."""
@@ -248,149 +199,77 @@ class Sandbox:
                 f"{result.stdout.strip()}"
             )
 
-    def create_worktree(self, iteration: int) -> Worktree:
-        """Create a new worktree for an iteration."""
+    def create_worktree(self, iteration: int, expected_tip: str | None = None) -> Worktree:
+        """Create a detached iteration worktree at the harness's expected tip."""
         self.worktrees_dir.mkdir(parents=True, exist_ok=True)
-
-        branch = f"{self.branch_prefix}-iter-{iteration}"
         worktree_path = self.worktrees_dir / f"iter-{iteration}"
-        base_commit = self._run_git_checked("rev-parse", "HEAD").stdout.strip()
-
-        # Clean up if exists from previous failed run
-        if worktree_path.exists():
+        base_commit = expected_tip or self._run_git_checked(
+            "rev-parse", self.paths.ref if self.paths.run_id else "HEAD",
+        ).stdout.strip()
+        registered = self._run_git_checked("worktree", "list", "--porcelain").stdout
+        if (worktree_path.exists() or worktree_path.is_symlink()
+                or f"worktree {worktree_path}\n" in registered):
             self.remove_worktree(worktree_path)
-
-        # Delete branch if it exists (stale from previous run)
-        self._run_git("branch", "-D", branch)
-
-        # Create new branch and worktree
-        self._run_git("worktree", "add", "-b", branch, str(worktree_path))
-
-        # Compute working directory within worktree
+        self._run_git_checked("worktree", "add", "--detach", str(worktree_path), base_commit)
         working_dir = worktree_path / self.repo_prefix if self.repo_prefix else worktree_path
+        context = PinnedGit.discover(worktree_path, inherit=False)
+        self._contexts[worktree_path.absolute()] = context
+        try:
+            checkpoint = ContentCheckpoint(working_dir, git=context, tip=base_commit)
+        except BaseException:
+            self.remove_worktree(worktree_path)
+            raise
+        if not hasattr(self, "_checkpoints"):
+            self._checkpoints = {}
+        self._checkpoints[worktree_path.absolute()] = checkpoint
+        return Worktree(worktree_path, self.paths.ref if self.paths.run_id else "", iteration,
+                        working_dir, base_commit, context, checkpoint)
 
-        return Worktree(
-            path=worktree_path,
-            branch=branch,
-            iteration=iteration,
-            working_dir=working_dir,
-            base_commit=base_commit,
-        )
-
-    def uncommit_agent_changes(self, worktree: Worktree) -> int:
-        """Turn agent-created commits back into ordinary worktree changes.
-
-        AutoHelix must enforce scope and run validation against the complete
-        candidate diff before creating its own iteration commit. An agent that
-        commits inside the worktree would otherwise hide those changes from
-        `git diff HEAD` and could have its accepted work discarded as a no-op.
-        """
-        result = self._run_git_checked(
-            "rev-list",
-            "--count",
-            f"{worktree.base_commit}..HEAD",
-            cwd=worktree.working_dir,
-        )
-        commit_count = int(result.stdout.strip())
-        if commit_count:
-            self._run_git_checked(
-                "reset",
-                "--mixed",
-                worktree.base_commit,
-                cwd=worktree.working_dir,
-            )
-        return commit_count
+    def normalize(self, worktree: Worktree, expected_tip: str) -> tuple[int, bool]:
+        """Detach, restore the owned ref, and reopen all file changes unconditionally."""
+        restored = False
+        if self.paths.run_id:
+            lookup = self._run_git("rev-parse", "--verify", self.paths.ref)
+            current = lookup.stdout.strip() if lookup.returncode == 0 else "0" * len(expected_tip)
+            if current != expected_tip or self._run_git("symbolic-ref", "--quiet", self.paths.ref).returncode == 0:
+                self._run_git_checked("update-ref", "--no-deref", "--create-reflog", "-m", "AutoHelix restore expected tip",
+                                      self.paths.ref, expected_tip, current)
+                restored = True
+        cwd = worktree.working_dir
+        head = self._run_git("rev-parse", "--verify", "HEAD", cwd=cwd)
+        count = (self._run_git_checked("rev-list", "--count", f"{expected_tip}..{head.stdout.strip()}", cwd=cwd)
+                 if head.returncode == 0 else None)
+        self._run_git_checked("update-ref", "--no-deref", "HEAD", expected_tip, cwd=cwd)
+        self._run_git_checked("reset", "--mixed", expected_tip, cwd=cwd)
+        return int(count.stdout.strip()) if count else 0, restored
 
     def remove_worktree(self, worktree_path: Path) -> None:
-        """Remove a worktree and its branch."""
-        # Get branch name before removing
-        result = self._run_git("worktree", "list", "--porcelain")
-        branch = None
-        lines = result.stdout.split("\n")
-        for i, line in enumerate(lines):
-            if line.startswith("worktree ") and str(worktree_path) in line:
-                for j in range(i, min(i + 5, len(lines))):
-                    if lines[j].startswith("branch "):
-                        branch = lines[j].replace("branch refs/heads/", "")
-                        break
+        for parent in worktree_path.parents:
+            if parent == self.project_path:
                 break
+            if parent.is_symlink():
+                raise RuntimeError(f"Cannot remove worktree through changed parent symlink: {parent}")
+        result = self._run_git("worktree", "remove", str(worktree_path), "--force", "--force")
+        if result.returncode:
+            if worktree_path.is_symlink():
+                worktree_path.unlink()
+            elif worktree_path.exists():
+                shutil.rmtree(worktree_path)
+            self._run_git_checked("worktree", "prune", "--expire", "now")
+        self._contexts.pop(worktree_path.absolute(), None)
+        getattr(self, "_checkpoints", {}).pop(worktree_path.absolute(), None)
 
-        # Remove worktree
-        self._run_git("worktree", "remove", str(worktree_path), "--force")
-
-        # Clean up directory if still exists
-        if worktree_path.exists():
-            shutil.rmtree(worktree_path)
-
-        # Remove branch
-        if branch:
-            self._run_git("branch", "-D", branch)
-
-    def merge_worktree(self, worktree: Worktree, editable: list[str] | None = None, message: str | None = None) -> str | None:
-        """Merge worktree changes back to main branch and return commit hash."""
-        # Check for uncommitted changes in main repo (could indicate agent modified wrong location)
-        result = self._run_git("status", "--porcelain")
-        uncommitted = [
-            line for line in result.stdout.strip().split("\n")
-            if line and not line.strip().startswith("?")  # Ignore untracked files
-        ]
-        if uncommitted:
-            raise RuntimeError(
-                "Main repo has uncommitted changes. This can happen if:\n"
-                "  - The agent modified files in the main repo instead of the worktree\n"
-                "  - Python imports resolved to main repo due to editable install (.pth)\n\n"
-                "The iteration's work may be in the main repo, not the worktree.\n"
-                "Review with 'git diff' and commit or stash before continuing.\n\n"
-                f"Changed files:\n" + "\n".join(f"  {line}" for line in uncommitted[:10])
-            )
-
-        # Only add editable files (safety: changes outside scope are discarded)
-        if editable:
-            self._run_git_checked(
-                "add",
-                "--",
-                *editable,
-                cwd=worktree.working_dir,
-            )
-        else:
-            # Fallback: add everything if no editable scope defined
-            self._run_git_checked(
-                "add",
-                "-A",
-                cwd=worktree.working_dir,
-            )
-        if not self._tracked_changes_outside_autohelix(cwd=worktree.working_dir):
-            return None
-        commit_message = message or f"AutoHelix iteration {worktree.iteration}"
-        self._run_git_checked(
-            "commit",
-            "-m",
-            commit_message,
-            cwd=worktree.working_dir,
-        )
-
-        # Get the commit from the worktree (full hash to avoid ambiguity)
-        result = self._run_git_checked("rev-parse", "HEAD", cwd=worktree.working_dir)
-        commit = result.stdout.strip()
-
-        # Merge the worktree branch into main. A serial run branches from the
-        # current main, so this is normally a trivial fast-forward; a conflict
-        # means main diverged unexpectedly. Abort the half-done merge so the main
-        # tree is left clean — otherwise MERGE_HEAD + conflict markers would wedge
-        # the next `run`, which refuses to start on a dirty tree. The raise is
-        # handled upstream as a normal iteration rejection.
-        merge = self._run_git("merge", worktree.branch, "--no-edit")
-        if merge.returncode != 0:
-            self._run_git("merge", "--abort")
-            error = (merge.stderr or merge.stdout).strip()
-            raise RuntimeError(
-                f"Failed to merge iteration {worktree.iteration} into the main branch "
-                f"(likely a conflict — the main branch may have diverged): {error}. "
-                "The merge was aborted and the main tree left clean; this iteration's "
-                "work was not applied."
-            )
-
-        return commit
+    def commit_worktree(self, worktree: Worktree, editable: list[str] | None = None,
+                        message: str | None = None, expected_tip: str | None = None) -> str | None:
+        """Commit candidate files, without changing either the run or target ref."""
+        expected_tip = expected_tip or worktree.base_commit
+        if expected_tip != worktree.checkpoint.tip:
+            raise RuntimeError("Candidate checkpoint does not match expected parent")
+        scope = Scope(worktree.working_dir.resolve(), worktree.path.resolve(),
+                      editable=tuple(editable or ()))
+        if editable == [] and worktree.checkpoint.changed():
+            raise RuntimeError("Changes outside write scope after validation")
+        return worktree.checkpoint.commit(scope, message or f"AutoHelix iteration {worktree.iteration}")
 
     def discard_worktree(self, worktree: Worktree) -> None:
         """Discard a worktree without merging."""
@@ -404,12 +283,12 @@ class Sandbox:
         `hints.md`, `logs/`, and the latest review materialized as a transient
         `review.md`. Also copies `prompt.md` and `history.jsonl`.
 
-        Reviews are *not* copied in as an archive — only the single latest review
-        is materialized, so the reviewer (which runs in this same worktree) can't
-        read prior reviews and be conditioned by them. Skips worktrees, runtime,
+        Only the latest review is materialized in the intended reference view.
+        Shared Git metadata and project paths remain accessible; this layout
+        does not isolate a reviewer from prior state. Skips worktrees, runtime,
         output, and archive.
         """
-        src_autohelix = self.project_path / ".autohelix"
+        src_autohelix = self.paths.run_dir
         dst_autohelix = worktree.working_dir / ".autohelix"
 
         if not src_autohelix.exists():
@@ -419,7 +298,7 @@ class Sandbox:
 
         # Copy top-level files the agent needs (canonical log + user hints)
         for name in ("prompt.md", "history.jsonl", "hints.md"):
-            src = src_autohelix / name
+            src = self.paths.prompt if name == "prompt.md" else src_autohelix / name
             if src.exists():
                 shutil.copy2(src, dst_autohelix / name)
 
@@ -428,7 +307,7 @@ class Sandbox:
         # peers' shared notes (parallel mode); copytree follows them so the agent
         # sees peer content.
         for dirname in ("notes", "observations", "logs", "peer_notes"):
-            src_dir = src_autohelix / dirname
+            src_dir = self.paths.peer_notes if dirname == "peer_notes" else src_autohelix / dirname
             if src_dir.exists():
                 dst_dir = dst_autohelix / dirname
                 if dst_dir.exists():
@@ -445,7 +324,7 @@ class Sandbox:
 
     def _latest_review(self) -> Path | None:
         """Return the highest-numbered reviews/iter-N.md, or None."""
-        reviews_dir = self.project_path / ".autohelix" / "reviews"
+        reviews_dir = self.paths.reviews
         if not reviews_dir.exists():
             return None
         best: tuple[int, Path] | None = None
@@ -466,7 +345,7 @@ class Sandbox:
         latest review) is read-only reference and is deliberately not copied back.
         """
         src_notes = worktree.working_dir / ".autohelix" / "notes"
-        dst_notes = self.project_path / ".autohelix" / "notes"
+        dst_notes = self.paths.notes
 
         if src_notes.exists():
             dst_notes.mkdir(parents=True, exist_ok=True)
@@ -492,7 +371,7 @@ class Sandbox:
         if not src_review.exists():
             return False
 
-        reviews_dir = self.project_path / ".autohelix" / "reviews"
+        reviews_dir = self.paths.reviews
         reviews_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_review, reviews_dir / f"iter-{iteration}.md")
 

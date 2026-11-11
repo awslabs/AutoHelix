@@ -17,6 +17,7 @@ from autohelix.agents import AgentRunResult
 from autohelix.config import Config, ReviewerConfig, load_config
 from autohelix.harness import AutoHelixRunError, Harness
 from autohelix.history import History
+from autohelix.runs import RunPaths
 
 
 @pytest.fixture
@@ -91,7 +92,7 @@ class TestMockAgentIntegration:
             assert r.iteration == i
             assert r.accepted is True
 
-    def test_agent_failure_stops_without_validation_or_history(
+    def test_agent_failure_aborts_and_records_failed_attempt(
         self, integration_project, monkeypatch
     ):
         harness = Harness(integration_project, verbose=False)
@@ -119,7 +120,8 @@ class TestMockAgentIntegration:
             harness.run(max_iterations=1)
 
         results = History(integration_project).load()
-        assert [result.iteration for result in results] == [0]
+        assert [result.iteration for result in results] == [0, 1]
+        assert not results[-1].accepted and results[-1].cost.incomplete
         assert subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=integration_project,
@@ -152,9 +154,9 @@ class TestMockAgentIntegration:
             check=True,
             capture_output=True,
             text=True,
-        ).stdout.strip() != head_before
+        ).stdout.strip() == head_before
         assert (
-            integration_project / ".autohelix" / "reviews" / "iter-1.md"
+            harness.paths.reviews / "iter-1.md"
         ).read_text() == "# Review\n\nReviewer failed.\n"
 
     def test_baseline_reviewer_failure_continues(
@@ -200,7 +202,8 @@ metrics:
         ):
             harness.run(max_iterations=1)
 
-        assert History(integration_project).load() == []
+        records = History(integration_project).load()
+        assert len(records) == 1 and records[0].iteration == 0 and not records[0].accepted
 
     def test_constraint_failure_rejects(self, integration_project):
         """A failing constraint should reject the iteration."""
@@ -346,10 +349,10 @@ scope:
         # frozen_file.py should be unchanged
         assert (integration_project / "frozen_file.py").read_text() == "original\n"
 
-    def test_agent_failure_retries_same_iteration_after_recovery(
+    def test_agent_failure_resumes_next_iteration_after_recovery(
         self, integration_project
     ):
-        """Infrastructure failure should not consume the iteration number."""
+        """Failed calls remain attributable and consume their attempted iteration."""
         (integration_project / "autohelix.yaml").write_text("""
 goal: Test agent failure
 
@@ -369,7 +372,7 @@ constraints:
             harness.run(max_iterations=1)
 
         history = History(integration_project)
-        assert [result.iteration for result in history.load()] == [0]
+        assert [result.iteration for result in history.load()] == [0, 1]
 
         config_path = integration_project / "autohelix.yaml"
         config_path.write_text(config_path.read_text().replace(
@@ -388,9 +391,10 @@ constraints:
             capture_output=True,
         )
 
-        Harness(integration_project, verbose=False).run(max_iterations=1)
+        Harness(integration_project, verbose=False).run(max_iterations=2)
         results = history.load()
-        assert [result.iteration for result in results] == [0, 1]
+        assert [result.iteration for result in results] == [0, 1, 2]
+        assert not results[1].accepted
         assert results[-1].accepted
 
 
@@ -777,13 +781,15 @@ constraints:
 
         # Patch the history file to include cost_usd (the monkey-patch sets it
         # after history.append writes, so the JSONL doesn't have it yet)
-        history_path = integration_project / ".autohelix" / "history.jsonl"
+        history_path = RunPaths(integration_project).history
         lines = history_path.read_text().splitlines()
         updated = []
         for line in lines:
             entry = json.loads(line)
             if entry.get("iteration", 0) > 0:
-                entry["usage"]["cost_usd"] = 0.05
+                for call in entry["calls"]:
+                    if call["role"] == "agent":
+                        call["usage"]["cost_usd"] = 0.05
             updated.append(json.dumps(entry))
         history_path.write_text("\n".join(updated) + "\n")
 
@@ -838,13 +844,16 @@ constraints:
         assert len(iters1) == 2
 
         # Patch history to show each iteration took 14 seconds (28s total)
-        history_path = integration_project / ".autohelix" / "history.jsonl"
+        history_path = RunPaths(integration_project).history
         lines = history_path.read_text().splitlines()
         updated = []
         for line in lines:
             entry = json.loads(line)
             if entry.get("iteration", 0) > 0:
-                entry["usage"]["duration_ms"] = 14000
+                for call in entry["calls"]:
+                    if call["role"] == "agent":
+                        call["usage"]["duration_ms"] = 14000
+                        call["usage"].pop("wall_clock_ms", None)
             updated.append(json.dumps(entry))
         history_path.write_text("\n".join(updated) + "\n")
 
@@ -911,14 +920,16 @@ constraints:
         history = History(integration_project)
 
         # Patch history: duration_ms=5000 (5s agent time) but wall_clock_ms=14000 (14s total)
-        history_path = integration_project / ".autohelix" / "history.jsonl"
+        history_path = RunPaths(integration_project).history
         lines = history_path.read_text().splitlines()
         updated = []
         for line in lines:
             entry = json.loads(line)
             if entry.get("iteration", 0) > 0:
-                entry["usage"]["duration_ms"] = 5000
-                entry["usage"]["wall_clock_ms"] = 14000
+                for call in entry["calls"]:
+                    if call["role"] == "agent":
+                        call["usage"]["duration_ms"] = 5000
+                        call["usage"]["wall_clock_ms"] = 14000
             updated.append(json.dumps(entry))
         history_path.write_text("\n".join(updated) + "\n")
 
@@ -1037,13 +1048,15 @@ constraints:
         history = History(integration_project)
 
         # Patch history entries to have wall_clock_ms=0 (simulating crashed iterations)
-        history_path = integration_project / ".autohelix" / "history.jsonl"
+        history_path = RunPaths(integration_project).history
         lines = history_path.read_text().splitlines()
         updated = []
         for line in lines:
             entry = json.loads(line)
             if entry.get("iteration", 0) > 0:
-                entry["usage"]["wall_clock_ms"] = 0
+                for call in entry["calls"]:
+                    if call["role"] == "agent":
+                        call["usage"]["wall_clock_ms"] = 0
             updated.append(json.dumps(entry))
         history_path.write_text("\n".join(updated) + "\n")
 

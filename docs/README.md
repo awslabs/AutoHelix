@@ -2,7 +2,7 @@
 
 **Autonomous iterative improvement harness.**
 
-AutoHelix runs AI agents in a loop — each iteration is isolated in a git worktree, validated against constraints, and only merged when everything checks out. What doesn't pass gets discarded; what the agent learns persists.
+AutoHelix runs AI agents in a loop — each iteration is isolated in a git worktree, validated against constraints, and only accepted when everything checks out. What doesn't pass gets discarded; what the agent learns persists.
 
 See the [main README](../README.md) for an overview, quick start, and the config reference.
 
@@ -10,7 +10,7 @@ See the [main README](../README.md) for an overview, quick start, and the config
 
 - **[Getting Started](getting-started.md)** — install, initialize a project, run your first loop
 - **[Configuration](config.md)** — the full `autohelix.yaml` surface
-- **[CLI Reference](cli.md)** — skill installation/export, `init`, `run`, `clear`, `watch`, `view`, `report`
+- **[CLI Reference](cli.md)** — skill installation/export, `init`, `run`, `land`, `abandon`, `clear`, `watch`, `view`, `report`
 - **[Docker Sandbox](docker.md)** — run the agent with filesystem isolation
 - **[Concepts](concepts.md)** — how iteration, isolation, and verified improvement
   work, and how to design a loop

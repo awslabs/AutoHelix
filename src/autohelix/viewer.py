@@ -29,6 +29,7 @@ from autohelix.agents import AgentEventKind
 from autohelix.config import load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History
+from autohelix.runs import RunPaths
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
 from autohelix.run_status import read_run_status
@@ -86,19 +87,32 @@ def _note_order(name: str):
 class RunData:
     """Reads one project's .autohelix/ directory for the viewer."""
 
-    def __init__(self, project: Path, config_file: Path | None = None):
+    def __init__(self, project: Path, config_file: Path | None = None, run_id: str | None = None):
         self.project = project.resolve()
-        self.root = self.project / ".autohelix"
+        self.run_id = run_id
+        self.paths = RunPaths(self.project, run_id)
+        self.root = self.paths.run_dir
         self.config_file = config_file
-        self.history = History(self.project)
+        self.history = History(self.project, self.paths.run_id)
         self._logs: dict[Path, tuple[LogTail, deque]] = {}
         self._diffs: dict[str, str] = {}
         self._clipped: set[Path] = set()  # logs whose oldest events were dropped
         self._subject_cache: dict[str, str | None] = {}
         self._prefix: str | None = None
 
+    def _refresh_current(self):
+        if self.run_id in (None, "current"):
+            paths = RunPaths(self.project)
+            if paths.run_id != self.paths.run_id:
+                self.paths = paths
+                self.root = paths.run_dir
+                self.history = History(self.project, paths.run_id)
+                self._logs.clear()
+                self._diffs.clear()
+
     def _config(self):
-        path = self.config_file or read_stored_config_path(self.project) or self.project / "autohelix.yaml"
+        stored = read_stored_config_path(self.project, self.paths.run_id) if self.paths.run_id else None
+        path = self.config_file or stored or self.project / "autohelix.yaml"
         try:
             return load_config(self.project, config_file=path)[0], path
         except Exception:
@@ -120,9 +134,10 @@ class RunData:
         return summary
 
     def state(self) -> dict:
+        self._refresh_current()
         config, config_path = self._config()
-        records = self.history.load()
-        total_cost = summarize_costs(self.history.cost_usages)
+        records = self.history.load() if self.paths.run_id else []
+        total_cost = summarize_costs([usage for row in records for usage in row.cost_usages])
         subjects = self._subjects([r.commit for r in records if r.commit])
         iterations = [
             {"iteration": r.iteration, "accepted": r.accepted, "metrics": r.metrics,
@@ -137,10 +152,11 @@ class RunData:
             "title": getattr(config, "title", None) or self.project.name,
             "goal": config.goal if config else None,
             "directions": config.metric_directions() if config else {},
-            "status": read_run_status(self.project),
+            "status": read_run_status(self.project, self.paths.run_id),
+            "run_id": self.paths.run_id,
             "config": self._config_summary(config, config_path),
-            "notes_files": sorted((e.name for e in _files(self.root / "notes")), key=_note_order),
-            "artifacts": self._artifacts(),
+            "notes_files": sorted((e.name for e in _files(self.root / "notes")), key=_note_order) if self.paths.run_id else [],
+            "artifacts": self._artifacts() if self.paths.run_id else {},
             "iterations": iterations,
             "cost": {
                 "cost_usd": total_cost.cost_usd,
@@ -150,15 +166,22 @@ class RunData:
         }
 
     def _report(self) -> dict | None:
+        if not self.paths.run_id:
+            return None
         html = _markdown(_read_text(self.root / "output" / "report.md"))
-        return {"html": html, **(read_report_info(self.project) or {})} if html else None
+        return {"html": html, **(read_report_info(self.project, self.paths.run_id) or {})} if html else None
 
     def iteration(self, n: int, logs: bool = True, diff: bool = True) -> dict:
+        self._refresh_current()
+        if not self.paths.run_id:
+            return {"iteration": n, "failure_output": None, "notes": None, "review": None,
+                    "diff": None, "agent": [], "calls": [], "agent_clipped": False, "reviewer": []}
         records = self.history.load()
         record = next((r for r in records if r.iteration == n), None)
         # The baseline is the code the run started from: the parent of the first accepted commit.
         first = next((r.commit for r in records if r.iteration > 0 and r.accepted and r.commit), None)
-        base = f"{first}^" if first and COMMIT.fullmatch(first) else None
+        base = (self.paths.read_identity()["base_commit"] if self.paths.run_id
+                else f"{first}^" if first and COMMIT.fullmatch(first) else None)
         changes = None
         if not diff:
             pass
@@ -171,16 +194,33 @@ class RunData:
         notes = [self.root / "notes" / f"iter-{n}.md", self._worktree(n) / ".autohelix" / "notes" / f"iter-{n}.md"]
         if record is None:
             notes.reverse()
-        log_dir = self.root / "logs" / f"iter-{n}"
+        log_dir = self.paths.logs / f"iter-{n}"
+        calls = record.calls if record else []
+        if record is None:
+            from autohelix.usage_log import read_usage
+
+            status = read_run_status(self.project, self.paths.run_id) or {}
+            calls = list(status.get("calls", [])) if status.get("iteration") == n else []
+            for usage in read_usage(self.paths.runtime / "usage" / f"iter-{n}.jsonl"):
+                calls.append({"role": "command", "log": usage.get("log"), "usage": usage})
+        phases = []
+        for call in calls:
+            log = self.paths.relative_log(call.get("log"))
+            phases.append({"role": call["role"], "usage": call.get("usage", {}), "log": log,
+                           "events": self._events(Path(log)) if logs and log else []})
+        agent_events = [event for call in phases if call["role"] == "agent" for event in call["events"]]
+        review_events = [event for call in phases if call["role"] == "reviewer" for event in call["events"]]
         return {
             "iteration": n,
             "failure_output": record.failure_output if record else None,
             "notes": _markdown(next(filter(None, map(_read_text, notes)), None)),
             "review": _markdown(_read_text(self.root / "reviews" / f"iter-{n}.md")),
             "diff": changes,
-            "agent": self._events(log_dir / "agent.log") if logs else [],
-            "agent_clipped": logs and log_dir / "agent.log" in self._clipped,
-            "reviewer": self._events(log_dir / "review.log") if logs else [],
+            "agent": agent_events,
+            "calls": phases,
+            "agent_clipped": any(self.paths.run_dir / call["log"] in self._clipped
+                                 for call in phases if call.get("log")),
+            "reviewer": review_events,
         }
 
     def snapshot(self) -> dict:
@@ -206,7 +246,10 @@ class RunData:
                                               capture_output=True, text=True, timeout=5).stdout.strip()
             except (OSError, subprocess.TimeoutExpired):
                 self._prefix = ""
-        return self.root / "worktrees" / f"iter-{n}" / self._prefix
+        status = read_run_status(self.project, self.paths.run_id) or {}
+        if status.get("iteration") == n and status.get("worktree"):
+            return Path(status["worktree"])
+        return self.paths.worktrees / f"iter-{n}" / self._prefix
 
     def _artifacts(self) -> dict[int, list[dict]]:
         """Captured files per iteration, from observations/iter-N/."""
@@ -225,10 +268,14 @@ class RunData:
         return dict(sorted(out.items()))
 
     def note(self, name: str) -> dict | None:
+        if not self.paths.run_id:
+            return None
         entry = next((e for e in _files(self.root / "notes") if e.name == name), None)
         return {"name": name, "html": _markdown(_read_text(Path(entry.path)))} if entry else None
 
     def artifact(self, n: int, name: str) -> tuple[bytes, str] | None:
+        if not self.paths.run_id:
+            return None
         entry = next((e for e in _files(self.root / "observations" / f"iter-{n}") if e.name == name), None)
         if entry is None or entry.stat().st_size > MAX_ARTIFACT:
             return None
@@ -239,6 +286,10 @@ class RunData:
 
     def _events(self, path: Path) -> list[dict]:
         """Incrementally parse a log, merging streamed text into one event."""
+        relative = self.paths.relative_log(path)
+        if not relative:
+            return []
+        path = self.paths.run_dir / relative
         if not path.is_file():
             return []
         if path not in self._logs:
@@ -329,14 +380,14 @@ class RunData:
         return self._diffs[key]
 
 
-def write_static(project: Path, config_file: Path | None = None) -> Path:
+def write_static(project: Path, config_file: Path | None = None, *, run_id: str | None = None) -> Path:
     """Write output/report.html: the viewer page with this run's data built in."""
     resources = files("autohelix").joinpath("viewer_resources")
     read = lambda name: resources.joinpath(name).read_text(encoding="utf-8")  # noqa: E731
     # Each logo once, in the data; the page's theme code sets the <img> from it.
     logos = {theme: "data:image/svg+xml," + quote(read(f"autohelix-{theme}.svg"), safe=" =:/-.,;'\"()")
              for theme in ("light", "dark")}
-    data = {"routes": RunData(project, config_file).snapshot(), "logos": logos, "saved_at": time.time()}
+    data = {"routes": RunData(project, config_file, run_id).snapshot(), "logos": logos, "saved_at": time.time()}
     # "<" escaped, so no text in the data can close the script element.
     script = json.dumps(data).replace("<", "\\u003c")
     page = (read("index.html")
@@ -346,7 +397,7 @@ def write_static(project: Path, config_file: Path | None = None) -> Path:
             .replace(' src="/logo-light.svg"', "")
             .replace("</body>", f"<script>window.AUTOHELIX_SNAPSHOT = {script};</script>\n"
                                 f"<script>\n{read('viewer.js')}</script>\n</body>"))
-    out = project / ".autohelix" / "output" / "report.html"
+    out = RunPaths(project, run_id).output / "report.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".tmp")
     tmp.write_text(page, encoding="utf-8")
@@ -354,8 +405,8 @@ def write_static(project: Path, config_file: Path | None = None) -> Path:
     return out
 
 
-def make_server(project: Path, port: int = 8765, config_file: Path | None = None) -> ThreadingHTTPServer:
-    data = RunData(project, config_file)
+def make_server(project: Path, port: int = 8765, config_file: Path | None = None, *, run_id: str | None = None) -> ThreadingHTTPServer:
+    data = RunData(project, config_file, run_id)
     lock = threading.Lock()  # RunData's caches and log tails are not thread-safe
     resources = files("autohelix").joinpath("viewer_resources")
 

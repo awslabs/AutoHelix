@@ -11,6 +11,10 @@ All configuration lives in `autohelix.yaml` at the project root.
 goal: |
   Be specific about what to optimize and success criteria.
 
+# Optional run identity prefix and landing policy
+# name: experiment      # lowercase letters/digits/hyphens, at most 32 characters
+# land: auto            # default: land at segment end; manual retains only the run ref
+
 # Must pass (exit 0) or iteration is rejected
 constraints:
   - pytest tests/
@@ -78,6 +82,16 @@ budget:
 # Write a summary of the run when it finishes (default true)
 # report: false
 ```
+
+## Run identity and landing
+
+`name` is an optional readable prefix for newly generated run ids; it does not
+select an existing run. It accepts lowercase letters, digits and hyphens, with
+at most 32 characters. Without a name, nondefault config filename stems supply
+the prefix. `land` is optional: `auto` (default) fast-forwards accepted code to the
+starting branch when a run segment ends, while `manual` keeps it on the run ref
+until `autohelix land`. CLI `--name` and `--land` override these values. Resume is
+keyed by config path or exact `--run`, independently of those optional fields.
 
 ## Example Configs
 
@@ -251,7 +265,7 @@ metrics:
 
 **Output storage:**
 
-All captured output lives in `.autohelix/observations/iter-N/`:
+All captured output lives in `.autohelix/runs/<id>/observations/iter-N/`:
 - `stdout.txt` — command stdout+stderr (or `stdout-0.txt`, `stdout-1.txt` for multiple commands)
 - Captured files are copied by basename
 
@@ -264,7 +278,7 @@ Controls what files the agent can modify:
 - **`editable`** (allowlist): only matching files are committed. Everything else is reverted.
 - **`frozen`** (denylist): matching files are reverted. Everything else is committed.
 - Mutually exclusive — use one or the other.
-- Out-of-scope changes are reverted *before* constraints run, so constraints test the actual state that would be merged.
+- Out-of-scope changes are reverted *before* constraints run, so constraints test the actual state that would be accepted.
 
 ### Metric Gates
 
@@ -272,9 +286,9 @@ Optional regression guards. If a metric drops more than `max_regression_pct` fro
 
 ### Reviewer
 
-An optional second agent that reviews a change before it merges and writes qualitative feedback, archived to `.autohelix/reviews/iter-N.md`. The latest review is included in the next iteration's prompt (materialized into the worktree as `review.md`). It is advisory — it never rejects an iteration; only constraints and metric gates decide what merges.
+An optional second agent that reviews a change before acceptance into the run and writes qualitative feedback, archived to `.autohelix/runs/<id>/reviews/iter-N.md`. The latest review is included in the next iteration's prompt (materialized into the worktree as `review.md`). Its verdict is advisory. Ordinary reviewer errors do not reject an iteration; candidate edits by a reviewer do, because they invalidate the checks that just ran.
 
-The `reviewer.prompt` is the reviewer's entire instruction (it inspects the diff itself and is not handed the goal or metrics), so put any context it should consider there. The reviewer never sees the `reviews/` archive, so each review is independent by construction. See [Concepts → Reviewer](concepts.md#reviewer) for the full mechanics.
+The `reviewer.prompt` is the reviewer's entire instruction (it inspects the diff itself and is not handed the goal or metrics), so put any context it should consider there. The intended worktree view omits the `reviews/` archive, but shared project state remains reachable; this is not access isolation. See [Concepts → Reviewer](concepts.md#reviewer) for the full mechanics.
 
 ### Stop Conditions
 
@@ -295,7 +309,7 @@ After iterations they run in the iteration's worktree, like constraints; the bas
 
 Stop conditions only end a run early: budgets still apply. If the baseline already meets one, no iterations run. If you interrupt a run while its stop commands are running, the iteration is kept but not checked; the next accepted iteration is. Running `autohelix run` again after a stop continues the run (and stops again after the next accepted iteration if the condition still holds); raise the target or remove the condition first.
 
-Why a run ended is shown at the end of the run, in `autohelix view`, `autohelix watch`, the run summary, and `.autohelix/runtime/run.json` (`stop_reason`).
+Why a run ended is shown at the end of the run, in `autohelix view`, `autohelix watch`, the run summary, and `.autohelix/runs/<id>/runtime/status.json` (`stop_reason`).
 
 ### Budget
 
@@ -317,7 +331,7 @@ the baseline review and when resuming a run.
 
 ### Report
 
-When a run finishes after at least one iteration (a stop condition is met, or the iteration, cost or time budget is reached), one more agent call reads the run's history, notes, reviews, logs and commits and writes a short summary to `.autohelix/output/report.md`: what was achieved, which changes mattered, what didn't work, what to try next, and anything worth checking before relying on the results. An interrupted run gets no summary; run [`autohelix report`](cli.md#autohelix-report) to write one. Set `report: false` to skip it. The call uses the same agent backend and model as the run, with a timeout of `agent.timeout_seconds` capped at 15 minutes. Its time and cost are shown next to the summary in `autohelix view` and `report.html`; the cost is not counted against `budget.cost`.
+When a run finishes after at least one iteration (a stop condition is met, or the iteration, cost or time budget is reached), one more agent call reads the run's history, notes, reviews, logs and commits and writes a short summary to `.autohelix/runs/<id>/output/report.md`: what was achieved, which changes mattered, what didn't work, what to try next, and anything worth checking before relying on the results. An interrupted run gets no summary; run [`autohelix report`](cli.md#autohelix-report) to write one. Set `report: false` to skip it. The call uses the same agent backend and model as the run, with a timeout of `agent.timeout_seconds` capped at 15 minutes. Its time and cost are shown next to the summary in `autohelix view` and `report.html`; the cost is not counted against `budget.cost`.
 
 ### Auto Memory
 
@@ -334,23 +348,27 @@ Available token usage and cost are captured from agent backends and shown:
 
 - Per iteration (after accepted/rejected). A `+` after the amount (`$0.10+`) means part of that iteration's cost (agent or reviewer) is unavailable, so the amount is what is known.
 - Cumulative in the final summary
-- Persisted in `.autohelix/history.jsonl`
+- Persisted in `.autohelix/runs/<id>/history.jsonl`
 
 Iteration costs include the optimization agent, the reviewer, and model calls
 made by the commands the harness runs (such as `autohelix ask` in `stop:`,
 `constraints:` or `metrics:`). Run totals and `budget.cost` also include
 baseline reviews and the baseline's commands; report generation remains separate.
-History preserves the optimization agent's `usage`, a `reviewer_usage` list
-containing the raw usage for each attempted review, including failed attempts,
-and a `command_usage` list with one record per model call made by a command.
+History's `calls` list records each attempted agent, reviewer and command judge
+with its role, usage and log path. The older `usage`, `reviewer_usage` and
+`command_usage` fields remain readable for compatibility.
 
 A command of your own can report its model calls the same way: append one JSON
 line per call, e.g. `{"id": "...", "source": "my-eval", "cost_usd": 0.12}`, to the
 file named by `$AUTOHELIX_USAGE_FILE` (set for every command the harness runs).
 Lines with the same `id` are one call (the last line wins), so a call can be
 recorded with `"cost_usd": null` when it starts and its cost when it ends.
-An iteration that is interrupted or fails before it is recorded leaves no record, so
-its agent and reviewer costs are not counted.
+Interrupted or failed actual main-agent attempts are recorded as rejected
+iterations, including reviewer/command calls and any available usage. Missing
+charges remain unknown, so totals are incomplete rather than zero. Failures before
+an agent call consume no iteration. Failed baseline attempts retain their costs in
+iteration 0 for a clean retry. A process killed before a durable history write can
+still lose unreturned usage; recovered accepted commits record that charge as unknown.
 
 The numeric field is `usage.cost_usd` for every backend. `usage.cost_source` is
 `backend` when the CLI supplies the amount, or `calculated` when AutoHelix

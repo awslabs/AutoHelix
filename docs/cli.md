@@ -59,7 +59,7 @@ autohelix init [path]
 Creates:
 
 - `autohelix.yaml` — config template (won't overwrite existing)
-- `.autohelix/` — runtime directory with notes, prompt template
+- `.autohelix/` — project runtime directory and prompt template
 - Local git exclusions for `.autohelix/` and `__pycache__/` in the repository's
   shared `info/exclude`; `.gitignore` is unchanged.
 
@@ -74,7 +74,7 @@ negation rules in your `.gitignore`, then retry. AutoHelix leaves that file unch
 Start or resume the optimization loop. Requires `autohelix init` to have been run first.
 
 ```bash
-autohelix run [--path PATH] [-n ITERATIONS] [--verbose] [--config PATH] [--no-report]
+autohelix run [--path PATH] [-n ITERATIONS] [--verbose] [--config PATH] [--no-report] [--new | --run ID] [--name NAME] [--land auto|manual]
 ```
 
 ### Options
@@ -86,39 +86,80 @@ autohelix run [--path PATH] [-n ITERATIONS] [--verbose] [--config PATH] [--no-re
 | `--config`, `-c` | Path to config file (default: `autohelix.yaml` in project) |
 | `--path`, `-p` | Project directory (default: current dir) |
 | `--no-report` | Don't write the run summary when the run finishes |
+| `--new` | Create separate run state even for a previously used config path |
+| `--run ID` | Resume exactly this open run (`current` selects the pointer) |
+| `--name NAME` | Readable prefix for a new run id, lowercase letters/digits/hyphens, up to 32 characters |
+| `--land auto\|manual` | Land accepted code at segment end (default auto), or retain it only on the run ref |
 
-When the run finishes (not when interrupted), it writes a summary to `.autohelix/output/report.md` — see [Configuration → Report](config.md#report).
+When the run finishes (not when interrupted), it writes a summary to `.autohelix/runs/<id>/output/report.md` — see [Configuration → Report](config.md#report).
 
-On first run, performs preflight checks and captures baseline observables. When the run stops, it saves `.autohelix/output/report.html`, a one-file copy of the [`autohelix view`](#autohelix-view) page — see [Concepts → Run page](concepts.md#run-page).
+On first run, performs preflight checks and captures baseline observables. When the run stops, it saves `.autohelix/runs/<id>/output/report.html`, a one-file copy of the [`autohelix view`](#autohelix-view) page — see [Concepts → Run page](concepts.md#run-page).
 
-## `autohelix clear`
+Runs are identified independently of the checkout branch. Without `--new` or
+`--run`, the most recent open run for the config path resumes. `--run` without
+`--config` loads that run's stored config path; an explicit config can override
+settings without changing the original run identity. `-n` is a total run limit.
+An actual main-agent failure records a rejected attempt and consumes its number;
+resuming starts at the next number. Setup failures before a call do not consume
+an iteration. Failed baseline attempts remain iteration 0 and retain their costs.
 
-Archive state and start fresh.
+A refused dirty first start creates no run. The first valid baseline requires
+a clean checkout at the run's starting commit. Resumes use the run's accepted
+code, so unrelated staged/dirty user files can stay in the checkout. Accepted
+commits advance `refs/autohelix/<id>` first, then auto landing fast-forwards the
+starting branch before report generation. If dirty files would be overwritten,
+the target diverged, or the target is checked out elsewhere, landing is refused
+and the run ref retains the accepted code. Resolve that condition and land later.
+One invocation of `run` is a segment; its iteration/time/cost limits still apply
+to the whole run. Only one writing lifecycle operation can own a run at a time; a PID in the viewer
+is advisory, while a process-held file lock enforces ownership.
+
+Legacy `.autohelix/history.jsonl` state is not migrated: move or delete the old
+`.autohelix/` directory and run `git worktree prune` before starting a new run.
+
+## `autohelix land`
 
 ```bash
+autohelix land [RUN_ID] [--path PATH] [--into BRANCH]
+```
+
+Fast-forward the run's starting branch to its accepted tip, preserving unrelated
+checkout edits. Defaults to the current run. For a divergent target, use the
+printed git merge command after reviewing the changes. A run created from a
+detached checkout requires `--into BRANCH`. Landing also refuses branches that
+are being rebased. If the target moved during a segment, review it and land
+explicitly; AutoHelix never rewinds user commits.
+
+## `autohelix abandon` and `autohelix clear`
+
+```bash
+autohelix abandon [RUN_ID] [--path PATH] [--purge]
 autohelix clear [path]
 ```
 
-Archives everything (history, notes, reviews, logs) to `.autohelix/archive/<timestamp>/`. The agent starts with a clean slate. Archives are excluded from agent context via `.claudeignore`.
-
-Does not touch code — use git directly to roll back.
+Abandon prevents further resume and retains the run's evidence/current selection.
+Fully landed refs can be removed; unlanded accepted commits stay on the run ref.
+`--purge` permanently deletes the ref and run directory. `clear` aliases abandon
+for the current run. Code, external artifacts, `.claudeignore`, and the project
+prompt stay intact. Use `run --new` for fresh state and git directly to roll code
+back when desired.
 
 ## `autohelix watch`
 
 Follow a run in a second terminal.
 
 ```bash
-autohelix watch [path]
+autohelix watch [path] [--run ID]
 ```
 
-Shows the live output of whatever the run is doing: the agent during an iteration, the reviewer during a review, and the summary agent at the end (tool calls, text, elapsed time). Below it is a status line with the iteration, phase (agent, checks, review, …) and time in that phase, read from `.autohelix/runtime/run.json`. When the run stops, watch says how and when, and waits for the next run; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs.
+Shows the live output of whatever the run is doing: the agent during an iteration, the reviewer during a review, and the summary agent at the end (tool calls, text, elapsed time). Below it is a status line with the iteration, phase (agent, checks, review, …) and time in that phase, read from `.autohelix/runs/<id>/runtime/status.json`. When the run stops, watch says how and when, and waits for the next run; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs.
 
 ## `autohelix view`
 
 Live web view of a run, in your browser.
 
 ```bash
-autohelix view [path] [--port 8765] [--open]
+autohelix view [path] [--port 8765] [--open] [--run ID]
 ```
 
 A browser view of a run's `.autohelix/` state. The header shows run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed). The left side shows the best metric value with total time and cost, the metric over time, and one row per iteration with the agent's one-line summary. The right side starts with the run summary once one is written (see [Configuration → Report](config.md#report)), then has one card per iteration with its notes (`notes/iter-N.md`), agent activity (`logs/iter-N/`, live while it runs), review, changes against the baseline, and captured output (`observations/iter-N/`); click a row or chart point to open that card. Notes that are not tied to an iteration are listed under Shared notes. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
@@ -134,10 +175,10 @@ ssh -L 8765:127.0.0.1:8765 user@host   # then open http://localhost:8765
 Send a hint to a running agent, picked up at the start of its next iteration.
 
 ```bash
-autohelix hint "MESSAGE" [--path PATH]
+autohelix hint "MESSAGE" [--path PATH] [--run ID]
 ```
 
-Appends a timestamped line to `.autohelix/hints.md`. The agent reads that file (listed in its "Read before starting" section) each iteration, so a hint lets you steer a run without stopping it. Run it from a second terminal while `autohelix run` is going. Hints accumulate — the file holds the full history for the run.
+Requires a selected run (start one first). Appends a timestamped line to `.autohelix/runs/<id>/hints.md`. The agent reads that file (listed in its "Read before starting" section) each iteration, so a hint lets you steer a run without stopping it. Run it from a second terminal while `autohelix run` is going. Hints accumulate — the file holds the full history for the run.
 
 ## `autohelix ask`
 
@@ -163,9 +204,10 @@ stop:
 ```
 
 - **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run) or `./autohelix.yaml`: backend, command, model and effort only, never `agent.settings` or `extra_args`.
+- **Candidate contents are checked before and after every judge call.** Tracked and nonignored files, modes, symlinks and submodule contents must remain unchanged; runtime feedback/log outputs are allowed. A stop judge after acceptance cannot change accepted code: its edits are discarded and its verdict ignored, with error and usage recorded. Backend restrictions remain best effort.
 - **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox; it still reads an `AGENTS.md` in the directory. OpenCode can't be used as a judge yet: it has no read-only mode.
-- **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `budget.cost`, and its transcript is saved as `.autohelix/logs/iter-N/ask-*.log`. Outside a run, the cost is printed to stderr.
-- An invalid answer or failed call is retried once. The command stays inside the timeout of the check that runs it.
+- **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `budget.cost`, and its transcript is saved as `.autohelix/runs/<id>/logs/iter-N/call-*-command/ask.log`. Outside a run, the cost is printed to stderr.
+- An invalid answer or failed call is retried once. Candidate edits end the call without retry: standalone ask exits 2, and calls in constraints or observables invalidate iteration acceptance even if a shell swallows the exit code. The command stays inside the timeout of the check that runs it.
 - **Limits.** The judge reads the same directory the agent worked in, including `.autohelix/notes/` and gitignored files, which scope enforcement doesn't revert. Keep criteria files out of `scope.editable`. Running the judge on a clean copy (without notes, gitignored files or agent instruction files) is planned.
 
 ## `autohelix report`
@@ -173,14 +215,14 @@ stop:
 Write (or rewrite) the run summary.
 
 ```bash
-autohelix report [path] [--config PATH]
+autohelix report [path] [--config PATH] [--run ID]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--config`, `-c` | Path to config file (default: from last run, or `autohelix.yaml`) |
 
-`autohelix run` writes the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. One agent call reads the run's history, notes, reviews, logs and commits and writes `.autohelix/output/report.md`. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
+`autohelix run` writes the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. One agent call reads the run's history, notes, reviews, logs and commits and writes `.autohelix/runs/<id>/output/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
 
 ## `autohelix parallel` (alpha)
 

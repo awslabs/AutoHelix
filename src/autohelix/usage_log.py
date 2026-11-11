@@ -56,5 +56,7 @@ def read_usage(path: Path) -> list[dict[str, Any]]:
                                  or not math.isfinite(cost) or cost < 0):
             record["cost_usd"] = None
         key = str(record.get("id") or f"line-{len(calls)}")
+        if calls.get(key, {}).get("candidate_changed"):
+            record["candidate_changed"] = True
         calls[key] = record
     return list(calls.values())

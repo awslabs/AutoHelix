@@ -65,7 +65,7 @@ class MockAgent:
             return AgentRunResult(success=True, exit_code=0)
 
         if self.config.read_only:  # a judge call (`autohelix ask`)
-            return self._judge(settings, log_path, prompt)
+            return self._judge(settings, log_path, prompt, worktree_path)
 
         # Check if we should fail
         if settings.get("should_fail", False):
@@ -128,10 +128,14 @@ class MockAgent:
 
         return AgentRunResult(success=True, exit_code=0, usage=usage)
 
-    def _judge(self, settings: dict, log_path: Path, prompt: str) -> AgentRunResult:
+    def _judge(self, settings: dict, log_path: Path, prompt: str, cwd: Path) -> AgentRunResult:
         """Answer a judge prompt. Settings: `judge_answer` ("yes"/"no", default "yes"),
         `judge_reason`, `judge_output` (raw final text, overrides both), `judge_fail`."""
         log_path.write_text(f"Mock judge\nSystem: {self.config.system_prompt}\nPrompt: {prompt}\n")
+        if settings.get("judge_change_file"):
+            path = cwd / settings["judge_change_file"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(settings.get("judge_change_content", "Unvalidated judge edit\n"))
         usage = {"cost_usd": float(settings["cost_usd"])} if settings.get("cost_usd") is not None else {}
         if settings.get("judge_fail"):
             return AgentRunResult(success=False, exit_code=1, error="Mock judge failure", usage=usage)

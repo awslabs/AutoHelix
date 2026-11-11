@@ -53,21 +53,17 @@ class TestHistoryAppendAndLoad:
         h.append(IterationResult(iteration=1, accepted=True, metrics={}))
         assert h.history_path.exists()
 
-    def test_tolerates_malformed_and_unknown_lines(self, history):
-        # A good row, a corrupt/partial line, a forward-compat unknown field,
-        # then another good row. Load should skip the bad ones, not crash.
-        history.append(IterationResult(iteration=1, accepted=True, metrics={"speed": 100.0}))
-        with open(history.history_path, "a") as f:
-            f.write('{"iteration": 2, "accepted"\n')  # truncated (crash mid-write)
-            f.write(json.dumps({"iteration": 3, "accepted": True, "metrics": {},
-                                "future_field": "x"}) + "\n")  # newer schema
-        history.append(IterationResult(iteration=4, accepted=True, metrics={"speed": 120.0}))
+    def test_rejects_earlier_corruption_and_tolerates_unknown_fields(self, history):
+        history.append(IterationResult(iteration=1, accepted=True, metrics={}))
+        with history.history_path.open("a") as stream:
+            stream.write(json.dumps({"iteration": 2, "accepted": True, "future_field": "x"}) + "\n")
+        assert [r.iteration for r in history.load()] == [1, 2]
+        history._invalidate_cache()
+        with history.history_path.open("a") as stream:
+            stream.write('corrupt\n{"iteration":3,"accepted":true}\n')
+        with pytest.raises(RuntimeError, match="Corrupt history"):
+            history.load()
 
-        loaded = history.load()
-        assert [r.iteration for r in loaded] == [1, 3, 4]
-
-
-class TestGetLastIteration:
     def test_empty(self, history):
         assert history.get_last_iteration() == 0
 
@@ -247,12 +243,7 @@ class TestUsageField:
         assert r.usage == {}
 
     def test_usage_persisted(self, history):
-        r = IterationResult(
-            iteration=1,
-            accepted=True,
-            metrics={"speed": 100.0},
-            usage={"input_tokens": 5000, "output_tokens": 1000, "cost_usd": 0.05},
-        )
+        r = IterationResult(iteration=1, accepted=True, metrics={'speed': 100.0}, calls=[{'role': 'agent', 'usage': {'input_tokens': 5000, 'output_tokens': 1000, 'cost_usd': 0.05}}])
         history.append(r)
         loaded = history.load()
         assert loaded[0].usage["input_tokens"] == 5000
@@ -274,11 +265,12 @@ class TestUsageField:
         assert len(loaded) == 1
         assert loaded[0].usage == {}
 
-    def test_legacy_review_charge_is_unknown_when_artifacts_exist(self, history):
+    def test_unknown_review_charge_is_explicit_in_calls(self, history):
         history.history_path.parent.mkdir(parents=True, exist_ok=True)
         history.history_path.write_text(json.dumps({
             "iteration": 1, "accepted": True, "metrics": {},
-            "usage": {"cost_usd": 0.10},
+            "calls": [{"role": "agent", "usage": {"cost_usd": 0.10}},
+                      {"role": "reviewer", "usage": {}}],
         }) + "\n")
         reviews = history.history_path.parent / "reviews"
         reviews.mkdir()
@@ -287,3 +279,11 @@ class TestUsageField:
         assert result.reviewer_usage == [{}]
         assert result.cost.cost_usd == 0.10
         assert result.cost.incomplete
+
+
+def test_adding_review_call_preserves_main_charge(history):
+    history.append(IterationResult(iteration=1, accepted=True, calls=[{'role': 'agent', 'usage': {'cost_usd': 0.1}}]))
+    history.record_reviewer_usage(1, {"cost_usd": 0.2}, log="review.log")
+    [record] = history.load()
+    assert record.cost.cost_usd == pytest.approx(0.3)
+    assert [call["role"] for call in record.calls] == ["agent", "reviewer"]

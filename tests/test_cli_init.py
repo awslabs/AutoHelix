@@ -29,7 +29,7 @@ class TestInitCommand:
         result = runner.invoke(main, ["init", str(git_project)])
         assert result.exit_code == 0, result.output
         assert (git_project / ".autohelix").is_dir()
-        assert (git_project / ".autohelix" / "notes").is_dir()
+        assert (git_project / ".autohelix" / "prompt.md").is_file()
 
     def test_creates_config_template(self, runner, git_project):
         result = runner.invoke(main, ["init", str(git_project)])

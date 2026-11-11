@@ -9,6 +9,55 @@ import pytest
 # Tests poke module internals (P._run_segment, P.subprocess), so import the
 # implementation module directly rather than the package's public __init__.
 from autohelix.parallel import core as P
+from autohelix.runs import RunPaths
+
+
+def test_mock_parallel_real_subprocess(tmp_path):
+    """Workers keep stable run ids across segments and land validated commits."""
+    repo = _init_repo(tmp_path)
+    config = repo / "autohelix.yaml"
+    config.write_text(
+        "goal: append a note\n"
+        "agent:\n"
+        "  type: mock\n"
+        "  settings:\n"
+        "    change_file: sort.py\n"
+        "    notes_content: 'worker iteration {iteration}'\n"
+        "    cost_usd: 0.1\n"
+        "scope:\n"
+        "  editable: [sort.py]\n"
+        "budget:\n"
+        "  iterations: 2\n"
+        "report: false\n"
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "mock config"], cwd=repo, check=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    result = subprocess.run(
+        ["autohelix", "parallel", "--worker", str(config), "--worker", str(config),
+         "--sync-notes-every", "1"],
+        cwd=repo, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    ids = []
+    for index in (1, 2):
+        worker = repo.parent / "proj-parallel" / f"worker-{index}"
+        run_id = (worker / ".autohelix" / "current").read_text().strip()
+        ids.append(run_id)
+        state = worker / ".autohelix" / "runs" / run_id
+        records = [json.loads(line) for line in (state / "history.jsonl").read_text().splitlines()]
+        assert [record["iteration"] for record in records] == [0, 1, 2]
+        assert all(record["accepted"] for record in records)
+        tip = subprocess.check_output(
+            ["git", "rev-parse", f"refs/autohelix/{run_id}"], cwd=repo, text=True,
+        ).strip()
+        branch_tip = subprocess.check_output(
+            ["git", "rev-parse", f"parallel/worker-{index}"], cwd=repo, text=True,
+        ).strip()
+        assert tip == branch_tip != base
+        assert (state / "notes" / "notes.md").exists()
+    assert len(set(ids)) == 2
+    assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip() == base
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -35,7 +84,7 @@ def _init_repo(tmp_path: Path) -> Path:
 
 def _seed_history(worktree: Path, scores: list[float], baseline: float = 1.0) -> None:
     """Write a history.jsonl with one accepted iteration per score."""
-    ah = worktree / ".autohelix"
+    ah = RunPaths(worktree).run_dir
     ah.mkdir(parents=True, exist_ok=True)
     rows = [{"iteration": 0, "accepted": True, "metrics": {"speed": baseline}, "usage": {}}]
     for i, s in enumerate(scores, start=1):
@@ -49,7 +98,7 @@ def test_setup_link_sync_teardown(tmp_path):
     workers = P.setup_workers(repo, [cfg, cfg, cfg], tmp_path / "shared")
 
     assert [w.name for w in workers] == ["worker-1", "worker-2", "worker-3"]
-    assert [w.branch_prefix for w in workers] == ["autohelix-w1", "autohelix-w2", "autohelix-w3"]
+    assert len({w.run_id for w in workers}) == 3
     assert all(w.worktree.exists() for w in workers)
     assert all(w.budget == 6 for w in workers)
 
@@ -59,7 +108,7 @@ def test_setup_link_sync_teardown(tmp_path):
     assert all((ext / n).is_symlink() for n in ["worker-2", "worker-3"])
 
     # worker-2 writes a note -> sync -> worker-1 reads it through the symlink
-    note = workers[1].worktree / ".autohelix" / "notes" / "iter-1.md"
+    note = RunPaths(workers[1].worktree).notes / "iter-1.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("tried quicksort")
     P.sync_own_notes(workers[1])
@@ -81,7 +130,7 @@ def test_setup_workers_reuses_existing_worktree(tmp_path):
     wt = workers[0].worktree
 
     # A file written into the worktree survives a second setup (nothing deleted).
-    marker = wt / ".autohelix" / "history.jsonl"
+    marker = RunPaths(wt).history
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text("prior-run-state")
 
@@ -179,11 +228,14 @@ def test_run_args_forwarded_to_subprocess(tmp_path, monkeypatch):
     captured = {}
 
     class FakePopen:
-        def __init__(self, cmd, cwd, env, stdout, stderr, start_new_session):
+        def __init__(self, cmd, cwd, env, stdout, stderr, start_new_session, **kwargs):
             captured["cmd"] = cmd
-            captured["prefix"] = env.get("AUTOHELIX_BRANCH_PREFIX")
+            captured["peers"] = env.get("AUTOHELIX_PEER_RUNS")
             self.pid = 99999
 
+        returncode = 0
+        def communicate(self):
+            return None, ""
         def wait(self):
             pass
 
@@ -192,7 +244,7 @@ def test_run_args_forwarded_to_subprocess(tmp_path, monkeypatch):
 
     assert captured["cmd"][:2] == ["autohelix", "run"]
     assert "--timeout" in captured["cmd"] and "600" in captured["cmd"]
-    assert captured["prefix"] == "autohelix-w1"
+    assert json.loads(captured["peers"]) == {}
 
 
 def test_cli_rejects_wrapper_owned_passthrough(tmp_path):

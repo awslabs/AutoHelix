@@ -42,13 +42,10 @@ class TestParallelResume:
         worktree.mkdir()
         history = History(worktree)
         for iteration, cost in enumerate(costs, 1):
-            history.append(IterationResult(
-                iteration=iteration, accepted=True, metrics={},
-                usage={"cost_usd": cost} if cost is not None else {},
-            ))
+            history.append(IterationResult(iteration=iteration, accepted=True, metrics={}, calls=[{'role': 'agent', 'usage': {'cost_usd': cost} if cost is not None else {}}]))
         worker = Worker(
             index=1, name="worker-1", config_file=config, worktree=worktree,
-            branch="parallel/worker-1", branch_prefix="autohelix-w1",
+            branch="parallel/worker-1",
             shared_dir=tmp_path / "shared", budget=2,
         )
         with patch("autohelix.parallel.run_parallel", return_value=[worker]):
@@ -65,16 +62,11 @@ class TestParallelResume:
         worktree = tmp_path / "worker"
         worktree.mkdir()
         history = History(worktree)
-        history.append(IterationResult(
-            iteration=0, accepted=True, metrics={"score": 1}, reviewer_usage=[{"cost_usd": 0.03}],
-        ))
-        history.append(IterationResult(
-            iteration=1, accepted=True, metrics={}, usage={"cost_usd": 0.10},
-            reviewer_usage=[{"cost_usd": 0.04}, {}],
-        ))
+        history.append(IterationResult(iteration=0, accepted=True, metrics={'score': 1}, calls=[{'role': 'reviewer', 'usage': {'cost_usd': 0.03}}]))
+        history.append(IterationResult(iteration=1, accepted=True, metrics={}, calls=[{'role': 'agent', 'usage': {'cost_usd': 0.1}}, {'role': 'reviewer', 'usage': {'cost_usd': 0.04}}, {'role': 'reviewer', 'usage': {}}]))
         worker = Worker(
             index=1, name="worker-1", config_file=config, worktree=worktree,
-            branch="parallel/worker-1", branch_prefix="autohelix-w1",
+            branch="parallel/worker-1",
             shared_dir=tmp_path / "shared", budget=1,
             best_score=2, best_metric="score",
         )

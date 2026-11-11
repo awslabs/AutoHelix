@@ -125,10 +125,11 @@ def test_staged_user_changes_are_preserved(project_layout, command):
         result = CliRunner().invoke(
             main, ["run", "-p", str(project), "-n", "1", "--no-report"],
         )
-        assert "Uncommitted changes in the repo" in result.output
+        assert "Uncommitted changes in tracked files" in result.output
         assert History(project).load() == []
 
-    assert result.exit_code == 0, result.output
+    # Init succeeds; refusing a dirty first baseline is a command error.
+    assert result.exit_code == (0 if command == "init" else 1), result.output
     assert git(project, "rev-parse", "HEAD") == head_before
     assert git(project, "write-tree") == index_before
     assert git(project, "diff", "--cached", "--binary") == staged_before

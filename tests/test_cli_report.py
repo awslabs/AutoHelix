@@ -12,6 +12,7 @@ from autohelix.cli import main
 from autohelix.config import load_config
 from autohelix.history import History, IterationResult
 from autohelix.report import WRITE_TO, build_report_prompt, read_report_info
+from autohelix.runs import RunPaths, git, write_json
 
 
 @pytest.fixture
@@ -20,7 +21,7 @@ def runner():
 
 
 @pytest.fixture
-def project(tmp_path):
+def project(tmp_path, run_paths):
     """Project with config and some history."""
     config = textwrap.dedent("""\
         goal: Make it faster
@@ -32,8 +33,18 @@ def project(tmp_path):
               speed: higher
     """)
     (tmp_path / "autohelix.yaml").write_text(config)
-    (tmp_path / ".autohelix").mkdir()
-    (tmp_path / ".autohelix" / "notes").mkdir()
+    run_paths.notes.mkdir()
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.com")
+    git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / ".gitignore").write_text(".autohelix/\n")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "baseline")
+    tip = git(tmp_path, "rev-parse", "HEAD").stdout.strip()
+    identity = run_paths.read_identity()
+    identity["base_commit"] = tip
+    write_json(run_paths.identity, identity)
+    git(tmp_path, "update-ref", "--create-reflog", run_paths.ref, tip)
 
     # Add some history
     history = History(tmp_path)
@@ -66,7 +77,7 @@ class TestReportCommand:
                 draft = kwargs["prompt"].rsplit(WRITE_TO, 1)[1].strip().removesuffix(".")
                 Path(draft).write_text(writes)
             if also:
-                also()
+                also(**kwargs)
             return MagicMock(error=None, usage={"cost_usd": 0.28})
         agent = MagicMock(display_name="mock")
         agent.run.side_effect = run
@@ -76,20 +87,18 @@ class TestReportCommand:
         with patch("autohelix.agents.create_agent", return_value=self._agent("# Summary\nGood run.")):
             result = runner.invoke(main, ["report", str(project)])
         assert result.exit_code == 0, result.output
-        assert (project / ".autohelix/output/report.md").read_text() == "# Summary\nGood run."
+        assert (RunPaths(project).output / "report.md").read_text() == "# Summary\nGood run."
         info = read_report_info(project)
         assert info["last_iteration"] == 3 and info["cost_usd"] == 0.28 and info["seconds"] >= 0
-        assert not (project / ".autohelix/output/report.draft.md").exists()
+        assert not (RunPaths(project).output / "report.draft.md").exists()
 
     def test_warns_when_agent_changes_files(self, runner, project):
-        import subprocess
-        (project / ".gitignore").write_text(".autohelix/\n")
-        for cmd in (["init", "-q"], ["add", "-A"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]):
-            subprocess.run(["git", *cmd], cwd=project, check=True)
-        touch = lambda: (project / "autohelix.yaml").write_text("goal: changed\n")  # noqa: E731
+        def change(**kwargs):
+            (kwargs["worktree_path"] / "autohelix.yaml").write_text("goal: changed\n")
+        touch = change
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok", also=touch)):
             result = runner.invoke(main, ["report", str(project)])
-        assert "changed files it should only have read" in result.output
+        assert "changed candidate files" in result.output
         assert "autohelix.yaml" in result.output
 
     def test_timeout_is_capped(self, runner, project):
@@ -100,7 +109,7 @@ class TestReportCommand:
         assert create.call_args[0][0].timeout_seconds == 15 * 60
 
     def test_keeps_old_report_when_agent_writes_nothing(self, runner, project):
-        out = project / ".autohelix/output"
+        out = RunPaths(project).output
         out.mkdir(parents=True)
         (out / "report.md").write_text("old")
         with patch("autohelix.agents.create_agent", return_value=self._agent(None)):
@@ -167,11 +176,12 @@ class TestBuildReportPrompt:
 
     def test_points_at_files_and_baseline(self, project):
         prompt = self._prompt(project)
-        for path in ("history.jsonl", ".autohelix/notes/", ".autohelix/reviews/", "agent.log", "autohelix.yaml"):
+        for path in ("history.jsonl", "notes/", "reviews/", "agent.log", "autohelix.yaml"):
             assert path in prompt
-        assert "`abc123^`" in prompt
+        assert f"`{RunPaths(project).read_identity()['base_commit']}`" in prompt
 
-    def test_no_accepted_iterations(self, tmp_path):
-        (tmp_path / "autohelix.yaml").write_text("goal: g\nconstraints: [true]\n")
-        History(tmp_path).append(IterationResult(iteration=1, accepted=False, metrics={}))
-        assert "no iteration was accepted" in self._prompt(tmp_path)
+    def test_no_accepted_iterations(self, project):
+        history = History(project)
+        history.history_path.write_text("")
+        history.append(IterationResult(iteration=1, accepted=False, metrics={}))
+        assert "No iteration was accepted" in self._prompt(project)

@@ -21,6 +21,7 @@ the user to merge or discard.
 from __future__ import annotations
 
 import os
+import json
 import signal
 import shutil
 import subprocess
@@ -33,6 +34,8 @@ from autohelix.config import load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History
 from autohelix.run_status import read_run_status
+from autohelix.runs import RunPaths, select_run
+from autohelix.state import ensure_runtime_ignored
 
 
 @dataclass
@@ -44,7 +47,6 @@ class Worker:
     config_file: Path
     worktree: Path
     branch: str
-    branch_prefix: str
     shared_dir: Path
     budget: int
     error: str | None = field(default=None)
@@ -52,6 +54,8 @@ class Worker:
     best_metric: str | None = field(default=None)
     direction: str = field(default="higher")
     total_cost: float = field(default=0.0)
+    run_id: str | None = None
+    peers: dict[str, str] = field(default_factory=dict)
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
@@ -110,10 +114,21 @@ def setup_workers(
                 _git_checked(["worktree", "add", "-b", branch, str(worktree)], cwd=repo)
 
         budget = _resolve_budget(cfg, worktree)
+        ensure_runtime_ignored(worktree)
+        config, _ = load_config(worktree, config_file=cfg)
+        paths, _, lock = select_run(worktree, cfg, name=config.name)
+        try:
+            current = paths.root / "current.tmp"
+            current.write_text(paths.run_id + "\n")
+            current.replace(paths.root / "current")
+        finally:
+            lock.close()
         workers.append(Worker(
             index=i, name=name, config_file=cfg, worktree=worktree, branch=branch,
-            branch_prefix=f"autohelix-w{i}", shared_dir=shared_dir, budget=budget,
+            shared_dir=shared_dir, budget=budget, run_id=paths.run_id,
         ))
+    for worker in workers:
+        worker.peers = {peer.name: peer.run_id for peer in workers if peer is not worker}
     return workers
 
 
@@ -136,7 +151,7 @@ def link_peer_notes(workers: list[Worker]) -> None:
 
 def sync_own_notes(worker: Worker) -> None:
     """Mirror a worker's own notes into its flat shared dir."""
-    src = worker.worktree / ".autohelix" / "notes"
+    src = RunPaths(worker.worktree).notes
     if not src.exists():
         return
     for item in src.iterdir():
@@ -172,20 +187,25 @@ def _run_segment(worker: Worker, upto: int, verbose: bool, run_args: list[str] |
     if _stop_event.is_set():
         return
     env = os.environ.copy()
-    env["AUTOHELIX_BRANCH_PREFIX"] = worker.branch_prefix
+    env["AUTOHELIX_PEER_RUNS"] = json.dumps(worker.peers)
     cmd = ["autohelix", "run", "-n", str(upto), "--config", str(worker.config_file)]
     if verbose:
         cmd.append("--verbose")
     if run_args:
         cmd.extend(run_args)
+    if worker.run_id:
+        cmd.extend(["--run", worker.run_id])
+    cmd.extend(["--land", "auto"])
     proc = subprocess.Popen(cmd, cwd=worker.worktree, env=env,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            start_new_session=True)
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            text=True, start_new_session=True)
     with _procs_lock:
         _procs.append(proc)
-    proc.wait()
+    _, stderr = proc.communicate()
     with _procs_lock:
         _procs.remove(proc)
+    if proc.returncode:
+        raise RuntimeError(f"Worker exited {proc.returncode}: {(stderr or '').strip()[-4000:]}")
 
 
 def _write_worker_report(worker: Worker) -> None:
@@ -195,12 +215,14 @@ def _write_worker_report(worker: Worker) -> None:
         return
     proc = subprocess.Popen(["autohelix", "report", "--config", str(worker.config_file)],
                             cwd=worker.worktree, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, start_new_session=True)
+                            stderr=subprocess.PIPE, text=True, start_new_session=True)
     with _procs_lock:
         _procs.append(proc)
-    proc.wait()
+    _, stderr = proc.communicate()
     with _procs_lock:
         _procs.remove(proc)
+    if proc.returncode:
+        raise RuntimeError(f"Worker report exited {proc.returncode}: {(stderr or '').strip()[-4000:]}")
 
 
 def run_worker(worker: Worker, sync_every: int, verbose: bool,

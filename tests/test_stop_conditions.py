@@ -157,7 +157,8 @@ def test_broken_command_fails_on_the_baseline_before_recording(project):
     _configure(project, "stop:\n  - exit 3\n")
     with pytest.raises(AutoHelixRunError, match="Stop command failed on the baseline"):
         Harness(project, verbose=False).run(max_iterations=2, report=False)
-    assert History(project).load() == []
+    records = History(project).load()
+    assert len(records) == 1 and records[0].iteration == 0 and not records[0].accepted
 
 
 def test_command_errors_after_the_baseline_only_warn(project):
@@ -306,7 +307,7 @@ def test_report_prompt_says_why_the_run_ended(project):
 def test_parallel_worker_stops_early_and_respects_report_option(tmp_path, monkeypatch, reason, no_report):
     segments, reports = [], []
     worker = parallel.Worker(index=1, name="w", config_file=tmp_path / "c.yaml", worktree=tmp_path,
-                             branch="b", branch_prefix="p", shared_dir=tmp_path, budget=5)
+                             branch="b", shared_dir=tmp_path, budget=5)
     monkeypatch.setattr(parallel, "_run_segment", lambda w, upto, verbose, args: segments.append(upto))
     monkeypatch.setattr(parallel, "sync_own_notes", lambda w: None)
     monkeypatch.setattr(parallel, "_write_worker_report", lambda w: reports.append(w.name))
