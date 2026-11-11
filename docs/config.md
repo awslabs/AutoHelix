@@ -2,7 +2,7 @@
 
 All configuration lives in `autohelix.yaml` at the project root.
 
-**Paths are relative to the project root.** Every path in the config — commands in `constraints` and `metrics`, `capture` files, and the patterns in `scope.editable`/`scope.frozen` — is resolved inside the per-iteration copy of the code, not the main repo. Use relative paths (`src/`, `tests/`, `results/log.json`); absolute paths point outside the copy and will either be silently ignored, revert all the agent's work as out-of-scope, or crash the run. (The one exception is long-lived outputs you deliberately keep outside the repo — e.g. a model checkpoint directory — which are meant to live at a fixed absolute path.)
+**Paths are relative to the project root.** Every path in the config — commands in `constraints` and `metrics`, `capture` files, and the patterns in `scope.editable`/`scope.frozen` — is resolved inside the per-iteration copy of the code, not the main repo. Use relative paths (`src/`, `tests/`, `results/log.json`); absolute paths point outside the copy and will either be silently ignored, revert all the agent's work as out-of-scope, or crash the run. (The one exception is long-lived outputs you deliberately keep outside the repo — e.g. a model checkpoint directory — which are meant to live at a fixed absolute path.) Untracked files such as a virtualenv or downloaded data aren't in the copy; see [Concepts → Candidate Copies](concepts.md#candidate-copies).
 
 ## Full Reference
 

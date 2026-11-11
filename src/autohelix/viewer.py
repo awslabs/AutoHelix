@@ -252,7 +252,7 @@ class RunData:
         return self._repository
 
     def _agent_copy(self, n: int) -> Path:
-        return self.paths.worktrees / f"iter-{n}-agent"
+        return self.paths.copies / f"iter-{n}-agent"
 
     def _worktree(self, n: int) -> Path:
         """Where a running iteration's files live (notes are copied back at the end)."""

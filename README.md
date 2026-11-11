@@ -230,8 +230,11 @@ my-project/
     │   ├── logs/        # iter-N/call-*/ prompts and transcripts
     │   ├── output/      # report.md and report.html
     │   └── runtime/     # live status and per-run settings
-    └── worktrees/<id>/  # temporary per-phase candidate copies
+    └── runtime/         # helper scripts and lock files
 ```
+
+Temporary per-phase candidate copies live outside the project, in
+`${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/` (set `AUTOHELIX_COPIES_ROOT` to move them).
 
 Runs resume by config path. Use `autohelix run --new` for a separate experiment,
 `--run ID` to select one, or `--land manual` to keep validated commits on the run's
@@ -375,7 +378,7 @@ constraint and re-run.
 AutoHelix isolates the agent at two levels:
 
 1. **Candidate copies** (default) — each phase of an iteration runs in a separate private
-   copy with its own git metadata. Rejected iterations are deleted entirely; accepted ones
+   copy, outside your project, with its own git metadata. Rejected iterations are deleted entirely; accepted ones
    are recorded on the run ref and landed separately.
 2. **Docker sandbox** (optional) — filesystem isolation: the agent can't access your
    home directory, SSH keys, or other projects. (Network is not isolated, since the

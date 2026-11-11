@@ -8,13 +8,12 @@ The agent writes only the narrative; the viewer shows the facts around it.
 """
 
 import json
-import os
 import time
 from pathlib import Path
 
 from autohelix.config import Config
 from autohelix.history import History
-from autohelix.runs import RunPaths, RunLock, run_tip, git
+from autohelix.runs import RunPaths, RunLock, claim_copies, ensure_copies, remove_copies, run_tip, git
 
 INSTRUCTIONS = """\
 Write a short summary of this run for someone who didn't watch it. Cover what was achieved, \
@@ -126,12 +125,10 @@ def write_report(config: Config, project: Path, console, config_path: Path | Non
     # The summary agent reads accepted code in a copy of the run's tip; it can't change it.
     before = git(project, "rev-parse", "--verify", paths.ref, check=False).stdout.strip()
     tip = before or run_tip(paths)
-    paths.worktrees.mkdir(parents=True, exist_ok=True)
-    copy_path = paths.worktrees / "iter-report"
-    copy = Copy.create(Repo(project), copy_path, files=tip, head=tip)
+    root = claim_copies(paths, lambda message: console.print(f"[yellow]{message}[/yellow]"))
+    copy = Copy.create(Repo(project), ensure_copies(root) / "iter-report", files=tip, head=tip)
     started = time.monotonic()
     try:
-        os.environ["GIT_CEILING_DIRECTORIES"] = str(paths.worktrees)
         with Live(display, console=console, refresh_per_second=10, transient=True):
             result = agent.run(
                 worktree_path=copy.working_dir,
@@ -150,6 +147,7 @@ def write_report(config: Config, project: Path, console, config_path: Path | Non
             console.print(f"[red]Error: the summary agent moved {paths.ref}; restored it.[/red]", highlight=False)
         try:
             copy.remove()
+            remove_copies(root)
         except Exception as e:  # noqa: BLE001 - keep the agent's outcome
             console.print(f"[yellow]Could not remove {copy.path}: {e}[/yellow]")
     seconds = round(time.monotonic() - started, 1)

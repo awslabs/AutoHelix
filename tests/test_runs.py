@@ -190,7 +190,7 @@ def test_recovery_after_ref_publication_and_torn_append(project, monkeypatch):
     with pytest.raises(AutoHelixRunError, match="crash after publication"):
         harness.run_iteration(1)
     paths = harness.paths
-    assert not list(paths.worktrees.glob("iter-*"))
+    assert not list(paths.copies.glob("iter-*"))
     tip = git(project, "rev-parse", paths.ref).stdout.strip()
     harness.close()
     resumed = Harness(project, land_mode="manual")
@@ -220,7 +220,7 @@ def test_ref_cas_failure_never_records_acceptance(project, monkeypatch):
     assert not record.accepted and record.commit is None
     assert record.cost.cost_usd == 0.1
     assert git(project, "rev-parse", harness.paths.ref).stdout.strip() == base
-    assert not list(harness.paths.worktrees.glob("iter-*"))
+    assert not list(harness.paths.copies.glob("iter-*"))
     harness.close()
 
 
@@ -245,7 +245,7 @@ def test_sigint_during_publication_defers_until_ref_and_history_agree(project, m
     assert record.accepted
     assert record.commit == harness.run_state.expected_tip
     assert record.commit == git(project, "rev-parse", harness.paths.ref).stdout.strip()
-    assert not list(harness.paths.worktrees.glob("iter-*"))
+    assert not list(harness.paths.copies.glob("iter-*"))
     harness.close()
 
 
@@ -589,7 +589,7 @@ def test_prompt_setup_failure_does_not_consume_attempt(project, monkeypatch):
     with pytest.raises(AutoHelixRunError, match="bad prompt"):
         harness.run_iteration(1)
     assert [row.iteration for row in harness.history.load()] == [0]
-    assert not (harness.paths.worktrees / "iter-1").exists()
+    assert not (harness.paths.copies / "iter-1").exists()
     harness.close()
 
 
@@ -610,7 +610,7 @@ def test_report_owns_run_and_restores_ref_before_removal(project, monkeypatch):
     monkeypatch.setattr("autohelix.agents.create_agent", lambda *a, **k: SimpleNamespace(run=run))
     assert not write_report(harness.config, project, Console(), run_id=harness.paths.run_id)
     assert git(project, "rev-parse", harness.paths.ref).stdout.strip() == expected
-    assert not list(harness.paths.worktrees.iterdir())
+    assert not harness.paths.copies.exists()
 
 
 def test_abandoned_noop_retains_user_commit_tip(project, monkeypatch):

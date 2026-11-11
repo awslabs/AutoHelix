@@ -4,12 +4,14 @@
 """Run identity, file layout, ownership, recovery, and fast-forward landing."""
 
 import fcntl
+import hashlib
 import json
 import os
 import re
 import secrets
 import shutil
 import signal
+import stat
 import threading
 import time
 from contextlib import contextmanager
@@ -20,6 +22,7 @@ SCHEMA = 1
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,36}\Z")
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}\Z")
 _ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
+COPIES_ENV = "AUTOHELIX_COPIES_ROOT"
 
 
 def git(project: Path, *args: str, check: bool = True):
@@ -34,11 +37,16 @@ def git(project: Path, *args: str, check: bool = True):
     return result
 
 
-def write_json(path: Path, data: dict) -> None:
+def write_text(path: Path, text: str) -> None:
+    """Replace a file atomically."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(data) + "\n")
+    temporary.write_text(text)
     temporary.replace(path)
+
+
+def write_json(path: Path, data: dict) -> None:
+    write_text(path, json.dumps(data) + "\n")
 
 
 def allocate_call(directory: Path, role: str) -> Path:
@@ -109,7 +117,22 @@ class RunPaths:
     @property
     def project_runtime(self): return self.root / "runtime"
     @property
-    def worktrees(self): return self.root / "worktrees" / self.run_id if self.run_id else self.root / "worktrees"
+    def copies_record(self): return self.run_dir / "copies"  # the copies base the last segment used
+    @property
+    def copies(self) -> Path:
+        """The run's copies folder, outside the project: `<base>/<dirname>-<hash8>/<id>`,
+        under the base the last segment recorded, else the current one. Only observers
+        read it; a segment uses the folder `claim_copies` returned."""
+        if not self.run_id:
+            raise RuntimeError("No run selected.")
+        try:
+            base = _checked_base(self.copies_record.read_text().strip())
+        except (OSError, RuntimeError):
+            base = copies_base()
+        return self.copies_under(base)
+
+    def copies_under(self, base: Path) -> Path:
+        return base / project_key(self.project) / self.run_id
     @property
     def ref(self): return f"refs/autohelix/{self.run_id}"
     @property
@@ -149,6 +172,113 @@ class RunPaths:
         return data
 
 
+def _checked_base(value: str) -> Path:
+    if not os.path.isabs(value) or os.path.realpath(value) != value or os.pathsep in value:
+        raise RuntimeError(f"Copies base must be an absolute, resolved path without {os.pathsep!r}: {value}")
+    return Path(value)
+
+
+def copies_base() -> Path:
+    """Where candidate copies live: ${AUTOHELIX_COPIES_ROOT}, else
+    ${XDG_CACHE_HOME:-~/.cache}/autohelix/copies, resolved."""
+    value = os.path.expanduser(os.environ.get(COPIES_ENV, ""))
+    if value and not os.path.isabs(value):
+        raise RuntimeError(f"{COPIES_ENV} must be an absolute path: {value}")
+    if not value:
+        cache = os.environ.get("XDG_CACHE_HOME", "")
+        if not os.path.isabs(cache):  # the XDG spec ignores relative values
+            cache = os.path.join(os.path.expanduser("~"), ".cache")
+        value = os.path.join(cache, "autohelix", "copies")
+    return _checked_base(os.path.realpath(value))
+
+
+def project_key(project: Path) -> str:
+    """`<dirname>-<hash8>` naming a project's folder under the copies base."""
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", project.name)[:40].lstrip(".") or "project"
+    return f"{name}-{hashlib.sha256(os.fsencode(project)).hexdigest()[:8]}"
+
+
+def _check_base(base: Path) -> None:
+    """The base may be shared (like /tmp) only if others can't rename entries in it."""
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = base.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in (os.getuid(), 0)
+            or info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX):
+        raise RuntimeError(f"Copies base must be owned by you or root and not writable by others: "
+                           f"{base}. Point {COPIES_ENV} at a private folder.")
+
+
+def _own_dir(path: Path, *, create: bool) -> None:
+    """A real directory owned by this user, made private (mode 0700)."""
+    if create:
+        try:
+            path.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise RuntimeError(f"Copies folder is not a directory owned by you: {path}")
+    if info.st_mode & 0o077:
+        os.chmod(path, 0o700)
+
+
+def ensure_copies(root: Path) -> Path:
+    """Create a run's copies folder and its project folder on first use: real
+    directories owned by this user, mode 0700."""
+    def make():
+        _check_base(root.parent.parent)
+        _own_dir(root.parent, create=True)
+        _own_dir(root, create=True)
+        return root
+
+    try:
+        return make()
+    except FileNotFoundError:  # another run of the project removed its empty folder
+        return make()
+
+
+def remove_copies(root: Path, warn=None) -> None:
+    """Delete a run's copies folder, then its project folder once empty. Errors raise
+    unless `warn` is given."""
+    from autohelix.workspace import _check_root, remove_copy
+
+    try:
+        if not os.path.lexists(root):
+            return
+        _own_dir(root, create=False)  # never empty a folder that isn't ours
+        _check_root(root)
+        for entry in root.iterdir():
+            remove_copy(entry)
+    except Exception as e:  # noqa: BLE001 - cleanup reports, the caller decides
+        if warn is None:
+            raise
+        warn(f"Could not remove copies in {root}: {e}")
+        return
+    for folder in (root, root.parent):
+        try:
+            folder.rmdir()
+        except OSError:  # not empty: other runs of the project
+            break
+
+
+def claim_copies(paths: "RunPaths", warn=None) -> Path:
+    """Fix the copies folder this process uses for the run (call under the run lock):
+    record its base for observers and stop git discovery there, so a process that
+    deletes its copy's .git can't climb into an enclosing repository. The folder
+    itself is created on first use (`ensure_copies`)."""
+    base = copies_base()
+    _check_base(base)
+    root = paths.copies_under(base)
+    previous = paths.copies
+    if previous != root:  # the base changed since the last segment
+        remove_copies(previous, warn)
+    write_text(paths.copies_record, f"{base}\n")
+    ceiling = os.environ.get("GIT_CEILING_DIRECTORIES", "")
+    if str(root) not in ceiling.split(os.pathsep):
+        os.environ["GIT_CEILING_DIRECTORIES"] = str(root) + (os.pathsep + ceiling if ceiling else "")
+    return root
+
+
 class RunLock:
     """Nonblocking, process-held ownership; the persistent inode is never removed."""
 
@@ -178,6 +308,7 @@ class RunState:
     paths: RunPaths
     data: dict
     expected_tip: str
+    copies_root: Path | None = None  # from claim_copies
 
 
 @contextmanager
@@ -390,7 +521,7 @@ def land(paths: RunPaths, data: dict, expected_tip: str, into: str | None = None
                 raise RuntimeError(f"Cannot land {target}: branch is busy or changed. {hint}")
 
 
-def abandon(paths: RunPaths, *, purge: bool = False) -> None:
+def abandon(paths: RunPaths, *, purge: bool = False, warn=None) -> None:
     with RunLock(paths.lock):
         data = paths.read_identity()
         data["lifecycle"] = "abandoned"
@@ -398,12 +529,7 @@ def abandon(paths: RunPaths, *, purge: bool = False) -> None:
         if tip.returncode == 0:
             data["abandoned_tip"] = tip.stdout.strip()
         write_json(paths.identity, data)
-        if paths.worktrees.is_dir() and not paths.worktrees.is_symlink():
-            from autohelix.workspace import remove_copy
-
-            for copy in paths.worktrees.iterdir():
-                remove_copy(copy)
-            paths.worktrees.rmdir()
+        remove_copies(paths.copies, warn or (lambda message: None))
         target = data.get("target_branch")
         landed = target and git(paths.project, "merge-base", "--is-ancestor", paths.ref,
                                 f"refs/heads/{target}", check=False).returncode == 0

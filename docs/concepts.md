@@ -77,12 +77,24 @@ made; no stash, no remote). This means:
 - Accepted commits advance the run's hidden `refs/autohelix/<id>` first.
 - A process-held per-run lock prevents concurrent writing lifecycle operations.
 - PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo).
+- **A copy holds only committed files.** Commands get
+  their tools from the environment AutoHelix started in: run it with your virtualenv
+  activated so `python` and `pytest` resolve to it, and reference untracked data by
+  absolute path. Copies sit outside the project, so lookups in parent directories
+  (Node's `node_modules`, a `.venv` beside the project) don't find your project's.
 - **Submodule changes are not supported.** Submodules appear as empty directories in a
   copy; changing one, or writing inside one, rejects the iteration.
 
-Copies live in `.autohelix/worktrees/<id>/` and are deleted after each phase. A baseline
-command that modifies the code it checks (for example a formatter without `--check`)
-stops the run with a setup error before any agent runs.
+Copies live in
+`${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/<project>-<hash>/<id>/` and are deleted
+after each phase; the run's folder goes when a segment ends. To put them elsewhere (for
+example on a larger disk), set `AUTOHELIX_COPIES_ROOT` to an absolute path. Each run
+records the folder it used, so `view` and `abandon` find it from any shell. The
+folders below that root are private (mode 0700, owned by you); a shared root must be
+sticky like `/tmp`. Copies left by a run that crashed are removed when it resumes or
+is abandoned; with no run active, the whole `copies/` folder is safe to delete. A
+baseline command that modifies the code it checks (for example a formatter without
+`--check`) stops the run with a setup error before any agent runs.
 
 ## Notes
 
@@ -177,7 +189,7 @@ Editing the template is also how you can keep an evaluation *out of the agent's 
 - **Don't list the eval command.** Drop the `{{observables}}` (or `{{constraints}}`) loop from your `prompt.md`. The command still runs and its metric still gates/ranks the run — it just isn't named in the prompt, so the agent isn't handed the exact thing to target.
 - **Fence the agent into its worktree.** Add an explicit instruction to only read and write inside `{{worktree}}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in-scope to reverse-engineer.
 
-This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence — in testing, Claude declined to read an out-of-worktree eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: iteration copies are nested under the project, so an agent that is determined (or explicitly told to cheat) can walk up to the parent directory and read whatever is there. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
+This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence — in testing, Claude declined to read an out-of-worktree eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: copies live outside the project, but the agent runs as you, so one that is determined (or explicitly told to cheat) can still reach the project and anything else on disk by absolute path. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
 
 ## Run state and lifecycle
 
@@ -199,10 +211,13 @@ scoped to `.autohelix/runs/<id>/`:
 │   ├── logs/iter-N/call-*/     # separate directory per actual agent/judge call
 │   ├── output/report.md
 │   ├── output/report.html
+│   ├── copies                  # base folder of this run's candidate copies
 │   └── runtime/status.json        # advisory live status/copy/log
-├── worktrees/<id>/iter-N-<phase>/  # temporary candidate copies
 └── runtime/                   # shared helper scripts and persistent lock files
 ```
+
+The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
+project; see [Candidate Copies](#candidate-copies).
 
 The agent still sees a small `.autohelix/` view inside its copy. Only `notes/`
 round-trips; observations, hints, peer notes and latest `review.md` are reference

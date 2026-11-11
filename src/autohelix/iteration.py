@@ -8,24 +8,11 @@ copy is snapshotted to a tree T through the user's repository; checks, the
 reviewer and stop commands each get a new copy; accepting publishes exactly T.
 """
 
-import os
 import shutil
 from pathlib import Path
 
-from autohelix.runs import RunPaths, RunState, critical_section
-from autohelix.workspace import Copy, Repo, Scope, remove_copy
-
-
-def remove_stale_copies(root, warn=None) -> None:
-    """Retry removing copies a previous segment could not delete."""
-    if not root.is_dir() or os.path.realpath(root) != str(root):
-        return
-    for entry in root.iterdir():  # the run's copies folder holds nothing else
-        try:
-            remove_copy(entry)
-        except Exception as e:  # noqa: BLE001 - never block a segment on cleanup
-            if warn:
-                warn(f"Could not remove stale copy {entry}: {e}")
+from autohelix.runs import RunPaths, RunState, critical_section, ensure_copies
+from autohelix.workspace import Copy, Repo, Scope
 
 
 def latest_review(paths: RunPaths) -> Path | None:
@@ -101,9 +88,7 @@ class IterationWorkspace:
         self.record_write_attempted = False
 
     def _copy(self, role: str, files: str, head: str) -> Copy:
-        root = self._run.paths.worktrees
-        root.mkdir(parents=True, exist_ok=True)
-        path = root / f"iter-{self.iteration}-{role}"
+        path = ensure_copies(self._run.copies_root) / f"iter-{self.iteration}-{role}"
         copy = Copy.create(self.repo, path, files=files, head=head)
         self.copies.append(copy)
         return copy

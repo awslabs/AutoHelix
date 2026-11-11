@@ -45,7 +45,7 @@ def test_agent_git_tampering_preserves_user_checkout(project, monkeypatch, opera
         assert git(project, "symbolic-ref", "HEAD").stdout == before_head
         assert git(project, "diff", "--cached").stdout == before_index
         assert (project / "code.py").read_text() == "user dirty content"
-        assert not harness.paths.worktrees.joinpath("iter-1").exists()
+        assert not harness.paths.copies.joinpath("iter-1").exists()
     finally:
         harness.close()
 
