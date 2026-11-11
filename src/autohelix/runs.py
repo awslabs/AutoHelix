@@ -113,6 +113,8 @@ class RunPaths:
     @property
     def ref(self): return f"refs/autohelix/{self.run_id}"
     @property
+    def pin(self): return f"refs/autohelix-tmp/{self.run_id}"  # the frozen candidate tree
+    @property
     def prompt(self): return self.root / "prompt.md"
     @property
     def peer_notes(self): return self.root / "peer_notes"
@@ -210,8 +212,11 @@ def config_relative(project: Path, config: Path) -> str:
 
 
 def select_run(project: Path, config: Path, *, name: str | None = None,
-               new: bool = False, run_id: str | None = None) -> tuple[RunPaths, dict, RunLock]:
-    """Select and own a run atomically before creating any per-run state."""
+               new: bool = False, run_id: str | None = None, ready=None) -> tuple[RunPaths, dict, RunLock]:
+    """Select and own a run atomically before creating any per-run state.
+
+    `ready` runs the caller's readiness checks before a new run is allocated;
+    raising refuses the start without leaving an identity, ref or pointer."""
     root = RunPaths(project).root
     if (root / "history.jsonl").exists():
         raise RuntimeError("Legacy AutoHelix state: move or delete .autohelix/, then run git worktree prune.")
@@ -253,6 +258,8 @@ def select_run(project: Path, config: Path, *, name: str | None = None,
         dirty = git(project, "status", "--porcelain", "--untracked-files=no").stdout
         if dirty:
             raise RuntimeError("Uncommitted changes in tracked files. Commit them before starting a run:\n" + dirty)
+        if ready is not None:
+            ready()
         base = git(project, "rev-parse", "HEAD").stdout.strip()
         target = git(project, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip().removeprefix("refs/heads/") or None
         while True:
@@ -331,21 +338,22 @@ def reconcile(paths: RunPaths, data: dict, history, land_mode: str) -> tuple[str
     warning = None
     target = data.get("target_branch")
     baseline_captured = any(row.iteration == 0 and row.accepted for row in history.load())
-    if target:
-        branch = git(paths.project, "rev-parse", f"refs/heads/{target}", check=False)
-        if branch.returncode == 0:
-            target_tip = branch.stdout.strip()
-            if baseline_captured and git(paths.project, "merge-base", "--is-ancestor", tip, target_tip, check=False).returncode == 0:
-                if tip != target_tip:
-                    git(paths.project, "update-ref", "--no-deref", "-m", "AutoHelix resume from target", paths.ref, target_tip, tip)
-                    tip = target_tip
-            elif land_mode == "auto":
-                if git(paths.project, "merge-base", "--is-ancestor", target_tip, tip, check=False).returncode == 0:
-                    warning = (f"Target {target} is behind run {paths.run_id}; auto landing will reapply accepted code. "
-                               f"To discard the run after a reset, use autohelix abandon {paths.run_id}.")
-                else:
-                    warning = (f"Target {target} diverged; continuing run {paths.run_id} from its accepted tip. "
-                               "Landing requires a branch that can fast-forward.")
+    branch = git(paths.project, "rev-parse", f"refs/heads/{target}", check=False) if target else None
+    target_tip = branch.stdout.strip() if branch and branch.returncode == 0 else tip
+    # Nothing to say before the baseline, or when the target is the tip.
+    if baseline_captured and target_tip != tip:
+        def ancestor(a, b):
+            return git(paths.project, "merge-base", "--is-ancestor", a, b, check=False).returncode == 0
+
+        if ancestor(tip, target_tip):
+            git(paths.project, "update-ref", "--no-deref", "-m", "AutoHelix resume from target", paths.ref, target_tip, tip)
+            tip = target_tip
+        elif not ancestor(target_tip, tip):
+            warning = (f"Target {target} diverged; continuing run {paths.run_id} from its accepted tip. "
+                       "Landing requires a branch that can fast-forward.")
+        elif land_mode == "auto":  # in manual mode, behind just means not landed yet
+            warning = (f"Target {target} is behind run {paths.run_id}; auto landing will reapply accepted code. "
+                       f"To discard the run after a reset, use autohelix abandon {paths.run_id}.")
     return tip, warning
 
 
@@ -390,13 +398,17 @@ def abandon(paths: RunPaths, *, purge: bool = False) -> None:
         if tip.returncode == 0:
             data["abandoned_tip"] = tip.stdout.strip()
         write_json(paths.identity, data)
-        for worktree in paths.worktrees.glob("*"):
-            git(paths.project, "worktree", "remove", "--force", str(worktree), check=False)
-        if paths.worktrees.exists():
-            shutil.rmtree(paths.worktrees)
+        if paths.worktrees.is_dir() and not paths.worktrees.is_symlink():
+            from autohelix.workspace import remove_copy
+
+            for copy in paths.worktrees.iterdir():
+                remove_copy(copy)
+            paths.worktrees.rmdir()
         target = data.get("target_branch")
         landed = target and git(paths.project, "merge-base", "--is-ancestor", paths.ref,
                                 f"refs/heads/{target}", check=False).returncode == 0
+        # The candidate pin keeps the last frozen tree alive; it's never needed again.
+        git(paths.project, "update-ref", "-d", paths.pin, check=False)
         if purge or landed:
             tip = git(paths.project, "rev-parse", paths.ref, check=False)
             if tip.returncode == 0:

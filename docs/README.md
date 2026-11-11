@@ -2,7 +2,7 @@
 
 **Autonomous iterative improvement harness.**
 
-AutoHelix runs AI agents in a loop — each iteration is isolated in a git worktree, validated against constraints, and only accepted when everything checks out. What doesn't pass gets discarded; what the agent learns persists.
+AutoHelix runs AI agents in a loop — each iteration is isolated in private copies of the code, validated against constraints, and only accepted when everything checks out. What doesn't pass gets discarded; what the agent learns persists.
 
 See the [main README](../README.md) for an overview, quick start, and the config reference.
 

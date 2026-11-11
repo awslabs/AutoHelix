@@ -61,7 +61,7 @@ to track. The agent proposes changes and the harness decides if they land.
 
 Core features:
 
-- **Isolation.** Each iteration runs in a fresh git worktree. A rejected attempt's code is cleanly discarded.
+- **Isolation.** Each iteration runs in fresh private copies of the code. A rejected attempt's code is cleanly discarded, and what was checked is exactly what gets accepted.
 - **Scope enforcement.** Only files marked `editable` can be changed; everything else is frozen.
 - **Constraints gate changes.** Tests, type-checks, or any command that must exit 0. Break a constraint and the iteration is discarded.
 - **Metrics track progress.** Metrics are captured and shown to the next iteration. Optionally gate on them to reject regressions. Logs and artifacts can be saved too.
@@ -230,7 +230,7 @@ my-project/
     │   ├── logs/        # iter-N/call-*/ prompts and transcripts
     │   ├── output/      # report.md and report.html
     │   └── runtime/     # live status and per-run settings
-    └── worktrees/<id>/  # temporary detached iteration checkouts
+    └── worktrees/<id>/  # temporary per-phase candidate copies
 ```
 
 Runs resume by config path. Use `autohelix run --new` for a separate experiment,
@@ -374,13 +374,14 @@ constraint and re-run.
 
 AutoHelix isolates the agent at two levels:
 
-1. **Git worktree** (default) — each iteration runs in a separate working copy.
-   Rejected iterations are deleted entirely; accepted ones are recorded on the run ref and landed separately.
+1. **Candidate copies** (default) — each phase of an iteration runs in a separate private
+   copy with its own git metadata. Rejected iterations are deleted entirely; accepted ones
+   are recorded on the run ref and landed separately.
 2. **Docker sandbox** (optional) — filesystem isolation: the agent can't access your
    home directory, SSH keys, or other projects. (Network is not isolated, since the
    agent needs it to reach the model API.)
 
-Worktree isolation protects your codebase from bad iterations, but it is **not a
+Copy isolation protects your codebase from bad iterations, but it is **not a
 security sandbox** — the agent still runs on your host and could in principle access
 the filesystem or network. For focused optimization tasks (the typical use case), the
 agent works toward a narrow goal, not exploring adversarially, so running without a

@@ -120,6 +120,7 @@ def test_baseline_review_alone_can_exhaust_budget(integration_project, monkeypat
 def test_failed_baseline_retry_preserves_every_charge(integration_project, monkeypatch):
     harness, calls = _harness(integration_project, monkeypatch, success=False, write_review=False)
     harness._capture_baseline()
+    harness._run_baseline_review()
     assert calls == [0]
     harness.close()
     resumed, calls = _harness(integration_project, monkeypatch, success=False, write_review=False)
@@ -139,8 +140,9 @@ def test_interrupted_baseline_review_preserves_unknown_charge(integration_projec
         raise KeyboardInterrupt
 
     monkeypatch.setattr(harness, "run_reviewer", interrupt_review)
+    harness._capture_baseline()
     with pytest.raises(KeyboardInterrupt):
-        harness._capture_baseline()
+        harness._run_baseline_review()
     history = History(integration_project)
     assert history.load()[0].reviewer_usage == [{}]
     assert summarize_costs(history.cost_usages).incomplete

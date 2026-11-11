@@ -203,15 +203,19 @@ def run_constraints(
     project_path: Path | None = None,
     on_progress: ProgressCallback | None = None,
     extra_env: dict[str, str] | None = None,
+    after_command: Callable[[str], None] | None = None,
 ) -> list[ConstraintResult]:
-    """Run all constraints and return results."""
-    return [
-        run_constraint(
+    """Run all constraints and return results. `after_command` runs after each
+    command (e.g. to verify the candidate) and may raise to stop the phase."""
+    results = []
+    for c in config.constraints:
+        results.append(run_constraint(
             c.command, cwd, timeout=c.timeout, project_path=project_path, on_progress=on_progress,
             extra_env=extra_env,
-        )
-        for c in config.constraints
-    ]
+        ))
+        if after_command:
+            after_command(c.command)
+    return results
 
 
 @dataclass
@@ -417,6 +421,7 @@ def run_observables(
     project_path: Path | None = None,
     on_progress: ProgressCallback | None = None,
     extra_env: dict[str, str] | None = None,
+    after_command: Callable[[str], None] | None = None,
 ) -> list[ObservableResult]:
     """Run all observable commands and return full results (values + output)."""
     results: list[ObservableResult] = []
@@ -424,6 +429,8 @@ def run_observables(
         cmd_result = run_observable(obs, cwd, project_path=project_path, on_progress=on_progress,
                                     extra_env=extra_env)
         results.append(cmd_result)
+        if after_command:
+            after_command(obs.command)
         for name, error in cmd_result.errors.items():
             logger.warning("Metric '%s' failed: %s", name, error)
     return results

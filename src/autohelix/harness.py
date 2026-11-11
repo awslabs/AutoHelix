@@ -7,10 +7,10 @@ import json
 import hashlib
 import os
 import shutil
-import subprocess
 import sys
 import time
-import traceback
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from rich.console import Console
@@ -26,16 +26,16 @@ from autohelix.config import load_config
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay
 from autohelix.history import History, IterationResult
-from autohelix.checkpoint import CandidateChanged, ContentGuard
 from autohelix.runs import RunPaths, RunLock, RunState, select_run, reconcile, land, git, allocate_call
-from autohelix.iteration import IterationWorkspace
+from autohelix.iteration import IterationWorkspace, remove_stale_copies
 from autohelix.checks import preflight_check, run_constraints, run_observables, run_stop_checks
 from autohelix.run_status import RunStatus
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
 from autohelix.formatting import format_cost, format_delta, format_duration, format_total_cost
 from autohelix.prompt_template import build_prompt_variables, load_template, render_template
 from autohelix.run_log import RunLog
-from autohelix.sandbox import Sandbox, Worktree
+from autohelix.sandbox import ensure_clean_working_tree, ensure_editable_files_ready
+from autohelix.workspace import SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, CandidateRejected, Copy, Repo, Scope
 from autohelix.state import (
     GitExcludeError,
     ensure_runtime_ignored,
@@ -47,6 +47,18 @@ _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 class AutoHelixRunError(RuntimeError):
     """A run could not safely continue because infrastructure failed."""
+
+
+@dataclass
+class _Attempt:
+    """What an iteration attempt has spent and checked so far, for its record."""
+
+    started_at: float
+    monotonic: float
+    agent_usage: dict = field(default_factory=dict)
+    agent_attempted: bool = False
+    constraints: list = field(default_factory=list)
+    reviews: list = field(default_factory=list)
 
 
 class _IterationSpinner:
@@ -139,10 +151,16 @@ class Harness:
                 self.console.print(f"[red]Error:[/red] {error.message}")
             raise SystemExit("Config validation failed. Edit autohelix.yaml and try again.")
         ensure_runtime_ignored(self.project_path)
+        # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send
+        # every child's git (agent, checks, judges) to the user's repository.
+        for key in SCRUBBED_GIT_ENV:
+            os.environ.pop(key, None)
         self.land_mode = land_mode or self.config.land
+        self._preflight_done = False
         self.paths, self.run_info, self._ownership = select_run(
             self.project_path, config_file or self.project_path / "autohelix.yaml",
             new=new, run_id=run_id, name=name if name is not None else self.config.name,
+            ready=self._first_start_ready,
         )
         try:
             self.history = History(self.project_path, self.paths.run_id)
@@ -151,15 +169,19 @@ class Harness:
             current = self.paths.root / f"current.{os.getpid()}.tmp"
             current.write_text(self.paths.run_id + "\n")
             current.replace(self.paths.root / "current")
-            self.sandbox = Sandbox(self.project_path, self.paths)
+            # Every child (agent, checks, judges, reviewer): a process that deletes its
+            # copy's .git must not climb into the user's repository.
+            ceiling = os.environ.get("GIT_CEILING_DIRECTORIES")
+            os.environ["GIT_CEILING_DIRECTORIES"] = (
+                str(self.paths.worktrees) + (os.pathsep + ceiling if ceiling else ""))
+            self.repo = Repo(self.project_path)
             self.run_status = RunStatus(self.project_path, self.paths.run_id)
             self.log = RunLog(self.project_path, self.paths.run_id)
             self._land_attempted = False
             self._segment_started = False
-            self._usage_starts = {}
-            self._review_logs = {}
+            self._usage_starts: set = set()
+            self._segment_target_tip: str | None = None
             self._agent_logs = {}
-            self._reviewer_attempt_usage = {}
             if warning:
                 self.console.print(f"[yellow]{warning}[/yellow]")
 
@@ -195,15 +217,9 @@ class Harness:
         arrow = "↓" if directions.get(name) == "lower" else "↑"
         return f"{name} {arrow}"
 
-    def _build_commit_message(self, iteration: int, metrics: dict[str, float], worktree_path: Path | None = None) -> str:
-        """Build a commit message with metric deltas and agent summary."""
-        # Read agent's commit summary if available
-        summary = None
-        if worktree_path:
-            summary_file = worktree_path / ".autohelix" / "commit_summary.txt"
-            if summary_file.exists():
-                summary = summary_file.read_text().strip().split("\n")[0]  # first line only
-
+    def _build_commit_message(self, iteration: int, metrics: dict[str, float], summary: str | None = None) -> str:
+        """Build a commit message with metric deltas and the agent's summary (first line
+        of its `.autohelix/commit_summary.txt`, read when the copy was frozen)."""
         if summary:
             lines = [summary, "", f"AutoHelix iteration {iteration}"]
         else:
@@ -460,21 +476,26 @@ class Harness:
         settings_path.write_text(json.dumps({"hooks": hooks}, indent=2))
         self._claude_settings_path = settings_path
 
-    def _validate_codex_iteration_time_ready(self) -> None:
-        """Fail before the iteration loop if Codex cannot support time-left hooks."""
+    def _validate_codex_iteration_time_ready(self, hook: Path | None = None) -> None:
+        """Fail before the iteration loop if Codex cannot support time-left hooks.
+
+        A first start checks the bundled hook before the run is allocated; later,
+        the hook installed for the run."""
         if (
             self.config.iteration_time_seconds is None
             or self.config.agent.type.lower() != "codex"
         ):
             return
 
-        if self._codex_time_left_hook_path is None:
+        hook = hook or self._codex_time_left_hook_path
+        if hook is None:
             message = "budget.iteration_time for Codex could not install the time-left hook."
         else:
             from autohelix.agents.codex import CodexAgent
 
-            agent = self.agent if isinstance(self.agent, CodexAgent) else CodexAgent(self.config.agent)
-            message = agent._validate_time_left_hook_support(str(self._codex_time_left_hook_path))
+            agent = getattr(self, "agent", None)
+            agent = agent if isinstance(agent, CodexAgent) else CodexAgent(self.config.agent)
+            message = agent._validate_time_left_hook_support(str(hook))
 
         if message:
             self.console.print(f"[red]Error:[/red] {message}")
@@ -536,8 +557,6 @@ class Harness:
             print(f"  Heartbeat: {self.heartbeat_seconds}s")
 
         deadline_env = {
-            **self.sandbox.context(worktree_path).env(),
-            "AUTOHELIX_CANDIDATE_TIP": self.run_state.expected_tip,
             "AUTOHELIX_PROJECT": str(self.project_path),
             "AUTOHELIX_RUN_ID": self.paths.run_id,
             "AUTOHELIX_RUN_DIR": str(self.paths.run_dir),
@@ -675,109 +694,44 @@ class Harness:
         # Use absolute path - Claude Code resolves relative paths against project root,
         # not cwd, so we must be explicit about the worktree location
         review_path = worktree_path / ".autohelix" / "review.md"
-        return f"{prompt}\n\nWrite your review to {review_path}"
+        diff = worktree_path / ".autohelix" / "candidate.diff"
+        return (f"{prompt}\n\nThe complete change under review, including new files, is in {diff}."
+                f"\n\nWrite your review to {review_path}")
 
-    def _begin_review(self, iteration: int) -> Path:
+    def _begin_review(self, iteration: int) -> dict:
+        """Reserve one reviewer call: its log directory and the call's record."""
         directory = allocate_call(self.paths.logs / f"iter-{iteration}", "reviewer")
         log = directory / "review.log"
-        self._review_logs.setdefault(iteration, []).append(log)
-        self._reviewer_attempt_usage = {}
         self._live_call("reviewer", log)
-        return log
+        return {"role": "reviewer", "usage": {}, "log": self._relative_log(log)}
 
     def _live_call(self, role, log):
         calls = list(self.run_status.data.get("calls", []))
         calls.append({"role": role, "log": self._relative_log(log), "usage": {}})
         self.run_status.note(calls=calls)
 
-    def run_reviewer(self, worktree: Worktree, iteration: int) -> AgentRunResult:
-        """Run the reviewer, preserving usage even if the review fails."""
-        if not self.config.reviewer:
-            return AgentRunResult(success=True)
+    def run_reviewer(self, worktree: Copy, iteration: int, call: dict) -> AgentRunResult:
+        """Run the reviewer in its copy; its usage lands in `call` even if it fails."""
         self.run_status.phase("review", iteration)
-
-        # Delete the transient prior review from the intended reference view
-        # so this attempt writes fresh feedback. Shared state remains accessible.
-        old_review = worktree.working_dir / ".autohelix" / "review.md"
-        if old_review.exists():
-            old_review.unlink()
-
-        reviewer_config = self._create_reviewer_agent_config()
-        reviewer_agent = create_agent(reviewer_config, heartbeat_seconds=self.heartbeat_seconds)
-
-        log_path = self._review_logs.get(iteration, [None])[-1]
-        if log_path is None:
-            log_path = self._begin_review(iteration)
-        logs_dir = log_path.parent
-        prompt_path = logs_dir / "review.prompt.txt"
+        reviewer_agent = create_agent(self._create_reviewer_agent_config(), heartbeat_seconds=self.heartbeat_seconds)
+        log_path = self.paths.run_dir / call["log"]
         self.run_status.note(log=str(log_path))
-
         prompt = self._build_reviewer_prompt(worktree.working_dir)
-        prompt_path.write_text(prompt)
-
-        display = LiveDisplay(
-            console=self.console,
-            title="review",
-            border_style="magenta",
-            verbose=self.verbose,
-            iteration=iteration,
-        )
-
-        def on_event(event: AgentEvent) -> None:
-            display.handle_event(event)
-
+        (log_path.parent / "review.prompt.txt").write_text(prompt)
+        display = LiveDisplay(console=self.console, title="review", border_style="magenta",
+                              verbose=self.verbose, iteration=iteration)
         result: AgentRunResult | None = None
         try:
-            with Live(
-                display,
-                console=self.console,
-                refresh_per_second=10,
-                transient=not self.verbose,
-            ) as live:
-                with ContentGuard(worktree.working_dir, allowed=(log_path,),
-                                  git=worktree.git, tip=self.run_state.expected_tip):
-                    result = reviewer_agent.run(
-                        worktree_path=worktree.working_dir,
-                        prompt=prompt,
-                        iteration=iteration,
-                        log_path=log_path,
-                        event_callback=on_event,
-                        project_path=self.project_path,
-                    )
+            with Live(display, console=self.console, refresh_per_second=10, transient=not self.verbose):
+                result = reviewer_agent.run(
+                    worktree_path=worktree.working_dir, prompt=prompt, iteration=iteration,
+                    log_path=log_path, event_callback=display.handle_event, project_path=self.project_path,
+                )
                 display.flush()
-
             if result.error:
                 self.console.print(f"[red]Reviewer error:[/red] {result.error}")
             if self.verbose:
                 self.console.print()
-
-            if not result.success:
-                return result
-
-            # Save review file
-            saved = self.sandbox.save_review(worktree, iteration)
-            if not saved:
-                self.console.print(
-                    f"  [yellow]![/yellow] Reviewer did not create review.md"
-                )
-                result.success = False
-                result.error = "Reviewer did not create review.md"
-                return result
-
-            # Also copy into logs for this iteration
-            review_src = (
-                self.paths.reviews
-                / f"iter-{iteration}.md"
-            )
-            iter_logs = logs_dir
-            iter_logs.mkdir(parents=True, exist_ok=True)
-            if review_src.exists():
-                shutil.copy2(review_src, iter_logs / "review.md")
-            if self.verbose:
-                self.console.print(
-                    f"  [green]✓[/green] Review saved to reviews/iter-{iteration}.md"
-                )
-
             return result
         except KeyboardInterrupt:
             self._status("Interrupted - stopping reviewer...")
@@ -785,320 +739,78 @@ class Harness:
         except Exception as e:
             self._status(f"Reviewer error: {e}")
             self.log.info(f"iter {iteration} reviewer error — {e}")
-            return AgentRunResult(
-                success=False, error=str(e),
-                usage={**(result.usage if result is not None else {}),
-                       **({"candidate_changed": True} if isinstance(e, CandidateChanged) else {})},
-            )
+            return AgentRunResult(success=False, error=str(e),
+                                  usage=dict(result.usage if result is not None else {}))
         finally:
             if result is not None:
-                self._reviewer_attempt_usage = dict(result.usage or {})
-            _, restored = self.sandbox.normalize(worktree, self.run_state.expected_tip)
-            if restored:
-                self.log.warn(f"reviewer changed {self.paths.ref}; restored expected tip")
+                call["usage"] = dict(result.usage or {})
+
+    def _review(self, workspace: IterationWorkspace, iteration: int, call: dict) -> tuple[AgentRunResult, bool]:
+        """Review T in a fresh copy. Returns (result, changed); a review whose
+        reviewer changed the candidate is discarded, since its verdict doesn't apply."""
+        review = workspace.eval_copy("review")
+        try:
+            result = self.run_reviewer(review, iteration, call)
+            call["usage"] = dict(result.usage or call["usage"])
+            try:
+                changed = bool(review.changed())
+            except RuntimeError:  # removed or replaced its copy
+                changed = True
+            if result.success and not changed:
+                source = review.working_dir / ".autohelix" / "review.md"
+                if source.is_file() and not source.is_symlink():
+                    self.paths.reviews.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, self.paths.reviews / f"iter-{iteration}.md")
+                    shutil.copy2(source, (self.paths.run_dir / call["log"]).parent / "review.md")
+                    if self.verbose:
+                        self.console.print(f"  [green]✓[/green] Review saved to reviews/iter-{iteration}.md")
+                else:
+                    self.console.print("  [yellow]![/yellow] Reviewer did not create review.md")
+                    result.success, result.error = False, "Reviewer did not create review.md"
+            return result, changed
+        finally:
+            workspace.remove(review)
+
+    def _rejected(self, iteration: int, attempt: "_Attempt", reason: str, **fields) -> IterationResult:
+        return IterationResult(iteration=iteration, accepted=False, reason=reason,
+                               calls=[{"role": "agent", "usage": attempt.agent_usage}], **fields)
 
     def run_iteration(self, iteration: int) -> IterationResult:
-        """Run a single iteration."""
-        iter_start = time.monotonic()
-        started_at = time.time()
+        """Run a single iteration and record it, whatever happens after the agent call."""
+        attempt = _Attempt(started_at=time.time(), monotonic=time.monotonic())
         self.log.info(f"iter {iteration} started")
         self.run_status.phase("agent", iteration)
         self.run_status.note(calls=[])
-
         self._start_command_usage(iteration)
-        command_env = self._command_env(iteration)
-
-        # Create worktree
-        if self.verbose:
-            self._status("Creating worktree...")
-        workspace = IterationWorkspace(self.sandbox, iteration, self.run_state, self.history)
-        worktree = workspace.worktree
-        command_env.update(worktree.git.env())
-        command_env["AUTOHELIX_CANDIDATE_TIP"] = self.run_state.expected_tip
-        if self.verbose:
-            self.console.print(f"  Working dir: {worktree.working_dir}")
-
-        workspace.prepare()
-        self.run_status.note(worktree=str(worktree.working_dir))
-        checkout_before = None
-
-        agent_usage: dict = {}
+        workspace = IterationWorkspace(iteration, self.run_state, self.history, self.repo, warn=self.log.warn)
         result: IterationResult | None = None
-        interrupted_after_accept = False
         failure: BaseException | None = None
-        agent_attempted = False
-        reviewer_usage = []
-        constraint_results = []
+        interrupted_after_accept = False
         try:
-            try:
-                checkout_before = self._checkout_probe()
-            except Exception as e:
-                self.log.warn(f"Could not inspect main checkout for import escapes: {e}")
-            # Build and run agent
-            prompt = self.build_prompt(iteration, worktree.working_dir)
-            if self.verbose:
-                self.console.print(Panel(
-                    prompt.strip(),
-                    title="[bold]Agent Prompt[/bold]",
-                    border_style="dim",
-                ))
-                self.console.print()
-                self._status("Running agent...")
-            try:
-                agent_attempted = True
-                agent_result = self.run_agent(worktree.working_dir, prompt, iteration)
-                agent_usage = agent_result.usage or {}
-            finally:
-                agent_commits, restored = workspace.normalize()
-                if restored:
-                    self.log.warn(f"agent changed {self.paths.ref}; restored expected tip")
-                try:
-                    if checkout_before is not None and self._checkout_probe() != checkout_before:
-                        self.log.warn("Main checkout changed during agent phase; review git diff for an import escape or user edits.")
-                except Exception as e:
-                    self.log.warn(f"Could not inspect main checkout for import escapes: {e}")
-            duration_s = agent_usage.get("duration_ms", 0) / 1000
-            cost_text = format_cost(agent_usage.get("cost_usd"), precision=4)
-            self.log.info(f"iter {iteration} agent complete — {duration_s:.0f}s, {cost_text}")
-
-            if not agent_result.success and self.verbose:
-                self._status("Agent did not complete successfully")
-            if not agent_result.success:
-                detail = agent_result.error or (
-                    f"agent exited with status {agent_result.exit_code}"
-                )
-                raise AutoHelixRunError(f"Iteration {iteration} agent failed: {detail}")
-
-            if agent_commits:
-                self.log.info(
-                    f"iter {iteration} normalized {agent_commits} agent-created commit(s)"
-                )
-                if self.verbose:
-                    self.console.print(
-                        f"  [yellow]![/yellow] Reopened {agent_commits} "
-                        "agent-created commit(s) for validation"
-                    )
-
-            # Resolve effective editable scope and revert out-of-scope changes
-            reverted = workspace.enforce_scope(
-                self.config.editable, self.config.frozen,
-            )
-            workspace.prepare_checks([capture for command in self.config.observables
-                                      for capture in command.capture])
-            if reverted and self.verbose:
-                self.console.print(
-                    f"  [yellow]![/yellow] Reverted {len(reverted)} file(s) outside editable scope:"
-                )
-                for f in reverted[:5]:
-                    self.console.print(f"    [dim]{f}[/dim]")
-                if len(reverted) > 5:
-                    self.console.print(f"    [dim]... and {len(reverted) - 5} more[/dim]")
-
-            # --- Validation phases (checks → benchmark → review) ---
-            # In compact mode, a single spinner persists across all phases.
-            self.log.info(f"iter {iteration} constraints started")
-            if self.verbose:
-                self._status("Checking constraints...")
-
-            val_spinner = _IterationSpinner(iteration)
-            val_spinner.set_phase("checks")
-            self.run_status.phase("checks")
-
-            def _on_check_progress(phase: str, command: str, elapsed: float | None) -> None:
-                val_spinner.set_detail(command)
-
-            def _on_obs_progress(phase: str, command: str, elapsed: float | None) -> None:
-                val_spinner.set_detail(command)
-
-            with Live(val_spinner, console=self.console, refresh_per_second=10, transient=True):
-                # Constraints
-                constraint_results = run_constraints(
-                    self.config, worktree.working_dir,
-                    project_path=self.project_path,
-                    on_progress=_on_check_progress,
-                    extra_env=command_env,
-                )
-
-                for r in constraint_results:
-                    status = "passed" if r.passed else "FAILED"
-                    self.log.info(f"iter {iteration} constraint: {r.command} — {status}")
-
-                all_passed = all(r.passed for r in constraint_results)
-
-                obs_results = None
-                metrics: dict[str, float] = {}
-                if all_passed:
-                    # Observables
-                    val_spinner.set_phase("benchmark")
-                    val_spinner.set_detail("")
-                    self.run_status.phase("benchmark")
-                    self.log.info(f"iter {iteration} observables started")
-
-                    obs_results = run_observables(
-                        self.config, worktree.working_dir,
-                        project_path=self.project_path,
-                        on_progress=_on_obs_progress,
-                        extra_env=command_env,
-                    )
-
-                    for obs in obs_results:
-                        metrics.update(obs.values)
-
-                    if metrics:
-                        metric_str = ", ".join(f"{k}={v:g}" for k, v in metrics.items())
-                        self.log.info(f"iter {iteration} observables: {metric_str}")
-
-            # --- Post-spinner verbose output and result building ---
-            if self.verbose:
-                for r in constraint_results:
-                    if r.passed:
-                        self.console.print(f"  [green]✓[/green] {r.command}")
-                    else:
-                        self.console.print(f"  [red]✗[/red] {r.command}")
-                        output = r.output[:2000] if len(r.output) > 2000 else r.output
-                        self.console.print(Panel(output, title="Constraint output", border_style="red"))
-            elif not all_passed:
-                for r in constraint_results:
-                    if not r.passed:
-                        self.console.print(f"  [red]✗[/red] {r.command}")
-
-            judge_error = self._judge_violation(iteration)
-            if judge_error:
-                result = IterationResult(iteration=iteration, accepted=False, metrics=metrics,
-                                         reason=judge_error, calls=[{"role": "agent", "usage": agent_usage}])
-            elif all_passed and obs_results is not None:
-                # Save stdout and capture files
-                use_index = len(obs_results) > 1
-                for i, obs in enumerate(obs_results):
-                    mc = self.config.observables[i]
-                    if mc.capture_stdout and obs.output:
-                        self.history.save_stdout(
-                            iteration, obs.output,
-                            index=i if use_index else None,
-                        )
-                    for cap_path in mc.capture:
-                        self.history.save_capture(
-                            iteration, worktree.working_dir / cap_path,
-                        )
-
-                if self.verbose:
-                    for name, value in metrics.items():
-                        self.console.print(f"  {self._metric_label(name)} [cyan]{value}[/cyan]")
-
-                # Check metric gates
-                gate_failed = self._check_metric_gates(metrics)
-                if gate_failed:
-                    if self.verbose:
-                        self.console.print(f"  [red]✗[/red] {gate_failed}")
-                    result = IterationResult(
-                        iteration=iteration,
-                        accepted=False,
-                        metrics=metrics,
-                        reason=gate_failed,
-                        calls=[{"role": "agent", "usage": agent_usage}],
-                    )
-                else:
-                    workspace.validate()
-                    # Run reviewer if configured (before acceptance, still in worktree)
-                    reviewer_failed = False
-                    reviewer_usage = []
-                    if self.config.reviewer:
-                        self._begin_review(iteration)
-                        reviewer_usage.append({})
-                        try:
-                            reviewer_result = self.run_reviewer(worktree, iteration)
-                            self._reviewer_attempt_usage = reviewer_result.usage or {}
-                        finally:
-                            reviewer_usage[-1] = self._reviewer_attempt_usage
-                        if not reviewer_result.success:
-                            if self.verbose:
-                                self.console.print(f"  [red]✗[/red] Reviewer failed")
-                            reviewer_failed = True
-
-                    if reviewer_failed:
-                        # Keep reviewer failures advisory so validated agent work
-                        # is not discarded after an infrastructure failure.
-                        reviews_dir = self.paths.reviews
-                        reviews_dir.mkdir(parents=True, exist_ok=True)
-                        review_path = reviews_dir / f"iter-{iteration}.md"
-                        review_path.write_text("# Review\n\nReviewer failed.\n")
-                        # TODO: After preserving and merging this candidate, halt
-                        # the run so persistent reviewer failures do not silently
-                        # affect subsequent iterations.
-
-                    # Publish the validated content to this run, independently of landing.
-                    self.run_status.phase("accept")
-                    if self.verbose:
-                        self._status("Accepting changes...")
-                    commit_msg = self._build_commit_message(iteration, metrics, worktree_path=worktree.working_dir)
-                    changed = any(usage.get("candidate_changed") for usage in reviewer_usage)
-                    result = IterationResult(
-                        iteration=iteration, accepted=not changed, metrics=metrics,
-                        reason="Reviewer changed candidate files" if changed else None,
-                        calls=[{"role": "agent", "usage": agent_usage}],
-                    )
-                    if not changed:
-                        self._complete_record(result, started_at, iter_start, constraint_results, reviewer_usage)
-                        workspace.accept(commit_msg, result)
-
-                    # Stop commands see accepted content in the disposable worktree.
-                    # An interrupt still records the accepted iteration.
-                    if result.accepted and self.config.stop:
-                        try:
-                            workspace.normalize()
-                            result.stop, _ = self._check_stop(
-                                worktree.working_dir, iteration, metrics, self.project_path,
-                            )
-                        except KeyboardInterrupt:
-                            interrupted_after_accept = True
-                        except Exception as e:  # noqa: BLE001 - acceptance already happened
-                            self.console.print(f"  [yellow]![/yellow] Stop check failed: {e}")
-                            self.log.info(f"iter {iteration} stop check failed — {e}")
-                        finally:
-                            workspace.normalize()
-            elif not all_passed:
-                # Reject: discard worktree
-                failed_results = [r for r in constraint_results if not r.passed]
-                reason = f"constraint failed: {failed_results[0].command}"
-                failure_output = "\n".join(failed_results[0].output.strip().splitlines()[-15:])
-
-                result = IterationResult(
-                    iteration=iteration,
-                    accepted=False,
-                    metrics={},
-                    reason=reason,
-                    failure_output=failure_output,
-                    calls=[{"role": "agent", "usage": agent_usage}],
-                )
-
+            result = self._attempt(workspace, attempt, iteration)
+        except CandidateRejected as e:
+            self.log.info(f"iter {iteration} rejected — {e}")
+            result = self._rejected(iteration, attempt, str(e))
         except KeyboardInterrupt as e:
-            if result is not None and result.accepted and workspace.recorded:
-                interrupted_after_accept = True
+            if workspace.recorded:
+                result, interrupted_after_accept = workspace.result, True
             else:
                 failure = e
-                if result is not None and not workspace.published:
-                    result.accepted = False
-                    result.reason = "interrupted"
         except Exception as e:
             failure = e if isinstance(e, AutoHelixRunError) else AutoHelixRunError(
                 f"Iteration {iteration} failed unexpectedly: {e}")
-            if result is not None and not workspace.published and not workspace.recorded:
-                result.accepted = False
-                result.reason = str(failure)
+            if workspace.recorded:
+                result = workspace.result
             self.log.error(str(failure))
         finally:
             if result is None:
-                result = IterationResult(iteration=iteration, accepted=False, calls=[{"role": "agent", "usage": agent_usage}],
-                                         reason=(str(failure) or "interrupted") if failure else "interrupted")
+                result = self._rejected(iteration, attempt, (str(failure) or "interrupted") if failure else "interrupted")
             try:
-                self._complete_record(result, started_at, iter_start, constraint_results, reviewer_usage)
-                # A failed transaction append may have torn its tail. Do not
-                # append blindly; the next owner repairs and reconciles it.
-                if agent_attempted and not (workspace.record_write_attempted and not workspace.recorded):
-                    if workspace.recorded:
-                        self.history.update(result)
-                    else:
-                        self.history.append(result)
+                self._complete_record(result, attempt.started_at, attempt.monotonic,
+                                      attempt.constraints, attempt.reviews)
+                # Failures before the agent call don't consume the iteration.
+                if attempt.agent_attempted:
+                    workspace.record(result)
             except BaseException as e:
                 if failure is None:
                     failure = e
@@ -1120,12 +832,178 @@ class Harness:
         self.run_status.phase("between iterations")
         return result
 
+    def _attempt(self, workspace: IterationWorkspace, attempt: "_Attempt", iteration: int) -> IterationResult:
+        """Agent, freeze, checks, gates, review, accept, stop: returns at the first rejection."""
+        if self.verbose:
+            self._status("Creating agent copy...")
+        agent_copy = workspace.agent_copy()
+        if self.verbose:
+            self.console.print(f"  Working dir: {agent_copy.working_dir}")
+        self.run_status.note(worktree=str(agent_copy.working_dir))
+        prompt = self.build_prompt(iteration, agent_copy.working_dir)
+        if self.verbose:
+            self.console.print(Panel(prompt.strip(), title="[bold]Agent Prompt[/bold]", border_style="dim"))
+            self.console.print()
+            self._status("Running agent...")
+        with self._watch_checkout():
+            attempt.agent_attempted = True
+            agent_result = self.run_agent(agent_copy.working_dir, prompt, iteration)
+            attempt.agent_usage = agent_result.usage or {}
+        duration_s = attempt.agent_usage.get("duration_ms", 0) / 1000
+        self.log.info(f"iter {iteration} agent complete — {duration_s:.0f}s, "
+                      f"{format_cost(attempt.agent_usage.get('cost_usd'), precision=4)}")
+        if not agent_result.success:
+            if self.verbose:
+                self._status("Agent did not complete successfully")
+            detail = agent_result.error or f"agent exited with status {agent_result.exit_code}"
+            raise AutoHelixRunError(f"Iteration {iteration} agent failed: {detail}")
+
+        # Freeze the candidate: out-of-scope changes never reach the tree.
+        discarded = workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen)))
+        self.run_status.note(worktree=None)
+        if discarded and self.verbose:
+            reverted = [name.removeprefix(self.repo.prefix) for name in discarded]
+            self.console.print(f"  [yellow]![/yellow] Discarded {len(reverted)} change(s) outside editable scope:")
+            for f in reverted[:5]:
+                self.console.print(f"    [dim]{f}[/dim]")
+            if len(reverted) > 5:
+                self.console.print(f"    [dim]... and {len(reverted) - 5} more[/dim]")
+
+        metrics, attempt.constraints = self._evaluate(workspace, iteration)
+        failed = [r for r in attempt.constraints if not r.passed]
+        if failed:
+            return self._rejected(iteration, attempt, f"constraint failed: {failed[0].command}", metrics={},
+                                  failure_output="\n".join(failed[0].output.strip().splitlines()[-15:]))
+        if self.verbose:
+            for name, value in metrics.items():
+                self.console.print(f"  {self._metric_label(name)} [cyan]{value}[/cyan]")
+        if gate_failed := self._check_metric_gates(metrics):
+            if self.verbose:
+                self.console.print(f"  [red]✗[/red] {gate_failed}")
+            return self._rejected(iteration, attempt, gate_failed, metrics=metrics)
+
+        if self.config.reviewer:
+            call = self._begin_review(iteration)
+            attempt.reviews.append(call)
+            review, changed = self._review(workspace, iteration, call)
+            if changed:
+                return self._rejected(iteration, attempt, "Reviewer changed candidate files", metrics=metrics)
+            if not review.success:
+                # Reviewer failures stay advisory: validated agent work isn't discarded
+                # after an infrastructure failure.
+                if self.verbose:
+                    self.console.print("  [red]✗[/red] Reviewer failed")
+                self.paths.reviews.mkdir(parents=True, exist_ok=True)
+                (self.paths.reviews / f"iter-{iteration}.md").write_text("# Review\n\nReviewer failed.\n")
+
+        # Publish the validated tree to this run, independently of landing.
+        self.run_status.phase("accept")
+        if self.verbose:
+            self._status("Accepting changes...")
+        result = IterationResult(iteration=iteration, accepted=True, metrics=metrics,
+                                 calls=[{"role": "agent", "usage": attempt.agent_usage}])
+        self._complete_record(result, attempt.started_at, attempt.monotonic, attempt.constraints, attempt.reviews)
+        workspace.accept(self._build_commit_message(iteration, metrics, summary=workspace.summary), result)
+
+        # Stop commands see accepted content in a fresh copy. Errors (and interrupts,
+        # handled by the caller) keep the recorded acceptance.
+        if self.config.stop:
+            try:
+                result.stop, _ = self._check_stop(workspace, iteration, metrics)
+            except Exception as e:  # noqa: BLE001 - acceptance already happened
+                self.console.print(f"  [yellow]![/yellow] Stop check failed: {e}")
+                self.log.info(f"iter {iteration} stop check failed — {e}")
+        return result
+
+    def _evaluate(self, workspace: IterationWorkspace, iteration: int) -> tuple[dict[str, float], list]:
+        """Run constraints, then metrics (if they pass, or always for the baseline), in a
+        checks copy of T, verifying T's files after every command. Saves outputs and
+        captures; raises CandidateRejected if a command or judge changed the candidate."""
+        baseline = iteration == 0
+        checks = workspace.eval_copy("checks")
+        command_env = self._command_env(iteration)
+
+        def verify(command: str) -> None:
+            # Checks are read-only: one command must not alter what a later one validates.
+            try:
+                changed = checks.changed()
+            except RuntimeError:
+                changed = ["its copy was removed or replaced"]
+            if changed:
+                raise CandidateRejected(f"checks modified candidate files: {command} ({', '.join(changed[:5])})")
+
+        spinner = _IterationSpinner(iteration)
+        spinner.set_phase("checks")
+        progress = None if baseline else (lambda _phase, command, _elapsed: spinner.set_detail(command))
+        run = dict(project_path=self.project_path, extra_env=command_env, after_command=verify, on_progress=progress)
+        if not baseline:
+            self.log.info(f"iter {iteration} constraints started")
+            self.run_status.phase("checks")
+            if self.verbose:
+                self._status("Checking constraints...")
+        display = (Status("Running baseline...", console=self.console, spinner="dots") if baseline
+                   else Live(spinner, console=self.console, refresh_per_second=10, transient=True))
+        with display:
+            constraints = run_constraints(self.config, checks.working_dir, **run)
+            for r in constraints:
+                self.log.info(f"{'baseline' if baseline else f'iter {iteration}'} constraint: {r.command} — "
+                              f"{'passed' if r.passed else 'FAILED'}")
+            observables = []
+            # At the baseline, constraints only guard against mutation; failing is fine.
+            if baseline or all(r.passed for r in constraints):
+                spinner.set_phase("benchmark")
+                spinner.set_detail("")
+                if not baseline:
+                    self.run_status.phase("benchmark")
+                    self.log.info(f"iter {iteration} observables started")
+                observables = run_observables(self.config, checks.working_dir, **run)
+
+        if not baseline:
+            for r in constraints:
+                if not r.passed:
+                    self.console.print(f"  [red]✗[/red] {r.command}")
+                    if self.verbose:
+                        self.console.print(Panel(r.output[:2000], title="Constraint output", border_style="red"))
+                elif self.verbose:
+                    self.console.print(f"  [green]✓[/green] {r.command}")
+        metrics: dict[str, float] = {}
+        for index, (command, observed) in enumerate(zip(self.config.observables, observables)):
+            metrics.update(observed.values)
+            if command.capture_stdout and observed.output:
+                self.history.save_stdout(iteration, observed.output, index=index if len(observables) > 1 else None)
+            for capture in command.capture:
+                self.history.save_capture(iteration, checks.working_dir / capture)
+        workspace.remove(checks)
+        if metrics and not baseline:
+            self.log.info(f"iter {iteration} observables: " + ", ".join(f"{k}={v:g}" for k, v in metrics.items()))
+        if violation := self._integrity_violation(iteration):
+            raise CandidateRejected(violation)
+        return metrics, constraints
+
+    @contextmanager
+    def _watch_checkout(self):
+        """Advisory: warn if the user's checkout changes while the agent runs (an import escape)."""
+        try:
+            before = self._checkout_probe()
+        except Exception as e:  # noqa: BLE001
+            before = None
+            self.log.warn(f"Could not inspect main checkout for import escapes: {e}")
+        try:
+            yield
+        finally:
+            try:
+                if before is not None and self._checkout_probe() != before:
+                    self.log.warn("Main checkout changed during agent phase; review git diff for an import escape or user edits.")
+            except Exception as e:  # noqa: BLE001
+                self.log.warn(f"Could not inspect main checkout for import escapes: {e}")
+
     def _checkout_probe(self):
         """Tracked-only, advisory import-escape inspection of the user's checkout."""
-        context = self.sandbox.git
-        status = context.run("status", "--porcelain", "--untracked-files=no").stdout
-        diff = context.run("diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", "--").stdout
-        return hashlib.sha256((status + diff).encode()).digest()
+        def run(*args):
+            return self.repo.git(*args, work_tree=self.repo.root, cwd=self.project_path, user_checkout=True).stdout
+
+        return hashlib.sha256(run("status", "--porcelain", "--untracked-files=no")
+                              + run("diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", "--")).digest()
 
     def _relative_log(self, path):
         return self.paths.relative_log(path)
@@ -1140,12 +1018,8 @@ class Harness:
         for call in agents:
             call["usage"]["wall_clock_ms"] = int((time.monotonic() - iter_start) * 1000)
             call["log"] = self._relative_log(self._agent_logs.get(result.iteration))
-        reviewer_calls = [call for call in result.calls if call["role"] == "reviewer"]
-        if reviews is not None:
-            logs = self._review_logs.get(result.iteration, [])
-            reviewer_calls = [{"role": "reviewer", "usage": usage,
-                               "log": self._relative_log(logs[index]) if index < len(logs) else None}
-                              for index, usage in enumerate(reviews)]
+        reviewer_calls = ([dict(call) for call in reviews] if reviews is not None
+                          else [call for call in result.calls if call["role"] == "reviewer"])
         commands = []
         for record in read_usage(self._usage_path(result.iteration)):
             usage = dict(record)
@@ -1153,27 +1027,25 @@ class Harness:
             commands.append({"role": "command", "usage": usage, "log": self._relative_log(log)})
         result.calls = agents + reviewer_calls + commands
 
-    def _judge_violation(self, iteration: int) -> str | None:
+    def _integrity_violation(self, iteration: int) -> str | None:
+        """A judge call in this attempt changed the files it judged (sticky)."""
         for usage in read_usage(self._usage_path(iteration)):
-            if usage.get("id") in self._usage_starts.get(iteration, set()):
-                continue
-            if usage.get("candidate_changed"):
-                return "Judge changed candidate files or candidate verification failed"
-            if usage.get("source") in {"ask", "score", "review"} and usage.get("status") == "started":
-                return "Judge did not finish verifying the candidate"
+            if usage.get("id") not in self._usage_starts and usage.get("integrity_violation"):
+                return f"a judge call changed the files it judged ({usage.get('source', 'judge')})"
         return None
 
     def _usage_path(self, iteration: int) -> Path:
         return self.paths.runtime / "usage" / f"iter-{iteration}.jsonl"
 
     def _start_command_usage(self, iteration: int) -> None:
-        """Start an empty usage file for the commands this iteration runs."""
+        """Start an empty usage file for the commands this iteration runs. A baseline
+        retry keeps the earlier attempts' calls, which still count toward its cost."""
         path = self._usage_path(iteration)
         path.parent.mkdir(parents=True, exist_ok=True)
         previous = next((r for r in self.history.load() if r.iteration == iteration), None)
         if previous is None or previous.accepted:
             path.write_text("")
-        self._usage_starts[iteration] = {r.get("id") for r in read_usage(path)}
+        self._usage_starts = {r.get("id") for r in read_usage(path)}
 
     def _command_env(self, iteration: int) -> dict[str, str]:
         """Variables for every command the harness runs (checks, metrics, stop):
@@ -1189,21 +1061,26 @@ class Harness:
             "AUTOHELIX_ITERATION": str(iteration),
         }
 
-    def _check_stop(self, cwd: Path, iteration: int, metrics: dict[str, float],
-                    project_path: Path | None) -> tuple[dict[str, str] | None, list]:
-        """Run the stop commands on the current head. Returns (stop, errors): stop is
-        {"command", "reason"} if one exited 0; errors are the results that exited
-        with anything other than 0 or 1 (or timed out)."""
+    def _check_stop(self, workspace: IterationWorkspace, iteration: int,
+                    metrics: dict[str, float]) -> tuple[dict[str, str] | None, list]:
+        """Run the stop commands in a fresh copy of the accepted tip. Returns (stop,
+        errors): stop is {"command", "reason"} if one exited 0; errors are the results
+        that exited with anything other than 0 or 1 (or timed out). Changing the
+        files or a judge violation is an error."""
         self.run_status.phase("stop check", iteration)
         runtime = self.paths.runtime
         runtime.mkdir(parents=True, exist_ok=True)
         metrics_path = runtime / "metrics.json"
         metrics_path.write_text(json.dumps(metrics))
-        env = {**self._command_env(iteration), **self.sandbox.context(cwd).env(),
-               "AUTOHELIX_CANDIDATE_TIP": self.run_state.expected_tip,
-               "AUTOHELIX_METRICS": str(metrics_path), "AUTOHELIX_ITERATION": str(iteration)}
-        with Status("Checking stop conditions...", console=self.console, spinner="dots"):
-            results = run_stop_checks(self.config, cwd, project_path=project_path, extra_env=env)
+        env = {**self._command_env(iteration), "AUTOHELIX_METRICS": str(metrics_path)}
+        stop = workspace.stop_copy()
+        try:
+            with Status("Checking stop conditions...", console=self.console, spinner="dots"):
+                results = run_stop_checks(self.config, stop.working_dir, project_path=self.project_path, extra_env=env)
+            if changed := stop.changed():
+                raise AutoHelixRunError("stop commands modified accepted files: " + ", ".join(changed[:5]))
+        finally:
+            workspace.remove(stop)
         errors = [r for r in results if r.error]
         for r in errors:
             code = ("timed out" if r.output.startswith("Timeout after")
@@ -1213,7 +1090,7 @@ class Harness:
             if tail:
                 self.console.print(f"[dim]{tail}[/dim]", highlight=False)
             self.log.info(f"iter {iteration} stop command error ({code}): {r.command}")
-        if violation := self._judge_violation(iteration):
+        if violation := self._integrity_violation(iteration):
             raise AutoHelixRunError(violation)
         fired = next((r for r in results if r.stop), None)
         if fired is None:
@@ -1221,65 +1098,56 @@ class Harness:
         self.log.info(f"iter {iteration} stop condition met — {fired.command}: {fired.reason}")
         return {"command": fired.command, "reason": fired.reason}, errors
 
+    def _baseline_workspace(self) -> IterationWorkspace:
+        workspace = IterationWorkspace(0, self.run_state, self.history, self.repo, warn=self.log.warn)
+        workspace.unchanged()
+        return workspace
+
+    def _write_baseline(self, baseline: IterationResult) -> None:
+        if any(r.iteration == 0 for r in self.history.load()):
+            self.history.update(baseline)
+        else:
+            self.history.append(baseline)
+
     def _capture_baseline(self) -> dict[str, str] | None:
-        """Capture baseline observables, check stop commands, run baseline review.
+        """Evaluate A in a checks copy and check stop commands.
 
         Returns the stop condition the baseline already meets, if any."""
+        workspace = self._baseline_workspace()
         try:
             self.log.info("baseline capture started")
             self.run_status.phase("baseline", 0)
             self._start_command_usage(0)
-            with Status("Running baseline...", console=self.console, spinner="dots"):
-                obs_results = run_observables(self.config, self.project_path,
-                                              extra_env=self._command_env(0))
-
-            # Collect scalar values
-            metrics: dict[str, float] = {}
-            for obs in obs_results:
-                metrics.update(obs.values)
-
-            # Save stdout and capture files for baseline (iter-0)
-            use_index = len(obs_results) > 1
-            for i, obs in enumerate(obs_results):
-                mc = self.config.observables[i]
-                if mc.capture_stdout and obs.output:
-                    self.history.save_stdout(0, obs.output, index=i if use_index else None)
-                for cap_path in mc.capture:
-                    self.history.save_capture(0, self.project_path / cap_path)
+            try:
+                metrics, _ = self._evaluate(workspace, 0)
+            except CandidateRejected as e:
+                # A mutating check would reject every iteration; refuse before agent spend.
+                reason = str(e)
+                if reason.startswith("checks modified candidate files: "):
+                    reason = ("Baseline command modified candidate files: "
+                              + reason.removeprefix("checks modified candidate files: ")
+                              + ". Checks must not change the code they check; for example, run a "
+                              "formatter in its check-only mode.")
+                else:
+                    reason = f"Baseline setup error: {reason}"
+                self.log.info(f"baseline FAILED — {reason}")
+                raise AutoHelixRunError(reason) from e
 
             missing_metrics = set(self.config.metric_directions()) - set(metrics)
             if missing_metrics:
                 names = ", ".join(sorted(missing_metrics))
                 self.log.info(f"baseline FAILED — missing metrics: {names}")
-                raise RuntimeError(
-                    f"Baseline benchmark did not produce required metric(s): {names}"
-                )
-
+                raise RuntimeError(f"Baseline benchmark did not produce required metric(s): {names}")
             if metrics:
                 metric_str = ", ".join(f"{name}: {value:g}" for name, value in metrics.items())
                 self.console.print(f"  baseline │ {metric_str}", highlight=False)
                 self.log.info(f"baseline: {metric_str}")
 
-            if violation := self._judge_violation(0):
-                raise AutoHelixRunError(violation)
-            baseline = IterationResult(
-                iteration=0,
-                accepted=True,
-                metrics=metrics,
-                commit=None,
-                reason="baseline",
-            )
+            baseline = IterationResult(iteration=0, accepted=True, metrics=metrics, commit=None, reason="baseline")
             if self.config.stop:
-                # Like the baseline observables, these run in the project checkout. A
-                # broken stop command fails here, before anything is recorded, so a
+                # A broken stop command fails here, before anything is recorded, so a
                 # typo surfaces before the first iteration is paid for.
-                stop_tree = self.sandbox.create_worktree(0, self.run_state.expected_tip)
-                self.sandbox.prepare_worktree(stop_tree)
-                try:
-                    baseline.stop, errors = self._check_stop(stop_tree.working_dir, 0, metrics, self.project_path)
-                finally:
-                    self.sandbox.normalize(stop_tree, self.run_state.expected_tip)
-                    self.sandbox.discard_worktree(stop_tree)
+                baseline.stop, errors = self._check_stop(workspace, 0, metrics)
                 if errors:
                     self.log.info("baseline FAILED — stop command error")
                     raise AutoHelixRunError(
@@ -1287,57 +1155,37 @@ class Harness:
                         "(expected exit 0 to stop or 1 to continue)"
                     )
             self._complete_record(baseline, time.time(), time.monotonic())
-            if any(r.iteration == 0 for r in self.history.load()):
-                self.history.update(baseline)
-            else:
-                self.history.append(baseline)
-            if self.config.reviewer and not baseline.stop:
-                self._run_baseline_review()
+            self._write_baseline(baseline)
             return baseline.stop
-
         except BaseException as error:
             baseline = IterationResult(iteration=0, accepted=False, reason=f"baseline failed: {error}")
             self._complete_record(baseline, time.time(), time.monotonic())
-            if any(r.iteration == 0 for r in self.history.load()):
-                previous = self.history.load()[0]
-                baseline.calls.extend(call for call in previous.calls if call["role"] == "reviewer")
-                if previous.accepted:
-                    raise
-                self.history.update(baseline)
-            else:
-                self.history.append(baseline)
+            if any(r.iteration == 0 and r.accepted for r in self.history.load()):
+                raise
+            self._write_baseline(baseline)
             raise
+        finally:
+            workspace.close()
 
     def _run_baseline_review(self) -> None:
-        """Run reviewer on the baseline state (before any iterations)."""
-        if not self.config.reviewer:
-            return
-
-        # Create a temporary worktree for baseline review
-        worktree = self.sandbox.create_worktree(0, self.run_state.expected_tip)
-        self.sandbox.prepare_worktree(worktree)
-
-        # Ensure notes directory exists
-        notes_dir = worktree.working_dir / ".autohelix" / "notes"
-        notes_dir.mkdir(parents=True, exist_ok=True)
-
+        """Run the reviewer on the baseline (before any iterations), in a reviewer copy."""
+        workspace = self._baseline_workspace()
         try:
             # Preserve an unknown charge if interrupted before usage is returned.
-            log = self._begin_review(0)
-            attempt = self.history.record_reviewer_usage(0, {}, log=self._relative_log(log))
+            call = self._begin_review(0)
+            attempt = self.history.record_reviewer_usage(0, {}, log=call["log"])
             try:
-                reviewer_result = self.run_reviewer(worktree, 0)
-                self._reviewer_attempt_usage = reviewer_result.usage or {}
+                result, changed = self._review(workspace, 0, call)
             finally:
-                self.history.record_reviewer_usage(0, self._reviewer_attempt_usage, attempt)
-            review_cost = (reviewer_result.usage or {}).get("cost_usd")
-            self.console.print(f"  baseline review │ {format_cost(review_cost)}", highlight=False)
-            if not reviewer_result.success:
-                self.console.print(
-                    f"  [yellow]![/yellow] Baseline review failed, continuing anyway"
-                )
+                self.history.record_reviewer_usage(0, call["usage"], attempt)
+            self.console.print(f"  baseline review │ {format_cost(call['usage'].get('cost_usd'))}", highlight=False)
+            if changed:
+                self.log.warn("baseline reviewer changed candidate files; review discarded")
+                self.console.print("  [yellow]![/yellow] Baseline reviewer changed candidate files; review discarded")
+            elif not result.success:
+                self.console.print("  [yellow]![/yellow] Baseline review failed, continuing anyway")
         finally:
-            self.sandbox.discard_worktree(worktree)
+            workspace.close()
 
     def _resolve_config_rel_path(self) -> str:
         """Return the config file path relative to the project root."""
@@ -1405,21 +1253,52 @@ class Harness:
     def __del__(self):
         self.close()
 
+    def _first_start_ready(self) -> None:
+        """Readiness checks for a first start, run before any run state exists."""
+        ensure_editable_files_ready(Repo(self.project_path), self.project_path, self.config.editable)
+        if not self._preflight():
+            raise RuntimeError("Preflight checks failed. Fix the issues above before running.")
+        self._validate_codex_iteration_time_ready(Path(__file__).parent / "bin" / "claude_hook_time_left.sh")
+        self._preflight_done = True
+
+    def _preflight(self) -> bool:
+        """Print preflight warnings and errors; False if there are errors."""
+        issues = preflight_check(self.config, self._raw_config, self.project_path)
+        for w in (i for i in issues if i.level == "warning"):
+            self.console.print(f"  [yellow]WARN[/yellow] {w.message}")
+        errors = [i for i in issues if i.level == "error"]
+        for e in errors:
+            self.console.print(f"  [red]FAIL[/red] {e.message}")
+        if errors:
+            self.console.print(
+                "\n[red]Preflight checks failed.[/red] Fix the issues above before running."
+            )
+        return not errors
+
+    def _target_tip(self) -> str | None:
+        target = self.run_info.get("target_branch")
+        return git(self.project_path, "rev-parse", "--verify", f"refs/heads/{target}",
+                   check=False).stdout.strip() if target else None
+
     def _land(self) -> None:
-        if self.land_mode != "auto" or not self._segment_started or self._land_attempted:
+        """Auto-land at segment end; in every mode, refuse/warn if the target moved."""
+        if not self._segment_started or self._land_attempted:
             return
         self._land_attempted = True
+        target = self.run_info.get("target_branch")
         try:
-            target = self.run_info.get("target_branch")
-            if target and getattr(self, "_segment_target_tip", None) is not None:
-                current = self.sandbox._run_git("rev-parse", "--verify", f"refs/heads/{target}").stdout.strip()
-                if current != self._segment_target_tip:
+            if target and self._segment_target_tip is not None and self._target_tip() != self._segment_target_tip:
+                if self.land_mode == "auto":
                     raise AutoHelixRunError(
                         f"Target {target} changed during this segment; leaving user commits untouched. "
-                        f"Review them, then use autohelix land {self.paths.run_id} explicitly."
-                    )
-            land(self.paths, self.run_info, self.run_state.expected_tip)
-            self.console.print(f"[dim]Landed run {self.paths.run_id} into {target}.[/dim]")
+                        f"Review them, then use autohelix land {self.paths.run_id} explicitly.")
+                message = (f"Target {target} changed during this segment. Review those commits "
+                           f"before autohelix land {self.paths.run_id}.")
+                self.console.print(f"[yellow]{message}[/yellow]", highlight=False)
+                self.log.warn(message)
+            if self.land_mode == "auto":
+                land(self.paths, self.run_info, self.run_state.expected_tip)
+                self.console.print(f"[dim]Landed run {self.paths.run_id} into {target}.[/dim]")
         except Exception as e:
             self.console.print(f"[yellow]{e}[/yellow]", highlight=False)
             self.log.warn(f"auto-land: {e}")
@@ -1446,48 +1325,34 @@ class Harness:
 
         needs_baseline = not any(r.iteration == 0 and r.accepted for r in self.history.load())
         if needs_baseline:
-            self.sandbox.ensure_clean_working_tree()
-            if self.sandbox._run_git_checked("rev-parse", "HEAD").stdout.strip() != self.run_state.expected_tip:
+            ensure_clean_working_tree(self.repo, self.project_path)
+            if git(self.project_path, "rev-parse", "HEAD").stdout.strip() != self.run_state.expected_tip:
                 raise AutoHelixRunError("Baseline checkout moved since this run started. Restore its original commit or abandon this run and start --new.")
-            self.sandbox.ensure_editable_files_ready(self.config.editable)
+            ensure_editable_files_ready(self.repo, self.project_path, self.config.editable)
 
         # Show header
         self._print_header(max_iter, start_iter)
+        remove_stale_copies(self.paths.worktrees, self.log.warn)
+        if not self.repo.attr_source:
+            self.console.print(f"  [yellow]WARN[/yellow] {ATTR_SOURCE_LIMITATION}")
 
-        # Run preflight checks on first run (silent on success)
-        if needs_baseline:
-            issues = preflight_check(self.config, self._raw_config, self.project_path)
-            errors = [i for i in issues if i.level == "error"]
-            warnings = [i for i in issues if i.level == "warning"]
-            for w in warnings:
-                self.console.print(f"  [yellow]WARN[/yellow] {w.message}")
-            if errors:
-                for e in errors:
-                    self.console.print(f"  [red]FAIL[/red] {e.message}")
-                self.console.print(
-                    "\n[red]Preflight checks failed.[/red] Fix the issues above before running."
-                )
-                return False
+        # Run preflight checks before the baseline (silent on success); a first
+        # start already ran them before allocating the run.
+        if needs_baseline and not self._preflight_done and not self._preflight():
+            return False
 
         self.run_status.start(max_iterations=max_iter, run_id=self.paths.run_id)
         self._segment_started = True
-        target = self.run_info.get("target_branch")
-        self._segment_target_tip = (
-            self.sandbox._run_git("rev-parse", "--verify", f"refs/heads/{target}").stdout.strip()
-            if target else None)
+        self._segment_target_tip = self._target_tip()
 
         # Capture baseline on first run
-        baseline_captured = False
         baseline_stop = None
-        if start_iter == 1 and self.history.get_last_iteration() == 0:
-            results = self.history.load()
-            if needs_baseline:
-                baseline_stop = self._capture_baseline()
-                baseline_captured = True
+        if start_iter == 1 and needs_baseline:
+            baseline_stop = self._capture_baseline()
 
         # Run baseline review if configured but no review exists yet (and budget is left)
         reviews_dir = self.paths.reviews
-        if (self.config.reviewer and not baseline_captured
+        if (self.config.reviewer and not baseline_stop
                 and not (reviews_dir.exists() and any(reviews_dir.glob("iter-*.md")))
                 and (self.config.max_cost_usd is None
                      or (summarize_costs(self.history.cost_usages).cost_usd or 0) < self.config.max_cost_usd)):

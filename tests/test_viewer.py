@@ -163,15 +163,21 @@ def test_diff_is_relative_to_baseline(viewer):
     assert "+# Modified in iteration 1" in two and "+# Modified in iteration 2" in two
 
 
-def test_running_iteration_shows_worktree_diff(viewer, integration_project):  # noqa: F811
-    worktree = RunPaths(integration_project).worktrees / "iter-3"
-    subprocess.run(["git", "worktree", "add", "--detach", str(worktree)], cwd=integration_project,
-                   check=True, capture_output=True)
-    (worktree / "hello.py").write_text('print("work in progress")\n')
-    (worktree / "brand_new.py").write_text("NEW = 1\n")  # untracked: plain git diff would miss it
+def test_running_iteration_shows_copy_diff(viewer, integration_project):  # noqa: F811
+    from autohelix.workspace import Copy, Repo
+
+    paths = RunPaths(integration_project)
+    paths.worktrees.mkdir(parents=True, exist_ok=True)
+    copy = Copy.create(Repo(integration_project), paths.worktrees / "iter-3-agent",
+                       files="HEAD", head="HEAD")
+    private_index = (copy.path / ".git" / "index").read_bytes()
+    (copy.path / "hello.py").write_text('print("work in progress")\n')
+    (copy.path / "brand_new.py").write_text("NEW = 1\n")  # untracked: plain git diff would miss it
     diff = json.loads(get(viewer + "/api/iteration/3")[1])["diff"]
     assert '+print("work in progress")' in diff
     assert "+NEW = 1" in diff
+    assert (copy.path / ".git" / "index").read_bytes() == private_index
+    copy.remove()
 
 
 def test_long_logs_are_clipped_visibly(tmp_path, monkeypatch, run_paths):
@@ -215,13 +221,10 @@ def test_preflight_failure_is_not_recorded_as_a_run(integration_project):  # noq
     (integration_project / "autohelix.yaml").write_text(
         (integration_project / "autohelix.yaml").read_text().replace("type: mock", "type: claude\n  command: /nonexistent/agent"))
     subprocess.run(["git", "commit", "-qam", "Use a missing agent"], cwd=integration_project, check=True)
-    harness = Harness(integration_project)
-    preflight = []
-    original = harness.console.print
-    harness.console.print = lambda *a, **k: (preflight.append(str(a)), original(*a, **k))
-    harness.run(max_iterations=1)
-    assert any("Preflight checks failed" in line for line in preflight)
+    with pytest.raises(RuntimeError, match="Preflight checks failed"):
+        Harness(integration_project)
     assert read_run_status(integration_project) is None
+    assert not (RunPaths(integration_project).root / "current").exists()
 
 
 def _snapshot(page: str) -> dict:

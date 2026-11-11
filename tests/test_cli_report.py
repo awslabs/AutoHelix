@@ -92,13 +92,13 @@ class TestReportCommand:
         assert info["last_iteration"] == 3 and info["cost_usd"] == 0.28 and info["seconds"] >= 0
         assert not (RunPaths(project).output / "report.draft.md").exists()
 
-    def test_warns_when_agent_changes_files(self, runner, project):
+    def test_errors_when_agent_changes_files(self, runner, project):
         def change(**kwargs):
             (kwargs["worktree_path"] / "autohelix.yaml").write_text("goal: changed\n")
         touch = change
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok", also=touch)):
             result = runner.invoke(main, ["report", str(project)])
-        assert "changed candidate files" in result.output
+        assert "changed accepted code files" in result.output
         assert "autohelix.yaml" in result.output
 
     def test_timeout_is_capped(self, runner, project):

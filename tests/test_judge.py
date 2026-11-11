@@ -132,6 +132,15 @@ def test_invalid_answer_is_retried_once_then_fails(tmp_path, usage_file):
     assert sum(c["cost_usd"] for c in calls) == pytest.approx(0.02)
 
 
+def test_judge_changing_files_fails_without_retry_and_flags_the_call(tmp_path, usage_file):
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work" / "code.py").write_text("original")
+    with pytest.raises(JudgeError, match="the judge changed files: code.py"):
+        ask("Done?", tmp_path / "work", mock_judge(judge_change_file="code.py", cost_usd=0.01))
+    [call] = read_usage(usage_file)
+    assert call["integrity_violation"] is True and call["status"] == "error"
+
+
 def test_failed_call_is_retried(tmp_path, usage_file):
     with pytest.raises(JudgeError, match="Mock judge failure"):
         ask("Done?", tmp_path, mock_judge(judge_fail=True))
@@ -274,3 +283,34 @@ def test_cli_unreadable_config_env_exits_2(tmp_path, monkeypatch):
     result = CliRunner().invoke(main, ["ask", "Done?"])
     assert result.exit_code == 2
     assert "could not read the config" in result.stderr
+
+
+def test_in_a_run_the_guard_ignores_git_excludes_candidate_code_could_edit(tmp_path, monkeypatch):
+    from autohelix.judge import DirectoryGuard
+    from autohelix.runs import git
+
+    git(tmp_path, "init", "-q")
+    (tmp_path / "code.py").write_text("x")
+    monkeypatch.setenv("AUTOHELIX_RUN_DIR", str(tmp_path / "run"))
+    guard = DirectoryGuard(tmp_path)
+    (tmp_path / ".git" / "info").mkdir(exist_ok=True)
+    (tmp_path / ".git" / "info" / "exclude").write_text("hidden.py\n")
+    (tmp_path / "hidden.py").write_text("planted by the judge")
+    assert guard.violations() == ["hidden.py"]
+
+
+def test_interrupted_judge_that_changed_files_is_flagged_and_still_interrupts(tmp_path, usage_file, monkeypatch):
+    from types import SimpleNamespace
+
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work" / "code.py").write_text("original")
+
+    def run(**kwargs):
+        (kwargs["worktree_path"] / "code.py").write_text("judge edit")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("autohelix.judge.create_agent", lambda config: SimpleNamespace(run=run))
+    with pytest.raises(KeyboardInterrupt):
+        ask("Done?", tmp_path / "work", mock_judge())
+    [call] = read_usage(usage_file)
+    assert call["integrity_violation"] is True

@@ -25,3 +25,6 @@ notes/
 # Local/personal
 env.sh
 TODO.md
+
+# uv lockfile: not used (installs go through pip / uv pip install -e .)
+uv.lock

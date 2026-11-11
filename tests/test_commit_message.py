@@ -103,24 +103,12 @@ class TestBuildCommitMessage:
         ])
         ah_dir = tmp_path / ".autohelix"
         ah_dir.mkdir(exist_ok=True)
-        (ah_dir / "commit_summary.txt").write_text("Replace bubble sort with quicksort\n")
-
-        msg = harness._build_commit_message(1, {"speed": 1500}, worktree_path=tmp_path)
+        msg = harness._build_commit_message(1, {"speed": 1500}, summary="Replace bubble sort with quicksort")
         assert msg.startswith("Replace bubble sort with quicksort")
         assert "AutoHelix iteration 1" in msg
         assert "speed: 1500" in msg
 
     def test_no_commit_summary_file(self, tmp_path):
         harness = _make_harness(tmp_path)
-        msg = harness._build_commit_message(1, {}, worktree_path=tmp_path)
+        msg = harness._build_commit_message(1, {})
         assert msg == "AutoHelix iteration 1"
-
-    def test_multiline_commit_summary_uses_first_line(self, tmp_path):
-        harness = _make_harness(tmp_path)
-        ah_dir = tmp_path / ".autohelix"
-        ah_dir.mkdir(exist_ok=True)
-        (ah_dir / "commit_summary.txt").write_text("First line\nSecond line\nThird line\n")
-
-        msg = harness._build_commit_message(1, {}, worktree_path=tmp_path)
-        assert msg.startswith("First line")
-        assert "Second line" not in msg

@@ -1,4 +1,4 @@
-"""Run ownership, checkpoint publication, recovery, and candidate correctness."""
+"""Run ownership, publication, recovery, and candidate correctness."""
 
 import json
 import os
@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 from autohelix.agents import AgentRunResult
-from autohelix.checkpoint import CandidateChanged, ContentGuard
+from autohelix.judge import DirectoryGuard
 from autohelix.cli import main
 from autohelix.harness import AutoHelixRunError, Harness
 from autohelix.history import History
@@ -202,18 +202,18 @@ def test_recovery_after_ref_publication_and_torn_append(project, monkeypatch):
 
 
 def test_ref_cas_failure_never_records_acceptance(project, monkeypatch):
-    import autohelix.iteration as iteration
+    from autohelix.workspace import Repo
 
     harness = Harness(project, land_mode="manual")
     base = harness.run_state.expected_tip
-    real = iteration.git
+    real = Repo.git
 
-    def fail_update(project, *args, **kwargs):
-        if args[0] == "update-ref":
+    def fail_update(repo, *args, **kwargs):
+        if args[:2] == ("update-ref", "--no-deref"):
             raise RuntimeError(f"{harness.paths.ref} moved")
-        return real(project, *args, **kwargs)
+        return real(repo, *args, **kwargs)
 
-    monkeypatch.setattr(iteration, "git", fail_update)
+    monkeypatch.setattr(Repo, "git", fail_update)
     with pytest.raises(AutoHelixRunError, match="refs/autohelix"):
         harness.run_iteration(1)
     [record] = harness.history.load()
@@ -224,21 +224,21 @@ def test_ref_cas_failure_never_records_acceptance(project, monkeypatch):
     harness.close()
 
 
-def test_sigint_during_commit_defers_until_ref_and_history_agree(project, monkeypatch):
-    from autohelix.checkpoint import PinnedGit
+def test_sigint_during_publication_defers_until_ref_and_history_agree(project, monkeypatch):
+    from autohelix.workspace import Repo
 
     harness = Harness(project, land_mode="manual")
-    real = PinnedGit.run
+    real = Repo.git
     sent = False
 
-    def interrupt(context, *args, **kwargs):
+    def interrupt(repo, *args, **kwargs):
         nonlocal sent
-        if args[0] == "commit-tree" and not sent:
+        if args[0] == "update-ref" and args[1] == "--no-deref" and not sent:
             sent = True
             os.kill(os.getpid(), signal.SIGINT)
-        return real(context, *args, **kwargs)
+        return real(repo, *args, **kwargs)
 
-    monkeypatch.setattr(PinnedGit, "run", interrupt)
+    monkeypatch.setattr(Repo, "git", interrupt)
     with pytest.raises(KeyboardInterrupt):
         harness.run_iteration(1)
     [record] = harness.history.load()
@@ -327,7 +327,7 @@ def test_nested_ask_mutation_cannot_be_swallowed(project, slot):
     data["agent"]["settings"]["judge_change_file"] = "code.py"
     ask = 'autohelix ask "Done?" || true'
     if slot == "constraints":
-        data["constraints"] = [ask]
+        data["constraints"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] || ' + ask]
     elif slot == "observables":
         data["observables"] = [{"command": '[ "$AUTOHELIX_ITERATION" = 0 ] || ' + ask}]
     else:
@@ -340,7 +340,7 @@ def test_nested_ask_mutation_cannot_be_swallowed(project, slot):
     record = harness.history.load()[-1]
     assert record.accepted == (slot == "stop")
     assert record.stop is None
-    assert any(call["usage"].get("candidate_changed") for call in record.calls)
+    assert any(call["usage"].get("integrity_violation") for call in record.calls)
     assert record.cost.cost_usd == pytest.approx(0.2)
     accepted = git(project, "show", f"{harness.paths.ref}:code.py").stdout
     assert "Unvalidated judge edit" not in accepted
@@ -354,15 +354,16 @@ def test_baseline_judge_mutation_fails_and_cost_survives(project):
     git(project, "add", ".")
     git(project, "commit", "-qm", "baseline judge")
     harness = Harness(project, land_mode="manual")
-    with pytest.raises(AutoHelixRunError, match="Judge changed"):
+    with pytest.raises(AutoHelixRunError, match="Baseline command modified candidate files"):
         harness.run(max_iterations=1, report=False)
     [baseline] = harness.history.load()
     assert not baseline.accepted and baseline.iteration == 0
     assert baseline.cost.cost_usd == 0.1
+    assert (project / "code.py").read_text() == "print('baseline')\n"
     retry = Harness(project, land_mode="manual")
-    with pytest.raises(RuntimeError, match="Uncommitted"):
+    with pytest.raises(AutoHelixRunError, match="Baseline command modified candidate files"):
         retry.run(max_iterations=1, report=False)
-    assert retry.history.load()[0].cost.cost_usd == 0.1
+    assert retry.history.load()[0].cost.cost_usd == pytest.approx(0.2)
 
 
 @pytest.mark.parametrize("change", ["dirty", "new", "delete", "mode", "symlink"])
@@ -371,30 +372,33 @@ def test_guard_detects_candidate_content_and_modes(project, change):
         (project / "code.py").write_text("already dirty")
     if change == "symlink":
         (project / "link").symlink_to("code.py")
-    with pytest.raises(CandidateChanged):
-        with ContentGuard(project):
-            if change == "new":
-                (project / "new.py").write_text("new")
-            elif change == "delete":
-                (project / "code.py").unlink()
-            elif change == "mode":
-                (project / "code.py").chmod(0o755)
-            elif change == "symlink":
-                (project / "link").unlink()
-                (project / "link").symlink_to("autohelix.yaml")
-            else:
-                (project / "code.py").write_text("changed contents with same status")
+    guard = DirectoryGuard(project)
+    if change == "new":
+        (project / "new.py").write_text("new")
+    elif change == "delete":
+        (project / "code.py").unlink()
+    elif change == "mode":
+        (project / "code.py").chmod(0o755)
+    elif change == "symlink":
+        (project / "link").unlink()
+        (project / "link").symlink_to("autohelix.yaml")
+    else:
+        (project / "code.py").write_text("changed contents with same status")
+    assert guard.violations()
 
 
 def test_guard_allows_feedback_and_exact_non_git_wrapper_outputs(tmp_path):
     log = tmp_path / "own.log"
     usage = tmp_path / "usage.jsonl"
-    with ContentGuard(tmp_path, allowed=(log, usage)):
-        log.write_text("log")
-        usage.write_text("usage")
-        feedback = tmp_path / ".autohelix" / "review.md"
-        feedback.parent.mkdir()
-        feedback.write_text("review")
+    guard = DirectoryGuard(tmp_path, allowed=(log, usage))
+    log.write_text("log")
+    usage.write_text("usage")
+    feedback = tmp_path / ".autohelix" / "review.md"
+    feedback.parent.mkdir()
+    feedback.write_text("review")
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "x.pyc").write_text("cache")
+    assert guard.violations() == []
 
 
 def test_guard_detects_submodule_edit_and_commit(project, tmp_path):
@@ -409,14 +413,30 @@ def test_guard_detects_submodule_edit_and_commit(project, tmp_path):
     git(project, "-c", "protocol.file.allow=always", "submodule", "add", str(child), "module")
     git(project, "commit", "-qm", "submodule")
     module = project / "module"
-    with pytest.raises(CandidateChanged):
-        with ContentGuard(project):
-            (module / "code.py").write_text("judge change")
-            git(module, "add", ".")
-            git(module, "commit", "-qm", "judge")
+    guard = DirectoryGuard(project)
+    (module / "code.py").write_text("judge change")
+    git(module, "add", ".")
+    git(module, "commit", "-qm", "judge")
+    assert guard.violations() == ["module/code.py"]
     git(project, "submodule", "deinit", "-f", "module")
-    with ContentGuard(project):
-        pass
+    assert DirectoryGuard(project).violations() == []
+
+
+def test_judge_violation_stays_recorded_after_wrapper_restores_files(project):
+    data = yaml.safe_load((project / "autohelix.yaml").read_text())
+    data["agent"]["settings"]["judge_change_file"] = "code.py"
+    data["constraints"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; cp code.py /tmp/ah-saved.$$; '
+                           'autohelix ask "Done?"; cp /tmp/ah-saved.$$ code.py; exit 0']
+    (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
+    git(project, "add", ".")
+    git(project, "commit", "-qm", "restoring wrapper")
+    harness = Harness(project, land_mode="manual")
+    harness.run(max_iterations=1, report=False)
+    record = harness.history.load()[-1]
+    assert not record.accepted
+    assert "judge call changed the files it judged" in record.reason
+    assert any(call["usage"].get("integrity_violation") for call in record.calls)
+    harness.close()
 
 
 def test_constructor_failure_releases_owner_even_with_retained_traceback(project):
@@ -590,7 +610,7 @@ def test_report_owns_run_and_restores_ref_before_removal(project, monkeypatch):
     monkeypatch.setattr("autohelix.agents.create_agent", lambda *a, **k: SimpleNamespace(run=run))
     assert not write_report(harness.config, project, Console(), run_id=harness.paths.run_id)
     assert git(project, "rev-parse", harness.paths.ref).stdout.strip() == expected
-    assert not (harness.paths.worktrees / "iter--1").exists()
+    assert not list(harness.paths.worktrees.iterdir())
 
 
 def test_abandoned_noop_retains_user_commit_tip(project, monkeypatch):
@@ -665,3 +685,178 @@ def test_real_worker_failure_includes_subprocess_stderr(project):
                     branch="unused", shared_dir=project / ".autohelix" / "peers", budget=1)
     with pytest.raises(RuntimeError, match="Worker exited 1.*Mock failure"):
         _run_segment(worker, 1, False)
+
+
+def test_mutating_baseline_check_is_a_setup_error_before_agent_spend(project, monkeypatch):
+    configure(project, constraints=["true", "echo formatted >> code.py"])
+    harness = Harness(project, land_mode="manual")
+    monkeypatch.setattr(harness, "run_agent", lambda *_: pytest.fail("agent must not run"))
+    try:
+        with pytest.raises(AutoHelixRunError, match=r"Baseline command modified candidate files: "
+                                                    r"echo formatted >> code.py \(code.py\)"):
+            harness.run(max_iterations=1, report=False)
+        [baseline] = harness.history.load()
+        assert not baseline.accepted
+        assert (project / "code.py").read_text() == "print('baseline')\n"
+    finally:
+        harness.close()
+
+
+def test_failing_baseline_constraint_does_not_block_the_run(project):
+    configure(project, constraints=['[ "$AUTOHELIX_ITERATION" != 0 ]'])
+    harness = Harness(project, land_mode="manual")
+    harness.run(max_iterations=1, report=False)
+    assert [(r.iteration, r.accepted) for r in harness.history.load()] == [(0, True), (1, True)]
+    harness.close()
+
+
+@pytest.mark.parametrize("scope", [{}, {"frozen": ["frozen.txt"]}])
+def test_project_subdirectory_never_accepts_staged_sibling(project, monkeypatch, scope):
+    sub = project / "sub"
+    sub.mkdir()
+    config = yaml.safe_load((project / "autohelix.yaml").read_text())
+    config["scope"] = scope
+    (sub / "autohelix.yaml").write_text(yaml.safe_dump(config))
+    (sub / "code.py").write_text("baseline sub")
+    (project / "sibling.py").write_text("baseline sibling")
+    git(project, "add", ".")
+    git(project, "commit", "-qm", "subdirectory")
+    harness = Harness(sub, land_mode="manual")
+
+    def agent(cwd, *_):
+        (cwd / "code.py").write_text("candidate sub")
+        (cwd.parent / "sibling.py").write_text("protected sibling")
+        git(cwd, "add", "../sibling.py")
+        return AgentRunResult(success=True, usage={"cost_usd": 0.2})
+
+    monkeypatch.setattr(harness, "run_agent", agent)
+    try:
+        result = harness.run_iteration(1)
+        assert result.accepted
+        assert git(project, "show", f"{harness.paths.ref}:sibling.py").stdout == "baseline sibling"
+        assert git(project, "show", f"{harness.paths.ref}:sub/code.py").stdout == "candidate sub"
+    finally:
+        harness.close()
+
+
+def test_standalone_unborn_git_retains_cached_inventory(project, tmp_path):
+    empty = tmp_path / "unborn"
+    empty.mkdir()
+    git(empty, "init", "-q")
+    (empty / ".gitignore").write_text("ignored.txt\n")
+    (empty / "ignored.txt").write_text("staged ignored content")
+    git(empty, "add", "-f", "ignored.txt")
+    guard = DirectoryGuard(empty)
+    git(empty, "rm", "--cached", "ignored.txt")
+    (empty / "ignored.txt").write_text("changed behind removed index")
+    assert guard.violations() == ["ignored.txt"]
+
+
+def test_nongit_and_dangling_symlink_mutations_are_detected(tmp_path):
+    (tmp_path / "draft").write_text("candidate")
+    (tmp_path / "link").symlink_to("missing")
+    guard = DirectoryGuard(tmp_path)
+    (tmp_path / "draft").write_text("judge edit")
+    (tmp_path / "link").unlink()
+    (tmp_path / "link").symlink_to("another-missing")
+    assert guard.violations() == ["draft", "link"]
+
+
+def add_submodule(project, tmp_path):
+    child = tmp_path / "child"
+    child.mkdir()
+    git(child, "init", "-q")
+    git(child, "config", "user.email", "test@example.com")
+    git(child, "config", "user.name", "Test")
+    (child / "code.py").write_text("child baseline")
+    git(child, "add", ".")
+    git(child, "commit", "-qm", "child")
+    git(project, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(child), "sub")
+    git(project, "commit", "-qam", "submodule")
+
+
+def test_initializing_empty_submodule_invalidates_guard(project, tmp_path):
+    add_submodule(project, tmp_path)
+    git(project, "submodule", "deinit", "-f", "sub")
+    guard = DirectoryGuard(project)
+    git(project, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "sub")
+    (project / "sub" / "code.py").write_text("judge changed initialized child")
+    assert "sub/code.py" in guard.violations()
+
+
+def test_fresh_run_has_no_target_warning(project):
+    from autohelix.runs import reconcile
+
+    harness = Harness(project)
+    try:
+        assert reconcile(harness.paths, harness.run_info, harness.history, "auto")[1] is None
+        assert reconcile(harness.paths, harness.run_info, harness.history, "manual")[1] is None
+        git(project, "commit", "-q", "--allow-empty", "-m", "target ahead before baseline")
+        assert reconcile(harness.paths, harness.run_info, harness.history, "auto")[1] is None
+    finally:
+        harness.close()
+
+
+def test_target_behind_after_baseline_warns_only_for_auto_landing(project):
+    from autohelix.runs import reconcile
+
+    harness = Harness(project, land_mode="manual")
+    harness.run(max_iterations=1, report=False)
+    base = harness.run_info["base_commit"]
+    warning = reconcile(harness.paths, harness.run_info, harness.history, "auto")[1]
+    assert "is behind" in warning and "auto landing" in warning
+    # In manual mode, behind just means not landed yet.
+    assert reconcile(harness.paths, harness.run_info, harness.history, "manual")[1] is None
+    assert git(project, "rev-parse", "HEAD").stdout.strip() == base
+
+
+@pytest.mark.parametrize("problem", ["editable", "preflight"])
+def test_refused_first_start_creates_no_identity(project, problem):
+    if problem == "editable":
+        configure(project, scope={"editable": ["missing_dir/*.py"]})
+    else:
+        configure(project, agent={"type": "claude", "command": "/nonexistent/agent"})
+    with pytest.raises(RuntimeError, match="No files found|Preflight checks failed"):
+        Harness(project)
+    root = RunPaths(project).root
+    assert not (root / "current").exists()
+    assert not list((root / "runs").glob("*/run.json"))
+    assert not git(project, "for-each-ref", "--format=%(refname)", "refs/autohelix/").stdout.strip()
+
+
+def test_manual_mode_warns_when_target_moves_during_segment(project, monkeypatch):
+    harness = Harness(project, land_mode="manual")
+    target = harness.run_info["target_branch"]
+    printed = []
+    original = harness.console.print
+    monkeypatch.setattr(harness.console, "print", lambda *a, **k: (printed.append(" ".join(map(str, a))),
+                                                                    original(*a, **k)))
+    real = harness.run_agent
+
+    def agent(cwd, prompt, iteration):
+        git(project, "commit", "-q", "--allow-empty", "-m", "agent moved the target by absolute path")
+        return real(cwd, prompt, iteration)
+
+    monkeypatch.setattr(harness, "run_agent", agent)
+    harness.run(max_iterations=1, report=False)
+    assert any(f"Target {target} changed during this segment" in line for line in printed)
+
+
+def test_ask_from_an_agent_without_log_dir_records_absolute_log(tmp_path, monkeypatch):
+    from autohelix.agents import AgentConfig
+    from autohelix.judge import ask
+    from autohelix.usage_log import read_usage
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    usage = tmp_path / "usage.jsonl"
+    monkeypatch.setenv("AUTOHELIX_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("AUTOHELIX_USAGE_FILE", str(usage))
+    monkeypatch.delenv("AUTOHELIX_LOG_DIR", raising=False)
+    work = tmp_path / "work"
+    work.mkdir()
+    answer = ask("Done?", work, AgentConfig(type="mock", read_only=True))
+    assert answer.yes
+    [call] = read_usage(usage)
+    assert Path(call["log"]).is_absolute() and Path(call["log"]).exists()
+
