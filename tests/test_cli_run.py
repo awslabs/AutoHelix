@@ -1,5 +1,7 @@
 """Tests for failure handling in the `autohelix run` CLI command."""
 
+import subprocess
+
 from click.testing import CliRunner
 
 from autohelix.cli import main
@@ -7,6 +9,7 @@ from autohelix.harness import AutoHelixRunError
 
 
 def test_run_returns_nonzero_for_infrastructure_failure(tmp_path, monkeypatch):
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
     (tmp_path / ".autohelix").mkdir()
 
     class FailingHarness:

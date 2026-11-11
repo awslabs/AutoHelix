@@ -33,7 +33,7 @@ def integration_project(tmp_path):
     # Create a simple file to modify
     (project / "hello.py").write_text('print("hello")\n')
 
-    # Create .gitignore (like autohelix init does)
+    # Exercise an existing repository-level exclusion for AutoHelix state.
     (project / ".gitignore").write_text(".autohelix/\n")
 
     # Create autohelix config with mock agent
@@ -416,7 +416,7 @@ class TestRealAgentIntegration:
         # Create a simple file
         (project / "example.py").write_text('# TODO: add a hello function\n')
 
-        # Create .gitignore (like autohelix init does)
+        # Exercise an existing repository-level exclusion for AutoHelix state.
         (project / ".gitignore").write_text(".autohelix/\n")
 
         # Create config with real claude agent and short timeout

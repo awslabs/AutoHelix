@@ -16,8 +16,10 @@ from autohelix.history import History
 from autohelix.formatting import format_total_cost
 from autohelix.skill import skill
 from autohelix.state import (
+    GitExcludeError,
     archive_state,
-    ensure_gitignore_entry,
+    ensure_git_exclude_entry,
+    ensure_runtime_ignored,
     read_stored_config_path,
 )
 
@@ -104,10 +106,6 @@ def init(path: str):
     project_path = Path(path).resolve()
     autohelix_dir = project_path / ".autohelix"
 
-    if autohelix_dir.exists():
-        click.echo(f"Already initialized ({autohelix_dir})")
-        return
-
     # Require git
     git_check = subprocess.run(
         ["git", "rev-parse", "--git-dir"],
@@ -121,6 +119,18 @@ def init(path: str):
         )
         raise SystemExit(1)
 
+    # Validate before creating runtime/config files, and on repeated init calls.
+    try:
+        ensure_runtime_ignored(project_path)
+        # Auxiliary cache exclusion is best effort; runtime state must be ignored.
+        ensure_git_exclude_entry(project_path, "__pycache__/")
+    except (GitExcludeError, OSError, subprocess.CalledProcessError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if autohelix_dir.exists():
+        click.echo(f"Already initialized ({autohelix_dir})")
+        return
+
     # Create .autohelix/ structure. `notes/` is the agent-owned memory dir; the
     # default prompt teaches the iter-N.md convention, but it is free-form.
     autohelix_dir.mkdir()
@@ -130,10 +140,6 @@ def init(path: str):
     from autohelix.prompt_template import DEFAULT_TEMPLATE
 
     (autohelix_dir / "prompt.md").write_text(DEFAULT_TEMPLATE)
-
-    # Ensure .autohelix/ is gitignored
-    ensure_gitignore_entry(project_path, ".autohelix/")
-    ensure_gitignore_entry(project_path, "__pycache__/")
 
     # Write config template if none exists
     config_path = project_path / "autohelix.yaml"
@@ -165,6 +171,12 @@ def run(path: str, iterations: int | None, verbose: bool, config_file: str | Non
         click.echo("Error: AutoHelix not initialized.")
         click.echo("Run 'autohelix init' first.")
         raise SystemExit(1)
+
+    # Refuse before the harness creates logs, settings, or agent state.
+    try:
+        ensure_runtime_ignored(project_path)
+    except GitExcludeError as e:
+        raise click.ClickException(str(e)) from e
 
     config_path = Path(config_file).resolve() if config_file else None
     try:

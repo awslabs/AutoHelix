@@ -32,8 +32,9 @@ from autohelix.prompt_template import build_prompt_variables, load_template, ren
 from autohelix.run_log import RunLog
 from autohelix.sandbox import Sandbox, Worktree
 from autohelix.state import (
+    GitExcludeError,
     archive_state,
-    ensure_gitignore_entry,
+    ensure_runtime_ignored,
     read_stored_config_rel,
     store_config_path,
 )
@@ -1226,26 +1227,15 @@ class Harness:
         max_iter = max_iterations or self.config.max_iterations
         start_iter = self.history.get_last_iteration() + 1
 
+        # Covers programmatic/repeated runs as well as the CLI's early check.
+        try:
+            ensure_runtime_ignored(self.project_path)
+        except GitExcludeError as e:
+            raise AutoHelixRunError(str(e)) from e
+
         # Check active config matches
         if not self._check_active_config():
             return False
-
-        # Ensure .autohelix/ is gitignored (covers manual config + run path)
-        ensure_gitignore_entry(self.project_path, ".autohelix/")
-        # Commit .gitignore if we just modified it
-        result = subprocess.run(
-            ["git", "status", "--porcelain", ".gitignore"],
-            cwd=self.project_path, capture_output=True, text=True,
-        )
-        if result.stdout.strip():
-            subprocess.run(
-                ["git", "add", ".gitignore"],
-                cwd=self.project_path, capture_output=True,
-            )
-            subprocess.run(
-                ["git", "commit", "-m", "Add .autohelix to .gitignore"],
-                cwd=self.project_path, capture_output=True,
-            )
 
         # Check for any uncommitted changes in the repo
         try:

@@ -60,9 +60,14 @@ Creates:
 
 - `autohelix.yaml` — config template (won't overwrite existing)
 - `.autohelix/` — runtime directory with notes, prompt template
-- `.gitignore` entry for `.autohelix/`
+- Local git exclusions for `.autohelix/` and `__pycache__/` in the repository's
+  shared `info/exclude`; `.gitignore` is unchanged.
 
 Requires an existing git repository.
+
+`init` and `run` refuse if a conflicting `.gitignore` rule makes `.autohelix/`
+visible to git despite the local exclusion. Add `.autohelix/` after any conflicting
+negation rules in your `.gitignore`, then retry. AutoHelix leaves that file unchanged.
 
 ## `autohelix run`
 
