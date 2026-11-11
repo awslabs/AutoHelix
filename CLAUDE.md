@@ -33,6 +33,7 @@ uv pip install -e ".[dev]"
 - `src/autohelix/display.py` - live Rich display
 - `src/autohelix/run_status.py` - live run status (`.autohelix/runs/<id>/runtime/status.json`)
 - `src/autohelix/viewer.py` + `viewer_resources/` - `autohelix view` / `dashboard` web app (`/` run list, `/run/<id>/` one run)
+- `src/autohelix/run_table.py` - `view --print` / `dashboard --print` text (the `--json` payloads, `ProjectRuns.runs()` / `.run()`)
 - `src/autohelix/replay.py` - parse saved agent logs into events (watch, view)
 - `src/autohelix/prompt_template.py` - agent prompt rendering
 - `tests/` - test suite (pytest)
@@ -52,8 +53,8 @@ autohelix land         # Fast-forward the run tip onto its starting branch
 autohelix abandon      # Retain run evidence; refuse further resume
 autohelix clear        # Alias for abandoning the current run
 autohelix watch        # Follow a run in the terminal (second terminal)
-autohelix view         # Live web view of a run (127.0.0.1)
-autohelix dashboard    # Live list of the project's runs (same server as view)
+autohelix view         # Live web view of a run (127.0.0.1); --json / --print for a snapshot
+autohelix dashboard    # Live list of the project's runs (same server as view); --json / --print
 autohelix hint         # Send a hint to the running agent (picked up next iteration)
 autohelix report       # Agent-written analysis of the run
 ```

@@ -158,7 +158,7 @@ function lastActiveCell(run) {
 
 function runRow(run) {
   const href = `/run/${encodeURIComponent(run.id)}/`;
-  const file = run.config?.file;
+  const file = run.config_file;
   const tr = el('tr', { className: run.lifecycle === 'abandoned' ? 'abandoned' : '', tabIndex: 0 },
     el('td', {}, el('a', { className: 'run-id', href, textContent: run.id }),
       file ? el('div', { className: 'status-sub run-config', textContent: file, title: 'Config file' }) : null),
@@ -212,8 +212,8 @@ function render() {
   document.title = `${data.project} · AutoHelix dashboard`;
   // Which machine and checkout: over SSH tunnels every dashboard is localhost.
   const head = data.commit && `${data.branch || 'detached'} @ ${data.commit}`;
-  $('where').textContent = [[data.host, data.path].filter(Boolean).join(':'), head].filter(Boolean).join(' · ');
-  $('where').title = [data.path_full, head && `Checked out: ${head}`].filter(Boolean).join('\n');
+  $('where').textContent = [[data.host, data.path_display].filter(Boolean).join(':'), head].filter(Boolean).join(' · ');
+  $('where').title = [data.path, head && `Checked out: ${head}`].filter(Boolean).join('\n');
   renderSubtitle(runs);
   const running = runs.filter(live).length;
   $('status').textContent = running ? `${running} live` : 'No live runs';
