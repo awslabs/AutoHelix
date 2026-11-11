@@ -512,16 +512,39 @@ def view(path: str, port: int, config_file: str | None, open_browser: bool, run_
     """Live web view of a run, served on 127.0.0.1.
 
     Safe to run alongside `autohelix run`; it only reads .autohelix/.
+    The same server also lists all runs at / (see `autohelix dashboard`).
     Over SSH: ssh -L 8765:127.0.0.1:8765 host, then open http://localhost:8765.
     """
+    try:
+        selected = RunPaths(Path(path), run_id).run_id
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
+    _serve(Path(path), port, open_browser, f"/run/{selected}/" if selected else "/",
+           config_file=Path(config_file) if config_file else None, run_id=run_id)
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=True, file_okay=False), default=".")
+@click.option("--port", type=click.IntRange(0, 65535), default=8765, show_default=True)
+@click.option("--open", "open_browser", is_flag=True, help="Open the dashboard in a browser.")
+def dashboard(path: str, port: int, open_browser: bool):
+    """Live list of this project's runs, served on 127.0.0.1.
+
+    Each run links to its `autohelix view` page; one server serves both.
+    Over SSH: ssh -L 8765:127.0.0.1:8765 host, then open http://localhost:8765.
+    """
+    _serve(Path(path), port, open_browser, "/")
+
+
+def _serve(project: Path, port: int, open_browser: bool, page: str, **options) -> None:
     from autohelix.viewer import make_server
 
     try:
-        server = make_server(Path(path), port, Path(config_file) if config_file else None, run_id=run_id)
+        server = make_server(project, port, **options)
     except OSError as exc:
         raise click.ClickException(f"Cannot listen on port {port}: {exc}") from exc
-    url = f"http://127.0.0.1:{server.server_port}/"
-    click.echo(f"Viewing {Path(path).resolve().name} at {url}  (Ctrl-C to stop)")
+    url = f"http://127.0.0.1:{server.server_port}{page}"
+    click.echo(f"Viewing {project.resolve().name} at {url}  (Ctrl-C to stop)")
     if open_browser:
         import webbrowser
         webbrowser.open(url)

@@ -1,11 +1,14 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""`autohelix view`: a small live web view of a run, served on 127.0.0.1.
+"""`autohelix view` / `autohelix dashboard`: a small live web app, served on 127.0.0.1.
 
-The page polls a few JSON routes. There are no write routes. Every file read
-is derived from an iteration number, or is a file name that must match an
-entry in a fixed directory listing (notes/, observations/iter-N/).
+Two pages share one server: `/` lists the project's runs, `/run/<id>/` shows one
+run. The pages poll a few JSON routes. There are no write routes. Every file read
+is derived from a run id that must name an existing run directory, an iteration
+number, or a file name that must match an entry in a fixed directory listing
+(notes/, observations/iter-N/). The unprefixed `/api/...` routes serve the
+server's default run.
 
 `write_static` saves the same page as one file, output/report.html, with the
 route data built in.
@@ -14,6 +17,7 @@ route data built in.
 import json
 import os
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -29,7 +33,7 @@ from autohelix.agents import AgentEventKind
 from autohelix.config import load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History
-from autohelix.runs import RunPaths
+from autohelix.runs import RunPaths, git
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
 from autohelix.run_status import read_run_status
@@ -44,7 +48,8 @@ IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
 ASSETS = {
-    "/": ("index.html", "text/html; charset=utf-8"),
+    "/": ("dashboard.html", "text/html; charset=utf-8"),
+    "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
     "/viewer.css": ("viewer.css", "text/css; charset=utf-8"),
     "/viewer.js": ("viewer.js", "text/javascript; charset=utf-8"),
     "/logo-light.svg": ("autohelix-light.svg", "image/svg+xml"),
@@ -150,6 +155,7 @@ class RunData:
             item["summary"] = item["summary"] or subjects.get(record.commit)
         return {
             "title": getattr(config, "title", None) or self.project.name,
+            "project": self.project.name,
             "goal": config.goal if config else None,
             "directions": config.metric_directions() if config else {},
             "status": read_run_status(self.project, self.paths.run_id),
@@ -380,6 +386,145 @@ class RunData:
         return self._diffs[key]
 
 
+RUN_ID = r"[a-z0-9][a-z0-9-]{0,36}"
+
+
+class ProjectRuns:
+    """Reads every run in a project's .autohelix/runs/ for the dashboard."""
+
+    def __init__(self, project: Path):
+        self.project = project.resolve()
+        self._histories: dict[str, History] = {}
+        self._configs: dict[Path, tuple[float, dict]] = {}
+        self._counts: dict[tuple[str, str], int | None] = {}
+
+    def exists(self, run_id: str) -> bool:
+        return bool(re.fullmatch(RUN_ID, run_id)) and (RunPaths(self.project).runs / run_id / "run.json").is_file()
+
+    def runs(self) -> dict:
+        root = RunPaths(self.project)
+        refs = self._refs()
+        rows = []
+        for identity in root.runs.glob("*/run.json"):
+            run_id = identity.parent.name
+            if not re.fullmatch(RUN_ID, run_id):
+                continue
+            try:
+                rows.append(self._run(run_id, refs))
+            except Exception as exc:  # one unreadable run must not hide the others
+                rows.append({"id": run_id, "error": str(exc)})
+        rows.sort(key=lambda r: r.get("last_activity") or 0, reverse=True)
+        home = Path.home()
+        path = f"~/{self.project.relative_to(home)}" if self.project.is_relative_to(home) else str(self.project)
+        # What the checkout is on: the reference point for each run's landing state.
+        branch = git(self.project, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip() or None
+        commit = git(self.project, "rev-parse", "--short", "HEAD", check=False).stdout.strip() or None
+        return {"project": self.project.name, "host": socket.gethostname().split(".")[0],
+                "path": path, "path_full": str(self.project), "branch": branch, "commit": commit, "runs": rows}
+
+    def _refs(self) -> dict[str, str]:
+        try:
+            out = git(self.project, "for-each-ref", "--format=%(refname)%09%(objectname)",
+                      "refs/autohelix", "refs/heads").stdout
+        except (OSError, RuntimeError):
+            return {}
+        return dict(line.split("\t", 1) for line in out.splitlines() if "\t" in line)
+
+    def _config(self, relative: str | None) -> dict:
+        if not relative:
+            return {}
+        path = Path(relative) if Path(relative).is_absolute() else self.project / relative
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return {"file": relative, "missing": True}
+        cached = self._configs.get(path)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        try:
+            config = load_config(self.project, config_file=path)[0]
+            summary = {"file": relative,
+                       "directions": config.metric_directions(),
+                       "max_iterations": config.max_iterations, "max_cost_usd": config.max_cost_usd,
+                       "max_time_seconds": config.max_time_seconds}
+        except Exception:
+            summary = {"file": relative, "invalid": True}
+        self._configs[path] = (mtime, summary)
+        return summary
+
+    def _landing(self, target_tip: str | None, tip: str | None) -> dict | None:
+        """Commits on the run that its target lacks, and whether a fast-forward could add them."""
+        if not (target_tip and tip and COMMIT.fullmatch(target_tip) and COMMIT.fullmatch(tip)):
+            return None
+        key = (target_tip, tip)
+        if key not in self._counts:
+            count = git(self.project, "rev-list", "--count", f"{target_tip}..{tip}", check=False)
+            ancestor = git(self.project, "merge-base", "--is-ancestor", target_tip, tip, check=False)
+            self._counts[key] = None if count.returncode or not count.stdout.strip().isdigit() else {
+                "commits": int(count.stdout), "fast_forward": ancestor.returncode == 0}
+        return self._counts[key]
+
+    @staticmethod
+    def _metrics(records, directions: dict[str, str]) -> dict | None:
+        """The latest accepted measurement (the code a land would deliver) against the baseline.
+
+        Not the best value per metric: acceptance does not require improvement, and
+        per-metric bests can come from different iterations."""
+        latest = next((r for r in reversed(records) if r.accepted and r.metrics), None)
+        if latest is None:
+            return None
+        baseline = next((r.metrics for r in records if r.iteration == 0), {}) or {}
+        names = [n for n in directions if n in latest.metrics] + [n for n in latest.metrics if n not in directions]
+        return {"iteration": latest.iteration, "values": [
+            {"name": n, "value": latest.metrics[n], "baseline": baseline.get(n), "direction": directions.get(n)}
+            for n in names]}
+
+    def _run(self, run_id: str, refs: dict[str, str]) -> dict:
+        paths = RunPaths(self.project, run_id)
+        data = paths.read_identity()
+        status = read_run_status(self.project, run_id)
+        history = self._histories.setdefault(run_id, History(self.project, run_id))
+        records = history.load()
+        config = self._config(data.get("config_path"))
+
+        attempts = [r for r in records if r.iteration > 0]
+        cost = summarize_costs([usage for r in records for usage in r.cost_usages])
+        tip = refs.get(paths.ref) or data.get("abandoned_tip")
+        target = data.get("target_branch")
+        target_tip = refs.get(f"refs/heads/{target}") if target else None
+        try:
+            history_mtime = paths.history.stat().st_mtime
+        except OSError:
+            history_mtime = None
+        activity = [data.get("created_at"), history_mtime, (status or {}).get("updated_at")]
+        return {
+            "id": run_id,
+            "name": data.get("name"),
+            "lifecycle": data.get("lifecycle"),
+            "created_at": data.get("created_at"),
+            "last_activity": max((t for t in activity if isinstance(t, (int, float))), default=None),
+            "config": {"file": config.get("file")},
+            "status": status and {k: status.get(k) for k in (
+                "state", "phase", "iteration", "iteration_started_at", "phase_started_at", "stopped_at",
+                "stop_reason", "max_iterations")},
+            "accepted": sum(1 for r in attempts if r.accepted),
+            "metrics": self._metrics(records, config.get("directions") or {}),
+            # Budgets are run totals across segments; `run -n` overrides the file for a segment.
+            "progress": {
+                "iterations": max((r.iteration for r in attempts), default=0),
+                "max_iterations": (status or {}).get("max_iterations") or config.get("max_iterations"),
+                "cost_usd": cost.cost_usd, "cost_incomplete": cost.incomplete,
+                "max_cost_usd": config.get("max_cost_usd"),
+                # As the time budget counts it: iteration wall-clock, not the baseline.
+                "seconds": sum(r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0)) or 0
+                               for r in attempts) / 1000,
+                "max_seconds": config.get("max_time_seconds"),
+            },
+            "target_branch": target,
+            "landing": self._landing(target_tip, tip),
+        }
+
+
 def write_static(project: Path, config_file: Path | None = None, *, run_id: str | None = None) -> Path:
     """Write output/report.html: the viewer page with this run's data built in."""
     resources = files("autohelix").joinpath("viewer_resources")
@@ -407,8 +552,32 @@ def write_static(project: Path, config_file: Path | None = None, *, run_id: str 
 
 def make_server(project: Path, port: int = 8765, config_file: Path | None = None, *, run_id: str | None = None) -> ThreadingHTTPServer:
     data = RunData(project, config_file, run_id)
+    dashboard = ProjectRuns(project)
+    others: dict[str, RunData] = {}
     lock = threading.Lock()  # RunData's caches and log tails are not thread-safe
     resources = files("autohelix").joinpath("viewer_resources")
+
+    def run_data(rid: str) -> RunData | None:
+        if not dashboard.exists(rid):
+            return None
+        if rid == data.paths.run_id:
+            return data  # keeps an explicit --config for the default run
+        if rid not in others:
+            others[rid] = RunData(project, None, rid)
+        return others[rid]
+
+    def run_route(rd: RunData, path: str) -> tuple | None:
+        if path == "/state":
+            return 200, rd.state()
+        if match := re.fullmatch(r"/iteration/(\d{1,9})", path):
+            return 200, rd.iteration(int(match[1]))
+        if match := re.fullmatch(r"/notes/([^/]+)", path):
+            if note := rd.note(unquote(match[1])):
+                return 200, note
+        if match := re.fullmatch(r"/artifact/(\d{1,9})/([^/]+)", path):
+            if found := rd.artifact(int(match[1]), unquote(match[2])):
+                return 200, *found
+        return None
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -444,16 +613,16 @@ def make_server(project: Path, port: int = 8765, config_file: Path | None = None
             if path in ASSETS:
                 name, mime = ASSETS[path]
                 return 200, resources.joinpath(name).read_bytes(), mime
-            if path == "/api/state":
-                return 200, data.state()
-            if match := re.fullmatch(r"/api/iteration/(\d{1,9})", path):
-                return 200, data.iteration(int(match[1]))
-            if match := re.fullmatch(r"/api/notes/([^/]+)", path):
-                if note := data.note(unquote(match[1])):
-                    return 200, note
-            if match := re.fullmatch(r"/api/artifact/(\d{1,9})/([^/]+)", path):
-                if found := data.artifact(int(match[1]), unquote(match[2])):
-                    return 200, *found
+            if match := re.fullmatch(rf"/run/({RUN_ID})/", path):
+                if dashboard.exists(match[1]):
+                    return 200, resources.joinpath("index.html").read_bytes(), "text/html; charset=utf-8"
+            elif path == "/api/runs":
+                return 200, dashboard.runs()
+            elif match := re.fullmatch(rf"/api/run/({RUN_ID})(/.+)", path):
+                if (rd := run_data(match[1])) and (response := run_route(rd, match[2])):
+                    return response
+            elif path.startswith("/api/") and (response := run_route(data, path[4:])):
+                return response
             return 404, {"error": "not found"}
 
     # Threads, so one idle browser connection (e.g. a preconnect) cannot stall the page.

@@ -32,7 +32,7 @@ uv pip install -e ".[dev]"
 - `src/autohelix/checkpoint.py` - pinned Git contexts, immutable content checkpoints, shared write scope and judge guard
 - `src/autohelix/display.py` - live Rich display
 - `src/autohelix/run_status.py` - live run status (`.autohelix/runs/<id>/runtime/status.json`)
-- `src/autohelix/viewer.py` + `viewer_resources/` - `autohelix view` web viewer
+- `src/autohelix/viewer.py` + `viewer_resources/` - `autohelix view` / `dashboard` web app (`/` run list, `/run/<id>/` one run)
 - `src/autohelix/replay.py` - parse saved agent logs into events (watch, view)
 - `src/autohelix/prompt_template.py` - agent prompt rendering
 - `tests/` - test suite (pytest)
@@ -53,6 +53,7 @@ autohelix abandon      # Retain run evidence; refuse further resume
 autohelix clear        # Alias for abandoning the current run
 autohelix watch        # Follow a run in the terminal (second terminal)
 autohelix view         # Live web view of a run (127.0.0.1)
+autohelix dashboard    # Live list of the project's runs (same server as view)
 autohelix hint         # Send a hint to the running agent (picked up next iteration)
 autohelix report       # Agent-written analysis of the run
 ```
