@@ -13,7 +13,7 @@ import pytest
 
 from autohelix.agents import AgentRunResult
 from autohelix.harness import AutoHelixRunError, Harness
-from autohelix.runs import RunLock, abandon, git, land
+from autohelix.runs import RunLock, delete, git, land, short_id
 from autohelix.usage_log import append_usage
 from autohelix.viewer import RunData
 from tests.test_runs import project, configure
@@ -218,17 +218,17 @@ def test_selection_waits_briefly_and_real_new_runs_allocate_distinct_ids(project
     assert ids[0] != ids[1]
 
 
-def test_reusing_purged_id_does_not_recover_older_run_commits(project, monkeypatch):
+def test_reusing_deleted_id_does_not_recover_older_run_commits(project, monkeypatch):
     import autohelix.runs as runs
 
     monkeypatch.setattr(runs.secrets, "choice", lambda _: "a")
     first = Harness(project)
     first.run(max_iterations=1, report=False)
-    assert first.paths.run_id == "aaaa"
-    abandon(first.paths, purge=True)
+    assert short_id(first.paths.run_id) == "aaaa"
+    delete(first.paths, force=True)
     second = Harness(project, new=True)
     try:
-        assert second.paths.run_id == "aaaa"
+        assert short_id(second.paths.run_id) == "aaaa"
         assert second.history.load() == []
         assert second.run_state.expected_tip == git(project, "rev-parse", "HEAD").stdout.strip()
     finally:

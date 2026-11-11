@@ -60,12 +60,12 @@ class TestReportCommand:
         (tmp_path / "autohelix.yaml").write_text("goal: test\n")
         (tmp_path / ".autohelix").mkdir()
 
-        result = runner.invoke(main, ["report", str(tmp_path)])
+        result = runner.invoke(main, ["report", "-p", str(tmp_path)])
         assert result.exit_code == 1
         assert "No iterations" in result.output
 
     def test_no_config_exits(self, runner, tmp_path):
-        result = runner.invoke(main, ["report", str(tmp_path)])
+        result = runner.invoke(main, ["report", "-p", str(tmp_path)])
         assert result.exit_code == 1
         assert "Config not found" in result.output
 
@@ -85,7 +85,7 @@ class TestReportCommand:
 
     def test_writes_report(self, runner, project):
         with patch("autohelix.agents.create_agent", return_value=self._agent("# Summary\nGood run.")):
-            result = runner.invoke(main, ["report", str(project)])
+            result = runner.invoke(main, ["report", "-p", str(project)])
         assert result.exit_code == 0, result.output
         assert (RunPaths(project).output / "report.md").read_text() == "# Summary\nGood run."
         info = read_report_info(project)
@@ -97,7 +97,7 @@ class TestReportCommand:
             (kwargs["worktree_path"] / "autohelix.yaml").write_text("goal: changed\n")
         touch = change
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok", also=touch)):
-            result = runner.invoke(main, ["report", str(project)])
+            result = runner.invoke(main, ["report", "-p", str(project)])
         assert "changed accepted code files" in result.output
         assert "autohelix.yaml" in result.output
 
@@ -105,7 +105,7 @@ class TestReportCommand:
         config = project / "autohelix.yaml"
         config.write_text(config.read_text() + "agent:\n  timeout_seconds: 36000\n")
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok")) as create:
-            runner.invoke(main, ["report", str(project)])
+            runner.invoke(main, ["report", "-p", str(project)])
         assert create.call_args[0][0].timeout_seconds == 15 * 60
 
     def test_keeps_old_report_when_agent_writes_nothing(self, runner, project):
@@ -113,7 +113,7 @@ class TestReportCommand:
         out.mkdir(parents=True)
         (out / "report.md").write_text("old")
         with patch("autohelix.agents.create_agent", return_value=self._agent(None)):
-            result = runner.invoke(main, ["report", str(project)])
+            result = runner.invoke(main, ["report", "-p", str(project)])
         assert result.exit_code == 1
         assert (out / "report.md").read_text() == "old"
 
@@ -132,7 +132,7 @@ class TestParallelGuard:
             {"name": "worker-2", "worktree": "/tmp/proj-parallel/worker-2", "branch": "parallel/worker-2"},
         ])
 
-        result = runner.invoke(main, ["report", str(tmp_path)])
+        result = runner.invoke(main, ["report", "-p", str(tmp_path)])
         assert result.exit_code == 1
         assert "run with `autohelix parallel`" in result.output
         assert "/tmp/proj-parallel/worker-1" in result.output
@@ -144,7 +144,7 @@ class TestParallelGuard:
         (tmp_path / "autohelix.yaml").write_text("goal: test\n")
         (tmp_path / ".autohelix").mkdir()
 
-        result = runner.invoke(main, ["report", str(tmp_path)])
+        result = runner.invoke(main, ["report", "-p", str(tmp_path)])
         assert result.exit_code == 1
         assert "autohelix parallel" not in result.output
 
@@ -155,7 +155,7 @@ class TestParallelGuard:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("{not valid json")
 
-        result = runner.invoke(main, ["report", str(tmp_path)])
+        result = runner.invoke(main, ["report", "-p", str(tmp_path)])
         assert result.exit_code == 1
         # No crash, no parallel warning — just the normal empty-state message.
         assert "No iterations" in result.output

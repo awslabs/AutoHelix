@@ -19,7 +19,7 @@ def initialized_project(tmp_path):
     """A project with a selected run."""
     paths = RunPaths(tmp_path, "test-1234")
     paths.run_dir.mkdir(parents=True)
-    write_json(paths.identity, {"schema": 1, "id": paths.run_id, "lifecycle": "open"})
+    write_json(paths.identity, {"schema": 1, "id": paths.run_id})
     (paths.root / "current").write_text(paths.run_id + "\n")
     return tmp_path
 

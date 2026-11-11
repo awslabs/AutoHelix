@@ -201,8 +201,11 @@ def test_viewer_index_is_private_and_one_per_run(viewer, integration_project):  
 @pytest.mark.parametrize("phase, shown", [("preparing checks", True), ("checks", True), ("review", True),
                                            ("agent", False), ("between iterations", False)])
 def test_frozen_candidate_diff_only_once_this_iteration_froze(viewer, integration_project, phase, shown):  # noqa: F811
-    # After the run, the pin holds iteration 2's tree; iteration 3 has no copy yet.
+    # As if a segment were live: the pin holds iteration 2's tree; iteration 3 has no copy yet.
     paths = RunPaths(integration_project)
+    tree = subprocess.run(["git", "rev-parse", f"{paths.ref}^{{tree}}"], cwd=integration_project,
+                          capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(["git", "update-ref", paths.pin, tree], cwd=integration_project, check=True)
     status = json.loads(paths.status.read_text())
     paths.status.write_text(json.dumps({**status, "iteration": 3, "phase": phase}))
     diff = json.loads(get(viewer + "/api/iteration/3")[1])["diff"]
@@ -310,7 +313,7 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
         runs = {r["id"]: r for r in listing["runs"]}
         assert set(runs) == {first.paths.run_id, second.paths.run_id}
         one, two = runs[first.paths.run_id], runs[second.paths.run_id]
-        assert (one["lifecycle"], one["status"]["state"]) == ("open", "finished")
+        assert (one["archived"], one["status"]["state"]) == (False, "finished")
         progress = one["progress"]
         assert (progress["iterations"], progress["max_iterations"], progress["max_cost_usd"]) == (2, 2, None)
         assert progress["seconds"] > 0
@@ -386,7 +389,7 @@ def _cli(*args):
 
 @pytest.fixture
 def measured_project(integration_project):  # noqa: F811
-    """Two runs with a metric: one finished and landed, one manual and unlanded, one abandoned."""
+    """Three runs with a metric: one finished and landed, one manual and unlanded, one archived."""
     config = integration_project / "autohelix.yaml"
     config.write_text(config.read_text() + """
 metrics:
@@ -401,8 +404,8 @@ metrics:
     second.run(max_iterations=1, report=False)
     gone = Harness(integration_project, new=True, land_mode="manual")
     gone.run(max_iterations=1, report=False)
-    abandon = _cli("abandon", gone.paths.run_id, "-p", integration_project)
-    assert abandon.exit_code == 0, abandon.output
+    archived = _cli("archive", gone.paths.run_id, "-p", integration_project)
+    assert archived.exit_code == 0, archived.output
     return integration_project, first.paths.run_id, second.paths.run_id, gone.paths.run_id
 
 
@@ -410,20 +413,20 @@ def test_dashboard_json_and_print(measured_project):
     from autohelix.viewer import ProjectRuns
 
     project, first, second, gone = measured_project
-    data = json.loads(_cli("dashboard", project, "--json").output)
+    data = json.loads(_cli("dashboard", "-p", project, "--json").output)
     assert data.keys() == ProjectRuns(project).runs().keys()  # the page's payload, schema 1 (checked above)
     runs = {r["id"]: r for r in data["runs"]}
-    assert set(runs) == {first, second, gone}  # abandoned runs included
+    assert set(runs) == {first, second, gone}  # archived runs included
     assert runs[first]["metrics"]["values"] == [
         {"name": "speed", "value": 120, "baseline": 100, "direction": "higher"}]
     assert runs[second]["landing"] == {"commits": 1, "fast_forward": True}
 
-    result = _cli("dashboard", project, "--print")
+    result = _cli("dashboard", "-p", project, "--print")
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
     assert lines[0].startswith(f"test_project  ") and lines[0].endswith(" @ " + subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip())
-    assert lines[1].startswith("2 open runs") and lines[1].endswith("1 abandoned (not listed; see --json)")
+    assert lines[1].startswith("2 runs") and lines[1].endswith("1 archived (not listed; see --json)")
     assert lines[3].split() == ["RUN", "STATUS", "ITER", "speed", "LANDING", "ACTIVE"]
     rows = {line.split()[0]: line for line in lines[4:] if not line.startswith(" ")}
     assert set(rows) == {first, second}
@@ -431,23 +434,23 @@ def test_dashboard_json_and_print(measured_project):
     assert rows[second].split()[1:7] == ["finished", "1/1", "130.0", "1", "commit", "to"]
     assert "  autohelix.yaml" in result.output
 
-    assert "no run has metric" in _cli("dashboard", project, "--print", "--metric", "nope").output.lower()
-    assert _cli("dashboard", project, "--metric", "speed").exit_code == 2
-    assert _cli("dashboard", project, "--json", "--print").exit_code == 2
+    assert "no run has metric" in _cli("dashboard", "-p", project, "--print", "--metric", "nope").output.lower()
+    assert _cli("dashboard", "-p", project, "--metric", "speed").exit_code == 2
+    assert _cli("dashboard", "-p", project, "--json", "--print").exit_code == 2
 
 
 def test_view_json_and_print(measured_project, monkeypatch):
     project, first, second, gone = measured_project
-    data = json.loads(_cli("view", project, "--json", "--run", first).output)
+    data = json.loads(_cli("view", first, "-p", project, "--json").output)
     assert data["project"] == "test_project"
     run = data["run"]
     assert run["id"] == first and run["goal"] == "Test the integration"
     assert [(r["iteration"], r["accepted"], r["metrics"]) for r in run["iterations"]] == [
         (0, True, {"speed": 100}), (1, True, {"speed": 110}), (2, True, {"speed": 120})]
     # The default run is the selected one.
-    assert json.loads(_cli("view", project, "--json").output)["run"]["id"] == RunPaths(project).run_id
+    assert json.loads(_cli("view", "-p", project, "--json").output)["run"]["id"] == RunPaths(project).run_id
 
-    text = _cli("view", project, "--print", "--run", first).output
+    text = _cli("view", first, "-p", project, "--print").output
     lines = text.splitlines()
     assert lines[0] == f"{first} · finished"
     assert lines[1].startswith("autohelix.yaml · ") and lines[1].endswith(f"iterations 2/2 · landed ({data['branch']})")
@@ -458,26 +461,26 @@ def test_view_json_and_print(measured_project, monkeypatch):
     assert table[0].split() == ["ITER", "OK", "speed", "COST", "TIME", "SUMMARY"]
     assert table[1].split()[:3] == ["0", "✓", "100.0"] and table[1].endswith("baseline")
 
-    missing = _cli("view", project, "--json", "--run", "missing-zzzz")
+    missing = _cli("view", "missing-zzzz", "-p", project, "--json")
     assert missing.exit_code == 1 and "missing-zzzz" in missing.output
 
     # --config is relative to the shell's folder, shown relative to the project.
     other = project / "other.yaml"
     other.write_text((project / "autohelix.yaml").read_text().replace("Test the integration", "  Other goal\n"))
     monkeypatch.chdir(project.parent)
-    run = json.loads(_cli("view", project.name, "--json", "--run", first, "--config", f"{project.name}/other.yaml").output)["run"]
+    run = json.loads(_cli("view", first, "-p", project.name, "--json", "--config", f"{project.name}/other.yaml").output)["run"]
     assert (run["config_file"], run["goal"]) == ("other.yaml", "Other goal")
     assert run["metrics"]["values"][0]["direction"] == "higher"
 
     other.write_text((project / "autohelix.yaml").read_text().replace("Test the integration", '" "'))
-    printed = _cli("view", project.name, "--print", "--run", first, "--config", f"{project.name}/other.yaml")
+    printed = _cli("view", first, "-p", project.name, "--print", "--config", f"{project.name}/other.yaml")
     assert printed.exit_code == 0 and "Goal:" not in printed.output
 
 
 def test_print_shows_the_iteration_under_way():
     from autohelix.run_table import format_run, format_runs
 
-    run = {"id": "r1", "lifecycle": "open", "config_file": "a.yaml", "accepted": 1, "target_branch": None,
+    run = {"id": "r1", "config_file": "a.yaml", "accepted": 1, "target_branch": None,
            "landing": None, "last_activity": 990, "metrics": None, "goal": None,
            "status": {"state": "running", "phase": "checks", "iteration": 3,
                       "iteration_started_at": 900, "phase_started_at": 970},

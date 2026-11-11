@@ -1,14 +1,14 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Persistent `.autohelix/` state management: git exclusions, archival, active config.
+"""Persistent `.autohelix/` state management: git exclusions, active config.
 
 Utilities for the state that lives across runs under a project's `.autohelix/`
 directory — as opposed to per-run scaffolding (runs/, runtime/bin, etc.),
 which the harness manages directly.
 
 These helpers have no CLI or harness dependency, so both
-the CLI commands (`init`, `clear`, `report`) and the harness can import them
+the CLI commands (`init`, `report`) and the harness can import them
 without creating an import cycle.
 """
 

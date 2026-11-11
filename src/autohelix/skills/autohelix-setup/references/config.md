@@ -147,12 +147,10 @@ runtime expects a numeric iteration limit.
 
 `budget.time` measures elapsed time in the iteration loop, including its checks
 and reviews; initial preflight and baseline work happen before that timer.
-Total time/cost budgets are checked after an iteration finishes, so they can
-overshoot rather than interrupt that iteration. Prior recorded usage counts on
-resume. The cost threshold is also checked before starting another iteration;
-an already-exhausted cost budget starts no new attempt. The time budget is only
-checked after an iteration, so an already-exhausted time budget can still start one
-more attempt.
+Total time/cost budgets are checked between iterations, so they can
+overshoot rather than interrupt an iteration. Prior recorded usage counts on
+resume, and both are checked before starting another iteration: an
+already-exhausted cost or time budget starts no new attempt.
 
 `iteration_time` limits the main-agent call and provides remaining-time feedback,
 not a deadline for the whole evaluation/review cycle. `agent.timeout_seconds`
@@ -171,14 +169,18 @@ the user's supervising/setup agent are separate.
 These boundaries make the budget a run-control threshold, not an absolute
 all-inclusive financial cap.
 
-Run with `autohelix run --path PROJECT -n 3`. `-n` selects the total iteration
-limit for that run, including iterations already in history; it does not add
-three iterations to an existing run.
+Start with `autohelix run --path PROJECT -n 3`: always a new run, of three
+iterations. Continue one with `autohelix resume [RUN_ID] --path PROJECT`:
+`--until N` runs up to iteration N (a total; repeating it is harmless), `-n 3`
+runs three more. Either overrides only `budget.iterations`; cost and time stay
+run totals.
 
-`autohelix clear` abandons the current run, retaining its history and unlanded commits.
-It leaves code unchanged; use `autohelix run --new` to start a separate run.
-Resuming, clearing history, and resetting code or external artifacts are
-different operations. Explain the intended operation before changing state.
+`autohelix archive RUN_ID` hides a run and stops a bare `resume` from picking
+it, retaining its history and unlanded commits; `autohelix delete RUN_ID`
+removes its history (with `--force`, even unlanded commits). Both leave code
+unchanged. Resuming, archiving, deleting, and resetting code or external
+artifacts are different operations. Explain the intended operation before
+changing state.
 
 ## Explain the generated configuration
 

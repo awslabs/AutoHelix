@@ -14,7 +14,8 @@ import click
 from autohelix.config import load_config
 from autohelix.harness import Harness
 from autohelix.history import History
-from autohelix.runs import RunPaths, RunLock, abandon as abandon_run, land as land_run, run_tip, git
+from autohelix.runs import (NoRunToResume, RunPaths, RunLock, archive as archive_run, delete as delete_run,
+                            land as land_run, resolve_run, run_tip, short_id)
 from autohelix.formatting import format_total_cost
 from autohelix import run_table
 from autohelix.skill import skill
@@ -153,53 +154,101 @@ def init(path: str):
     click.echo(f"  2. autohelix run")
 
 
-@main.command()
-@click.option("--path", "-p", type=click.Path(exists=True), default=".", help="Project directory (default: current dir)")
-@click.option("--iterations", "-n", type=int, help="Maximum iterations to run")
-@click.option("--verbose", is_flag=True, help="Show agent command details and heartbeat messages")
-@click.option("--config", "-c", "config_file", type=click.Path(exists=True), help="Path to config file (default: autohelix.yaml in project dir)")
-@click.option("--no-report", is_flag=True, help="Don't write the run summary when the run finishes")
-@click.option("--new", is_flag=True, help="Start a new run instead of resuming this config.")
-@click.option("--run", "run_id", help="Resume an exact run id (or current).")
-@click.option("--name", help="Readable prefix for a new run id.")
-@click.option("--land", "land_mode", type=click.Choice(["auto", "manual"]), help="When to fast-forward the target branch (default auto).")
-def run(path: str, iterations: int | None, verbose: bool, config_file: str | None,
-        no_report: bool, new: bool, run_id: str | None, name: str | None, land_mode: str | None):
-    """Run the optimization loop.
+def _run_id(project: Path, value: str | None) -> str | None:
+    """A run id as typed (full, or its last part), checked; None follows `current`."""
+    if value is None:
+        return None
+    try:
+        return resolve_run(project, value)
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
 
-    Reads configuration from autohelix.yaml (or --config).
-    Requires 'autohelix init' to have been run first.
-    """
+
+def _segment_options(command):
+    """The options `run` and `resume` share."""
+    for option in reversed([
+        click.option("--path", "-p", type=click.Path(exists=True, file_okay=False), default=".",
+                     help="Project directory (default: current dir)"),
+        click.option("--config", "-c", "config_file", type=click.Path(exists=True, dir_okay=False),
+                     help="Config file (default: autohelix.yaml; for resume, the run's own)"),
+        click.option("--verbose", is_flag=True, help="Show agent command details and heartbeat messages"),
+        click.option("--no-report", is_flag=True, help="Don't write the run summary when the run finishes"),
+        click.option("--land", "land_mode", type=click.Choice(["auto", "manual"]),
+                     help="Fast-forward the target branch at the end (auto, the default) or leave it to "
+                          "`autohelix land` (manual)."),
+    ]):
+        command = option(command)
+    return command
+
+
+def _start(path: str, config_file: str | None, **selection) -> Harness:
     project_path = Path(path).resolve()
-    autohelix_dir = project_path / ".autohelix"
-
-    if not autohelix_dir.exists():
+    if not (project_path / ".autohelix").exists():
         click.echo("Error: AutoHelix not initialized.")
         click.echo("Run 'autohelix init' first.")
         raise SystemExit(1)
-
     # Refuse before the harness creates logs, settings, or agent state.
     try:
         ensure_runtime_ignored(project_path)
     except GitExcludeError as e:
         raise click.ClickException(str(e)) from e
-
     config_path = Path(config_file).resolve() if config_file else None
     try:
-        if new and run_id:
-            raise click.UsageError("--new and --run cannot be combined")
-        harness = Harness(project_path, verbose=verbose, config_file=config_path,
-                          new=new, run_id=run_id, name=name, land_mode=land_mode)
+        return Harness(project_path, config_file=config_path, **selection)
+    except NoRunToResume as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(3)
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
     except FileNotFoundError as e:
         click.echo(f"Error: {e}")
         click.echo("Run 'autohelix init' first, then edit autohelix.yaml.")
         raise SystemExit(1)
+
+
+def _segment(harness: Harness, iterations: int | None, report: bool) -> None:
     try:
-        harness.run(max_iterations=iterations, report=not no_report)
+        harness.run(max_iterations=iterations, report=report)
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
+
+
+@main.command()
+@_segment_options
+@click.option("--iterations", "-n", type=click.IntRange(min=1), help="Iterations to run (default: budget.iterations)")
+@click.option("--name", help="Readable part of the new run's id.")
+def run(path: str, config_file: str | None, verbose: bool, no_report: bool, land_mode: str | None,
+        iterations: int | None, name: str | None):
+    """Start a new run of the optimization loop.
+
+    Always a new run, with its own budget, notes and history; to continue one,
+    use `autohelix resume`. Reads autohelix.yaml (or --config).
+    """
+    harness = _start(path, config_file, verbose=verbose, new=True, name=name, land_mode=land_mode)
+    _segment(harness, iterations, not no_report)
+
+
+@main.command()
+@click.argument("run_id", required=False)
+@_segment_options
+@click.option("--iterations", "-n", type=click.IntRange(min=1), help="How many more iterations to run.")
+@click.option("--until", type=click.IntRange(min=1), help="Run up to iteration N (repeatable; for scripts).")
+def resume(run_id: str | None, path: str, config_file: str | None, verbose: bool, no_report: bool,
+           land_mode: str | None, iterations: int | None, until: int | None):
+    """Continue a run: RUN_ID (or its last part), else this config's latest.
+
+    The latest is the most recently active run for the config that isn't
+    archived, preferring runs that captured their baseline. Without -n or --until it runs to
+    budget.iterations; cost and time budgets stay run totals from the config.
+    Exits 3 when there is no run to resume.
+    """
+    if iterations and until:
+        raise click.UsageError("Use either -n (more iterations) or --until (up to an iteration), not both.")
+    selected = _run_id(Path(path), run_id)
+    harness = _start(path, config_file, verbose=verbose, run_id=selected, create=False, land_mode=land_mode)
+    if iterations:
+        until = harness.history.get_last_iteration() + iterations
+    _segment(harness, until, not no_report)
 
 
 @main.command()
@@ -209,41 +258,55 @@ def run(path: str, iterations: int | None, verbose: bool, config_file: str | Non
 def land(run_id: str | None, path: str, into: str | None):
     """Fast-forward a target branch to this run's accepted code."""
     try:
-        paths = RunPaths(Path(path), run_id)
+        paths = RunPaths(Path(path), _run_id(Path(path), run_id))
         if not paths.run_id:
             raise RuntimeError("No current run.")
         with RunLock(paths.lock):
             data = paths.read_identity()
             land_run(paths, data, run_tip(paths, data), into)
-        click.echo(f"Landed {paths.run_id}.")
+        click.echo(f"Landed {short_id(paths.run_id)}.")
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
 
 
 @main.command()
-@click.argument("run_id", required=False)
+@click.argument("run_ids", nargs=-1, required=True)
 @click.option("--path", "-p", type=click.Path(exists=True), default=".")
-@click.option("--purge", is_flag=True, help="Delete this run's ref and files permanently.")
-def abandon(run_id: str | None, path: str, purge: bool):
-    """Abandon a run, retaining its history and any unlanded commits."""
-    try:
-        paths = RunPaths(Path(path), run_id)
-        if not paths.run_id:
-            raise RuntimeError("No current run.")
-        abandon_run(paths, purge=purge, warn=lambda message: click.echo(f"Warning: {message}", err=True))
-        click.echo(f"Abandoned {paths.run_id}{' and purged its state' if purge else ''}.")
-        if not purge and git(paths.project, "rev-parse", "--verify", paths.ref, check=False).returncode == 0:
-            click.echo(f"Unlanded commits remain on {paths.ref}. Recover with git merge autohelix/{paths.run_id}.")
-    except RuntimeError as e:
-        raise click.ClickException(str(e)) from e
+@click.option("--undo", is_flag=True, help="Bring archived runs back.")
+def archive(run_ids: tuple[str, ...], path: str, undo: bool):
+    """Set runs aside: hidden from the run list and skipped by a bare resume.
+
+    Their history, notes and commits stay; `autohelix resume RUN_ID` (or
+    --undo) brings one back.
+    """
+    project = Path(path)
+    for value in run_ids:
+        paths = RunPaths(project, _run_id(project, value))
+        try:
+            archive_run(paths, undo=undo)
+        except RuntimeError as e:
+            raise click.ClickException(str(e)) from e
+        click.echo(f"{'Unarchived' if undo else 'Archived'} {short_id(paths.run_id)}.")
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True), default=".")
-def clear(path: str):
-    """Alias for abandoning the current run; code is unchanged."""
-    from click import get_current_context
-    get_current_context().invoke(abandon, run_id=None, path=path, purge=False)
+@click.argument("run_ids", nargs=-1, required=True)
+@click.option("--path", "-p", type=click.Path(exists=True), default=".")
+@click.option("--force", is_flag=True, help="Also delete runs with unlanded commits (they are lost).")
+def delete(run_ids: tuple[str, ...], path: str, force: bool):
+    """Delete runs: their history, notes, logs, ref and leftover copies.
+
+    Refuses while a run is running, and for runs with commits not on their
+    target branch unless --force. To keep a run but hide it, use archive.
+    """
+    project = Path(path)
+    for value in run_ids:
+        paths = RunPaths(project, _run_id(project, value))
+        try:
+            delete_run(paths, force=force, warn=lambda message: click.echo(f"Warning: {message}", err=True))
+        except RuntimeError as e:
+            raise click.ClickException(str(e)) from e
+        click.echo(f"Deleted {short_id(paths.run_id)}.")
 
 
 @main.command(context_settings={"ignore_unknown_options": True})
@@ -319,7 +382,8 @@ def parallel(worker_configs: tuple[str, ...], path: str, sync_every: int | None,
     if sync_every is None:
         sync_every = 1
 
-    forbidden = {"-n", "--iterations", "-c", "--config", "-p", "--path"}
+    # Workers run `autohelix resume <id> --until N`: run-only and selection flags would fail there.
+    forbidden = {"-n", "--iterations", "--until", "-c", "--config", "-p", "--path", "--name", "--new", "--run"}
     for arg in run_args:
         flag = arg.split("=", 1)[0]
         if flag in forbidden:
@@ -364,7 +428,7 @@ def parallel(worker_configs: tuple[str, ...], path: str, sync_every: int | None,
     console.print(f"\n  [bold]{heading}[/bold]")
     for i, w in enumerate(ranked, start=1):
         prefix = f"   {i}." if is_ranked else "   •"
-        hist = History(w.worktree)
+        hist = History(w.worktree, w.run_id)
         results = hist.load()
         usages = hist.cost_usages
         cost_text = format_total_cost(usages) if usages else None
@@ -475,7 +539,7 @@ def ask(question: str, yes_means: str | None, no_means: str | None, rubric: str 
 @main.command()
 @click.argument("message")
 @click.option("--path", "-p", type=click.Path(exists=True), default=".", help="Project directory")
-@click.option("--run", "run_id", help="Run id (default current).")
+@click.option("--run", "run_id", help="Run id or its last part (default: the current run).")
 def hint(message: str, path: str, run_id: str | None):
     """Send a hint to the running agent (picked up next iteration).
 
@@ -486,7 +550,7 @@ def hint(message: str, path: str, run_id: str | None):
 
     project_path = Path(path).resolve()
     try:
-        paths = RunPaths(project_path, run_id)
+        paths = RunPaths(project_path, _run_id(project_path, run_id))
         if not paths.run_id:
             raise RuntimeError("No current run; start a run first.")
         paths.read_identity()
@@ -514,17 +578,18 @@ def _snapshot(as_json: bool, as_print: bool) -> bool:
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
+@click.argument("run_id", required=False)
+@click.option("--path", "-p", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
 @click.option("--json", "as_json", is_flag=True, help=_JSON_HELP)
 @click.option("--print", "as_print", is_flag=True, help=_PRINT_HELP)
 @click.option("--port", type=click.IntRange(0, 65535), default=8765, show_default=True)
 @click.option("--config", "-c", "config_file", type=click.Path(exists=True, dir_okay=False, path_type=Path),
               help="Config file (default: from last run, or autohelix.yaml)")
 @click.option("--open", "open_browser", is_flag=True, help="Open the viewer in a browser.")
-@click.option("--run", "run_id", help="Run id (default current).")
-def view(path: Path, as_json: bool, as_print: bool, port: int, config_file: Path | None,
-         open_browser: bool, run_id: str | None):
-    """One run: --json or --print a snapshot, else a live web page.
+def view(run_id: str | None, path: Path, as_json: bool, as_print: bool, port: int, config_file: Path | None,
+         open_browser: bool):
+    """One run (RUN_ID or its last part, default the current run): --json or
+    --print a snapshot, else a live web page.
 
     --json and --print show the run's status, budgets, latest accepted
     metrics, landing state and one row per iteration, then exit.
@@ -534,6 +599,7 @@ def view(path: Path, as_json: bool, as_print: bool, port: int, config_file: Path
     all runs at / (see `autohelix dashboard`).
     Over SSH: ssh -L 8765:127.0.0.1:8765 host, then open http://localhost:8765.
     """
+    run_id = _run_id(path, run_id)
     try:
         selected = RunPaths(path, run_id).run_id
     except RuntimeError as error:
@@ -544,7 +610,7 @@ def view(path: Path, as_json: bool, as_print: bool, port: int, config_file: Path
         runs = ProjectRuns(path)
         if not selected or not runs.exists(selected):
             raise click.ClickException(f"No run {run_id!r} in {path.resolve()}" if run_id else
-                                       "No current run; start one with `autohelix run` or pick one with --run.")
+                                       "No current run; start one with `autohelix run` or name one.")
         try:
             data = runs.run(selected, config_file)
         except RuntimeError as error:
@@ -556,7 +622,7 @@ def view(path: Path, as_json: bool, as_print: bool, port: int, config_file: Path
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
+@click.option("--path", "-p", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
 @click.option("--json", "as_json", is_flag=True, help=_JSON_HELP)
 @click.option("--print", "as_print", is_flag=True, help=_PRINT_HELP)
 @click.option("--metric", help="With --print: the metric column (default: the most recent run's first).")
@@ -567,7 +633,7 @@ def dashboard(path: Path, as_json: bool, as_print: bool, metric: str | None, por
 
     --json and --print list every run with its status, iterations of the
     budget, latest accepted metrics, landing state and last activity, then
-    exit. --print leaves abandoned runs out (--json has them).
+    exit. --print leaves archived runs out (--json has them).
 
     Without them, serves a live page on 127.0.0.1; each run links to its
     `autohelix view` page. Over SSH: ssh -L 8765:127.0.0.1:8765 host, then
@@ -581,7 +647,7 @@ def dashboard(path: Path, as_json: bool, as_print: bool, metric: str | None, por
     from autohelix.viewer import ProjectRuns
 
     data = ProjectRuns(path).runs()
-    names = run_table.metric_names([r for r in data["runs"] if r.get("lifecycle") != "abandoned"])
+    names = run_table.metric_names([r for r in data["runs"] if not r.get("archived")])
     if metric and metric not in names:
         raise click.ClickException(f"No run has metric {metric!r}" + (f"; known: {', '.join(names)}" if names else ""))
     click.echo(json.dumps(data, indent=2) if as_json else run_table.format_runs(data, metric=metric), nl=as_json)
@@ -608,12 +674,12 @@ def _serve(project: Path, port: int, open_browser: bool, page: str, **options) -
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True), default=".")
-@click.option("--run", "run_id", help="Run id (default current).")
-def watch(path: str, run_id: str | None):
-    """Follow a run in the terminal.
+@click.argument("run_id", required=False)
+@click.option("--path", "-p", type=click.Path(exists=True), default=".")
+def watch(run_id: str | None, path: str):
+    """Follow a run (RUN_ID or its last part, default the current run) in the terminal.
 
-    Run this in a second terminal while `autohelix run` is active. Shows what the
+    Run this in a second terminal while a run is active. Shows what the
     run is doing and the live output of the agent, reviewer or summary agent.
     Keeps waiting when the run stops; Ctrl-C stops watching (not the run).
     """
@@ -624,6 +690,7 @@ def watch(path: str, run_id: str | None):
 
     console = Console()
     project_path = Path(path).resolve()
+    run_id = _run_id(project_path, run_id)
     if _parallel_marker_path(project_path).exists() and read_run_status(project_path) is None:
         _warn_if_parallel(project_path, console)  # lists the workers to watch instead
         raise SystemExit(1)
@@ -642,14 +709,14 @@ def watch(path: str, run_id: str | None):
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True), default=".")
-@click.option("--config", "-c", "config_file", type=click.Path(exists=True), help="Path to config file (default: from last run, or autohelix.yaml)")
-@click.option("--run", "run_id", help="Run id (default current).")
-def report(path: str, config_file: str | None, run_id: str | None):
-    """Write (or rewrite) the run summary.
+@click.argument("run_id", required=False)
+@click.option("--path", "-p", type=click.Path(exists=True), default=".")
+@click.option("--config", "-c", "config_file", type=click.Path(exists=True), help="Path to config file (default: the run's own)")
+def report(run_id: str | None, path: str, config_file: str | None):
+    """Write (or rewrite) a run's summary (RUN_ID or its last part, default the current run).
 
     One agent call reads the run's history, notes, reviews, logs and commits, and writes
-    the selected run's output/report.md. `autohelix run` does this automatically when a run
+    the selected run's output/report.md. `run` and `resume` do this automatically when a run
     finishes; use this after an interrupted run or to regenerate it.
     """
     from rich.console import Console
@@ -658,6 +725,7 @@ def report(path: str, config_file: str | None, run_id: str | None):
 
     console = Console()
     project_path = Path(path).resolve()
+    run_id = _run_id(project_path, run_id)
     resolved_config = Path(config_file).resolve() if config_file else read_stored_config_path(project_path, run_id)
     try:
         config, _ = load_config(project_path, config_file=resolved_config)

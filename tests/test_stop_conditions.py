@@ -312,7 +312,7 @@ def test_parallel_worker_stops_early_and_respects_report_option(tmp_path, monkey
     monkeypatch.setattr(parallel, "sync_own_notes", lambda w: None)
     monkeypatch.setattr(parallel, "_write_worker_report", lambda w: reports.append(w.name))
     monkeypatch.setattr(parallel, "read_run_status",
-                        lambda p: {"stop_reason": reason} if len(segments) >= 2 else {})
+                        lambda *a: {"stop_reason": reason} if len(segments) >= 2 else {})
     parallel.run_worker(worker, sync_every=1, verbose=False,
                         run_args=["--no-report"] if no_report else None)
     assert worker.error is None

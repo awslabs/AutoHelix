@@ -95,12 +95,12 @@ def test_watch_exits_with_hints_instead_of_waiting(tmp_path):
 
     from autohelix.cli import main
 
-    result = CliRunner().invoke(main, ["watch", str(tmp_path)])
+    result = CliRunner().invoke(main, ["watch", "-p", str(tmp_path)])
     assert result.exit_code == 1 and "No .autohelix/" in result.output
     marker = tmp_path / ".autohelix" / "parallel" / "run.json"
     marker.parent.mkdir(parents=True)
     marker.write_text(json.dumps({"workers": [{"name": "w1", "worktree": "/tmp/w1"}]}))
-    result = CliRunner().invoke(main, ["watch", str(tmp_path)])
+    result = CliRunner().invoke(main, ["watch", "-p", str(tmp_path)])
     assert result.exit_code == 1 and "/tmp/w1" in result.output
 
 

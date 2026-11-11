@@ -109,7 +109,7 @@ committed state required to launch, starts the loop, and monitors it through
 termination. It can send evidence-based `autohelix hint` messages for subsequent
 iterations. The handoff should explain accepted changes, actual measurements,
 failures, evidence paths, and accounting limits. Ending this execution does not
-mean an open-ended experiment cannot be resumed.
+mean an open-ended experiment cannot be continued with `autohelix resume`.
 
 You can also combine preparation and execution in one request when you want the
 agent to set up and manage the experiment from scratch.
@@ -179,19 +179,28 @@ You'll see a live display of agent activity, followed by constraint/metric resul
 
 Use `autohelix watch` in a second terminal for detailed live output.
 
-### 4. Reset
+### 4. Continue, set aside or start over
 
-`autohelix clear` only archives run state (history, notes, logs) — your **code stays as
-is** (every iteration is still committed):
+Each `autohelix run` starts a **new** run, with fresh notes and budget. To give
+the same run more iterations, resume it:
 
 ```bash
-autohelix clear
+autohelix resume -n 5                # five more iterations of this config's latest run
+autohelix resume k3f9                # a specific run (its id, or the last part of it)
+```
+
+Runs you're done with stay listed in `autohelix dashboard`; archive them to hide
+them, or delete them for good. Your **code stays as is** either way:
+
+```bash
+autohelix archive k3f9               # hidden, skipped by a bare resume; history kept
+autohelix delete k3f9                # history, notes and logs removed
 ```
 
 For a full reset to before iteration 1:
 
 ```bash
-autohelix clear                      # 1. archive history, notes, logs (code unchanged)
+autohelix delete --force k3f9        # 1. remove the run (--force: even with unlanded commits)
 git reset --hard <initial-commit>    # 2. roll code back to before the agent's iterations
 rm -rf /path/to/artifacts/<task>/*   # 3. only if you configured an external artifacts path
 ```

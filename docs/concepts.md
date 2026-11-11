@@ -75,7 +75,7 @@ made; no stash, no remote). This means:
 - In a checks copy, plain `git diff` shows changes to tracked files; new files show as
   untracked. The complete change is in `.autohelix/candidate.diff`.
 - Accepted commits advance the run's hidden `refs/autohelix/<id>` first.
-- A process-held per-run lock prevents concurrent writing lifecycle operations.
+- A process-held per-run lock lets only one process write a run at a time.
 - PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo).
 - **A copy holds only committed files.** Commands get
   their tools from the environment AutoHelix started in: run it with your virtualenv
@@ -89,10 +89,13 @@ Copies live in
 `${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/<project>-<hash>/<id>/` and are deleted
 after each phase; the run's folder goes when a segment ends. To put them elsewhere (for
 example on a larger disk), set `AUTOHELIX_COPIES_ROOT` to an absolute path. Each run
-records the folder it used, so `view` and `abandon` find it from any shell. The
+records the folder it used, so `view` and `delete` find it from any shell. The
 folders below that root are private (mode 0700, owned by you); a shared root must be
-sticky like `/tmp`. Copies left by a run that crashed are removed when it resumes or
-is abandoned; with no run active, the whole `copies/` folder is safe to delete. A
+sticky like `/tmp`. Copies left by a process that was killed (or a machine that
+crashed) are removed at the start of the next `run` or `resume` in the project,
+and other projects' leftovers once their checkout has been gone for a day (each
+project's folder records which checkout it serves, and the machine); with no run
+active, the whole `copies/` folder is safe to delete. A
 baseline command that modifies the code it checks (for example a formatter without
 `--check`) stops the run with a setup error before any agent runs.
 
@@ -113,7 +116,7 @@ Key properties:
 - **Survive rejection** — notes are saved during final cleanup, so even rejected iterations contribute learnings
 - **Copied into agent copies** — the agent sees notes from all previous iterations
 - **Agent-managed** — the agent decides what to write and how to organize notes
-- **Retained on abandon** — `autohelix clear` aliases abandonment; `run --new` gives a new run separate state
+- **Per run** — each `autohelix run` starts with empty notes; `resume` continues a run's notes; `archive` keeps them, `delete` removes them
 
 Notes are the primary mechanism for the agent to build on previous attempts. They're more effective than full session context because the agent curates what's worth remembering.
 
@@ -191,7 +194,7 @@ Editing the template is also how you can keep an evaluation *out of the agent's 
 
 This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence — in testing, Claude declined to read an out-of-worktree eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: copies live outside the project, but the agent runs as you, so one that is determined (or explicitly told to cheat) can still reach the project and anything else on disk by absolute path. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
 
-## Run state and lifecycle
+## Runs and run state
 
 `.autohelix/` is gitignored locally; AutoHelix leaves `.gitignore` unchanged.
 `prompt.md` is project-wide, and `current` points to the selected run. State is
@@ -202,7 +205,7 @@ scoped to `.autohelix/runs/<id>/`:
 ├── prompt.md
 ├── current
 ├── runs/<id>/
-│   ├── run.json                # immutable identity + lifecycle metadata
+│   ├── run.json                # identity (base commit, target branch, config), archived flag
 │   ├── history.jsonl           # schema 1 result/core fields and model calls
 │   ├── notes/                  # agent memory; round-trips
 │   ├── observations/iter-N/    # stdout and captured artifacts
@@ -223,7 +226,11 @@ The agent still sees a small `.autohelix/` view inside its copy. Only `notes/`
 round-trips; observations, hints, peer notes and latest `review.md` are reference
 material. The review archive never enters a copy.
 
-A run resumes by config path or exact id. One invocation, called a **segment**,
+A run is a line of work: `autohelix run` starts one, `autohelix resume` continues
+one (by default the config's most recently active), `archive` sets one aside and
+`delete` removes it. A run has no other state: whether it is running comes from its
+lock, how its last segment ended from `status.json`, and whether it has landed from
+git. One invocation of `run` or `resume`, called a **segment**,
 holds a process lock through validation, final landing and report. Agent commits
 don't matter: the candidate is the agent copy's files. Acceptance commits exactly
 the checked tree, with the previous accepted tip as its parent; it leaves the
@@ -238,8 +245,9 @@ out elsewhere, and dirty files that would be overwritten require user resolution
 If the target moves during a segment, AutoHelix warns (in every landing mode),
 leaves it alone and asks for an explicit land after review. Unrelated dirty and staged files are preserved.
 
-If you reset the target behind accepted run code, auto landing would reapply that
-code. Use `autohelix abandon` to discard the old run before starting `run --new`.
+If you reset the target behind accepted run code, resuming that run with auto
+landing would reapply that code: `autohelix archive` it (or `delete` it) so a bare
+`resume` passes it over.
 Only first valid baseline capture requires a clean checkout, and every readiness
 check (clean checkout, editable patterns, preflight) runs before a first start
 allocates a run. The baseline, stop commands and summary run in copies of the
@@ -248,10 +256,10 @@ accepted code. Agents can still reach the project, its `.git`, other runs and
 logs possible escapes, without reverting user edits. Copies are correctness tools
 for cooperative agents, not a filesystem security boundary.
 
-Abandon retains evidence and unlanded commits, refuses future resume and leaves
-code intact. Purge removes the run directory/ref, while lock files remain outside
-that directory. Legacy top-level history must be moved or deleted before run;
-there is no automatic migration.
+Archive retains evidence and unlanded commits and leaves code intact. Delete
+removes the run directory and ref, while lock files remain outside that
+directory. Runs abandoned by earlier versions read as archived. Legacy top-level
+history must be moved or deleted before run; there is no automatic migration.
 
 ## Cost Tracking
 
