@@ -201,9 +201,9 @@ def test_interrupt_during_stop_check_still_records_the_merge(project, monkeypatc
     harness = Harness(project, verbose=False)
     original = harness._check_stop
 
-    def interrupt_after_baseline(cwd, iteration, metrics, project_path):
+    def interrupt_after_baseline(workspace, iteration, metrics):
         if iteration == 0:
-            return original(cwd, iteration, metrics, project_path)
+            return original(workspace, iteration, metrics)
         raise KeyboardInterrupt
 
     monkeypatch.setattr(harness, "_check_stop", interrupt_after_baseline)
@@ -262,9 +262,9 @@ def test_stop_check_failure_after_merge_keeps_the_iteration(project, monkeypatch
     harness = Harness(project, verbose=False)
     original = harness._check_stop
 
-    def fail_after_baseline(cwd, iteration, metrics, project_path):
+    def fail_after_baseline(workspace, iteration, metrics):
         if iteration == 0:
-            return original(cwd, iteration, metrics, project_path)
+            return original(workspace, iteration, metrics)
         raise OSError("disk full")
 
     monkeypatch.setattr(harness, "_check_stop", fail_after_baseline)

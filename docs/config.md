@@ -2,7 +2,7 @@
 
 All configuration lives in `autohelix.yaml` at the project root.
 
-**Paths are relative to the project root.** Every path in the config — commands in `constraints` and `metrics`, `capture` files, and the patterns in `scope.editable`/`scope.frozen` — is resolved inside the per-iteration git worktree, not the main repo. Use relative paths (`src/`, `tests/`, `results/log.json`); absolute paths point outside the worktree and will either be silently ignored, revert all the agent's work as out-of-scope, or crash the run. (The one exception is long-lived outputs you deliberately keep outside the repo — e.g. a model checkpoint directory — which are meant to live at a fixed absolute path.)
+**Paths are relative to the project root.** Every path in the config — commands in `constraints` and `metrics`, `capture` files, and the patterns in `scope.editable`/`scope.frozen` — is resolved inside the per-iteration copy of the code, not the main repo. Use relative paths (`src/`, `tests/`, `results/log.json`); absolute paths point outside the copy and will either be silently ignored, revert all the agent's work as out-of-scope, or crash the run. (The one exception is long-lived outputs you deliberately keep outside the repo — e.g. a model checkpoint directory — which are meant to live at a fixed absolute path.)
 
 ## Full Reference
 
@@ -238,7 +238,7 @@ Add `values:` to a command to pull numbers out of its output — those numbers r
 
 - `command` — shell command to run (required)
 - `values` — scalars to extract for display/gating (optional). Each is `name: direction` where direction is `higher` or `lower`
-- `capture` — list of file paths (relative to worktree) to copy into the history directory (optional)
+- `capture` — list of file paths (relative to the project) to copy from the checks copy into the history directory (optional). Captured files are outputs; they are never published
 - `capture_stdout` — save stdout to history (default `true`)
 - `timeout` — seconds (default 1800)
 
@@ -269,7 +269,7 @@ All captured output lives in `.autohelix/runs/<id>/observations/iter-N/`:
 - `stdout.txt` — command stdout+stderr (or `stdout-0.txt`, `stdout-1.txt` for multiple commands)
 - Captured files are copied by basename
 
-The agent can read these at any time from the worktree.
+The agent can read these at any time from its copy.
 
 ### Scope
 
@@ -286,9 +286,9 @@ Optional regression guards. If a metric drops more than `max_regression_pct` fro
 
 ### Reviewer
 
-An optional second agent that reviews a change before acceptance into the run and writes qualitative feedback, archived to `.autohelix/runs/<id>/reviews/iter-N.md`. The latest review is included in the next iteration's prompt (materialized into the worktree as `review.md`). Its verdict is advisory. Ordinary reviewer errors do not reject an iteration; candidate edits by a reviewer do, because they invalidate the checks that just ran.
+An optional second agent that reviews a change before acceptance into the run and writes qualitative feedback, archived to `.autohelix/runs/<id>/reviews/iter-N.md`. The latest review is included in the next iteration's prompt (materialized into the agent's copy as `review.md`). Its verdict is advisory. Ordinary reviewer errors do not reject an iteration; candidate edits by a reviewer do, because they invalidate its verdict.
 
-The `reviewer.prompt` is the reviewer's entire instruction (it inspects the diff itself and is not handed the goal or metrics), so put any context it should consider there. The intended worktree view omits the `reviews/` archive, but shared project state remains reachable; this is not access isolation. See [Concepts → Reviewer](concepts.md#reviewer) for the full mechanics.
+The `reviewer.prompt` is the reviewer's entire instruction (it inspects the diff itself and is not handed the goal or metrics), so put any context it should consider there. The reviewer's copy omits the `reviews/` archive, but shared project state remains reachable; this is not access isolation. See [Concepts → Reviewer](concepts.md#reviewer) for the full mechanics.
 
 ### Stop Conditions
 
@@ -305,7 +305,7 @@ Each command gets these environment variables (on top of the ones every command 
 
 For a qualitative condition, use [`autohelix ask`](cli.md#autohelix-ask): it asks an agent a yes/no question and exits 0 for yes, e.g. `autohelix ask "Is every item in SPEC.md implemented and tested?"`. Its cost counts toward the run.
 
-After iterations they run in the iteration's worktree, like constraints; the baseline check runs in the project, like the baseline metrics. Keep stop commands out of `scope.editable`, and don't let them modify files. The agent's prompt lists them.
+They run in a fresh copy of the accepted code (HEAD at the accepted commit), after iterations and on the baseline. Keep stop commands out of `scope.editable`, and don't let them modify files: a change is reported as an error (the acceptance stays recorded), and on the baseline it stops the run. The agent's prompt lists them.
 
 Stop conditions only end a run early: budgets still apply. If the baseline already meets one, no iterations run. If you interrupt a run while its stop commands are running, the iteration is kept but not checked; the next accepted iteration is. Running `autohelix run` again after a stop continues the run (and stops again after the next accepted iteration if the condition still holds); raise the target or remove the condition first.
 

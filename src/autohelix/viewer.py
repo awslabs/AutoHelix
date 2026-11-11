@@ -42,7 +42,6 @@ from autohelix.state import read_stored_config_path
 MAX_TEXT = 256 * 1024
 MAX_EVENTS = 3000  # merged events kept per log; tool output is clipped to keep this small
 MAX_ARTIFACT = 20 * 1024 * 1024
-MAX_NEW_FILES = 20  # untracked files shown in a running iteration's diff
 COMMIT = re.compile(r"[0-9a-f]{7,64}")
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
@@ -103,7 +102,8 @@ class RunData:
         self._diffs: dict[str, str] = {}
         self._clipped: set[Path] = set()  # logs whose oldest events were dropped
         self._subject_cache: dict[str, str | None] = {}
-        self._prefix: str | None = None
+        self._index_dir: str | None = None
+        self._repository = None
 
     def _refresh_current(self):
         if self.run_id in (None, "current"):
@@ -244,18 +244,23 @@ class RunData:
             routes["/api/notes/" + quote(name, safe="!'()*")] = self.note(name)
         return routes
 
+    def _repo(self):
+        from autohelix.workspace import Repo
+
+        if self._repository is None:
+            self._repository = Repo(self.project)
+        return self._repository
+
+    def _agent_copy(self, n: int) -> Path:
+        return self.paths.worktrees / f"iter-{n}-agent"
+
     def _worktree(self, n: int) -> Path:
         """Where a running iteration's files live (notes are copied back at the end)."""
-        if self._prefix is None:
-            try:
-                self._prefix = subprocess.run(["git", "rev-parse", "--show-prefix"], cwd=self.project,
-                                              capture_output=True, text=True, timeout=5).stdout.strip()
-            except (OSError, subprocess.TimeoutExpired):
-                self._prefix = ""
-        status = read_run_status(self.project, self.paths.run_id) or {}
-        if status.get("iteration") == n and status.get("worktree"):
-            return Path(status["worktree"])
-        return self.paths.worktrees / f"iter-{n}" / self._prefix
+        try:
+            prefix = self._repo().prefix
+        except RuntimeError:
+            prefix = ""
+        return self._agent_copy(n) / prefix
 
     def _artifacts(self) -> dict[int, list[dict]]:
         """Captured files per iteration, from observations/iter-N/."""
@@ -344,29 +349,37 @@ class RunData:
                 self._subject_cache[commit] = None if not subject or subject.startswith("AutoHelix iteration") else subject
         return {c: self._subject_cache.get(c) for c in commits}
 
-    def _live_diff(self, n: int, base: str | None) -> str | None:
-        """A running iteration's edits so far: its worktree compared with the baseline."""
-        worktree = self._worktree(n)
-        if not worktree.is_dir():
+    def _live_diff(self, n: int, base: str) -> str | None:
+        """A running iteration's edits so far: its copy compared with the baseline, or
+        the frozen candidate once the agent's copy is gone.
+
+        Git runs from outside the copy, through the user's repository, with an
+        index of the viewer's own (kept per copy so unchanged files aren't rehashed)."""
+        if not COMMIT.fullmatch(base.removesuffix("^")):
             return None
-
-        def git(*args, cwd=worktree):
-            return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
-                                  errors="replace", timeout=5)
-
+        copy = self._agent_copy(n)
+        index = None
         try:
-            if base is None:  # No accepted iteration yet: the project's HEAD is the baseline.
-                base = git("rev-parse", "HEAD", cwd=self.project).stdout.strip()
-            if not COMMIT.fullmatch(base.removesuffix("^")):
-                return None
-            diff = git("diff", "--no-ext-diff", "--no-textconv", base, "--").stdout
-            # New files are untracked in the worktree, so plain `git diff` skips them.
-            new = git("ls-files", "--others", "--exclude-standard", "-z").stdout.split("\0")
-            for name in [f for f in new if f][:MAX_NEW_FILES]:
-                diff += git("diff", "--no-index", "--no-ext-diff", "--no-textconv", "--", os.devnull, name).stdout
-        except (OSError, subprocess.TimeoutExpired):
+            repo = self._repo()
+            if not copy.is_dir() or copy.is_symlink():
+                diff = repo.git("diff", "--no-ext-diff", "--no-textconv", base, self.paths.pin, "--", timeout=5)
+            else:
+                if self._index_dir is None:
+                    import tempfile
+
+                    self._index_dir = tempfile.mkdtemp(prefix="autohelix-view-")
+                index = Path(self._index_dir) / f"{self.paths.run_id}-{copy.name}.index"
+                if not index.exists():
+                    repo.git("read-tree", base, index=index, timeout=5)
+                repo.git("add", "-A", "--", ".", work_tree=copy, index=index, timeout=5)
+                diff = repo.git("diff", "--cached", "--no-ext-diff", "--no-textconv", base, "--",
+                                work_tree=copy, index=index, timeout=5)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired):
+            # A killed git can leave its lock behind; start this copy's index afresh next time.
+            for stale in (index, index.with_name(index.name + ".lock")) if index else ():
+                stale.unlink(missing_ok=True)
             return None
-        return diff[:MAX_TEXT] or None
+        return diff.stdout.decode(errors="replace")[:MAX_TEXT] or None
 
     def _diff(self, base: str, commit: str) -> str:
         """Everything changed between the baseline and this iteration's accepted code."""

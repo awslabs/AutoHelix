@@ -1,10 +1,10 @@
 # Shared paths for this example. Sourced by run_native.sh / run_eval.sh /
-# check_final_model.sh. EDIT THESE before running — they point outside the
-# worktree on purpose (the worktree is recreated every iteration).
+# check_final_model.sh. EDIT THESE before running — they must point outside the
+# project: every phase runs in a fresh copy of the code, deleted afterwards.
 
 # TODO(setup): point this at a FIXED absolute path OUTSIDE this repo where the
 #   agent saves checkpoints and final_model/. The eval reads final_model/ from here.
-#   Example: /data/posttrain/gsm8k_qwen3_4b/artifacts  (NOT inside the worktree)
+#   Example: /data/posttrain/gsm8k_qwen3_4b/artifacts  (NOT inside the project)
 : "${ARTIFACTS:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_artifacts_local}"
 
 # TODO(setup): point this at the prebuilt env (see README SETUP). The reference

@@ -8,6 +8,7 @@ The agent writes only the narrative; the viewer shows the facts around it.
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -97,7 +98,7 @@ def write_report(config: Config, project: Path, console, config_path: Path | Non
     paths = RunPaths(project, run_id)
     if not paths.run_id:
         raise RuntimeError("No current run; start a run first.")
-    if paths.run_id and not _owned:
+    if not _owned:
         with RunLock(paths.lock):
             return write_report(config, project, console, config_path,
                                 run_id=paths.run_id, _owned=True)
@@ -120,33 +121,37 @@ def write_report(config: Config, project: Path, console, config_path: Path | Non
     def on_event(event: AgentEvent) -> None:
         display.handle_event(event)
 
-    from autohelix.sandbox import Sandbox
+    from autohelix.workspace import Copy, Repo
 
-    sandbox = Sandbox(project, paths)
-    expected_tip = run_tip(paths)
-    had_ref = git(project, "rev-parse", "--verify", paths.ref, check=False).returncode == 0
-    worktree = sandbox.create_worktree(-1, expected_tip)
-    cwd = worktree.working_dir
-    tree_before = _changed_files(cwd, worktree.git)
+    # The summary agent reads accepted code in a copy of the run's tip; it can't change it.
+    before = git(project, "rev-parse", "--verify", paths.ref, check=False).stdout.strip()
+    tip = before or run_tip(paths)
+    paths.worktrees.mkdir(parents=True, exist_ok=True)
+    copy_path = paths.worktrees / "iter-report"
+    copy = Copy.create(Repo(project), copy_path, files=tip, head=tip)
     started = time.monotonic()
     try:
+        os.environ["GIT_CEILING_DIRECTORIES"] = str(paths.worktrees)
         with Live(display, console=console, refresh_per_second=10, transient=True):
             result = agent.run(
-                worktree_path=cwd,
+                worktree_path=copy.working_dir,
                 prompt=build_report_prompt(config, project, config_path, draft, paths.run_id),
                 iteration=0, log_path=log_path, event_callback=on_event,
             )
             display.flush()
-        if touched := sorted(_changed_files(cwd, worktree.git) - tree_before):
-            console.print("[yellow]The summary agent changed candidate files:[/yellow] " + ", ".join(touched))
+        if touched := copy.changed():
+            console.print("[red]Error: the summary agent changed accepted code files (discarded):[/red] "
+                          + ", ".join(touched[:10]), highlight=False)
     finally:
-        if worktree:
-            try:
-                sandbox.normalize(worktree, expected_tip)
-                if not had_ref:
-                    git(project, "update-ref", "--no-deref", "-d", paths.ref, expected_tip)
-            finally:
-                sandbox.discard_worktree(worktree)
+        # The agent can still reach the user's repository by absolute path.
+        after = git(project, "rev-parse", "--verify", paths.ref, check=False).stdout.strip()
+        if before and after != before:
+            git(project, "update-ref", "--no-deref", paths.ref, before, after or "0" * len(before))
+            console.print(f"[red]Error: the summary agent moved {paths.ref}; restored it.[/red]", highlight=False)
+        try:
+            copy.remove()
+        except Exception as e:  # noqa: BLE001 - keep the agent's outcome
+            console.print(f"[yellow]Could not remove {copy.path}: {e}[/yellow]")
     seconds = round(time.monotonic() - started, 1)
 
     if not draft.is_file() or not draft.read_text().strip():
@@ -161,8 +166,3 @@ def write_report(config: Config, project: Path, console, config_path: Path | Non
     console.print(f"[green]Summary of iterations 1–{last} written to {out / 'report.md'}[/green]")
     return True
 
-
-def _changed_files(project: Path, context) -> set[str]:
-    """Files git reports as modified or untracked (.autohelix/ is ignored)."""
-    result = context.run("status", "--porcelain", cwd=project, check=False)
-    return {line[3:] for line in result.stdout.splitlines()} if result.returncode == 0 else set()

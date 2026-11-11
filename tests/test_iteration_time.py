@@ -113,12 +113,13 @@ constraints:
   - "true"
 """)
 
-    # Run identity reserves its hidden ref before per-run agent setup.
     for args in (["init", "-q"], ["config", "user.email", "test@example.com"],
                  ["config", "user.name", "Test"], ["add", "autohelix.yaml"],
                  ["commit", "-qm", "initial config"]):
         subprocess.run(["git", *args], cwd=project, check=True, capture_output=True)
 
+    # Preflight now runs before the run is allocated; let it find the agent command.
+    monkeypatch.setattr("autohelix.checks.shutil.which", lambda command: command)
     monkeypatch.setattr(
         CodexAgent,
         "_validate_time_left_hook_support",
@@ -129,6 +130,11 @@ constraints:
         Harness(project)
 
     assert "Codex iteration_time setup failed" in str(exc.value)
+    # Refused before the run was allocated: no identity, ref or pointer.
+    assert not (project / ".autohelix" / "current").exists()
+    assert not list((project / ".autohelix" / "runs").glob("*/run.json"))
+    refs = subprocess.run(["git", "for-each-ref", "refs/autohelix/"], cwd=project, capture_output=True, text=True)
+    assert refs.stdout.strip() == ""
 
 
 TIME_LEFT = Path(__file__).parent.parent / "src" / "autohelix" / "bin" / "time_left.sh"

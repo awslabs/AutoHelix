@@ -55,8 +55,5 @@ def read_usage(path: Path) -> list[dict[str, Any]]:
         if cost is not None and (isinstance(cost, bool) or not isinstance(cost, (int, float))
                                  or not math.isfinite(cost) or cost < 0):
             record["cost_usd"] = None
-        key = str(record.get("id") or f"line-{len(calls)}")
-        if calls.get(key, {}).get("candidate_changed"):
-            record["candidate_changed"] = True
-        calls[key] = record
+        calls[str(record.get("id") or f"line-{len(calls)}")] = record
     return list(calls.values())

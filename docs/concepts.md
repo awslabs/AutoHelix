@@ -6,18 +6,19 @@ AutoHelix runs a loop where each iteration is isolated, validated, and either ac
 
 ```
 for each iteration:
-    1. create_worktree()      — detached checkout at the run tip
-    2. prepare_worktree()     — seed notes/ + read-only reference material
-    3. build_prompt()         — goal + history + metrics + scope
-    4. run_agent()            — agent makes changes
-    5. normalize()           — restore expected git state, keep file edits
-    6. revert_out_of_scope()  — enforce editable/frozen
-    7. run_constraints()      — hard gates (tests, linting)
-    8. run_observables()      — measurements (if constraints pass)
-    9. check_metric_gates()   — optional regression guards
-   10. run_reviewer()         — optional qualitative feedback
-   11. accept or discard      — update run ref and durable history atomically
-   12. save_notes()/cleanup()  — always, even on failure
+    1. agent copy             — fresh copy of the accepted tip A, plus notes/ and reference material
+    2. build_prompt()         — goal + history + metrics + scope
+    3. run_agent()            — agent makes changes in its copy
+    4. freeze                 — snapshot the copy to a tree T; out-of-scope changes are dropped;
+                                notes are saved and the copy is deleted
+    5. checks copy            — fresh copy of T (HEAD at A)
+    6. run_constraints()      — hard gates (tests, linting)
+    7. run_observables()      — measurements (if constraints pass); T's files are
+                                verified after every command
+    8. check_metric_gates()   — optional regression guards
+    9. run_reviewer()         — optional qualitative feedback, in its own copy of T
+   10. accept or discard      — commit exactly T on A, update run ref and durable history atomically
+   11. stop commands          — in a copy of the accepted tip
 ```
 
 ## Designing Your Own Loop
@@ -50,25 +51,47 @@ A useful loop answers five questions:
 See the [examples](../examples/) for concrete loops that can be adapted or
 combined.
 
-## Git Worktrees
+## Candidate Copies
 
-Each iteration runs in a separate [git worktree](https://git-scm.com/docs/git-worktree). This means:
+Every phase of an iteration (agent, checks, reviewer, stop) runs in **its own fresh
+copy** of the code: a private folder holding one fixed tree, with its own small
+`.git`. That `.git` borrows your repository's objects and has copies of its
+branches, tags, remote branches and run refs (a snapshot taken when the copy is
+made; no stash, no remote). This means:
 
-- The agent works on an isolated copy of the code
-- Accepted commits advance the run's hidden `refs/autohelix/<id>` first
-- A process-held per-run lock prevents concurrent writing lifecycle operations
-- PYTHONPATH is remapped so Python imports resolve to the worktree (not the main repo)
+- Whatever the agent does with git (commits, branches, config, hooks) stays in its copy.
+  AutoHelix reads the copy from outside, through your repository, and never runs git
+  inside it after a call has used it.
+- What gets checked is exactly what gets published: the agent's copy is frozen to a
+  tree, checks run on a fresh copy of that tree, and acceptance commits that tree.
+- **Only files git would add reach checks.** Ignored files the agent built (build
+  output, virtualenvs, caches, models) are deleted with the agent's copy. Constraints
+  must build or install what they need; long-lived outputs such as trained models
+  belong at a fixed absolute path outside the project.
+- **Checks are read-only.** Any change a constraint, metric, reviewer or `ask` makes to
+  the candidate's files rejects the iteration. New files are scratch, shared between
+  commands in the checks phase (so build-then-test works) and deleted afterwards. If
+  generated code should be accepted, generating it is the agent's job.
+- In a checks copy, plain `git diff` shows changes to tracked files; new files show as
+  untracked. The complete change is in `.autohelix/candidate.diff`.
+- Accepted commits advance the run's hidden `refs/autohelix/<id>` first.
+- A process-held per-run lock prevents concurrent writing lifecycle operations.
+- PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo).
+- **Submodule changes are not supported.** Submodules appear as empty directories in a
+  copy; changing one, or writing inside one, rejects the iteration.
 
-Worktrees live in `.autohelix/worktrees/<id>/` and are cleaned up after each iteration.
+Copies live in `.autohelix/worktrees/<id>/` and are deleted after each phase. A baseline
+command that modifies the code it checks (for example a formatter without `--check`)
+stops the run with a setup error before any agent runs.
 
 ## Notes
 
 The agent's persistent memory across iterations. Stored in `.autohelix/runs/<id>/notes/` and presented to the agent as `.autohelix/notes/`.
 
 `notes/` is the **sole agent-owned region** and the only thing that round-trips
-between the main project and each iteration worktree. Everything else the agent
+between the main project and each iteration's agent copy. Everything else the agent
 sees in `.autohelix/` (observations, hints, the latest review) is read-only
-reference — copied *into* the worktree but never copied back. That asymmetry is
+reference — copied *into* the copy but never copied back. That asymmetry is
 the whole contract: the agent freely structures `notes/` however the prompt
 directs (per-iteration files, a journal, subdirectories), and only `notes/`
 persists.
@@ -76,7 +99,7 @@ persists.
 Key properties:
 
 - **Survive rejection** — notes are saved during final cleanup, so even rejected iterations contribute learnings
-- **Copied into worktrees** — the agent sees notes from all previous iterations
+- **Copied into agent copies** — the agent sees notes from all previous iterations
 - **Agent-managed** — the agent decides what to write and how to organize notes
 - **Retained on abandon** — `autohelix clear` aliases abandonment; `run --new` gives a new run separate state
 
@@ -86,10 +109,10 @@ Notes are the primary mechanism for the agent to build on previous attempts. The
 
 AutoHelix can restrict which files the agent modifies:
 
-- **Editable (allowlist)**: only matching files are committed
-- **Frozen (denylist)**: matching files are reverted, everything else is committed
+- **Editable (allowlist)**: only matching files are kept
+- **Frozen (denylist)**: changes to matching files are dropped, everything else is kept
 
-Enforcement happens *before* constraints run, so constraints test the actual state that would be accepted. This prevents situations where constraints pass in the worktree but fail after acceptance because out-of-scope changes were included.
+Enforcement happens when the agent's copy is frozen, *before* constraints run, so constraints test exactly the tree that would be accepted. Out-of-scope changes are dropped from the candidate tree only; nothing is written back into the agent's copy.
 
 ## Agent Backends
 
@@ -102,13 +125,13 @@ AutoHelix supports pluggable agent backends:
 | **OpenCode** | `opencode` | JSON format, model variants |
 | **Mock** | (built-in) | Deterministic changes for testing |
 
-All backends implement the same interface: receive a prompt, work in a worktree, emit events for the live display.
+All backends implement the same interface: receive a prompt, work in a directory, emit events for the live display.
 
 ## Reviewer
 
 An optional second agent that provides qualitative feedback between iterations. It runs after constraints and metric gates pass but *before* acceptance into the run. Landing on the user's branch may happen later, particularly in manual mode.
 
-It is a full agent working in the same worktree, with tool access: it inspects the diff and code itself rather than being handed one. Its entire instruction is the `reviewer.prompt` you configure, plus where to write the result — it does **not** automatically receive the goal, metrics, or a prepared diff, so include whatever context you want it to consider in the prompt. Example:
+It is a full agent working in its own fresh copy of the candidate, with tool access: it inspects the code itself, and `.autohelix/candidate.diff` holds the complete change. Its entire instruction is the `reviewer.prompt` you configure, plus where to write the result — it does **not** automatically receive the goal or metrics, so include whatever context you want it to consider in the prompt. Example:
 
 ```yaml
 reviewer:
@@ -120,9 +143,9 @@ reviewer:
   # auto_memory: false       # independent reviews (default)
 ```
 
-- The reviewer verdict is **advisory**. Ordinary errors still allow acceptance (with a placeholder review). Reviewer candidate edits invalidate the checks and reject the iteration. Every reviewer/ask call compares candidate contents before and after, including new/deleted files, modes, symlinks and submodules; runtime feedback is allowed. Backend read-only restrictions remain best effort.
+- The reviewer verdict is **advisory**. Ordinary errors still allow acceptance (with a placeholder review). A reviewer that changes the candidate's files invalidates its verdict and rejects the iteration. Feedback under `.autohelix/` is allowed. Backend read-only restrictions remain best effort.
 - Each review is archived to `.autohelix/runs/<id>/reviews/iter-N.md`. There is no standing "latest review" file — the latest is derived from the highest-numbered `iter-N.md`.
-- The **latest** review is materialized into the next iteration's worktree as `.autohelix/review.md` so the main agent can read it; the `reviews/` archive itself is never copied into a worktree.
+- The **latest** review is materialized into the next iteration's agent copy as `.autohelix/review.md` so the main agent can read it; the `reviews/` archive itself is never copied into a copy.
 - The intended reviewer view omits the review archive and removes the materialized latest `review.md` before its call. Agents can still reach shared project state and git metadata; the directory layout does not isolate that access. `auto_memory: false`, the default, disables Claude Code's cross-session memory.
 
 ## Prompt Template
@@ -135,7 +158,7 @@ Available template variables:
 |----------|---------|
 | `{{goal}}` | Goal from config |
 | `{{iteration}}` | Current iteration number (baseline is iter-0) |
-| `{{worktree}}` | Absolute path to this iteration's worktree (write only inside it) |
+| `{{worktree}}` | Absolute path to this iteration's agent copy (write only inside it) |
 | `{{history_summary}}` | Summary of recent iterations (empty on the first) |
 | `{{constraints}}` | List of constraint command strings |
 | `{{observables}}` | List of `{command, metric_labels}` — the metric commands and their labelled directions (e.g. `speed (↑)`) |
@@ -154,7 +177,7 @@ Editing the template is also how you can keep an evaluation *out of the agent's 
 - **Don't list the eval command.** Drop the `{{observables}}` (or `{{constraints}}`) loop from your `prompt.md`. The command still runs and its metric still gates/ranks the run — it just isn't named in the prompt, so the agent isn't handed the exact thing to target.
 - **Fence the agent into its worktree.** Add an explicit instruction to only read and write inside `{{worktree}}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in-scope to reverse-engineer.
 
-This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence — in testing, Claude declined to read an out-of-worktree eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: iteration worktrees are nested under the project, so an agent that is determined (or explicitly told to cheat) can walk up to the parent directory and read whatever is there. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
+This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence — in testing, Claude declined to read an out-of-worktree eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: iteration copies are nested under the project, so an agent that is determined (or explicitly told to cheat) can walk up to the parent directory and read whatever is there. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
 
 ## Run state and lifecycle
 
@@ -176,21 +199,20 @@ scoped to `.autohelix/runs/<id>/`:
 │   ├── logs/iter-N/call-*/     # separate directory per actual agent/judge call
 │   ├── output/report.md
 │   ├── output/report.html
-│   └── runtime/status.json        # advisory live status/worktree/log
-├── worktrees/<id>/iter-N/      # temporary detached checkouts
+│   └── runtime/status.json        # advisory live status/copy/log
+├── worktrees/<id>/iter-N-<phase>/  # temporary candidate copies
 └── runtime/                   # shared helper scripts and persistent lock files
 ```
 
-The agent still sees a small `.autohelix/` view inside its worktree. Only `notes/`
+The agent still sees a small `.autohelix/` view inside its copy. Only `notes/`
 round-trips; observations, hints, peer notes and latest `review.md` are reference
-material. Persistent history/review archives never enter the worktree.
+material. The review archive never enters a copy.
 
 A run resumes by config path or exact id. One invocation, called a **segment**,
-holds a process lock through validation, final landing and report. Agent-created
-commits are reopened as file changes before scope and checks run. Acceptance
-records only the validated files, with the previous accepted tip as their parent;
-it leaves the user's branch and staged files alone. No-op accepts retain the same
-tip. Judges use the same content policy with no candidate writes allowed.
+holds a process lock through validation, final landing and report. Agent commits
+don't matter: the candidate is the agent copy's files. Acceptance commits exactly
+the checked tree, with the previous accepted tip as its parent; it leaves the
+user's branch and staged files alone. No-op accepts retain the same tip.
 
 Resuming repairs an interrupted final record and recovers accepted commits whose
 record was not finished. Other history corruption is refused. User commits on
@@ -198,19 +220,18 @@ the target can be picked up when they descend from the run tip. Auto landing
 fast-forwards the target at segment end before report; manual mode retains code
 on the run ref until `autohelix land`. Divergence, a branch being rebased or checked
 out elsewhere, and dirty files that would be overwritten require user resolution.
-If the target moves during a segment, AutoHelix leaves it alone and asks for an
-explicit land after review. Unrelated dirty and staged files are preserved.
+If the target moves during a segment, AutoHelix warns (in every landing mode),
+leaves it alone and asks for an explicit land after review. Unrelated dirty and staged files are preserved.
 
 If you reset the target behind accepted run code, auto landing would reapply that
 code. Use `autohelix abandon` to discard the old run before starting `run --new`.
-Dirty submodule contents must be committed within the submodule before acceptance;
-a parent commit can record a clean submodule commit, not its uncommitted files.
-
-Only first valid baseline capture requires a clean checkout. Resumed evaluation,
-stop judges and summary use accepted run checkouts. Agents can still escape a
-worktree through absolute paths or shared git metadata: main-checkout inspection
-is best effort and logs possible escapes, without reverting user edits. Worktrees
-are correctness tools for cooperative agents, not a filesystem security boundary.
+Only first valid baseline capture requires a clean checkout, and every readiness
+check (clean checkout, editable patterns, preflight) runs before a first start
+allocates a run. The baseline, stop commands and summary run in copies of the
+accepted code. Agents can still reach the project, its `.git`, other runs and
+`~/.gitconfig` through absolute paths: main-checkout inspection is best effort and
+logs possible escapes, without reverting user edits. Copies are correctness tools
+for cooperative agents, not a filesystem security boundary.
 
 Abandon retains evidence and unlanded commits, refuses future resume and leaves
 code intact. Purge removes the run directory/ref, while lock files remain outside

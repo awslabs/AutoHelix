@@ -1,4 +1,4 @@
-"""Regression cases for immutable worktree checkpoints and publication."""
+"""Regression cases for candidate copies and publication."""
 
 import os
 import signal
@@ -21,6 +21,8 @@ from tests.test_runs import project, configure
 
 @pytest.mark.parametrize("operation", ["delete-marker", "orphan"])
 def test_agent_git_tampering_preserves_user_checkout(project, monkeypatch, operation):
+    import shutil
+
     harness = Harness(project, land_mode="manual")
     (project / "code.py").write_text("user dirty content")
     git(project, "add", "code.py")
@@ -30,7 +32,7 @@ def test_agent_git_tampering_preserves_user_checkout(project, monkeypatch, opera
     def agent(cwd, *_):
         (cwd / "code.py").write_text("validated candidate")
         if operation == "delete-marker":
-            (cwd / ".git").unlink()
+            shutil.rmtree(cwd / ".git")
         else:
             git(cwd, "symbolic-ref", "HEAD", "refs/heads/unborn-agent")
         return AgentRunResult(success=True, usage={"cost_usd": 0.2})
@@ -62,15 +64,14 @@ def test_validation_cannot_stage_protected_files_or_attach_head(project, monkeyp
         git(cwd, "symbolic-ref", "HEAD", target)
         (cwd / "frozen.txt").write_text("check changed protected file")
         git(cwd, "add", "frozen.txt")
+        kwargs["after_command"]("fake check")
         return []
 
     monkeypatch.setattr("autohelix.harness.run_constraints", checks)
     try:
-        with pytest.raises(AutoHelixRunError, match="scope"):
-            harness.run_iteration(1)
-        record = harness.history.load()[-1]
+        record = harness.run_iteration(1)
         assert not record.accepted
-        assert "scope" in record.reason.lower()
+        assert record.reason == "checks modified candidate files: fake check (frozen.txt)"
         assert git(project, "rev-parse", target).stdout.strip() == base
         assert git(project, "show", f"{harness.paths.ref}:frozen.txt").stdout == "protected"
     finally:
@@ -113,18 +114,18 @@ def test_postaccept_stop_sees_accepted_head_and_clean_index(project):
 
 
 def test_failed_publication_with_pending_interrupt_keeps_original_error(project, monkeypatch):
-    import autohelix.iteration as iteration
+    from autohelix.workspace import Repo
 
     harness = Harness(project, land_mode="manual")
-    original = iteration.git
+    original = Repo.git
 
-    def fail(project, *args, **kwargs):
-        if "update-ref" in args:
+    def fail(repo, *args, **kwargs):
+        if args[:2] == ("update-ref", "--no-deref"):
             os.kill(os.getpid(), signal.SIGINT)
             raise RuntimeError("publication compare failed")
-        return original(project, *args, **kwargs)
+        return original(repo, *args, **kwargs)
 
-    monkeypatch.setattr(iteration, "git", fail)
+    monkeypatch.setattr(Repo, "git", fail)
     try:
         with pytest.raises(AutoHelixRunError, match="publication compare failed"):
             harness.run_iteration(1)
@@ -147,47 +148,6 @@ def test_dirty_first_start_allocates_no_run(project):
     assert not (project / ".autohelix" / "current").exists()
     assert not list((project / ".autohelix" / "runs").glob("*/run.json"))
     assert not git(project, "for-each-ref", "--format=%(refname)", "refs/autohelix/").stdout.strip()
-
-
-def test_replaced_worktree_root_normalization_cannot_select_user_checkout(project):
-    import shutil
-
-    harness = Harness(project, land_mode="manual")
-    worktree = harness.sandbox.create_worktree(1, harness.run_state.expected_tip)
-    (project / "user.txt").write_text("user commit")
-    git(project, "add", "user.txt")
-    git(project, "commit", "-qm", "user")
-    (project / "code.py").write_text("user staged work")
-    git(project, "add", "code.py")
-    head = git(project, "rev-parse", "HEAD").stdout
-    branch = git(project, "symbolic-ref", "HEAD").stdout
-    index = git(project, "diff", "--cached").stdout
-    shutil.rmtree(worktree.path)
-    worktree.path.symlink_to(project)
-    try:
-        with pytest.raises(RuntimeError, match="removed or replaced"):
-            harness.sandbox.normalize(worktree, harness.run_state.expected_tip)
-        assert git(project, "rev-parse", "HEAD").stdout == head
-        assert git(project, "symbolic-ref", "HEAD").stdout == branch
-        assert git(project, "diff", "--cached").stdout == index
-    finally:
-        harness.sandbox.discard_worktree(worktree)
-        harness.close()
-
-
-def test_missing_registered_worktree_is_replaced_without_manual_prune(project):
-    import shutil
-
-    harness = Harness(project, land_mode="manual")
-    first = harness.sandbox.create_worktree(0, harness.run_state.expected_tip)
-    shutil.rmtree(first.path)
-    try:
-        second = harness.sandbox.create_worktree(0, harness.run_state.expected_tip)
-        assert second.path.is_dir()
-        assert (second.path / "code.py").read_text() == "print('baseline')\n"
-        harness.sandbox.discard_worktree(second)
-    finally:
-        harness.close()
 
 
 def test_landing_refuses_target_mid_rebase_without_mutating_it(project):
@@ -307,24 +267,24 @@ def test_calls_only_retains_usage_with_unsafe_live_log_metadata(project, tmp_pat
         harness.close()
 
 
-def test_reviewer_returned_cost_survives_normalization_failure(project, monkeypatch):
+def test_reviewer_returned_cost_survives_verification_failure(project, monkeypatch):
+    from autohelix.workspace import Copy
+
     harness = Harness(project, land_mode="manual")
     harness.config.reviewer = SimpleNamespace(model=None, timeout_seconds=None, auto_memory=False, prompt="Review")
     monkeypatch.setattr("autohelix.harness.create_agent", lambda *_a, **_k: SimpleNamespace(
         run=lambda **_kwargs: AgentRunResult(success=True, usage={"cost_usd": 0.3})))
-    original = harness.sandbox.normalize
-    calls = []
+    original = Copy.changed
 
-    def normalize(*args):
-        calls.append(None)
-        if len(calls) == 2:
+    def changed(copy):
+        if copy.path.name.endswith("-review"):
             raise RuntimeError("review cleanup failed")
-        return original(*args)
+        return original(copy)
 
-    monkeypatch.setattr(harness.sandbox, "normalize", normalize)
+    monkeypatch.setattr(Copy, "changed", changed)
     try:
-        with pytest.raises(AutoHelixRunError, match="review cleanup failed"):
-            harness.run_iteration(1)
+        record = harness.run_iteration(1)
+        assert not record.accepted and record.reason == "Reviewer changed candidate files"
         row = harness.history.load()[-1]
         assert not row.accepted and row.cost.cost_usd == pytest.approx(0.4)
         assert row.reviewer_usage == [{"cost_usd": 0.3}]
@@ -347,7 +307,7 @@ def test_no_current_observers_ignore_old_top_level_files(tmp_path):
 
 
 @pytest.mark.parametrize("preexisting", [False, True])
-def test_declared_capture_exempts_only_new_out_of_scope_artifacts(project, preexisting):
+def test_checks_cannot_modify_candidate_but_capture_new_files(project, preexisting):
     if preexisting:
         (project / "metric.txt").write_text("protected candidate content")
         git(project, "add", "metric.txt")
@@ -359,9 +319,8 @@ def test_declared_capture_exempts_only_new_out_of_scope_artifacts(project, preex
     harness = Harness(project, land_mode="manual")
     try:
         if preexisting:
-            with pytest.raises(AutoHelixRunError, match="scope"):
-                harness.run_iteration(1)
-            assert not harness.history.load()[-1].accepted
+            record = harness.run_iteration(1)
+            assert not record.accepted and record.reason.startswith("checks modified candidate files: echo")
             assert git(project, "show", f"{harness.paths.ref}:metric.txt").stdout == "protected candidate content"
         else:
             result = harness.run_iteration(1)

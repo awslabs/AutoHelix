@@ -37,9 +37,12 @@ posttrain/
 - **Agent-written:** the training code, iterated across runs.
 - **Frozen (never edited):** everything listed above — the agent tunes the recipe, never
   the scorer.
-- **Artifacts live outside the worktree:** checkpoints and `final_model/` go to the fixed
-  `$ARTIFACTS` path from `config.sh`; the eval reads exclusively from there. (The worktree
-  is recreated each iteration, so anything written inside it is thrown away.)
+- **Artifacts live outside the project:** checkpoints and `final_model/` go to the fixed
+  `$ARTIFACTS` path from `config.sh`; the eval reads exclusively from there. This is
+  required: checks run in a fresh copy of the candidate code, so a model the agent wrote
+  inside its own copy is deleted with that copy and never reaches the eval. If
+  `$ARTIFACTS` is left at its in-repo default, `check_final_model.sh` fails with an error
+  saying so.
 
 ## SETUP — required before this can run
 

@@ -166,7 +166,7 @@ def test_conflicting_ignore_refuses_and_preserves_user_work(
         pytest.fail("Ignore failure must refuse before creating an agent or worktree")
 
     monkeypatch.setattr("autohelix.harness.create_agent", unexpected_start)
-    monkeypatch.setattr("autohelix.sandbox.Sandbox.create_worktree", unexpected_start)
+    monkeypatch.setattr("autohelix.workspace.Copy.create", unexpected_start)
 
     for _ in range(2):
         args = (

@@ -8,20 +8,27 @@ answer format), inspects the current directory with read-only tools, and
 answers with {"answer": "yes"|"no", "reason": ...}. Usage is recorded through
 $AUTOHELIX_USAGE_FILE when the harness runs the command.
 
-Hardening still to come with the run restructure: running on a clean copy of
-the directory (no .autohelix/, no agent instruction or config files), so files
-the judged agent wrote can't configure the judge.
+Each call fingerprints the directory's files first. If the call changes one,
+or adds a non-ignored file, the call fails and its usage record carries a sticky
+`integrity_violation` flag, which rejects the iteration even if a wrapper script
+restores the files and exits 0. Ordinary failures are the calling script's
+business: `ask` exits non-zero, and a script that swallows that and exits 0 passes.
+
+Hardening still to come: running on a clean copy of the directory (no
+.autohelix/, no agent instruction or config files), so files the judged agent
+wrote can't configure the judge.
 """
 
 import json
 import os
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from autohelix.agents import AgentConfig, AgentEvent, create_agent
-from autohelix.checkpoint import CandidateChanged, ContentGuard
+from autohelix.workspace import Fingerprint, git_env
 from autohelix.runs import allocate_call
 from autohelix.usage_log import append_usage, new_call_id
 
@@ -166,11 +173,7 @@ def _deadline_timeout(timeout: int) -> int:
         left = int(float(raw) - time.time()) - 10 if raw else None
     except ValueError:
         left = None
-    if left is None:
-        return timeout
-    if left <= 0:
-        raise JudgeError("no time left before the command's timeout")
-    return min(timeout, left)
+    return timeout if left is None else min(timeout, left)
 
 
 def ask(question: str, cwd: Path, config: AgentConfig, *, yes: str | None = None,
@@ -180,13 +183,11 @@ def ask(question: str, cwd: Path, config: AgentConfig, *, yes: str | None = None
     system = build_system_prompt(question, yes, no, rubric)
     config = replace(config, system_prompt=system)
     total_cost: float | None = 0.0
-    last_error = "no attempt made"
+    last_error = "no time left before the command's timeout"
     ends = time.monotonic() + _deadline_timeout(config.timeout_seconds or DEFAULT_TIMEOUT)
     for attempt in range(attempts):
         left = int(ends - time.monotonic())
         if left < 1:
-            if attempt == 0:
-                raise JudgeError("no time left before the command's timeout")
             break
         config = replace(config, timeout_seconds=left)
         prompt = USER_PROMPT if attempt == 0 else (
@@ -194,32 +195,33 @@ def ask(question: str, cwd: Path, config: AgentConfig, *, yes: str | None = None
             "Reply with only the JSON object.")
         call_id = new_call_id()
         log_path = _log_path("ask")
-        run_dir = os.environ.get("AUTOHELIX_RUN_DIR")
-        stored_log = str(log_path.resolve().relative_to(Path(run_dir).resolve())) if run_dir else str(log_path)
+        # Readers make it relative to the run (and drop it if it's outside the run's logs).
         record = {"id": call_id, "source": "ask", "question": question[:200], "agent": config.type,
-                  "model": config.model, "log": stored_log}
+                  "model": config.model, "log": str(log_path.resolve())}
         append_usage({**record, "status": "started", "cost_usd": None})
         started = time.monotonic()
         result = None
         usage_path = os.environ.get("AUTOHELIX_USAGE_FILE")
         allowed = (log_path, *((Path(usage_path),) if usage_path else ()))
+        guard = DirectoryGuard(cwd, allowed=allowed)
+        failure: BaseException | None = None
         try:
-            with ContentGuard(cwd, allowed=allowed):
-                result = create_agent(config).run(
-                    worktree_path=cwd, prompt=prompt, iteration=0, log_path=log_path,
-                    event_callback=_ignore_event,
-                )
+            result = create_agent(config).run(
+                worktree_path=cwd, prompt=prompt, iteration=0, log_path=log_path,
+                event_callback=_ignore_event,
+            )
         except BaseException as e:
-            usage = dict(result.usage or {}) if result else {}
-            usage.setdefault("duration_ms", int((time.monotonic() - started) * 1000))
-            invalidated = isinstance(e, CandidateChanged) or bool(getattr(e, "candidate_changed", False))
-            append_usage({**record, **usage, "status": "error", "error": str(e),
-                          "candidate_changed": invalidated})
-            if invalidated and not isinstance(e, KeyboardInterrupt):
-                raise JudgeError(str(e)) from e
-            raise
-        usage = dict(result.usage or {})
-        usage.setdefault("duration_ms", int((time.monotonic() - started) * 1000))
+            failure = e
+        usage = {"duration_ms": int((time.monotonic() - started) * 1000), **(result.usage if result else {})}
+        if violation := _violation(guard):
+            # Recorded even if a wrapper script restores the files and exits 0.
+            append_usage({**record, **usage, "status": "error", "error": violation, "integrity_violation": True})
+            if isinstance(failure, KeyboardInterrupt):
+                raise failure
+            raise JudgeError(violation) from failure
+        if failure is not None:
+            append_usage({**record, **usage, "status": "error", "error": str(failure)})
+            raise failure
         cost = usage.get("cost_usd")
         total_cost = None if total_cost is None or cost is None else total_cost + cost
         try:
@@ -235,6 +237,84 @@ def ask(question: str, cwd: Path, config: AgentConfig, *, yes: str | None = None
         append_usage({**record, **usage, "status": "ok", "answer": "yes" if is_yes else "no"})
         return Answer(yes=is_yes, reason=reason, cost_usd=total_cost)
     raise JudgeError(last_error)
+
+
+# Directories a judge's working directory may hold outside git that aren't candidate code.
+CACHE_DIRS = frozenset({".git", ".autohelix", "__pycache__", ".pytest_cache", ".mypy_cache",
+                        ".ruff_cache", "node_modules", ".venv", "venv", ".tox"})
+
+
+def directory_files(root: Path) -> list[str]:
+    """A directory's tracked and non-ignored untracked files, relative to it.
+
+    Uses `git ls-files -co --exclude-standard` inside a repository, else a plain
+    walk skipping cache folders. Nested directories git lists as one entry
+    (submodules, nested repositories) are walked too."""
+    root = Path(root)
+    listing = None
+    if not os.environ.get("AUTOHELIX_RUN_DIR"):
+        # In a run, candidate code has already run here and could edit the copy's git
+        # excludes to hide files, so only a standalone call asks git.
+        listing = subprocess.run(["git", "ls-files", "-co", "--exclude-standard", "-z"],
+                                 cwd=root, env=git_env(), capture_output=True)
+    # Git's own listing is authoritative (tracked files under a cache-like folder count);
+    # the walk skips cache folders.
+    names = ([os.fsdecode(name) for name in listing.stdout.split(b"\0") if name]
+             if listing and listing.returncode == 0 else _walk(root, ""))
+    found = []
+    for name in names:
+        parts = name.split("/")
+        if ".autohelix" in parts or parts[-1] == ".git":
+            continue
+        path = root / name
+        if path.is_dir() and not path.is_symlink():
+            found.extend(_walk(root, name))
+        found.append(name)
+    return sorted(set(found))
+
+
+def _walk(root: Path, start: str) -> list[str]:
+    names = []
+    for directory, dirs, files in os.walk(root / start if start else root):
+        relative = Path(directory).relative_to(root)
+        for name in list(dirs):
+            if name in CACHE_DIRS or (Path(directory) / name).is_symlink():
+                dirs.remove(name)
+                if name not in CACHE_DIRS:
+                    names.append((relative / name).as_posix())
+        names.extend((relative / name).as_posix() for name in files)
+    return names
+
+
+class DirectoryGuard:
+    """Detects a call changing a directory's files: a changed or deleted file, or
+    a new non-ignored one. `allowed` names (e.g. the call's own log) are exempt."""
+
+    def __init__(self, root: Path, allowed=()):
+        self.root = Path(root)
+        self.allowed = {name for name in (self._relative(path) for path in allowed) if name}
+        self.before = [name for name in directory_files(self.root) if name not in self.allowed]
+        self.fingerprint = Fingerprint.take(self.root, self.before)
+
+    def _relative(self, path) -> str | None:
+        path = Path(path)
+        path = path.parent.resolve() / path.name
+        root = self.root.resolve()
+        return path.relative_to(root).as_posix() if path.is_relative_to(root) else None
+
+    def violations(self) -> list[str]:
+        known = set(self.before)
+        new = [name for name in directory_files(self.root) if name not in known and name not in self.allowed]
+        return sorted(set(self.fingerprint.changed(self.root)) | set(new))
+
+
+def _violation(guard: DirectoryGuard) -> str | None:
+    """Why the judged files can no longer be trusted, if they can't."""
+    try:
+        changed = guard.violations()
+    except Exception as e:  # noqa: BLE001 - unverifiable counts as changed
+        return f"could not verify the judged files: {e}"
+    return f"the judge changed files: {', '.join(changed[:10])}" if changed else None
 
 
 def _ignore_event(event: AgentEvent) -> None:
