@@ -23,11 +23,12 @@ session tools when available. If the environment cannot support continued
 monitoring, explain that limit and give a concrete handoff; do not claim that
 supervision completed.
 
-Read the id from `.autohelix/current` (or pass a run id to `view`, `watch` and `report`), then read `.autohelix/runs/<id>/history.jsonl`, the current backend log under
+Read the id from `.autohelix/current` (or pass a run id to `view` and `report`), then read `.autohelix/runs/<id>/history.jsonl`, the current backend log under
 `.autohelix/runs/<id>/logs/iter-N/`, captured observations under
 `.autohelix/runs/<id>/observations/iter-N/`, and persistent `.autohelix/runs/<id>/notes/iter-N.md`.
-`autohelix watch` provides a terminal view; `.autohelix/runs/<id>/runtime/status.json` records
-the run's state and phase, and `.autohelix/runs/<id>/output/report.html` is saved when it stops. If watch does not present the selected
+`autohelix view --json` (or `--once`) prints the run's state and iterations once; a bare
+`autohelix view` is a live terminal view that does not exit, for people. `.autohelix/runs/<id>/runtime/status.json` records
+the run's state and phase, and `.autohelix/runs/<id>/output/report.html` is saved when it stops. If the view does not present the selected
 backend's activity use its logs and saved records. Infer active execution from
 the launched process, not from the configured iteration count or old logs.
 

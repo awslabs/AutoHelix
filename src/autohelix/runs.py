@@ -473,7 +473,7 @@ def resolve_run(project: Path, value: str) -> str:
         raise RuntimeError(f"{value!r} matches several runs ({', '.join(matches)}); use the full id.")
     folder = f" ({value} is a folder: use -p {value})" if Path(value).is_dir() else ""
     raise RuntimeError(f"No run {value!r} in {Path(project).resolve()}{folder}. Use a run id or its last "
-                       "part, e.g. k3f9 (names aren't ids); `autohelix dashboard --print` lists runs.")
+                       "part, e.g. k3f9 (names aren't ids); `autohelix dashboard` lists runs.")
 
 
 def _ago(seconds: float) -> str:

@@ -18,7 +18,7 @@ cd my-project
 docker/run.sh --env ~/autohelix-env.sh run --config autohelix.yaml -n 10
 ```
 
-All autohelix commands work: `run`, `report`, `clear`, `watch`.
+All autohelix commands work: `run`, `resume`, `report`, `view` (in the terminal).
 
 Tip: set up an alias to avoid repeating the env path:
 ```bash

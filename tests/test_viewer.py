@@ -14,7 +14,7 @@ from autohelix.agents import AgentRunResult
 from autohelix.harness import AutoHelixRunError, Harness
 from autohelix.run_status import RunStatus, read_run_status
 from autohelix.viewer import make_server
-from autohelix.runs import RunPaths
+from autohelix.runs import RunPaths, short_id
 from tests.test_integration import integration_project  # noqa: F401  (fixture)
 
 
@@ -378,7 +378,7 @@ def test_dashboard_metrics_are_the_latest_accepted_not_the_best():
     assert ProjectRuns._metrics([], {}) is None
 
 
-# ---------- --json / --print ----------
+# ---------- --json / --once / live ----------
 
 def _cli(*args):
     from click.testing import CliRunner
@@ -409,7 +409,7 @@ metrics:
     return integration_project, first.paths.run_id, second.paths.run_id, gone.paths.run_id
 
 
-def test_dashboard_json_and_print(measured_project):
+def test_dashboard_json_and_once(measured_project):
     from autohelix.viewer import ProjectRuns
 
     project, first, second, gone = measured_project
@@ -421,7 +421,7 @@ def test_dashboard_json_and_print(measured_project):
         {"name": "speed", "value": 120, "baseline": 100, "direction": "higher"}]
     assert runs[second]["landing"] == {"commits": 1, "fast_forward": True}
 
-    result = _cli("dashboard", "-p", project, "--print")
+    result = _cli("dashboard", "-p", project, "--once")
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
     assert lines[0].startswith(f"test_project  ") and lines[0].endswith(" @ " + subprocess.run(
@@ -434,12 +434,12 @@ def test_dashboard_json_and_print(measured_project):
     assert rows[second].split()[1:7] == ["finished", "1/1", "130.0", "1", "commit", "to"]
     assert "  autohelix.yaml" in result.output
 
-    assert "no run has metric" in _cli("dashboard", "-p", project, "--print", "--metric", "nope").output.lower()
-    assert _cli("dashboard", "-p", project, "--metric", "speed").exit_code == 2
-    assert _cli("dashboard", "-p", project, "--json", "--print").exit_code == 2
+    assert "no run has metric" in _cli("dashboard", "-p", project, "--once", "--metric", "nope").output.lower()
+    assert _cli("dashboard", "-p", project, "--metric", "speed", "--json").exit_code == 2
+    assert _cli("dashboard", "-p", project, "--json", "--once").exit_code == 2
 
 
-def test_view_json_and_print(measured_project, monkeypatch):
+def test_view_json_and_once(measured_project, monkeypatch):
     project, first, second, gone = measured_project
     data = json.loads(_cli("view", first, "-p", project, "--json").output)
     assert data["project"] == "test_project"
@@ -450,7 +450,7 @@ def test_view_json_and_print(measured_project, monkeypatch):
     # The default run is the selected one.
     assert json.loads(_cli("view", "-p", project, "--json").output)["run"]["id"] == RunPaths(project).run_id
 
-    text = _cli("view", first, "-p", project, "--print").output
+    text = _cli("view", first, "-p", project, "--once").output
     lines = text.splitlines()
     assert lines[0] == f"{first} · finished"
     assert lines[1].startswith("autohelix.yaml · ") and lines[1].endswith(f"iterations 2/2 · landed ({data['branch']})")
@@ -473,11 +473,11 @@ def test_view_json_and_print(measured_project, monkeypatch):
     assert run["metrics"]["values"][0]["direction"] == "higher"
 
     other.write_text((project / "autohelix.yaml").read_text().replace("Test the integration", '" "'))
-    printed = _cli("view", first, "-p", project.name, "--print", "--config", f"{project.name}/other.yaml")
+    printed = _cli("view", first, "-p", project.name, "--once", "--config", f"{project.name}/other.yaml")
     assert printed.exit_code == 0 and "Goal:" not in printed.output
 
 
-def test_print_shows_the_iteration_under_way():
+def test_table_shows_the_iteration_under_way():
     from autohelix.run_table import format_run, format_runs
 
     run = {"id": "r1", "config_file": "a.yaml", "accepted": 1, "target_branch": None,
@@ -497,6 +497,24 @@ def test_print_shows_the_iteration_under_way():
     one = format_run({**header, "run": run}, now=1000).splitlines()
     assert one[0] == "r1 · running · checks 30s · iteration 3"
     assert one[-1].split() == ["3", "…", "running", "·", "checks", "30s"]
+
+
+def test_live_view_shows_the_run_table_and_where_it_stopped(measured_project, monkeypatch):
+    from tests.test_live import _stop_after
+
+    project, first, second, gone = measured_project
+    _stop_after(monkeypatch, polls=2)
+    result = _cli("view", short_id(first), "-p", project)
+    assert result.exit_code == 0, result.output
+    assert f"{first} · finished" in result.output and "Goal: Test the integration" in result.output
+    assert "ITER  OK  speed" in result.output and "Iteration 2 · agent" in result.output
+    assert "Finished at " in result.output and "Stopped watching. The run is unaffected." in result.output
+    # With --config, the table reads that config, as --once does.
+    other = project / "other.yaml"
+    other.write_text((project / "autohelix.yaml").read_text().replace("Test the integration", "Other goal"))
+    _stop_after(monkeypatch)
+    result = _cli("view", first, "-p", project, "--config", other)
+    assert result.exit_code == 0 and "Goal: Other goal" in result.output, result.output
 
 
 def test_pin_is_announced_before_the_checks_copy(integration_project, monkeypatch):  # noqa: F811

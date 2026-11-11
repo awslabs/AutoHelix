@@ -267,9 +267,10 @@ and the latest one guides the next iteration. See [Concepts → Reviewer](docs/c
 <details>
 <summary><b>Viewer and run page</b></summary>
 
-`autohelix view` serves a live page for a run on 127.0.0.1: status, metric chart,
-iterations with notes, diffs, reviews and agent activity, and the run summary once it is
-written. When a run stops, AutoHelix saves the same page as one file,
+`autohelix view` follows a run in the terminal: its status and iterations, with the
+agent's live output below; `autohelix dashboard` lists all runs. `autohelix view --web`
+serves a live page for a run on 127.0.0.1: status, metric chart, iterations with notes,
+diffs, reviews and agent activity, and the run summary once it is written. When a run stops, AutoHelix saves the same page as one file,
 `.autohelix/runs/<id>/output/report.html`, to open in a browser or share. See
 [Concepts → Run page](docs/concepts.md#run-page).
 

@@ -8,6 +8,7 @@ from collections import deque
 
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.panel import Panel
+from rich.segment import Segment
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind
@@ -126,14 +127,14 @@ class LiveDisplay:
         """Called by Rich Live on every refresh — keeps spinner smooth."""
         yield self.render()
 
-    def render(self, elapsed: int | None = None) -> RenderableType:
-        """Render the live status."""
+    def render(self, elapsed: int | None = None, height: int | None = None) -> RenderableType:
+        """Render the live status; `height` caps the verbose panel (older lines go first)."""
         if elapsed is not None:
             self._elapsed = elapsed
         else:
             self._elapsed = int(_time.monotonic() - self._start_time)
         if self.verbose:
-            return self._render_verbose()
+            return self._render_verbose(height)
         return self._render_compact()
 
     def _render_compact(self) -> Text:
@@ -152,7 +153,7 @@ class LiveDisplay:
             label = self.title
         return Text(f"  {frame} {label} ─ {time_str}", style="dim")
 
-    def _render_verbose(self) -> Panel:
+    def _render_verbose(self, height: int | None = None) -> Panel:
         """Full rolling log with event history."""
         mins, secs = divmod(self._elapsed, 60)
         time_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
@@ -184,7 +185,25 @@ class LiveDisplay:
         if len(body) == 2 and not self._state["entries"] and not self._state.get("active_text"):
             body.append(Text(f"Waiting for {self.title.lower()} output...", style="dim"))
 
-        return Panel(Group(*body), title=self.title, border_style=self.border_style)
+        content = Group(*body)
+        if height is not None:  # the borders and the header lines stay; the log keeps its newest lines
+            head = 2 if last_update else 1
+            content = Group(*body[:head], Tail(Group(*body[head:]), max(1, height - 2 - head)))
+        return Panel(content, title=self.title, border_style=self.border_style)
+
+
+class Tail:
+    """The last `height` lines of a renderable, as laid out at the width given."""
+
+    def __init__(self, renderable: RenderableType, height: int):
+        self.renderable = renderable
+        self.height = height
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        lines = console.render_lines(self.renderable, options.update(height=None), pad=False)
+        for line in lines[-self.height:]:
+            yield from line
+            yield Segment.line()
 
 
 # -- Pure functions (easily testable) -----------------------------------------
