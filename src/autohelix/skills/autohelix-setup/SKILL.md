@@ -131,7 +131,8 @@ the loop-design reference. Finish a setup-only request with static validation an
 any execution results, what remains unverified, and commands to verify later
 and start the run.
 
-Use `autohelix watch` to inspect live agent output and `autohelix hint` to steer
+Use `autohelix view` (live in a terminal; `--once` or `--json` print a snapshot and
+exit) to inspect a run and its live agent output, and `autohelix hint` to steer
 the next iteration. History, captured evidence, notes, reviews, the run summary
 (`output/report.md`), and the run page (`output/report.html`) are stored under `.autohelix/`.
 

@@ -12,7 +12,7 @@ from autohelix.parallel import core as parallel
 from autohelix.history import History
 from autohelix.prompt_template import build_prompt_variables
 from autohelix.run_status import read_run_status
-from autohelix.watch import status_line
+from autohelix.live import status_line
 
 
 def _git(project, *args):

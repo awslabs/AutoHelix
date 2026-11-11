@@ -26,8 +26,13 @@
   keeping everything; `autohelix delete` removes a run's state and ref
   (`--force` with unlanded commits). `clear` is gone.
 - Run ids are positional and the project folder is `-p` for every command:
-  `autohelix view k3f9 -p PATH` (was `view PATH --run ID`); likewise `watch`,
-  `report` and `dashboard -p`. `hint` takes `--run`.
+  `autohelix view k3f9 -p PATH` (was `view PATH --run ID`); likewise `report`
+  and `dashboard -p`. `hint` takes `--run`.
+- **`autohelix view` and `autohelix dashboard` are live in the terminal by
+  default**; `--web` serves the web pages (`--port` and `--open` now need
+  it). `view` shows the run's iteration table above the agent's live output,
+  so `autohelix watch` is removed: use `autohelix view`. `--once` prints one
+  snapshot as text (it replaces `--print`); `--json` is unchanged.
 - `budget.time` is also checked before an iteration starts, so a resumed run
   past its time budget starts no new iteration.
 - `dashboard --json`: `lifecycle` is replaced by `archived` (schema 1 was not
@@ -37,9 +42,9 @@
 
 ### Added
 
-- `autohelix dashboard`: a live list of the project's runs, served with the
-  run pages (`/run/<id>/`) by one local server.
-- `--json` and `--print` on `autohelix dashboard` and `autohelix view`: a
+- `autohelix dashboard`: a live list of the project's runs in the terminal;
+  with `--web`, served with the run pages (`/run/<id>/`) by one local server.
+- `--json` and `--once` on `autohelix dashboard` and `autohelix view`: a
   one-time snapshot for scripts (versioned with a `schema` field; fields are
   only ever added) or for the terminal.
 - `autohelix land`.

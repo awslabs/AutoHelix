@@ -100,7 +100,7 @@ before. Scripts that want to continue where they left off should call
 
 When the run finishes (not when interrupted), it writes a summary to `.autohelix/runs/<id>/output/report.md` — see [Configuration → Report](config.md#report).
 
-On first start, performs preflight checks and captures baseline observables. When the run stops, it saves `.autohelix/runs/<id>/output/report.html`, a one-file copy of the [`autohelix view`](#autohelix-view) page — see [Concepts → Run page](concepts.md#run-page).
+On first start, performs preflight checks and captures baseline observables. When the run stops, it saves `.autohelix/runs/<id>/output/report.html`, a one-file copy of the [`autohelix view --web`](#autohelix-view) page — see [Concepts → Run page](concepts.md#run-page).
 
 A refused dirty first start creates no run. The first valid baseline requires
 a clean checkout at the run's starting commit. Resumes use the run's accepted
@@ -194,28 +194,21 @@ with accepted commits that its target branch lacks (they would be lost) unless
 `--force`. Code on your branch, external artifacts, `.claudeignore` and the
 project prompt stay intact. To keep a run but hide it, use `archive`.
 
-## `autohelix watch`
-
-Follow a run in a second terminal.
-
-```bash
-autohelix watch [RUN_ID] [-p PATH]
-```
-
-Shows the live output of whatever the run is doing: the agent during an iteration, the reviewer during a review, and the summary agent at the end (tool calls, text, elapsed time). Below it is a status line with the iteration, phase (agent, checks, review, …) and time in that phase, read from `.autohelix/runs/<id>/runtime/status.json`. When the run stops, watch says how and when, and waits for the next run; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs.
-
 ## `autohelix view`
 
-One run: a snapshot in the terminal, or a live web view in your browser.
+One run, live in the terminal (run it in a second terminal while a run goes), as text once, as JSON, or as a live page in your browser.
 
 ```bash
-autohelix view [RUN_ID] [-p PATH] [--json | --print] [--config FILE]
-autohelix view [RUN_ID] [-p PATH] [--port 8765] [--open]
+autohelix view [RUN_ID] [-p PATH] [--config FILE]
+autohelix view [RUN_ID] [-p PATH] --once | --json [--config FILE]
+autohelix view [RUN_ID] [-p PATH] --web [--port 8765] [--open] [--config FILE]
 ```
 
-`--json` prints the run once and exits, for scripts and agents managing runs: the run's row from [`dashboard --json`](#json-output) under `run`, plus `iterations`, one entry per iteration with `iteration`, `accepted`, `metrics`, `summary` (the commit subject, or why it was rejected), `cost`, `cost_incomplete` and `seconds`. `--print` shows the same as text: status, time and cost, landing, the latest accepted metrics against the baseline, and one row per iteration.
+`RUN_ID` (or its last part) picks the run; the default is the current run. By default the terminal shows, on top, the run's status, time and cost, landing, the latest accepted metrics against the baseline, and one row per iteration, refreshed as the run goes. Below that is the live output of whatever the run is doing: the agent during an iteration, the reviewer during a review, and the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (agent, checks, review, …) and time in that phase, read from `.autohelix/runs/<id>/runtime/status.json`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out. When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
 
-Without either, it serves a browser view of a run's `.autohelix/` state. The header shows run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed). The left side shows the best metric value with total time and cost, the metric over time, and one row per iteration with the agent's one-line summary. The right side starts with the run summary once one is written (see [Configuration → Report](config.md#report)), then has one card per iteration with its notes (`notes/iter-N.md`), agent activity (`logs/iter-N/`, live while it runs), review, changes against the baseline, and captured output (`observations/iter-N/`); click a row or chart point to open that card. Notes that are not tied to an iteration are listed under Shared notes. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
+`--once` prints the top part (status and iteration table) once as text and exits. `--json` prints the run once and exits, for scripts and agents managing runs: the run's row from [`dashboard --json`](#json-output) under `run`, plus `iterations`, one entry per iteration with `iteration`, `accepted`, `metrics`, `summary` (the commit subject, or why it was rejected), `cost`, `cost_incomplete` and `seconds`. Use one of `--once`, `--json` and `--web` at a time.
+
+`--web` serves a browser view of a run's `.autohelix/` state instead (`--port`, default 8765, and `--open` go with it). The header shows run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed). The left side shows the best metric value with total time and cost, the metric over time, and one row per iteration with the agent's one-line summary. The right side starts with the run summary once one is written (see [Configuration → Report](config.md#report)), then has one card per iteration with its notes (`notes/iter-N.md`), agent activity (`logs/iter-N/`, live while it runs), review, changes against the baseline, and captured output (`observations/iter-N/`); click a row or chart point to open that card. Notes that are not tied to an iteration are listed under Shared notes.
 
 The server listens on `127.0.0.1` only and has no login, so on a shared machine other users of that machine can open it. From another machine, forward the port over SSH:
 
@@ -227,16 +220,18 @@ The page lives at `/run/<id>/`; the server's root (`/`) is the run list describe
 
 ## `autohelix dashboard`
 
-The project's runs: a snapshot in the terminal, or a live list in your browser.
+The project's runs, live in the terminal, as text once, as JSON, or as a live list in your browser.
 
 ```bash
-autohelix dashboard [-p PATH] [--json | --print [--metric NAME]]
-autohelix dashboard [-p PATH] [--port 8765] [--open]
+autohelix dashboard [-p PATH] [--metric NAME]
+autohelix dashboard [-p PATH] --once [--metric NAME]
+autohelix dashboard [-p PATH] --json
+autohelix dashboard [-p PATH] --web [--port 8765] [--open]
 ```
 
-`--json` prints every run once and exits (see [JSON output](#json-output)); `--print` shows the same columns as the web page as a table, with one metric (`--metric`, default the first one of the most recently active run) and without archived runs, which it only counts.
+By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C: the id; the status (with the phase while running), with time and cost so far underneath; iterations of the run's budget; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; and when the run was last active. The header names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
 
-Without either, it serves one row per run in `.autohelix/runs/`, kept to the essentials: the id; the status (with the phase while running), with time and cost so far underneath; iterations of the run's budget; one metric from the latest accepted iteration (the code a land would deliver; its change against the run's own baseline is in the tooltip), picked from a menu in the column header; and landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; and when the run was last active. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel) and shows the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view`](#autohelix-view) page. It is the same server as `autohelix view`, with the same `127.0.0.1`-only binding.
+`--web` serves the same rows as a live page instead (`--port`, default 8765, and `--open` go with it). There the metric's change against the run's own baseline is in the tooltip, and the metric is picked from a menu in the column header. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel). Archived runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view --web`](#autohelix-view) page. It is the same server as `autohelix view --web`, with the same `127.0.0.1`-only binding.
 
 ### JSON output
 

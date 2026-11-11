@@ -21,7 +21,7 @@ uv pip install -e ".[dev]"
 ## Project Layout
 
 - `src/autohelix/harness.py` - main iteration loop (start here)
-- `src/autohelix/cli.py` - CLI commands (init, run, resume, land, archive, delete, watch, view, dashboard, report)
+- `src/autohelix/cli.py` - CLI commands (init, run, resume, land, archive, delete, view, dashboard, report)
 - `src/autohelix/config.py` - configuration dataclasses and parsing
 - `src/autohelix/agents/` - agent backends (claudecode, codex, opencode, mock)
 - `src/autohelix/iteration.py` - one iteration's copies: agent copy, freeze to a tree, evaluation copies, accept, notes/cleanup
@@ -32,9 +32,10 @@ uv pip install -e ".[dev]"
 - `src/autohelix/workspace.py` - candidate copies (`Repo`, `Copy`, `Fingerprint`), tree snapshots, write scope and judge guard
 - `src/autohelix/display.py` - live Rich display
 - `src/autohelix/run_status.py` - live run status (`.autohelix/runs/<id>/runtime/status.json`)
-- `src/autohelix/viewer.py` + `viewer_resources/` - `autohelix view` / `dashboard` web app (`/` run list, `/run/<id>/` one run)
-- `src/autohelix/run_table.py` - `view --print` / `dashboard --print` text (the `--json` payloads, `ProjectRuns.runs()` / `.run()`)
-- `src/autohelix/replay.py` - parse saved agent logs into events (watch, view)
+- `src/autohelix/live.py` - live terminal `view` (run table + the log the run status points at) and `dashboard`
+- `src/autohelix/viewer.py` + `viewer_resources/` - `autohelix view --web` / `dashboard --web` app (`/` run list, `/run/<id>/` one run)
+- `src/autohelix/run_table.py` - `view` / `dashboard` terminal text (the `--json` payloads, `ProjectRuns.runs()` / `.run()`)
+- `src/autohelix/replay.py` - parse saved agent logs into events (live view, web view)
 - `src/autohelix/prompt_template.py` - agent prompt rendering
 - `tests/` - test suite (pytest)
 - `examples/` - example projects (sorting, ml-recipe, writing,
@@ -53,9 +54,8 @@ autohelix parallel     # Run multiple workers in parallel on the same goal
 autohelix land         # Fast-forward the run tip onto its starting branch
 autohelix archive      # Hide a run from the dashboard and a bare resume; keeps everything
 autohelix delete       # Remove a run's state and ref (--force with unlanded commits)
-autohelix watch        # Follow a run in the terminal (second terminal)
-autohelix view         # Live web view of a run (127.0.0.1); --json / --print for a snapshot
-autohelix dashboard    # Live list of the project's runs (same server as view); --json / --print
+autohelix view         # Follow a run live in the terminal; --once / --json snapshot; --web page (127.0.0.1)
+autohelix dashboard    # The project's runs, live in the terminal; --once / --json; --web (same server as view)
 autohelix hint         # Send a hint to the running agent (picked up next iteration)
 autohelix report       # Agent-written analysis of the run
 ```

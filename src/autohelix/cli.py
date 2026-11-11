@@ -34,7 +34,7 @@ def _parallel_marker_path(project_path: Path) -> Path:
 
 def _warn_if_parallel(project_path: Path, console) -> None:
     """If this repo was driven by `autohelix parallel`, warn that top-level
-    commands (report/watch) see nothing — the run state lives in the workers'
+    commands (report/view) see nothing — the run state lives in the workers'
     worktrees, not here. Lists where to point instead. Best-effort only.
     """
     import json as _json
@@ -406,7 +406,7 @@ def parallel(worker_configs: tuple[str, ...], path: str, sync_every: int | None,
 
     # Write a small marker recording where the resumable state lives and how the
     # run was launched. The worktrees remain the source of truth (they hold each
-    # worker's live .autohelix/ state); the marker lets top-level report/watch
+    # worker's live .autohelix/ state); the marker lets top-level report/view
     # warn that the main repo's state is empty and point at the workers, and lets
     # a bare `autohelix parallel` resume without re-listing --worker configs.
     marker = _parallel_marker_path(repo)
@@ -568,94 +568,149 @@ def hint(message: str, path: str, run_id: str | None):
 
 
 _JSON_HELP = "Print once as JSON and exit (for scripts and agents; fields are only ever added)."
-_PRINT_HELP = "Print once as a plain-text table and exit."
+_ONCE_HELP = "Print the table once and exit."
+_WEB_HELP = "Serve a live web page on 127.0.0.1 instead."
+_PORT_HELP = "Port for --web (default 8765)."
 
 
-def _snapshot(as_json: bool, as_print: bool) -> bool:
-    if as_json and as_print:
-        raise click.UsageError("Use either --json or --print, not both.")
-    return as_json or as_print
+def _mode(as_json: bool, once: bool, web: bool, port: int | None, open_browser: bool) -> str:
+    """live (the default), once, json or web; one at a time."""
+    if as_json + once + web > 1:
+        raise click.UsageError("Use one of --json, --once and --web.")
+    if not web and (port is not None or open_browser):
+        raise click.UsageError("--port and --open apply to --web.")
+    return "json" if as_json else "once" if once else "web" if web else "live"
+
+
+def _mode_options(command):
+    """The options `view` and `dashboard` share: the project and one mode."""
+    for option in reversed([
+        click.option("--path", "-p", type=click.Path(exists=True, file_okay=False, path_type=Path), default="."),
+        click.option("--once", is_flag=True, help=_ONCE_HELP),
+        click.option("--json", "as_json", is_flag=True, help=_JSON_HELP),
+        click.option("--web", is_flag=True, help=_WEB_HELP),
+        click.option("--port", type=click.IntRange(0, 65535), help=_PORT_HELP),
+        click.option("--open", "open_browser", is_flag=True, help="With --web: open the page in a browser."),
+    ]):
+        command = option(command)
+    return command
 
 
 @main.command()
 @click.argument("run_id", required=False)
-@click.option("--path", "-p", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
-@click.option("--json", "as_json", is_flag=True, help=_JSON_HELP)
-@click.option("--print", "as_print", is_flag=True, help=_PRINT_HELP)
-@click.option("--port", type=click.IntRange(0, 65535), default=8765, show_default=True)
+@_mode_options
 @click.option("--config", "-c", "config_file", type=click.Path(exists=True, dir_okay=False, path_type=Path),
               help="Config file (default: from last run, or autohelix.yaml)")
-@click.option("--open", "open_browser", is_flag=True, help="Open the viewer in a browser.")
-def view(run_id: str | None, path: Path, as_json: bool, as_print: bool, port: int, config_file: Path | None,
-         open_browser: bool):
-    """One run (RUN_ID or its last part, default the current run): --json or
-    --print a snapshot, else a live web page.
+def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, port: int | None,
+         open_browser: bool, config_file: Path | None):
+    """One run, live in the terminal: RUN_ID (or its last part), else the current run.
 
-    --json and --print show the run's status, budgets, latest accepted
-    metrics, landing state and one row per iteration, then exit.
+    On top, the run's status, budgets, latest accepted metrics, landing state
+    and one row per iteration; below, the live output of the agent, reviewer
+    or summary agent. Keeps waiting when the run stops; Ctrl-C stops watching
+    (not the run). Safe to run alongside `autohelix run`; it only reads
+    .autohelix/.
 
-    Without them, serves a live page on 127.0.0.1. Safe to run alongside
-    `autohelix run`; it only reads .autohelix/. The same server also lists
-    all runs at / (see `autohelix dashboard`).
+    --once prints the table and exits; --json prints it as JSON. --web serves
+    a live page on 127.0.0.1 instead (the same server lists all runs at /).
     Over SSH: ssh -L 8765:127.0.0.1:8765 host, then open http://localhost:8765.
     """
+    mode = _mode(as_json, once, web, port, open_browser)
     run_id = _run_id(path, run_id)
+    if mode == "live":
+        _view_live(path.resolve(), run_id, config_file)
+        return
     try:
         selected = RunPaths(path, run_id).run_id
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
-    if _snapshot(as_json, as_print):
-        from autohelix.viewer import ProjectRuns
-
-        runs = ProjectRuns(path)
-        if not selected or not runs.exists(selected):
-            raise click.ClickException(f"No run {run_id!r} in {path.resolve()}" if run_id else
-                                       "No current run; start one with `autohelix run` or name one.")
-        try:
-            data = runs.run(selected, config_file)
-        except RuntimeError as error:
-            raise click.ClickException(str(error)) from error
-        click.echo(json.dumps(data, indent=2) if as_json else run_table.format_run(data), nl=as_json)
+    if mode == "web":
+        _serve(path, port, open_browser, f"/run/{selected}/" if selected else "/",
+               config_file=config_file, run_id=run_id)
         return
-    _serve(path, port, open_browser, f"/run/{selected}/" if selected else "/",
-           config_file=config_file, run_id=run_id)
+    from autohelix.viewer import ProjectRuns
+
+    runs = ProjectRuns(path)
+    if not selected or not runs.exists(selected):
+        raise click.ClickException(f"No run {run_id!r} in {path.resolve()}" if run_id else
+                                   "No current run; start one with `autohelix run` or name one.")
+    try:
+        data = runs.run(selected, config_file)
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(json.dumps(data, indent=2) if as_json else run_table.format_run(data), nl=as_json)
+
+
+def _view_live(project_path: Path, run_id: str | None, config_file: Path | None) -> None:
+    from rich.console import Console
+
+    from autohelix.live import view as live_view
+    from autohelix.run_status import read_run_status
+
+    console = Console()
+    if _parallel_marker_path(project_path).exists() and read_run_status(project_path) is None:
+        _warn_if_parallel(project_path, console)  # lists the workers to view instead
+        raise SystemExit(1)
+    if not (project_path / ".autohelix").is_dir():
+        console.print(f"[red]No .autohelix/ in {project_path}.[/red] Run this in an AutoHelix project.")
+        raise SystemExit(1)
+    try:
+        config, _ = load_config(project_path, config_file=config_file or read_stored_config_path(project_path, run_id))
+        backend = config.agent.type
+    except Exception:  # noqa: BLE001 - the log parser can tell backends apart on its own
+        backend = None
+    try:
+        live_view(project_path, backend, console, run_id=run_id, config_file=config_file)
+    except KeyboardInterrupt:
+        console.print("[dim]Stopped watching. The run is unaffected.[/dim]")
 
 
 @main.command()
-@click.option("--path", "-p", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
-@click.option("--json", "as_json", is_flag=True, help=_JSON_HELP)
-@click.option("--print", "as_print", is_flag=True, help=_PRINT_HELP)
-@click.option("--metric", help="With --print: the metric column (default: the most recent run's first).")
-@click.option("--port", type=click.IntRange(0, 65535), default=8765, show_default=True)
-@click.option("--open", "open_browser", is_flag=True, help="Open the dashboard in a browser.")
-def dashboard(path: Path, as_json: bool, as_print: bool, metric: str | None, port: int, open_browser: bool):
-    """This project's runs: --json or --print a snapshot, else a live web page.
+@_mode_options
+@click.option("--metric", help="The table's metric column (default: the most recent run's first).")
+def dashboard(path: Path, once: bool, as_json: bool, web: bool, port: int | None, open_browser: bool,
+              metric: str | None):
+    """This project's runs, live in the terminal.
 
-    --json and --print list every run with its status, iterations of the
-    budget, latest accepted metrics, landing state and last activity, then
-    exit. --print leaves archived runs out (--json has them).
+    One row per run with its status, iterations of the budget, latest
+    accepted metrics, landing state and last activity; archived runs are
+    counted, not listed. Redrawn every 5 seconds until Ctrl-C.
 
-    Without them, serves a live page on 127.0.0.1; each run links to its
-    `autohelix view` page. Over SSH: ssh -L 8765:127.0.0.1:8765 host, then
+    --once prints the table and exits; --json prints every run (archived ones
+    too) as JSON. --web serves a live page on 127.0.0.1 instead; each run
+    links to its run page. Over SSH: ssh -L 8765:127.0.0.1:8765 host, then
     open http://localhost:8765.
     """
-    if metric and not as_print:
-        raise click.UsageError("--metric applies to --print (the web page has a menu).")
-    if not _snapshot(as_json, as_print):
+    mode = _mode(as_json, once, web, port, open_browser)
+    if metric and mode in ("json", "web"):
+        raise click.UsageError("--metric applies to the table (live or --once); the web page has a menu.")
+    if mode == "web":
         _serve(path, port, open_browser, "/")
         return
     from autohelix.viewer import ProjectRuns
 
     data = ProjectRuns(path).runs()
+    if mode == "json":
+        click.echo(json.dumps(data, indent=2))
+        return
     names = run_table.metric_names([r for r in data["runs"] if not r.get("archived")])
     if metric and metric not in names:
         raise click.ClickException(f"No run has metric {metric!r}" + (f"; known: {', '.join(names)}" if names else ""))
-    click.echo(json.dumps(data, indent=2) if as_json else run_table.format_runs(data, metric=metric), nl=as_json)
+    if mode == "once":
+        click.echo(run_table.format_runs(data, metric=metric), nl=False)
+        return
+    from autohelix.live import dashboard as live_dashboard
+
+    try:
+        live_dashboard(path, metric=metric)
+    except KeyboardInterrupt:
+        pass
 
 
-def _serve(project: Path, port: int, open_browser: bool, page: str, **options) -> None:
+def _serve(project: Path, port: int | None, open_browser: bool, page: str, **options) -> None:
     from autohelix.viewer import make_server
 
+    port = 8765 if port is None else port
     try:
         server = make_server(project, port, **options)
     except OSError as exc:
@@ -671,41 +726,6 @@ def _serve(project: Path, port: int, open_browser: bool, page: str, **options) -
         pass
     finally:
         server.server_close()
-
-
-@main.command()
-@click.argument("run_id", required=False)
-@click.option("--path", "-p", type=click.Path(exists=True), default=".")
-def watch(run_id: str | None, path: str):
-    """Follow a run (RUN_ID or its last part, default the current run) in the terminal.
-
-    Run this in a second terminal while a run is active. Shows what the
-    run is doing and the live output of the agent, reviewer or summary agent.
-    Keeps waiting when the run stops; Ctrl-C stops watching (not the run).
-    """
-    from rich.console import Console
-
-    from autohelix.run_status import read_run_status
-    from autohelix.watch import watch as watch_run
-
-    console = Console()
-    project_path = Path(path).resolve()
-    run_id = _run_id(project_path, run_id)
-    if _parallel_marker_path(project_path).exists() and read_run_status(project_path) is None:
-        _warn_if_parallel(project_path, console)  # lists the workers to watch instead
-        raise SystemExit(1)
-    if not (project_path / ".autohelix").is_dir():
-        console.print(f"[red]No .autohelix/ in {project_path}.[/red] Run this in an AutoHelix project.")
-        raise SystemExit(1)
-    try:
-        config, _ = load_config(project_path, config_file=read_stored_config_path(project_path, run_id))
-        backend = config.agent.type
-    except Exception:  # noqa: BLE001 - the log parser can tell backends apart on its own
-        backend = None
-    try:
-        watch_run(project_path, backend, console, run_id=run_id)
-    except KeyboardInterrupt:
-        console.print("[dim]Stopped watching. The run is unaffected.[/dim]")
 
 
 @main.command()

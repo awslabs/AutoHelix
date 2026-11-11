@@ -310,7 +310,7 @@ They run in a fresh copy of the accepted code (HEAD at the accepted commit), aft
 
 Stop conditions only end a run early: budgets still apply. If the baseline already meets one, no iterations run. If you interrupt a run while its stop commands are running, the iteration is kept but not checked; the next accepted iteration is. A stop pauses the run: `autohelix resume` continues it (and it stops again after the next accepted iteration if the condition still holds); raise the target or remove the condition first.
 
-Why a run ended is shown at the end of the run, in `autohelix view`, `autohelix watch`, the run summary, and `.autohelix/runs/<id>/runtime/status.json` (`stop_reason`).
+Why a run ended is shown at the end of the run, in `autohelix view` (terminal and `--web`), the run summary, and `.autohelix/runs/<id>/runtime/status.json` (`stop_reason`).
 
 ### Budget
 

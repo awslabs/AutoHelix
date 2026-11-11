@@ -177,7 +177,8 @@ autohelix run -n 5
 
 You'll see a live display of agent activity, followed by constraint/metric results for each iteration.
 
-Use `autohelix watch` in a second terminal for detailed live output.
+Use `autohelix view` in a second terminal to follow the run: its iterations so far, and the
+agent's live output below them (`autohelix view --web` for the same in a browser).
 
 ### 4. Continue, set aside or start over
 

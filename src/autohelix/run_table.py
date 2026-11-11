@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""`dashboard --print` / `view --print`: the `--json` payloads as plain text.
+"""The terminal `dashboard` / `view` (live, or `--once`): the `--json` payloads as plain text.
 
 Same words and choices as the web pages (dashboard.js, viewer.js), one snapshot,
 no colors, so it can be piped.

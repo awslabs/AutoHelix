@@ -106,7 +106,7 @@ def test_resuming_an_archived_run_by_id_brings_it_back(project):  # noqa: F811
     assert paths.read_identity()["archived"] is True
     listed = json.loads(cli(project, "dashboard", "--json").output)["runs"]
     assert [r["archived"] for r in listed] == [True]
-    assert "1 archived (not listed" in cli(project, "dashboard", "--print").output
+    assert "1 archived (not listed" in cli(project, "dashboard", "--once").output
     result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     assert "archived" not in paths.read_identity()

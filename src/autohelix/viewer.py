@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""`autohelix view` / `autohelix dashboard`: a small live web app, served on 127.0.0.1.
+"""`autohelix view --web` / `autohelix dashboard --web`: a small live web app, served on 127.0.0.1.
 
 Two pages share one server: `/` lists the project's runs, `/run/<id>/` shows one
 run. The pages poll a few JSON routes. There are no write routes. Every file read
