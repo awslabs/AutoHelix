@@ -170,6 +170,18 @@ The server listens on `127.0.0.1` only and has no login, so on a shared machine 
 ssh -L 8765:127.0.0.1:8765 user@host   # then open http://localhost:8765
 ```
 
+The page lives at `/run/<id>/`; the server's root (`/`) is the run list described under [`autohelix dashboard`](#autohelix-dashboard).
+
+## `autohelix dashboard`
+
+Live list of the project's runs, in your browser.
+
+```bash
+autohelix dashboard [path] [--port 8765] [--open]
+```
+
+One row per run in `.autohelix/runs/`, kept to the essentials: the id; the status (with the phase while running), with time and cost so far underneath; iterations of the run's budget; one metric from the latest accepted iteration (the code a land would deliver; its change against the run's own baseline is in the tooltip), picked from a menu in the column header; and landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; and when the run was last active. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel) and shows the project's total cost, including abandoned runs. Live runs come first; abandoned runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view`](#autohelix-view) page. It is the same server as `autohelix view`, with the same `127.0.0.1`-only binding.
+
 ## `autohelix hint`
 
 Send a hint to a running agent, picked up at the start of its next iteration.

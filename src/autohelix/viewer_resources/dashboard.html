@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoHelix dashboard</title>
+  <link rel="icon" href="/logo-light.svg">
+  <link rel="stylesheet" href="/viewer.css">
+  <script src="/dashboard.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="heading">
+      <h1 id="title">AutoHelix</h1>
+      <p id="where" class="where"></p>
+      <p id="subtitle" class="subtitle"></p>
+    </div>
+    <div class="top-right">
+      <span id="status" class="status">Connecting…</span>
+      <button id="theme" class="theme" title="Theme: follow the system, or force light or dark"></button>
+      <img id="logo" src="/logo-light.svg" alt="AutoHelix" class="logo">
+    </div>
+  </header>
+
+  <main class="runs-page">
+    <table class="iterations runs">
+      <thead><tr>
+        <th>Run</th>
+        <th title="Below the state: iteration time and cost so far, as the budgets count them">Status</th>
+        <th title="Iterations so far, of the run's budget">Iterations</th>
+        <th id="metric-head" class="value" hidden title="The latest accepted iteration: the code a land would deliver">
+          <select id="metric" aria-label="Metric"></select></th>
+        <th title="Accepted commits that the run's target branch does not have yet">Landing</th>
+        <th>Last active</th>
+      </tr></thead>
+      <tbody id="runs"></tbody>
+    </table>
+    <p id="empty" class="muted empty" hidden>No runs yet. Start one with <code>autohelix run</code>.</p>
+  </main>
+</body>
+</html>

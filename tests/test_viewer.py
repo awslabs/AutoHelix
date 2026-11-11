@@ -260,3 +260,83 @@ def test_interrupted_run_still_saves_static_page(integration_project, monkeypatc
     state = _snapshot(page)["routes"]["/api/state"]
     assert state["status"]["state"] == "interrupted"
     assert state["report"] is None
+
+
+# ---------- dashboard ----------
+
+def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa: F811
+    first = Harness(integration_project)
+    first.run(max_iterations=2, report=False)
+    second = Harness(integration_project, new=True, name="second", land_mode="manual")
+    second.run(max_iterations=1, report=False)
+    server = make_server(integration_project, port=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        assert b"dashboard.js" in get(base + "/")[1]
+        listing = json.loads(get(base + "/api/runs")[1])
+        runs = {r["id"]: r for r in listing["runs"]}
+        assert set(runs) == {first.paths.run_id, second.paths.run_id}
+        one, two = runs[first.paths.run_id], runs[second.paths.run_id]
+        assert (one["lifecycle"], one["status"]["state"]) == ("open", "finished")
+        progress = one["progress"]
+        assert (progress["iterations"], progress["max_iterations"], progress["max_cost_usd"]) == (2, 2, None)
+        assert progress["seconds"] > 0
+        assert one["landing"] == {"commits": 0, "fast_forward": True}  # auto-landed at the end of its segment
+        assert two["landing"] == {"commits": 1, "fast_forward": True}  # manual: ready to land
+        assert two["accepted"] == 1 and two["metrics"] is None
+        assert two["config"]["file"] == "autohelix.yaml"
+
+        # A user commit on the target: the manual run can no longer fast-forward.
+        (integration_project / "user.txt").write_text("mine\n")
+        subprocess.run(["git", "add", "user.txt"], cwd=integration_project, check=True)
+        subprocess.run(["git", "commit", "-qm", "user work"], cwd=integration_project, check=True)
+        runs = {r["id"]: r for r in json.loads(get(base + "/api/runs")[1])["runs"]}
+        assert runs[second.paths.run_id]["landing"] == {"commits": 1, "fast_forward": False}
+        assert runs[first.paths.run_id]["landing"]["commits"] == 0
+
+        # Each run has its own page and routes, independent of `current`.
+        assert b"viewer.js" in get(base + f"/run/{first.paths.run_id}/")[1]
+        state = json.loads(get(base + f"/api/run/{first.paths.run_id}/state")[1])
+        assert state["run_id"] == first.paths.run_id and len(state["iterations"]) == 3
+        assert json.loads(get(base + "/api/state")[1])["run_id"] == second.paths.run_id
+        detail = json.loads(get(base + f"/api/run/{first.paths.run_id}/iteration/2")[1])
+        assert "Modified in iteration 2" in detail["diff"]
+
+        for path in ("/run/missing-zzzz/", "/api/run/missing-zzzz/state", "/run/../", "/api/run/..%2f/state",
+                     f"/api/run/{first.paths.run_id}/history.jsonl", f"/run/{first.paths.run_id}/x"):
+            assert get(base + path)[0] == 404, path
+        assert get(base + "/api/runs", host="attacker.example")[0] == 403
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_tolerates_an_unreadable_run(tmp_path, run_paths):
+    from autohelix.viewer import ProjectRuns
+
+    broken = RunPaths(tmp_path).runs / "bad-aaaa"
+    broken.mkdir(parents=True)
+    (broken / "run.json").write_text("{not json")
+    rows = {r["id"]: r for r in ProjectRuns(tmp_path).runs()["runs"]}
+    assert "error" in rows["bad-aaaa"]
+    assert "error" not in rows["test"] and rows["test"]["landing"] is None  # no target branch
+
+
+def test_dashboard_metrics_are_the_latest_accepted_not_the_best():
+    from autohelix.history import IterationResult
+    from autohelix.viewer import ProjectRuns
+
+    records = [
+        IterationResult(iteration=0, accepted=True, metrics={"speed": 100, "mem": 50}),
+        IterationResult(iteration=1, accepted=True, metrics={"speed": 300, "mem": 60}),
+        IterationResult(iteration=2, accepted=True, metrics={"speed": 200, "mem": 40, "extra": 1}),
+        IterationResult(iteration=3, accepted=False, metrics={"speed": 900, "mem": 10}),
+        IterationResult(iteration=4, accepted=True, reason="recovered"),  # no measurement
+    ]
+    m = ProjectRuns._metrics(records, {"mem": "lower", "speed": "higher"})
+    assert m["iteration"] == 2
+    assert [(v["name"], v["value"], v["baseline"]) for v in m["values"]] == [
+        ("mem", 40, 50), ("speed", 200, 100), ("extra", 1, None)]  # declared order first
+    assert ProjectRuns._metrics(records[:1], {})["iteration"] == 0
+    assert ProjectRuns._metrics([], {}) is None

@@ -96,7 +96,7 @@ select { font: inherit; padding: 2px 6px; background: var(--bg); color: var(--te
 .iterations tbody tr { cursor: pointer; }
 .iterations tbody tr:hover { background: var(--panel); }
 .iterations tbody tr.selected { background: var(--panel); box-shadow: inset 3px 0 var(--accent); }
-.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.num, .iterations th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .summary { color: var(--muted); }
 .pill { font-size: 12px; font-weight: 550; }
 .pill.accepted { color: var(--good); }
@@ -196,5 +196,27 @@ pre { white-space: pre-wrap; word-break: break-word; }
 .ev.error { color: var(--bad); }
 .ev.meta { color: var(--muted); }
 
+/* dashboard (run list) */
+.crumbs a { color: var(--accent); text-decoration: none; }
+.crumbs a:hover { text-decoration: underline; }
+.runs-page { padding: 16px 28px 40px; }
+.runs td { vertical-align: top; }
+.run-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; color: var(--text); text-decoration: none; }
+.run-id:hover { color: var(--accent); }
+.run-config { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.runs tr.abandoned { opacity: 0.55; }
+.runs .warn { color: var(--bad); }
+.runs th select { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.pill.finished { color: var(--good); }
+.pill.failed, .pill.crashed, .pill.error { color: var(--bad); }
+.pill.interrupted, .pill.abandoned, .pill.idle { color: var(--muted); }
+.empty { padding: 24px 8px; }
+
 .yaml-key { color: var(--accent); }
 .yaml-comment { color: var(--muted); font-style: italic; }
+.subtitle { margin: 4px 0 0; color: var(--muted); }
+.status-sub { margin-top: 2px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.runs td.counts { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.where { margin: 4px 0 0; font-size: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+button.link { font: inherit; color: inherit; background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+button.link:hover { color: var(--text); }

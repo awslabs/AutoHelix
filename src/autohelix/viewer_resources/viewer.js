@@ -6,6 +6,9 @@
 const POLL_MS = 2000;
 const SNAPSHOT = window.AUTOHELIX_SNAPSHOT || null;
 const $ = (id) => document.getElementById(id);
+// On /run/<id>/ the routes are /api/run/<id>/...; the snapshot keys them as /api/....
+const RUN_PAGE = SNAPSHOT ? null : location.pathname.match(/^\/run\/([a-z0-9][a-z0-9-]*)\/$/);
+const api = (route) => (RUN_PAGE ? route.replace(/^\/api\//, `/api/run/${RUN_PAGE[1]}/`) : route);
 
 let state = null;
 let selected = null;   // iteration whose card was opened last
@@ -560,7 +563,7 @@ function fmtSize(bytes) {
 }
 
 function artifactEl(iteration, a) {
-  const url = `/api/artifact/${iteration}/${encodeURIComponent(a.name)}`;
+  const url = api(`/api/artifact/${iteration}/${encodeURIComponent(a.name)}`);
   const body = el('div', { className: 'artifact-body' });
   const item = el('details', { className: 'artifact' },
     el('summary', {}, el('span', { textContent: a.name }), el('span', { className: 'muted', textContent: ` · ${fmtSize(a.size)}` })),
@@ -761,7 +764,7 @@ async function getJSON(url) {
     if (url in SNAPSHOT.routes) return SNAPSHOT.routes[url];
     throw new Error(`${url}: not in this file`);
   }
-  const res = await fetch(url, { cache: 'no-store' });
+  const res = await fetch(api(url), { cache: 'no-store' });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return res.json();
 }
@@ -769,9 +772,13 @@ async function getJSON(url) {
 function render() {
   const names = metricNames();
   if (!names.includes(metric)) metric = names[0] || null;
-  setText('title', state.title);
-  document.title = `${state.title} · AutoHelix${SNAPSHOT ? ' report' : ''}`;
-  if (SNAPSHOT) { show('kind', true); setText('kind', `Run report · saved ${fmtClock(SNAPSHOT.saved_at)}`); }
+  // The page is about one run: its id is the title; the project is the way back to the list.
+  const project = state.project || state.title;
+  const title = state.run_id || state.title;
+  setText('title', title);
+  document.title = `${title} · ${project} · AutoHelix${SNAPSHOT ? ' report' : ''}`;
+  if (SNAPSHOT) { show('kind', true); setText('kind', `${project} · run report · saved ${fmtClock(SNAPSHOT.saved_at)}`); }
+  else if (state.run_id) { show('crumbs', true); setText('crumb-project', project); setText('crumb-run', state.run_id); }
   setText('goal', (state.goal || '').trim());
   renderStatus();
   renderConfig();
