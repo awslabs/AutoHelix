@@ -413,6 +413,8 @@ def test_guard_detects_submodule_edit_and_commit(project, tmp_path):
     git(project, "-c", "protocol.file.allow=always", "submodule", "add", str(child), "module")
     git(project, "commit", "-qm", "submodule")
     module = project / "module"
+    git(module, "config", "user.email", "test@example.com")  # a fresh clone has no identity of its own
+    git(module, "config", "user.name", "Test")
     guard = DirectoryGuard(project)
     (module / "code.py").write_text("judge change")
     git(module, "add", ".")
