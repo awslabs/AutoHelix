@@ -164,7 +164,7 @@ AutoHelix requires a clean committed working tree. Review and commit the
 intended setup changes first; preserve unrelated work:
 
 ```bash
-git add autohelix.yaml .gitignore
+git add autohelix.yaml
 git commit -m "Configure AutoHelix experiment"
 ```
 
