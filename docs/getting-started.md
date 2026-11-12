@@ -181,9 +181,10 @@ See the [configuration reference](config.md).
 
 ### 3. Run
 
-AutoHelix needs a git repository with a commit, and a clean committed working
-tree for the first baseline. Review and commit the intended setup changes
-first; preserve unrelated work:
+AutoHelix needs a git repository with a commit, and the first baseline needs no
+uncommitted changes to tracked files. Commit the config, and any scripts its
+commands use (iteration copies are made from the commit); preserve unrelated
+work:
 
 ```bash
 git add autohelix.yaml
@@ -233,31 +234,20 @@ Find `<initial-commit>` with `git log --oneline` (the one before "AutoHelix iter
 ### 5. Several configs
 
 A project can have several loops: one config each, in an `autohelix/` folder
-at the project root, versioned with the project.
+at the project root, versioned with the project. Commit the configs and any
+scripts their commands use: iteration copies are made from the commit.
 
 ```
 autohelix/
-  perf.yaml              # autohelix run perf
+  perf.yaml              # autohelix setup perf; autohelix run perf
   docs.yaml              # autohelix run docs
   prompts/perf.md        # prompt_template: prompts/perf.md, in perf.yaml
 ```
 
-- `autohelix setup NAME` writes `autohelix/NAME.yaml`, and
-  `autohelix run NAME` starts a run of it.
-- A bare `autohelix run` uses `autohelix.yaml`, else the only config in
-  `autohelix/`; with several, it lists them and asks you to pick one.
-- Runs are named after the file: runs of `perf.yaml` get ids like
-  `20261112-1400-perf-0mws` (unless the config sets `name:`).
-- Prompt templates and helper scripts can live in subfolders
-  (`autohelix/prompts/`): only the `.yaml` files directly in `autohelix/` are
-  configs. `prompt_template:` is relative to the config's folder, while
-  commands and scope paths stay relative to the project root.
-- `autohelix resume <id>` uses the config the run started with. A bare
-  `resume` uses the config a bare `run` would, so with several configs, name
-  the run.
-
-Configs live only at `autohelix.yaml` or `autohelix/<name>.yaml`; `.autohelix/`
-holds the runs' state, not configs.
+Runs are named after the file (`20261112-1400-perf-0mws`). A bare
+`autohelix run` uses `autohelix.yaml`, else the only config in `autohelix/`;
+with several, it stops with the list (`autohelix run <name>` picks one). See
+[CLI → Config files](cli.md#config-files) for the rules.
 
 ### 6. Several runs side by side
 

@@ -479,8 +479,8 @@ baseline and when resuming a run: a run past its budget stops at once
 `name` is an optional readable part of newly generated run ids
 (`20261111-1432-<name>-k3f9`); it does not select an existing run. It accepts
 lowercase letters, digits and hyphens, with at most 32 characters. Without
-it, the config file's stem is the name (`autohelix/perf.yaml` gives
-`20261112-1400-perf-0mws`); `autohelix.yaml` gives none.
+it, the config file's stem is the name; see
+[CLI → Config files](cli.md#config-files).
 
 `land` is optional: `auto` fast-forwards accepted code to the starting branch
 when a run segment ends, while `manual` keeps it on the run ref until
@@ -538,6 +538,8 @@ replacement; there are no aliases and no migration.
 | a bare number as the threshold (`max_regression_pct: 5` was one; `regress: 5` now) | `regress: 5%` | `write the percentage with %, e.g. 5%, got 5` |
 | `timeout:` in seconds | durations everywhere (a bare number, or a string of digits like `"90"`, is still seconds) | |
 | `.autohelix/prompt.md` | `prompt_template:` (relative to the config) | a warning at run start |
+| `-c/--config FILE` on `run`, `resume`, `view`, `report` | the config at `autohelix/<name>.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
+| `autohelix init [PATH]` | `autohelix setup [NAME] [-p PATH]` (`init` remains another name for it) | a NAME that is a folder is refused, pointing at `-p` |
 
 ## Example Configs
 

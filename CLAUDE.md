@@ -50,7 +50,7 @@ uv pip install -e ".[dev]"
 
 ```
 autohelix setup [NAME] # Write autohelix.yaml (or autohelix/NAME.yaml): the template, or an agent session with the setup skill
-autohelix run [NAME]   # Start a new run of autohelix.yaml (or autohelix/NAME.yaml) (--group NAME: share notes/code with its group)
+autohelix run [CONFIG] # Start a new run of autohelix.yaml (or autohelix/CONFIG.yaml) (--group NAME: share notes/code with its group)
 autohelix resume [ID]  # Continue a run with its stored config (-n N more, --until N total; --group / --land change the stored ones)
 autohelix land         # Fast-forward the run tip onto its starting branch
 autohelix archive      # Hide a run from the dashboard and a bare resume; keeps everything
@@ -100,4 +100,4 @@ User-facing docs are plain markdown in `docs/` (see `docs/README.md` for the ind
 
 - **Editable install:** the package is installed with `pip install -e .`, so edits under `src/autohelix/` are live immediately — no reinstall needed. Only re-run `pip install -e .` if `pyproject.toml` dependencies or console-script entry points change.
 - **Agent edits the main repo instead of its copy:** iterations run in private copies, but if an editable install (`.pth`) or a hardcoded absolute path resolves imports/writes back to the *main* repo, AutoHelix logs a best-effort warning about tracked main-checkout changes. This inspection cannot abort validation and does not revert user files. Keep per-iteration writable paths inside the copy, and put long-lived outputs (models, large artifacts) at a fixed absolute path *outside* the repo entirely.
-- **Starting a fresh experiment:** every `autohelix run` creates new state and baseline; `resume` continues one. `archive`/`delete` leave code and external outputs intact. Roll code back with git and remove external outputs separately when that is your intended reset. First baseline capture must be committed-clean.
+- **Starting a fresh experiment:** every `autohelix run` creates new state and baseline; `resume` continues one. `archive`/`delete` leave code and external outputs intact. Roll code back with git and remove external outputs separately when that is your intended reset. First baseline capture needs no uncommitted changes to tracked files (untracked files are ignored, so the config needn't be committed); scripts its commands use must be committed, since copies are made from the commit.

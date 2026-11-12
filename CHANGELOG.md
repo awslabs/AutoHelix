@@ -129,8 +129,8 @@ Hardening:
 
 Breaking:
 
-- **`autohelix setup [NAME]` replaces `init`** (`init` remains as a hidden
-  alias). It writes `autohelix.yaml`, or `autohelix/NAME.yaml`, from the
+- **`autohelix setup [NAME]` replaces `init`**. `autohelix init` is another
+  name for `setup`; its old PATH argument is now `-p PATH`. It writes `autohelix.yaml`, or `autohelix/NAME.yaml`, from the
   commented template; it never overwrites a file, doesn't need git and
   creates no `.autohelix/`. A bare `setup` is refused when `autohelix/`
   already has configs.
@@ -138,25 +138,21 @@ Breaking:
   with no replacement option: configs live only at `autohelix.yaml` or
   `autohelix/<name>.yaml`. Move a config kept elsewhere into one of them.
 - **No init step.** `run` creates `.autohelix/` and the local git excludes on
-  first use; it needs a git checkout with a commit, and the first baseline a
-  clean tree (commit the config). "AutoHelix not initialized" is gone.
+  first use; it needs a git checkout with a commit, and the first baseline no
+  uncommitted changes to tracked files. Commit the config so it's versioned,
+  and any scripts its commands use: iteration copies are made from the commit.
+  "AutoHelix not initialized" is gone.
 
 Added:
 
-- **`setup` as the front door.** In a terminal it asks whether to set up the
-  loop with an agent or write an empty config, and which agent when several
-  are installed (Claude Code, Codex, OpenCode). With an agent it starts that
-  agent's interactive session with a first prompt to follow the setup skill
-  bundled in the package (nothing is installed), which writes the config
-  with you; the chosen agent becomes `agent.backend` unless you decide
-  otherwise. Without a terminal it writes the template, unless `--agent` is
-  given; `--agent` on an existing config completes that file.
-  `autohelix skill install` remains for ordinary agent sessions.
+- **`setup` as the front door.** In a terminal, `setup` offers to start
+  Claude Code, Codex or OpenCode with the bundled skill, or writes the
+  template. `autohelix skill install` remains for ordinary agent sessions.
 - **Several configs in an `autohelix/` folder.** `autohelix run perf` uses
   `autohelix/perf.yaml`; a bare `run` uses `autohelix.yaml`, else the only
   config in `autohelix/`, else lists them. The folder is versioned and can hold
-  prompt templates and helper scripts in subfolders (`prompt_template:` is
-  relative to the config's folder).
+  prompt templates and helper scripts in subfolders, committed with it
+  (`prompt_template:` is relative to the config's folder).
 - `name:` defaults to the config file's stem, so runs of
   `autohelix/perf.yaml` are named like `20261112-1400-perf-0mws`.
 - A bare `resume` uses the config a bare `run` would and errors when that is

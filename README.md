@@ -134,14 +134,13 @@ cd my-project
 autohelix setup
 ```
 
-In a terminal it asks whether to set up the loop with an agent (it starts
-Claude Code, Codex or OpenCode with the bundled skill, nothing installed) or to
-write an empty config, the commented template `autohelix.yaml`. Edit it using
-the [configuration reference](#configuration), review and commit the intended
-setup changes, then launch with `autohelix run`. For several loops in one
-project, `autohelix setup perf` writes `autohelix/perf.yaml`, which
-`autohelix run perf` runs. Other commands are described in the
-[CLI reference](docs/cli.md).
+In a terminal it offers to start Claude Code, Codex or OpenCode with the
+bundled setup skill (nothing is installed), or writes the commented template
+`autohelix.yaml`. Edit it using the [configuration reference](#configuration),
+review and commit the intended setup changes, then launch with `autohelix run`.
+For several loops in one project, `autohelix setup perf` writes
+`autohelix/perf.yaml`, which `autohelix run perf` runs. Other commands are
+described in the [CLI reference](docs/cli.md).
 
 ## Examples
 
@@ -369,7 +368,7 @@ at the start of its next iteration. Useful to steer a run without stopping it. S
 <details>
 <summary><b>Full customization</b></summary>
 
-Beyond `autohelix.yaml`, you can replace the full per-iteration prompt template
+Beyond the config file, you can replace the full per-iteration prompt template
 (`prompt_template:`, with a documented set of variables) and control how the agent
 organizes its persistent notes. See [Concepts → Prompt](docs/concepts.md#prompt) and
 [Concepts → Notes](docs/concepts.md#notes).

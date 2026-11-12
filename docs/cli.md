@@ -1,7 +1,6 @@
 # CLI Reference
 
-Project commands default to the current directory if `--path` / positional path
-is omitted.
+Project commands default to the current directory if `--path` is omitted.
 
 ## `autohelix skill`
 
@@ -38,8 +37,9 @@ leave a partially updated folder. Correct the error and repeat with `--force`.
 
 After installation, ask your agent to use `autohelix-setup` to prepare your
 experiment (or let [`autohelix setup`](#autohelix-setup) start the agent with
-the bundled skill, without installing anything). It will inspect the project and help configure scope, gates,
-observe entries (commands and reviews), optional metric gates, and budgets.
+the bundled skill, without installing anything). It will inspect the project
+and help configure scope, gates, observe entries (commands and reviews),
+optional metric gates, and budgets.
 Review the configuration and verification results before starting
 `autohelix run`, unless you already requested a run.
 To request ongoing management, ask the agent to prepare, run, and supervise
@@ -59,7 +59,7 @@ autohelix setup [NAME] [-p PATH] [--agent claude|codex|opencode]
 
 | Option | Description |
 |--------|-------------|
-| `NAME` | Write `autohelix/NAME.yaml` (lowercase letters, digits, hyphens, up to 32 characters); runs of it are named after it |
+| `NAME` | Write `autohelix/NAME.yaml` (lowercase letters, digits, hyphens, up to 32 characters, starting with a letter or digit; not `autohelix`); runs of it are named after it |
 | `--path`, `-p` | Project directory (default: current dir) |
 | `--agent` | Draft the config with this agent, without asking |
 
@@ -85,7 +85,7 @@ configs: `autohelix.yaml` would take over a bare `autohelix run`, so name the
 new one. `setup` doesn't need git and creates no `.autohelix/`; it warns when
 `run` would refuse the folder (no git repository, or no commit yet).
 
-`autohelix init` still works, as another name for `setup`.
+`autohelix init` is another name for `setup`; its old PATH argument is now `-p PATH`.
 
 ### Config files
 
@@ -93,10 +93,13 @@ A project's configs live in exactly two places: `autohelix.yaml` at its root,
 or `autohelix/<name>.yaml` for several loops. The `autohelix/` folder is
 versioned, and can also hold prompt templates and helper scripts
 (`autohelix/prompts/perf.md`; `prompt_template:` is relative to the config's
-folder). `.autohelix/` is the runs' state, kept out of git.
+folder). Commit them: iteration copies are made from the commit, so an
+untracked script a gate runs is missing there. Keep `autohelix/` out of
+`scope.editable` (or list it under `frozen:`), so the agent can't edit its own
+gates. `.autohelix/` is the runs' state, kept out of git.
 
 - The configs in `autohelix/` are the `.yaml` files directly in it; keep
-  other files there in subfolders.
+  other YAML files in subfolders.
 - `autohelix run perf` uses `autohelix/perf.yaml`.
 - A bare `autohelix run` uses `autohelix.yaml`, else the only config in
   `autohelix/`, else stops with the list of configs.
@@ -110,10 +113,10 @@ folder). `.autohelix/` is the runs' state, kept out of git.
 There is no `--config` option, and nothing to initialize: the first
 `autohelix run` creates `.autohelix/` and adds `.autohelix/` and
 `__pycache__/` to the repository's local exclusions (`info/exclude`;
-`.gitignore` is unchanged). `run` refuses if a conflicting `.gitignore` rule makes `.autohelix/` visible
-to git despite the local exclusion. Add `.autohelix/` after any conflicting
-negation rules in your `.gitignore`, then retry. AutoHelix leaves that file
-unchanged.
+`.gitignore` is unchanged). `run` refuses if a conflicting `.gitignore` rule
+makes `.autohelix/` visible to git despite the local exclusion. Add
+`.autohelix/` after any conflicting negation rules in your `.gitignore`, then
+retry. AutoHelix leaves that file unchanged.
 
 ## `autohelix run`
 
@@ -126,8 +129,9 @@ autohelix run [CONFIG] [-p PATH] [-n ITERATIONS] [--name NAME] [--group NAME] [-
 `CONFIG` names a config in `autohelix/` (`perf` for `autohelix/perf.yaml`);
 without it, the run uses `autohelix.yaml`, else the only config in
 `autohelix/` (see [Config files](#config-files)). The project must be a git
-checkout with a commit, and the config must be committed: the first baseline
-needs a clean working tree.
+checkout with a commit, and the first baseline needs no uncommitted changes to
+tracked files. Commit the config so it's versioned, and any scripts its
+commands use: iteration copies are made from the commit.
 
 ### Options
 
