@@ -10,7 +10,7 @@ from autohelix.harness import AutoHelixRunError
 
 def test_run_returns_nonzero_for_infrastructure_failure(tmp_path, monkeypatch):
     subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
-    (tmp_path / ".autohelix").mkdir()
+    (tmp_path / "autohelix.yaml").write_text("goal: x\n")
 
     class FailingHarness:
         def __init__(self, *args, **kwargs):

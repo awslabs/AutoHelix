@@ -11,7 +11,7 @@ import json
 import time
 from pathlib import Path
 
-from autohelix.config import Config
+from autohelix.config import Config, default_config
 from autohelix.history import History
 from autohelix.runs import RunPaths, RunLock, claim_copies, ensure_copies, remove_copies, run_tip, git
 
@@ -79,7 +79,7 @@ captured files; a review entry's stdout is its review text.
 - logs/iter-N/call-*/agent.log: full agent transcripts. They are large; search them rather \
 than reading them whole.
 {git}
-- {config_path or project / "autohelix.yaml"}: the run's config.
+- {config_path or default_config(project)}: the run's config.
 
 ## Instructions
 {INSTRUCTIONS}

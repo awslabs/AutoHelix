@@ -226,7 +226,7 @@ class Config:
         elif "describe what you want" in self.goal.lower():
             error(
                 "'goal' is still the default placeholder - "
-                "edit autohelix.yaml with your optimization goal"
+                "replace it with your optimization goal"
             )
         elif len(self.goal.strip().split("\n", 1)[0].strip()) > TITLE_LENGTH:
             warning(f"The goal's first line is its title and is shown cut to \"{self.title}\"; "
@@ -645,19 +645,71 @@ def _parse_stop(value: Any, errors: list[str]) -> list[CommandSpec]:
     return commands
 
 
-def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Config, dict[str, Any]]:
-    """Load configuration from project's autohelix.yaml.
+CONFIG_FILE = "autohelix.yaml"
+CONFIG_DIR = "autohelix"
 
-    Args:
-        project_path: The project directory.
-        config_file: Optional path to a config file. Defaults to autohelix.yaml
-                     in project_path.
+
+class ConfigNotFound(FileNotFoundError):
+    """No config by that name, or no single config for a bare command; `configs`
+    lists the project's configs (project-relative) for the caller's own advice."""
+
+    def __init__(self, message: str, configs: list[str]):
+        super().__init__(message)
+        self.configs = configs
+
+
+def project_configs(project: Path) -> list[str]:
+    """The project's configs, project-relative: autohelix.yaml, then the `.yaml` files
+    directly in autohelix/ (its subfolders hold prompt templates and helper scripts)."""
+    configs = [CONFIG_FILE] if (project / CONFIG_FILE).is_file() else []
+    folder = project / CONFIG_DIR
+    if folder.is_dir():
+        configs += sorted(f"{CONFIG_DIR}/{p.name}" for p in folder.glob("*.yaml") if p.is_file())
+    return configs
+
+
+def find_config(project: Path, name: str | None = None) -> Path:
+    """The config `name` names (autohelix/<name>.yaml), else autohelix.yaml, else the
+    only config in autohelix/. Raises ConfigNotFound otherwise."""
+    configs = project_configs(project)
+    listed = ", ".join(configs)
+    if name is not None:
+        if not re.fullmatch(r"[\w-][\w.-]*", name) or name.endswith((".yaml", ".yml")):
+            raise ConfigNotFound(f"{name!r} is not a config name: name a config in {CONFIG_DIR}/ "
+                                 f"(`perf` for {CONFIG_DIR}/perf.yaml), or give a file with -c PATH.", configs)
+        relative = f"{CONFIG_DIR}/{name}.yaml"
+        if relative not in configs:
+            raise ConfigNotFound(f"No config {relative}. " + (f"Configs: {listed}." if configs else
+                                 f"Write one with `autohelix setup {name}`."), configs)
+        return project / relative
+    if (project / CONFIG_FILE).is_file():
+        return project / CONFIG_FILE
+    if len(configs) == 1:
+        return project / configs[0]
+    if configs:
+        raise ConfigNotFound(f"Several configs: {listed}. Pick one: `autohelix run <name>` "
+                             f"(for {CONFIG_DIR}/<name>.yaml) or -c PATH.", configs)
+    raise ConfigNotFound(f"No config found in {project}: no {CONFIG_FILE} or {CONFIG_DIR}/*.yaml. "
+                         "Write one with `autohelix setup`.", configs)
+
+
+def default_config(project: Path) -> Path:
+    """find_config's answer, else autohelix.yaml (which may not exist): for observers
+    that show what they can without a config."""
+    try:
+        return find_config(project)
+    except ConfigNotFound:
+        return project / CONFIG_FILE
+
+
+def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Config, dict[str, Any]]:
+    """Load configuration from `config_file`, else the project's config (`find_config`).
 
     Returns:
         A tuple of (Config, raw_data) where raw_data is the parsed YAML dict.
         The raw_data is used for unknown-key validation.
     """
-    config_path = Path(config_file) if config_file else project_path / "autohelix.yaml"
+    config_path = Path(config_file) if config_file else find_config(project_path)
     if not config_path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
 

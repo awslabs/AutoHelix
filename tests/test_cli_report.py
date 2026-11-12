@@ -68,7 +68,7 @@ class TestReportCommand:
     def test_no_config_exits(self, runner, tmp_path):
         result = runner.invoke(main, ["report", "-p", str(tmp_path)])
         assert result.exit_code == 1
-        assert "Config not found" in result.output
+        assert "No config found" in result.output
 
     @staticmethod
     def _agent(writes: str | None, also=None):

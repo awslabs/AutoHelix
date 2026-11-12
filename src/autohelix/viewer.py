@@ -36,7 +36,7 @@ from urllib.parse import quote, unquote, urlsplit
 from markdown_it import MarkdownIt
 
 from autohelix.agents import AgentEventKind
-from autohelix.config import MetricGate, load_config
+from autohelix.config import MetricGate, default_config, load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History
 from autohelix.runs import RunPaths, git, is_archived, last_activity
@@ -306,7 +306,7 @@ class RunData:
     def _config(self):
         """The run's stored config, parsed again only when its file changes."""
         stored = read_stored_config_path(self.project, self.paths.run_id) if self.paths.run_id else None
-        path = Path(self.config_file or stored or self.project / "autohelix.yaml")
+        path = Path(self.config_file or stored or default_config(self.project))
         try:
             info = path.stat()
             key = (info.st_mtime_ns, info.st_size, info.st_ino)

@@ -21,13 +21,13 @@ from rich.table import Table
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import MetricGate, load_config
+from autohelix.config import MetricGate, find_config, load_config
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay, Transcript, clean, header_lines
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git, allocate_call,
-                            claim_copies, critical_section, remove_copies, short_id, unlanded, write_json,
-                            write_text)
+                            claim_copies, config_relative, critical_section, remove_copies, short_id, unlanded,
+                            write_json, write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
@@ -162,10 +162,12 @@ class Harness:
         and `group` change the stored ones (`group=''` clears it) once the segment
         starts; otherwise the run keeps its own."""
         self.project_path = Path(project_path).resolve()
-        if run_id and config_file is None:
-            selected = RunPaths(self.project_path, run_id).read_identity()
-            config_file = self.project_path / selected["config_path"]
-        self.config_file = config_file
+        if config_file is None:  # always an explicit file: run.json and $AUTOHELIX_CONFIG name it
+            if run_id:
+                config_file = self.project_path / RunPaths(self.project_path, run_id).read_identity()["config_path"]
+            else:
+                config_file = find_config(self.project_path)
+        self.config_file = config_file = Path(config_file)
         self.config, self._raw_config = load_config(self.project_path, config_file=config_file)
         self.verbose = verbose
         self.heartbeat_seconds = heartbeat_seconds
@@ -174,7 +176,8 @@ class Harness:
         if errors:
             for error in errors:
                 self.console.print(f"[red]Error:[/red] {error.message}")
-            raise SystemExit("Config validation failed. Edit autohelix.yaml and try again.")
+            raise SystemExit(f"Config validation failed. Edit {config_relative(self.project_path, config_file)} "
+                             "and try again.")
         ensure_runtime_ignored(self.project_path)
         # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send
         # every child's git (agent, checks, judges) to the user's repository.
@@ -182,7 +185,7 @@ class Harness:
             os.environ.pop(key, None)
         self._preflight_done = False
         self.paths, self.run_info, self._ownership, notices = select_run(
-            self.project_path, config_file or self.project_path / "autohelix.yaml",
+            self.project_path, config_file,
             new=new, run_id=run_id, name=name if name is not None else self.config.name,
             create=create, ready=self._first_start_ready, group=group or None,
             # A group lands manually unless --land says otherwise: the config's `land:` is
@@ -1019,11 +1022,10 @@ class Harness:
     def _command_env(self, iteration: int) -> dict[str, str]:
         """Variables for every command the harness runs (checks, metrics, stop):
         where to record model usage and logs, and which config to read."""
-        config = self.config_file or self.project_path / "autohelix.yaml"
         log_dir = self.paths.logs / f"iter-{iteration}"
         return {
             USAGE_ENV: str(self._usage_path(iteration)),
-            "AUTOHELIX_CONFIG": str(Path(config).resolve()),
+            "AUTOHELIX_CONFIG": str(self.config_file.resolve()),
             "AUTOHELIX_LOG_DIR": str(log_dir),
             "AUTOHELIX_RUN_ID": self.paths.run_id,
             "AUTOHELIX_RUN_DIR": str(self.paths.run_dir),
@@ -1177,15 +1179,6 @@ class Harness:
             raise
         finally:
             workspace.close()
-
-    def _resolve_config_rel_path(self) -> str:
-        """Return the config file path relative to the project root."""
-        if self.config_file is None:
-            return "autohelix.yaml"
-        try:
-            return str(self.config_file.resolve().relative_to(self.project_path))
-        except ValueError:
-            return str(self.config_file)
 
     def run(self, max_iterations: int | None = None, report: bool = True) -> None:
         """Run the optimization loop, recording live status in runtime/status.json.
@@ -1403,7 +1396,7 @@ class Harness:
             ) / 1000.0
         loop_start = time.monotonic()  # monotonic counts from boot: never subtract prior time from it
 
-        config_name = self._resolve_config_rel_path()
+        config_name = config_relative(self.project_path, self.config_file)
         self.log.info(f"run started — config: {config_name}, max_iter: {max_iter}, resuming from iter {start_iter}")
 
         ran = False

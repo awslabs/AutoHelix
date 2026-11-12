@@ -102,7 +102,7 @@ def _cli(*args):
 
 def test_live_view_exits_with_hints_instead_of_waiting(tmp_path):
     result = _cli("view", "-p", tmp_path)
-    assert result.exit_code == 1 and "No .autohelix/" in result.output
+    assert result.exit_code == 1 and "Start one with `autohelix run`" in " ".join(result.output.split())
 
 
 @pytest.mark.parametrize("command", ["view", "dashboard"])
