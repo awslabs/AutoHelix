@@ -17,8 +17,9 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-To design a run with your coding agent, explicitly install the portable skill
-into your target project:
+To design a run with your coding agent, run `autohelix setup` in your project
+and choose the agent (see [With your coding agent](#with-your-coding-agent)), or
+explicitly install the portable skill into your target project:
 
 ```bash
 autohelix skill install --agent codex --scope project --path /path/to/my-project
@@ -70,12 +71,24 @@ agent:
 
 ### With your coding agent
 
-Start in a git project with the skill installed as described above. The skill
-helps design the experiment from your existing code, checks, and evidence.
-The installation's `--agent` selects the agent that discovers the skill;
-`agent.backend` in the generated configuration selects the loop backend.
+In your project, run:
 
-For preparation only, ask:
+```bash
+autohelix setup          # writes autohelix.yaml
+autohelix setup perf     # or autohelix/perf.yaml, one of several loops
+```
+
+and answer `agent`. `setup` starts your coding agent (Claude Code, Codex or
+OpenCode, whichever is installed; it asks which when there are several) with
+the setup skill bundled with AutoHelix, and the agent starts by asking what you
+want to achieve. The skill helps design the experiment from your existing code,
+checks, and evidence. The agent you choose becomes `agent.backend`, the loop's
+backend, unless you decide otherwise.
+
+With the skill installed as described above, you can also start from an
+ordinary agent session. The installation's `--agent` selects the agent that
+discovers the skill; `agent.backend` in the generated configuration selects the
+loop backend. For preparation only, ask:
 
 > Set up AutoHelix to improve [goal]. [Optional instructions.]
 
@@ -84,7 +97,8 @@ preserving its results. The agent can propose suitable tests and benchmarks;
 you do not need to specify the evaluation in the initial request.
 
 The agent should inspect the project, propose scope and evaluation, write
-`autohelix.yaml`, and validate it without executing evaluators. It can also run
+the config (`autohelix.yaml`, or `autohelix/<name>.yaml`), and validate it
+without executing evaluators. It can also run
 known cheap checks within the request. Missing evaluators should be proposed
 before implementation unless already authorized. Review the generated goal,
 scope, gates, observe entries (commands and reviews), and budget choices.
@@ -127,17 +141,17 @@ The console, `autohelix view`, the run summary and run page (`report.md`,
 
 The following steps prepare the same kind of experiment without the skill.
 
-### 1. Initialize
+### 1. Write the config
 
 ```bash
 cd my-project
-autohelix init
+autohelix setup          # answer `empty`
 ```
 
-This creates:
-
-- `autohelix.yaml` — config template at project root
-- `.autohelix/` — runtime directory (gitignored)
+This writes `autohelix.yaml`, a commented config template, at the project root
+(`autohelix setup perf` writes `autohelix/perf.yaml` instead; see
+[Several configs](#5-several-configs)). There is nothing else to initialize: the
+first run creates `.autohelix/`, its runtime directory, kept out of git.
 
 ### 2. Configure
 
@@ -167,8 +181,9 @@ See the [configuration reference](config.md).
 
 ### 3. Run
 
-AutoHelix requires a clean committed working tree. Review and commit the
-intended setup changes first; preserve unrelated work:
+AutoHelix needs a git repository with a commit, and a clean committed working
+tree for the first baseline. Review and commit the intended setup changes
+first; preserve unrelated work:
 
 ```bash
 git add autohelix.yaml
@@ -179,7 +194,7 @@ The configuration must reference implemented checks and measurements that use
 the intended environment. Then launch:
 
 ```bash
-autohelix run -n 5
+autohelix run -n 5       # autohelix run perf -n 5 for autohelix/perf.yaml
 ```
 
 You'll see a live display of agent activity, followed by gate and observe results for each iteration.
@@ -215,14 +230,44 @@ rm -rf /path/to/artifacts/<task>/*   # 3. only if you configured an external art
 
 Find `<initial-commit>` with `git log --oneline` (the one before "AutoHelix iteration 1").
 
-### 5. Several runs side by side
+### 5. Several configs
 
-To try a goal several ways at once (another model, prompt or budget), start
-runs of one group, each in its own terminal:
+A project can have several loops: one config each, in an `autohelix/` folder
+at the project root, versioned with the project.
+
+```
+autohelix/
+  perf.yaml              # autohelix run perf
+  docs.yaml              # autohelix run docs
+  prompts/perf.md        # prompt_template: prompts/perf.md, in perf.yaml
+```
+
+- `autohelix setup NAME` writes `autohelix/NAME.yaml`, and
+  `autohelix run NAME` starts a run of it.
+- A bare `autohelix run` uses `autohelix.yaml`, else the only config in
+  `autohelix/`; with several, it lists them and asks you to pick one.
+- Runs are named after the file: runs of `perf.yaml` get ids like
+  `20261112-1400-perf-0mws` (unless the config sets `name:`).
+- Prompt templates and helper scripts can live in subfolders
+  (`autohelix/prompts/`): only the `.yaml` files directly in `autohelix/` are
+  configs. `prompt_template:` is relative to the config's folder, while
+  commands and scope paths stay relative to the project root.
+- `autohelix resume <id>` uses the config the run started with. A bare
+  `resume` uses the config a bare `run` would, so with several configs, name
+  the run.
+
+Configs live only at `autohelix.yaml` or `autohelix/<name>.yaml`; `.autohelix/`
+holds the runs' state, not configs.
+
+### 6. Several runs side by side
+
+To try a goal several ways at once (another model, prompt or budget), write
+one config per variant, commit them, and start runs of one group, each in its
+own terminal:
 
 ```bash
-autohelix run --group perf -c a.yaml
-autohelix run --group perf -c b.yaml
+autohelix run a --group perf     # autohelix/a.yaml
+autohelix run b --group perf     # autohelix/b.yaml
 ```
 
 Each iteration's agent sees the other runs of its group: their notes, history and

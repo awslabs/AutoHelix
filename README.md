@@ -106,7 +106,7 @@ using the configured scope, gates, and observe entries.
 
    > Set up AutoHelix to improve [goal]. [Optional instructions.]
 
-   The agent proposes the experiment, shows the complete `autohelix.yaml`, and
+   The agent proposes the experiment, shows the complete config file, and
    walks through its choices without launching. Review what can change, what
    must pass (gates), what is observed, and the effective budgets.
 
@@ -127,16 +127,21 @@ and existing skill folders are preserved unless you pass `--force`.
 See the [conversational walkthroughs](docs/getting-started.md#with-your-coding-agent)
 and [skill installation and export](docs/cli.md#autohelix-skill).
 
-For manual setup, create the configuration template:
+Or start from the project itself:
 
 ```bash
 cd my-project
-autohelix init
+autohelix setup
 ```
 
-Edit `autohelix.yaml` using the [configuration reference](#configuration), review
-and commit the intended setup changes, then launch with `autohelix run`. Other
-commands are described in the [CLI reference](docs/cli.md).
+In a terminal it asks whether to set up the loop with an agent (it starts
+Claude Code, Codex or OpenCode with the bundled skill, nothing installed) or to
+write an empty config, the commented template `autohelix.yaml`. Edit it using
+the [configuration reference](#configuration), review and commit the intended
+setup changes, then launch with `autohelix run`. For several loops in one
+project, `autohelix setup perf` writes `autohelix/perf.yaml`, which
+`autohelix run perf` runs. Other commands are described in the
+[CLI reference](docs/cli.md).
 
 ## Examples
 
@@ -207,7 +212,8 @@ sequence length on a 27B model.
 
 ## Configuration
 
-A run is defined by a single `autohelix.yaml`. Every field is documented in
+A run is defined by a single config file, `autohelix.yaml` (or
+`autohelix/<name>.yaml`, one per loop). Every field is documented in
 [docs/config.md](docs/config.md).
 
 <p align="center">
@@ -264,7 +270,7 @@ their replacement; see [Old → new](docs/config.md#old--new).
 
 ```
 my-project/
-├── autohelix.yaml       # your config
+├── autohelix.yaml       # your config (or autohelix/<name>.yaml, one per loop)
 └── .autohelix/          # runtime state (gitignored)
     ├── current          # selected run id
     ├── runs/<id>/       # one persistent state directory per run

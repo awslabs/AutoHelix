@@ -18,7 +18,7 @@ autohelix skill export /path/to/autohelix-setup
 `--agent` is required and accepts `claude`, `codex`, or `opencode`. `--scope`
 defaults to `project`. Project installation uses the current directory or
 `--path`; user installation uses your home directory and rejects `--path`.
-Skill installation does not require a git repository or initialize AutoHelix.
+Skill installation does not require a git repository.
 
 | Agent | Project skill folder | User skill folder |
 | --- | --- | --- |
@@ -37,7 +37,8 @@ rejected before copying. Updates replace individual files; an I/O failure can
 leave a partially updated folder. Correct the error and repeat with `--force`.
 
 After installation, ask your agent to use `autohelix-setup` to prepare your
-experiment. It will inspect the project and help configure scope, gates,
+experiment (or let [`autohelix setup`](#autohelix-setup) start the agent with
+the bundled skill, without installing anything). It will inspect the project and help configure scope, gates,
 observe entries (commands and reviews), optional metric gates, and budgets.
 Review the configuration and verification results before starting
 `autohelix run`, unless you already requested a run.
@@ -48,43 +49,93 @@ termination and use hints when useful for later iterations. See the
 
 Installing the Python package does not register skills automatically.
 
-## `autohelix init`
+## `autohelix setup`
 
-Initialize AutoHelix in a project directory.
+Write a loop's config: `autohelix.yaml`, or `autohelix/NAME.yaml` with a name.
 
 ```bash
-autohelix init [path]
+autohelix setup [NAME] [-p PATH] [--agent claude|codex|opencode]
 ```
 
-Creates:
+| Option | Description |
+|--------|-------------|
+| `NAME` | Write `autohelix/NAME.yaml` (lowercase letters, digits, hyphens, up to 32 characters); runs of it are named after it |
+| `--path`, `-p` | Project directory (default: current dir) |
+| `--agent` | Draft the config with this agent, without asking |
 
-- `autohelix.yaml` — config template (won't overwrite existing)
-- `.autohelix/` — project runtime directory
-- Local git exclusions for `.autohelix/` and `__pycache__/` in the repository's
-  shared `info/exclude`; `.gitignore` is unchanged.
+In a terminal, `setup` first asks whether to set up the loop with an agent or
+write an empty config. When several agents are installed (looked for in the
+order `claude`, `codex`, `opencode`), it then asks which one (Enter takes the
+first). With an agent, `setup` is replaced by that agent's usual interactive
+session, started in the project with a first prompt to follow the setup skill
+bundled with AutoHelix: it asks what you want to achieve, and writes the
+config with you, with `agent.backend` set to that agent unless you decide
+otherwise. Nothing is installed into the agent's settings, and the skill
+always matches the installed AutoHelix.
 
-Requires an existing git repository.
+An empty config is the commented template; then edit it, commit it, and run
+`autohelix run [NAME]`. Without a terminal (a script), `setup` writes the
+template unless `--agent` is given. Without an agent on `PATH` it writes the
+template too.
 
-`init` and `run` refuse if a conflicting `.gitignore` rule makes `.autohelix/`
-visible to git despite the local exclusion. Add `.autohelix/` after any conflicting
-negation rules in your `.gitignore`, then retry. AutoHelix leaves that file unchanged.
+`setup` never overwrites a file. With `--agent`, an existing config (such as a
+template written earlier) is completed with the agent; without it, an existing
+config is an error. A bare `setup` is refused when `autohelix/` already has
+configs: `autohelix.yaml` would take over a bare `autohelix run`, so name the
+new one. `setup` doesn't need git and creates no `.autohelix/`; it warns when
+`run` would refuse the folder (no git repository, or no commit yet).
+
+`autohelix init` still works, as another name for `setup`.
+
+### Config files
+
+A project's configs live in exactly two places: `autohelix.yaml` at its root,
+or `autohelix/<name>.yaml` for several loops. The `autohelix/` folder is
+versioned, and can also hold prompt templates and helper scripts
+(`autohelix/prompts/perf.md`; `prompt_template:` is relative to the config's
+folder). `.autohelix/` is the runs' state, kept out of git.
+
+- The configs in `autohelix/` are the `.yaml` files directly in it; keep
+  other files there in subfolders.
+- `autohelix run perf` uses `autohelix/perf.yaml`.
+- A bare `autohelix run` uses `autohelix.yaml`, else the only config in
+  `autohelix/`, else stops with the list of configs.
+- The config's `name:` defaults to the file's stem, so runs of
+  `autohelix/perf.yaml` are named like `20261112-1400-perf-0mws`;
+  `autohelix.yaml` gives runs no name.
+- A run keeps the config file it started with: `resume <id>` uses it, and
+  `view`, `dashboard` and `report` read it. To change a run's config, edit
+  that file.
+
+There is no `--config` option, and nothing to initialize: the first
+`autohelix run` creates `.autohelix/` and adds `.autohelix/` and
+`__pycache__/` to the repository's local exclusions (`info/exclude`;
+`.gitignore` is unchanged). `run` refuses if a conflicting `.gitignore` rule makes `.autohelix/` visible
+to git despite the local exclusion. Add `.autohelix/` after any conflicting
+negation rules in your `.gitignore`, then retry. AutoHelix leaves that file
+unchanged.
 
 ## `autohelix run`
 
-Start a new run of the optimization loop. Requires `autohelix init` to have been run first.
+Start a new run of the optimization loop.
 
 ```bash
-autohelix run [-p PATH] [-c CONFIG] [-n ITERATIONS] [--name NAME] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
+autohelix run [CONFIG] [-p PATH] [-n ITERATIONS] [--name NAME] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
 ```
+
+`CONFIG` names a config in `autohelix/` (`perf` for `autohelix/perf.yaml`);
+without it, the run uses `autohelix.yaml`, else the only config in
+`autohelix/` (see [Config files](#config-files)). The project must be a git
+checkout with a commit, and the config must be committed: the first baseline
+needs a clean working tree.
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
 | `-n`, `--iterations` | Iterations to run (overrides `budget.iterations`) |
-| `--config`, `-c` | Path to config file (default: `autohelix.yaml` in project) |
 | `--path`, `-p` | Project directory (default: current dir) |
-| `--name NAME` | Readable part of the new run's id, lowercase letters/digits/hyphens, up to 32 characters (default: the config file's name, none for `autohelix.yaml`) |
+| `--name NAME` | Readable part of the new run's id, lowercase letters/digits/hyphens, up to 32 characters (default: the config's `name:`, else its file name, none for `autohelix.yaml`) |
 | `--group NAME` | Make the run part of a [group](#groups): it sees the other runs of the group (their notes, history and code), and lands manually by default |
 | `--land auto\|manual` | Land accepted code at the end of each segment, or retain it only on the run ref until `autohelix land`. Stored with the run. Default: `manual` with `--group`, else `land:` in the config, else `auto` |
 | `--verbose` | Show agent command details, file paths, heartbeats |
@@ -162,19 +213,21 @@ repository; git commands need the full id (`git merge autohelix/20261111-1432-k3
 Continue a run.
 
 ```bash
-autohelix resume [RUN_ID] [-n MORE | --until N] [-p PATH] [-c CONFIG] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
+autohelix resume [RUN_ID] [-n MORE | --until N] [-p PATH] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-n`, `--iterations` | How many **more** iterations to run |
 | `--until N` | Run up to iteration N (a total: running it twice does nothing the second time) |
-| `--config`, `-c` | Config file (default: the one the run started with; another one is used for this segment, with a warning) |
 | `--land auto\|manual` | Change the run's landing mode (stored; default: keep it) |
 | `--group NAME` | Put the run in group NAME from its next iteration (stored); `--group ''` takes it out of its group |
 
-Other options as for `run`. Without `RUN_ID`, resumes the most recently active
-run of the config that isn't [archived](#autohelix-archive), preferring runs
+Other options as for `run`. A run always uses the config file it started with;
+to change it, edit that file. Without `RUN_ID`, the config is the one a bare
+`autohelix run` would use (with several configs and no `autohelix.yaml`,
+`resume` stops: name a run), and `resume` continues that config's most
+recently active run that isn't [archived](#autohelix-archive), preferring runs
 that captured their baseline; it says which ("Resuming k3f9: 12 iterations,
 last active 2h ago"). If that run is running in another terminal, `resume`
 says so rather than picking an older one. With no run to resume it exits
@@ -231,9 +284,9 @@ To keep a run but hide it, use `archive`.
 One run, live in the terminal (run it in a second terminal while a run goes), as text once, as JSON, or as a live page in your browser.
 
 ```bash
-autohelix view [RUN_ID] [-p PATH] [--config FILE]
-autohelix view [RUN_ID] [-p PATH] --once | --json [--config FILE]
-autohelix view [RUN_ID] [-p PATH] --web [--port 8765] [--open] [--config FILE]
+autohelix view [RUN_ID] [-p PATH]
+autohelix view [RUN_ID] [-p PATH] --once | --json
+autohelix view [RUN_ID] [-p PATH] --web [--port 8765] [--open]
 ```
 
 `RUN_ID` (or its last part) picks the run; the default is the current run. By default the terminal shows, on top, the run's status, time and cost, landing, the latest accepted metrics against the baseline, and one row per iteration, refreshed as the run goes. Below that is the live output of the agent during an iteration and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (agent, checks, benchmark, …) and time in that phase, read from `.autohelix/runs/<id>/runtime/status.json`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out. When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
@@ -318,7 +371,7 @@ stop:
   - autohelix ask -- "Is every item in SPEC.md implemented and tested?"
 ```
 
-- **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run) or `./autohelix.yaml`: backend, command, model and effort only, never `agent.settings` or `extra_args`.
+- **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run), else the config a bare `autohelix run` in the current directory would use (none, or several: the defaults): backend, command, model and effort only, never `agent.settings` or `extra_args`.
 - **Candidate contents are checked before and after every judge call.** Tracked and nonignored files, modes, symlinks and submodule contents must remain unchanged; runtime feedback/log outputs are allowed. A stop judge after acceptance cannot change accepted code: its edits are discarded and its verdict ignored, with error and usage recorded. Backend restrictions remain best effort.
 - **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox; it still reads an `AGENTS.md` in the directory. OpenCode can't be used as a judge yet: it has no read-only mode.
 - **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `budget.cost`, and its transcript is saved as `.autohelix/runs/<id>/logs/iter-N/call-*-command/ask.log`. Outside a run, the cost is printed to stderr.
@@ -401,11 +454,7 @@ Costs and logs are recorded as for `ask`
 Write (or rewrite) the run summary.
 
 ```bash
-autohelix report [RUN_ID] [-p PATH] [--config PATH]
+autohelix report [RUN_ID] [-p PATH]
 ```
 
-| Option | Description |
-|--------|-------------|
-| `--config`, `-c` | Path to config file (default: the run's own) |
-
-`autohelix run` and `resume` write the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. One agent call reads the run's history, notes, logs and commits and writes `.autohelix/runs/<id>/output/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
+`autohelix run` and `resume` write the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. It uses the config file the run started with. One agent call reads the run's history, notes, logs and commits and writes `.autohelix/runs/<id>/output/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).

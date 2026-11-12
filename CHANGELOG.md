@@ -125,6 +125,44 @@ Hardening:
   component at a time without following symlinks, and passes git only object
   names that are plain hex.
 
+### Config files and `autohelix setup`
+
+Breaking:
+
+- **`autohelix setup [NAME]` replaces `init`** (`init` remains as a hidden
+  alias). It writes `autohelix.yaml`, or `autohelix/NAME.yaml`, from the
+  commented template; it never overwrites a file, doesn't need git and
+  creates no `.autohelix/`. A bare `setup` is refused when `autohelix/`
+  already has configs.
+- **`-c/--config` is removed** from `run`, `resume`, `view` and `report`,
+  with no replacement option: configs live only at `autohelix.yaml` or
+  `autohelix/<name>.yaml`. Move a config kept elsewhere into one of them.
+- **No init step.** `run` creates `.autohelix/` and the local git excludes on
+  first use; it needs a git checkout with a commit, and the first baseline a
+  clean tree (commit the config). "AutoHelix not initialized" is gone.
+
+Added:
+
+- **`setup` as the front door.** In a terminal it asks whether to set up the
+  loop with an agent or write an empty config, and which agent when several
+  are installed (Claude Code, Codex, OpenCode). With an agent it starts that
+  agent's interactive session with a first prompt to follow the setup skill
+  bundled in the package (nothing is installed), which writes the config
+  with you; the chosen agent becomes `agent.backend` unless you decide
+  otherwise. Without a terminal it writes the template, unless `--agent` is
+  given; `--agent` on an existing config completes that file.
+  `autohelix skill install` remains for ordinary agent sessions.
+- **Several configs in an `autohelix/` folder.** `autohelix run perf` uses
+  `autohelix/perf.yaml`; a bare `run` uses `autohelix.yaml`, else the only
+  config in `autohelix/`, else lists them. The folder is versioned and can hold
+  prompt templates and helper scripts in subfolders (`prompt_template:` is
+  relative to the config's folder).
+- `name:` defaults to the config file's stem, so runs of
+  `autohelix/perf.yaml` are named like `20261112-1400-perf-0mws`.
+- A bare `resume` uses the config a bare `run` would and errors when that is
+  ambiguous (name a run instead); `resume <id>` uses the config the run
+  started with. To change a run's config, edit its file.
+
 ### Changed (breaking)
 
 - **Runs.** Each `autohelix run` starts a new run, with its own id and state

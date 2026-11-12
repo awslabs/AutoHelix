@@ -1,7 +1,9 @@
 # Configuration
 
-All configuration lives in `autohelix.yaml` at the project root (or another file
-passed with `-c`).
+A loop's configuration lives in `autohelix.yaml` at the project root, or in
+`autohelix/<name>.yaml` when a project has several (`autohelix run <name>`; see
+[CLI → Config files](cli.md#config-files)). `autohelix setup [NAME]` writes a
+commented template there.
 
 **Paths are relative to the project root.** Every command (in `gates:`,
 `observe:` and `stop:`) runs inside a per-iteration copy of the code, not the main
@@ -476,8 +478,9 @@ baseline and when resuming a run: a run past its budget stops at once
 
 `name` is an optional readable part of newly generated run ids
 (`20261111-1432-<name>-k3f9`); it does not select an existing run. It accepts
-lowercase letters, digits and hyphens, with at most 32 characters. Without a
-name, nondefault config filename stems supply the name.
+lowercase letters, digits and hyphens, with at most 32 characters. Without
+it, the config file's stem is the name (`autohelix/perf.yaml` gives
+`20261112-1400-perf-0mws`); `autohelix.yaml` gives none.
 
 `land` is optional: `auto` fast-forwards accepted code to the starting branch
 when a run segment ends, while `manual` keeps it on the run ref until
@@ -486,8 +489,9 @@ mode when it starts (`--land`; else `manual` for a run started with `--group`,
 whatever `land:` says; else `land:`; else `auto`) and keeps it;
 `resume --land` changes it. CLI `--name` and `--land` override these values.
 
-A bare `autohelix resume` picks the config path's most recently active run, or
-name one; neither depends on `name` or `land`.
+A bare `autohelix resume` picks the most recently active run of the config a
+bare `autohelix run` would use, or name one; neither depends on `name` or
+`land`.
 
 ## Prompt template
 
