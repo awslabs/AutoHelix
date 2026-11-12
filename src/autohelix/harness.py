@@ -1461,8 +1461,7 @@ class Harness:
                     and not cost_warning_shown
                 ):
                     self.console.print(
-                        "[yellow]Warning: iteration cost is unavailable; "
-                        "budget.cost can only track known costs.[/yellow]"
+                        "           [yellow]! cost unknown; budget.cost counts known costs only[/yellow]", highlight=False,
                     )
                     cost_warning_shown = True
                 cumulative_cost += result.cost.cost_usd or 0

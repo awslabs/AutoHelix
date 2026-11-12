@@ -771,7 +771,7 @@ gates:
         # All 3 iterations should complete (cost never reaches $1)
         assert len(iterations) == 3
         output = capsys.readouterr().out
-        assert "budget.cost can only track known costs" in output
+        assert "budget.cost counts known costs only" in output
         assert "cost unavailable" in output
 
     def test_cost_budget_persists_across_resume(self, integration_project):
