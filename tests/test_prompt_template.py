@@ -93,47 +93,45 @@ class TestBuildPromptVariables:
         config.agent.timeout = iteration_time_seconds
         return config
 
-    def test_has_hints_false_when_no_file(self, tmp_path):
+    def test_the_documented_variables(self, tmp_path):
         (tmp_path / ".autohelix").mkdir()
-        config = self._make_config()
-        history = History(tmp_path)
-        variables = build_prompt_variables(config, history, iteration=1, worktree_dir=tmp_path)
-        assert variables["has_hints"] is False
+        variables = build_prompt_variables(Config(goal="Title line.\nMore."), History(tmp_path), iteration=1,
+                                           worktree_dir=tmp_path)
+        assert set(variables) == {
+            "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable",
+            "frozen", "notes_path", "hints", "rejected_patch", "discarded", "last", "time_limit", "group",
+            "group_runs"}
+        assert variables["title"] == "Title line."
+        assert variables["notes_path"] == str(tmp_path / ".autohelix-iteration" / "notes" / "iter-1.md")
+        assert variables["last"] is None and variables["discarded"] == [] and variables["rejected_patch"] == ""
 
-    def test_has_hints_true_when_file_exists(self, tmp_path):
+    def test_hints_empty_when_no_file(self, tmp_path):
+        (tmp_path / ".autohelix").mkdir()
+        variables = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        assert variables["hints"] == ""
+
+    def test_hints_is_the_copys_file(self, tmp_path):
         ah = tmp_path / ".autohelix"
         ah.mkdir(parents=True)
         (ah / "hints.md").write_text("- [2026-07-07 10:00] try numpy\n")
-        config = self._make_config()
-        history = History(tmp_path)
-        variables = build_prompt_variables(config, history, iteration=1, worktree_dir=tmp_path)
-        assert variables["has_hints"] is True
+        variables = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        assert variables["hints"] == ".autohelix-iteration/hints.md"
 
-    def test_iteration_time_is_compact_duration(self, tmp_path):
+    def test_time_limit_is_compact_duration(self, tmp_path):
         # Must be a forward-looking duration ("15m"), NOT the timeout *message*
         # ("timed out after 15 minutes"), which would read as if the run already died.
         (tmp_path / ".autohelix").mkdir()
         config = self._make_config(iteration_time_seconds=900)
-        history = History(tmp_path)
-        variables = build_prompt_variables(config, history, iteration=1, worktree_dir=tmp_path)
-        assert variables["iteration_time"] == "15m"
-
-    def test_iteration_time_empty_when_unset(self, tmp_path):
-        (tmp_path / ".autohelix").mkdir()
-        config = self._make_config(iteration_time_seconds=None)
-        history = History(tmp_path)
-        variables = build_prompt_variables(config, history, iteration=1, worktree_dir=tmp_path)
-        assert variables["iteration_time"] == ""
-
-    def test_default_template_renders_sane_time_budget(self, tmp_path):
-        # End-to-end: the rendered "Time budget:" line the agent actually sees.
-        (tmp_path / ".autohelix").mkdir()
-        config = self._make_config(iteration_time_seconds=900)
-        history = History(tmp_path)
-        variables = build_prompt_variables(config, history, iteration=1, worktree_dir=tmp_path)
+        variables = build_prompt_variables(config, History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        assert variables["time_limit"] == "15m"
         rendered = render_template(load_template(config), variables)
-        assert "Time budget: 15m." in rendered
-        assert "timed out" not in rendered
+        assert "Time limit: 15m." in rendered and "timed out" not in rendered
+
+    def test_time_limit_empty_when_unset(self, tmp_path):
+        (tmp_path / ".autohelix").mkdir()
+        variables = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        assert variables["time_limit"] == ""
+        assert "Time limit" not in render_template(load_template(self._make_config()), variables)
 
     def test_gates_observe_and_scope_render(self, tmp_path):
         (tmp_path / ".autohelix").mkdir()
@@ -142,19 +140,23 @@ class TestBuildPromptVariables:
             "gates": ["pytest -q", {"ask": "Keeps the API?"}, {"metric": "speed", "regress": "5%"},
                       {"metric": "speed", "improve": "0%"}],
             "observe": [{"name": "bench", "command": "python bench.py", "metrics": {"speed": "higher"}},
-                        {"name": "review", "review": "Review the diff."}],
+                        {"name": "review", "review": "Review the\ndiff."}],
             "scope": {"editable": ["src/"], "frozen": ["src/fixtures/"]},
         })
         variables = build_prompt_variables(config, History(tmp_path), iteration=1, worktree_dir=tmp_path)
-        assert variables["constraints"] == [
-            "pytest -q", "ask: Keeps the API?",
-            "speed: at most 5% worse than the last accepted iteration",
-            "speed: better than the last accepted iteration",
+        assert variables["gates"] == [
+            {"text": "pytest -q", "kind": "command"}, {"text": "ask: Keeps the API?", "kind": "command"},
+            {"text": "speed: at most 5% worse than the last accepted iteration", "kind": "metric"},
+            {"text": "speed: better than the last accepted iteration", "kind": "metric"},
+        ]
+        assert variables["observe"] == [
+            {"name": "bench", "kind": "command", "command": "python bench.py", "metric_labels": ["speed (↑)"]},
+            {"name": "review", "kind": "review", "prompt": "Review the diff.", "metric_labels": []},
         ]
         rendered = render_template(load_template(config), variables)
         assert "Gates (must pass" in rendered
         assert "bench: python bench.py → speed (↑)" in rendered
-        assert 'review: autohelix review "Review the diff."' in rendered
+        assert "review: review: Review the diff." in rendered
         assert "Editable (only changes to these files will be kept): src/" in rendered
         assert "Frozen (changes to these files will be reverted, even inside the editable ones): src/fixtures/" in rendered
         assert "review.md" not in rendered
@@ -166,3 +168,105 @@ class TestBuildPromptVariables:
         rendered = render_template(load_template(config), variables)
         assert "Frozen (changes to these files will be reverted): tests/" in rendered
         assert "Editable" not in rendered
+
+
+# --- the default template after each kind of iteration ---------------------------
+
+CONFIG = {
+    "goal": "Make sort fast.",
+    "gates": ["pytest -q", {"metric": "speed", "regress": "5%"}],
+    "observe": [{"name": "bench", "command": "python bench.py", "metrics": {"speed": "higher"}},
+                {"name": "progress", "review": "Track the PRD."}],
+    "scope": {"editable": ["sort.py"]},
+}
+
+
+def _render(tmp_path, records, iteration, *, patch=False, group=None, members=()):
+    from autohelix.history import IterationResult
+
+    (tmp_path / ".autohelix").mkdir(exist_ok=True)
+    history = History(tmp_path)
+    for record in records:
+        history.append(IterationResult(**record))
+    worktree = tmp_path / "copy"
+    (worktree / ".autohelix-iteration").mkdir(parents=True, exist_ok=True)
+    if patch:
+        (worktree / ".autohelix-iteration" / "rejected.patch").write_text("diff --git a/sort.py b/sort.py\n")
+    config = Config.from_dict(CONFIG)
+    variables = build_prompt_variables(config, history, iteration, worktree, group=group, members=members)
+    return variables, render_template(load_template(config), variables)
+
+
+BASELINE = {"iteration": 0, "accepted": True, "metrics": {"speed": 10.0}, "reason": "baseline",
+            "gates": [{"text": "pytest -q", "kind": "command", "passed": True},
+                      {"text": "speed regress 5%", "kind": "metric", "passed": None}],
+            "observe": [{"name": "bench", "ok": True, "error": None, "metrics": {"speed": 10.0}},
+                        {"name": "progress", "ok": True, "error": None, "metrics": {}}]}
+
+
+def test_first_iteration(tmp_path):
+    variables, rendered = _render(tmp_path, [BASELINE], 1)
+    assert variables["last"]["iteration"] == 0
+    assert "This is iteration 1. Baseline is iter-0." in rendered
+    assert "Last accepted: the baseline (iter-0); your copy holds its code." in rendered
+    assert "  bench: .autohelix-iteration/observations/iter-0/bench/" in rendered
+    assert "rejected.patch" not in rendered and "were discarded" not in rendered
+    assert "- iter 0: speed=10.0 (accepted)" in rendered
+    assert f"write to {tmp_path / 'copy' / '.autohelix-iteration' / 'notes' / 'iter-1.md'}." in rendered
+
+
+def test_after_an_accepted_iteration(tmp_path):
+    accepted = {**BASELINE, "iteration": 1, "reason": None, "summary": "Use insertion sort",
+                "gates": [{"text": "pytest -q", "kind": "command", "passed": True},
+                          {"text": "speed regress 5%", "kind": "metric", "passed": True}],
+                "observe": [{"name": "bench", "ok": True, "error": None, "metrics": {"speed": 12.0}},
+                            {"name": "progress", "ok": False, "error": "exited 2", "metrics": {}}]}
+    variables, rendered = _render(tmp_path, [BASELINE, accepted], 2)
+    assert "Last accepted: iter-1; your copy holds its code." in rendered
+    assert "Its gate results:\n  ✓ pytest -q\n  ✓ speed regress 5%" in rendered
+    assert "Read the latest observations (its):" in rendered
+    assert "  progress: .autohelix-iteration/observations/iter-1/progress/ (failed: exited 2)" in rendered
+    assert "- iter 1: speed=10.0 (accepted) — Use insertion sort" in rendered
+    assert "    observe progress failed: exited 2" in rendered
+    assert "was rejected" not in rendered
+
+
+def test_after_a_rejection_with_patch_and_discarded_paths(tmp_path):
+    rejected = {"iteration": 1, "accepted": False, "reason": "gate failed: pytest -q",
+                "failure_output": "FAILED test_sort.py::test_negative", "summary": "Try radix sort",
+                "discarded": ["tests/test_sort.py"], "tree": "abc", "rejected_ref": "refs/autohelix-rejected/x/1",
+                "gates": [{"text": "pytest -q", "kind": "command", "passed": False},
+                          {"text": "speed regress 5%", "kind": "metric", "passed": None}]}
+    variables, rendered = _render(tmp_path, [BASELINE, rejected], 2, patch=True)
+    assert variables["rejected_patch"] == ".autohelix-iteration/rejected.patch"
+    assert variables["discarded"] == ["tests/test_sort.py"]
+    assert "Iteration 1 was rejected: gate failed: pytest -q" in rendered
+    assert "Its rejected attempt's gate results:\n  ✗ pytest -q\n  · speed regress 5% (not reached)" in rendered
+    assert "Failure output:\n    FAILED test_sort.py::test_negative" in rendered
+    assert ("The previous attempt was rejected (failure output above). Its changes are in "
+            "`.autohelix-iteration/rejected.patch`; `git apply` it if it was close, or start over.") in rendered
+    assert "Your changes to tests/test_sort.py were discarded: outside the editable scope." in rendered
+    assert "- iter 1: rejected (gate failed: pytest -q) — Try radix sort" in rendered
+    assert "Last accepted" not in rendered
+
+
+def test_rejection_after_observe_shows_what_it_produced(tmp_path):
+    rejected = {"iteration": 1, "accepted": False, "reason": "metric gate: speed 5 is 50.0% worse than 10",
+                "gates": [{"text": "pytest -q", "kind": "command", "passed": True},
+                          {"text": "speed regress 5%", "kind": "metric", "passed": False}],
+                "observe": [{"name": "bench", "ok": True, "error": None, "metrics": {"speed": 5.0}}]}
+    _, rendered = _render(tmp_path, [BASELINE, rejected], 2)
+    assert "Read the latest observations (what the rejected attempt produced):" in rendered
+    assert "  bench: .autohelix-iteration/observations/iter-1/bench/" in rendered
+    assert "rejected.patch" not in rendered  # no kept tree, no patch
+
+
+def test_group_runs(tmp_path):
+    from autohelix.runs import RunPaths
+
+    (tmp_path / ".autohelix").mkdir()
+    member = RunPaths(tmp_path, "20261112-1200-other-k3f9")
+    variables, rendered = _render(tmp_path, [BASELINE], 1, group="perf", members=[(member, {})])
+    assert variables["group"] == "perf" and len(variables["group_runs"]) == 1
+    assert "Other runs in group `perf`" in rendered
+    assert "`.autohelix-iteration/runs/20261112-1200-other-k3f9/`" in rendered

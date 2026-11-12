@@ -314,7 +314,9 @@ class History:
         return results[-n:] if len(results) > n else results
 
     def format_summary(self) -> str:
-        """Format a summary of the history for the agent prompt."""
+        """The last 5 iterations for the agent prompt, one line each: metrics (accepted)
+        or the rejection reason, then the agent's one-line summary; below it a
+        rejection's failure output and any observe entry that failed."""
         results = self.load()
         if not results:
             return "No previous iterations."
@@ -323,12 +325,16 @@ class History:
         for r in self.get_recent(5):
             if r.accepted:
                 metrics_str = ", ".join(f"{k}={v}" for k, v in r.metrics.items())
-                lines.append(f"- iter {r.iteration}: {metrics_str} (accepted)")
+                line = f"- iter {r.iteration}: {metrics_str + ' ' if metrics_str else ''}(accepted)"
             else:
-                lines.append(f"- iter {r.iteration}: rejected ({r.reason})")
-                # Include failure output so agent can understand what went wrong
-                if r.failure_output:
-                    for line in r.failure_output.splitlines():
-                        lines.append(f"    {line}")
+                line = f"- iter {r.iteration}: rejected ({r.reason})"
+            lines.append(line + (f" — {r.summary}" if r.summary else ""))
+            # Include failure output so agent can understand what went wrong
+            if not r.accepted and r.failure_output:
+                for output_line in r.failure_output.splitlines():
+                    lines.append(f"    {output_line}")
+            for item in r.observe:
+                if not item.get("ok", True):
+                    lines.append(f"    observe {item.get('name')} failed: {item.get('error')}")
 
         return "\n".join(lines)
