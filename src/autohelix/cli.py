@@ -5,7 +5,10 @@
 
 import json
 import os
+import shutil
 import subprocess
+import sys
+import tempfile
 from importlib.resources import files as pkg_files
 from pathlib import Path
 
@@ -15,9 +18,10 @@ from autohelix.config import CONFIG_DIR, CONFIG_FILE, ConfigNotFound, find_confi
 from autohelix.harness import Harness
 from autohelix.history import History
 from autohelix.runs import (NoRunToResume, RunPaths, RunLock, archive as archive_run, check_group,
-                            delete as delete_run, land as land_run, resolve_run, run_tip, short_id)
+                            delete as delete_run, land as land_run, resolve_run, run_tip, short_id,
+                            valid_name)
 from autohelix import run_table
-from autohelix.skill import skill
+from autohelix.skill import SKILL_NAME, export_skill, skill
 from autohelix.state import (
     GitExcludeError,
     ensure_git_exclude_entry,
@@ -50,55 +54,143 @@ CONFIG_TEMPLATE = (
     pkg_files("autohelix.templates").joinpath("config_template.yaml").read_text()
 )
 
+# The agents `setup` offers, in the order it looks for them: executable -> name.
+SETUP_AGENTS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}
 
-@main.command()
-@click.argument("path", type=click.Path(), default=".")
-def init(path: str):
-    """Initialize AutoHelix in a project directory.
 
-    Creates .autohelix/ state directory, a prompt template, and
-    autohelix.yaml config (if not already present).
-    """
-    project_path = Path(path).resolve()
-    autohelix_dir = project_path / ".autohelix"
+def _found_agents() -> list[str]:
+    return [agent for agent in SETUP_AGENTS if shutil.which(agent)]
 
-    # Require git
-    git_check = subprocess.run(
-        ["git", "rev-parse", "--git-dir"],
-        cwd=project_path,
-        capture_output=True,
-    )
-    if git_check.returncode != 0:
-        click.echo(
-            "Not a git repository. AutoHelix requires git.\n"
-            "Run: git init && git add -A && git commit -m 'init'"
-        )
-        raise SystemExit(1)
 
-    # Validate before creating runtime/config files, and on repeated init calls.
+def _interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _skill_dir() -> Path:
+    """The bundled setup skill as a folder on disk; exported to a temporary folder when
+    the package isn't one (a zipped install)."""
+    bundled = pkg_files("autohelix") / "skills" / SKILL_NAME
+    if isinstance(bundled, Path) and bundled.is_dir():
+        return bundled.resolve()
+    target = Path(tempfile.mkdtemp(prefix="autohelix-skill-")) / SKILL_NAME
+    export_skill(target)
+    return target
+
+
+def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[str]:
+    """The interactive session `setup` starts: the agent's own CLI with a first prompt
+    that points at the bundled skill (nothing is installed or written)."""
+    skill_dir = _skill_dir()
+    where = (f"The config is `{target}`, already there (perhaps still the commented template): complete it there"
+             if exists else f"Write the config to `{target}`")
+    prompt = (f"Read `{skill_dir / 'SKILL.md'}` and follow it to help me set up an AutoHelix loop for this "
+              f"project. {where}, with `agent.backend: {agent}` unless we decide otherwise. "
+              "Start by asking what I want to achieve.")
+    if agent == "claude":  # --add-dir lets it read the skill; it takes several folders, hence --
+        return ["claude", "--add-dir", str(skill_dir), "--", prompt]
+    if agent == "codex":  # reads outside the workspace without a flag (its --add-dir grants writes)
+        return ["codex", prompt]
+    return ["opencode", str(project), "--prompt", prompt]
+
+
+def _outside_git(project: Path) -> bool:
+    env = {key: value for key, value in os.environ.items() if key not in SCRUBBED_GIT_ENV}
     try:
-        ensure_runtime_ignored(project_path)
-        # Auxiliary cache exclusion is best effort; runtime state must be ignored.
-        ensure_git_exclude_entry(project_path, "__pycache__/")
-    except (GitExcludeError, OSError, subprocess.CalledProcessError) as e:
-        raise click.ClickException(str(e)) from e
+        inside = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=project,
+                                capture_output=True, text=True, env=env)
+    except OSError:  # no git at all
+        return True
+    return inside.returncode != 0 or inside.stdout.strip() != "true"
 
-    if autohelix_dir.exists():
-        click.echo(f"Already initialized ({autohelix_dir})")
+
+@click.command(short_help="Write a loop's config, with an agent or from the template.")
+@click.argument("name", required=False)
+@click.option("--path", "-p", type=click.Path(exists=True, file_okay=False), default=".",
+              help="Project directory (default: current dir)")
+@click.option("--agent", type=click.Choice(list(SETUP_AGENTS)),
+              help="Draft the config with this agent, without asking.")
+def setup(name: str | None, path: str, agent: str | None):
+    """Write a loop's config: autohelix.yaml, or autohelix/NAME.yaml for NAME.
+
+    In a terminal, offers to draft it with a coding agent (Claude Code, Codex or
+    OpenCode, the first installed) in a session that follows the bundled setup skill;
+    otherwise writes the commented template. `autohelix run [NAME]` then starts runs
+    of the loop. Never overwrites a file.
+    """
+    if name is not None and not valid_name(name):
+        raise click.BadParameter(f"{name!r}: use lowercase letters, digits or hyphens, at most 32 "
+                                 "characters (runs of this config are named after it).", param_hint="NAME")
+    project = Path(path).resolve()
+    relative = f"{CONFIG_DIR}/{name}.yaml" if name else CONFIG_FILE
+    target = project / relative
+    exists = target.exists() or target.is_symlink()
+    found = _found_agents()
+    named = f" {name}" if name else ""
+    elsewhere = "" if project == Path.cwd().resolve() else f" -p {path}"
+    if exists and agent is None:
+        hint = f", or complete it with an agent: `autohelix setup{named}{elsewhere} --agent {found[0]}`" if found else ""
+        raise click.ClickException(f"{relative} already exists; setup never overwrites a config. Edit it{hint}.")
+    if name is None and not exists and (others := project_configs(project)):
+        raise click.ClickException(f"{CONFIG_DIR}/ already has {', '.join(Path(c).name for c in others)}, which "
+                                   f"{CONFIG_FILE} would shadow for a bare `autohelix run`. "
+                                   "Name this one: `autohelix setup <name>`.")
+    no_git = _outside_git(project)
+
+    def warn_git():
+        if no_git:
+            click.echo(click.style("Warning: not in a git repository; `autohelix run` needs one with a commit: "
+                                   "git init && git add -A && git commit -m 'init'", fg="yellow"), err=True)
+
+    if agent is not None:
+        if agent not in found:
+            raise click.ClickException(f"--agent {agent}: {SETUP_AGENTS[agent]} (`{agent}`) is not on PATH."
+                                       + (f" Found: {', '.join(found)}." if found else ""))
+    elif found and _interactive():
+        names = ", ".join(SETUP_AGENTS[a] for a in found)
+        choice = click.prompt(f"Set up the loop with an agent ({names} found), or write an empty config?",
+                              type=click.Choice(["agent", "empty"]), default="agent")
+        if choice == "agent":
+            agent = found[0] if len(found) == 1 else click.prompt(
+                "Which agent?", type=click.Choice(found), default=found[0])
+
+    if agent is not None:
+        argv = _agent_argv(agent, project, relative, exists)
+        warn_git()
+        click.echo(f"Starting {SETUP_AGENTS[agent]} with the AutoHelix setup skill…")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.chdir(project)
+        try:
+            os.execvp(argv[0], argv)  # the agent's session replaces this process
+        except OSError as e:
+            raise click.ClickException(f"Could not start {agent}: {e}") from e
         return
 
-    # The agent prompt is built in (a config can replace it with `prompt_template:`).
-    autohelix_dir.mkdir()
+    try:
+        target.parent.mkdir(exist_ok=True)
+        with open(target, "x") as f:
+            f.write(CONFIG_TEMPLATE)
+    except OSError as e:
+        raise click.ClickException(f"Could not write {relative}: {e}") from e
+    click.echo(f"Wrote {relative}.")
+    warn_git()
+    click.echo("Next:\n"
+               "  1. Edit it: the goal (its first line is the run's title), scope, gates, observe.\n"
+               "  2. Commit it.\n"
+               f"  3. autohelix run{named}{elsewhere}")
+    if found:
+        click.echo(f"An agent can draft the gates and observe entries with you: "
+                   f"`autohelix setup{named}{elsewhere} --agent {found[0]}`,\n"
+                   f"or `autohelix skill install --agent {found[0]}` for your usual agent sessions.")
+    else:
+        click.echo("No coding agent found (claude, codex or opencode on PATH). With one, "
+                   f"`autohelix setup{named}{elsewhere} --agent <agent>`\ndrafts the gates and observe entries with you.")
 
-    # Write config template if none exists
-    config_path = project_path / "autohelix.yaml"
-    if not config_path.exists():
-        config_path.write_text(CONFIG_TEMPLATE)
 
-    click.echo(f"Initialized AutoHelix at {project_path}")
-    click.echo(f"\nNext steps:")
-    click.echo(f"  1. Edit autohelix.yaml — set your goal")
-    click.echo(f"  2. autohelix run")
+main.add_command(setup)
+# `init` by reflex: the same command, not listed.
+main.add_command(click.Command("init", callback=setup.callback, params=setup.params, help=setup.help,
+                               hidden=True))
 
 
 def _run_id(project: Path, value: str | None) -> str | None:
@@ -186,11 +278,14 @@ def _segment_config(project: Path, name: str | None, command: str) -> Path:
     except ValueError as e:
         raise click.BadParameter(str(e), param_hint="CONFIG") from e
     except ConfigNotFound as e:
+        if name is None:
+            write = " Write one with `autohelix setup`."
+        else:  # `setup` takes run names only
+            write = f" Write it with `autohelix setup {name}`." if valid_name(name) else ""
         if e.configs:
-            advice = " " + pick if name is None else ""
+            advice = " " + pick if name is None else write
         else:
-            advice = _ancestor_configs(project) or (
-                " " + pick if command == "resume" else f" Write one with `autohelix setup{f' {name}' if name else ''}`.")
+            advice = _ancestor_configs(project) or (" " + pick if command == "resume" else write)
         raise click.ClickException(str(e) + advice) from e
     others = [Path(c).stem for c in project_configs(project) if c != CONFIG_FILE]
     if name is None and config == project / CONFIG_FILE and others:

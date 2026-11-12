@@ -21,7 +21,7 @@ uv pip install -e ".[dev]"
 ## Project Layout
 
 - `src/autohelix/harness.py` - main iteration loop (start here)
-- `src/autohelix/cli.py` - CLI commands (init, run, resume, land, archive, delete, view, dashboard, hint, ask, review, report)
+- `src/autohelix/cli.py` - CLI commands (setup, run, resume, land, archive, delete, view, dashboard, hint, ask, review, report)
 - `src/autohelix/config.py` - configuration dataclasses and parsing
 - `src/autohelix/agents/` - agent backends (claudecode, codex, opencode, mock)
 - `src/autohelix/iteration.py` - one iteration's copies: agent copy, freeze to a tree, evaluation copies, accept, notes/cleanup
@@ -49,7 +49,7 @@ uv pip install -e ".[dev]"
 ## CLI Commands
 
 ```
-autohelix init         # Initialize project (creates .autohelix/ and config template)
+autohelix setup [NAME] # Write autohelix.yaml (or autohelix/NAME.yaml): the template, or an agent session with the setup skill
 autohelix run          # Start a new run of the optimization loop (--group NAME: share notes/code with its group)
 autohelix resume       # Continue a run (-n N more, --until N total; --group / --land change the stored ones)
 autohelix land         # Fast-forward the run tip onto its starting branch
@@ -81,7 +81,7 @@ User-facing docs are plain markdown in `docs/` (see `docs/README.md` for the ind
 
 ## Architecture Notes
 
-- Entry points: `autohelix init` scaffolds `.autohelix/` and writes a config template. `autohelix run` loads config and starts the harness loop.
+- Entry points: `autohelix setup [NAME]` writes `autohelix.yaml` / `autohelix/NAME.yaml` (the template, or execs Claude Code/Codex/OpenCode with a first prompt pointing at the bundled skill; `init` is a hidden alias). `autohelix run [NAME]` finds the config (`config.find_config`), creates `.autohelix/` on first use and starts the harness loop.
 - Iteration isolation: `iteration.py` runs every phase in its own fresh `workspace.Copy` (agent, checks, each review, stop; baseline and report too): a private folder holding one tree, with its own `.git` borrowing the user's objects via alternates. The harness reads copies only from outside through `Repo` and a harness index kept in a private per-process folder; it never runs git inside a copy after a call used it. The agent copy is frozen to a tree T (pinned at `refs/autohelix-tmp/<id>`); checks run on a fresh copy of T with HEAD at A and T's files verified after every command; accept commits exactly T on A (`commit-tree`, no hooks), CAS-updates `refs/autohelix/<id>`, and records history in a deferred-SIGINT section. A no-op is accepted without a commit. A rejected attempt's T (also after a failed or timed-out agent call) is kept as `refs/autohelix-rejected/<id>/<n>` (`keep_rejected`; removed by `delete`), and the next agent copy gets the latest rejection's `base..T` (`workspace.diff_args`, independent of the user's git config) as `rejected.patch` (over 2 MiB: none, the prompt's `rejected_diff` names the `git diff`). An attempt whose T equals its base keeps no ref. Run segments land separately on the target branch.
 - Evaluation (`harness._evaluate`; user docs in `docs/config.md`): gate commands in list order (first failure rejects; `ask:` entries render to `autohelix ask [flags] -- Q`), then `observe:` entries top to bottom (`review:` entries render to `autohelix review [flags] -- P`); after each entry, the metric gates on its metrics, compared with the last accepted commit-creating record (`checks.metric_reference`). A failed observe entry is recorded and contributes no metrics; a missing gated metric fails. The baseline runs everything and rejects nothing; a missing command metric is a setup error. Old config keys are errors naming the replacement (`config.RENAMED_TOP_LEVEL_KEYS`, `agents.RENAMED_AGENT_KEYS`).
 - Copy location: copies live outside the project, at `<base>/<dirname>-<hash8>/<run-id>/iter-N-<role>`, where base is `$AUTOHELIX_COPIES_ROOT` or `${XDG_CACHE_HOME:-~/.cache}/autohelix/copies` (`runs.copies_base()`). `runs.claim_copies()` fixes the folder for a process under the run lock (created on first use by `ensure_copies`: private 0700, owned, no symlinks below the base; a shared base must be sticky), base recorded in `runs/<id>/copies` for observers (`RunPaths.copies`), `GIT_CEILING_DIRECTORIES` set there. Segment end, standalone report and delete remove it; the project's folder stays with a `project.json` record (path, host) so `runs.sweep_copies()`, at the start of every `run`/`resume`, can remove leftovers of killed processes (runs whose lock is free) and other projects' folders whose checkout is gone (same host, over a day old). The root `conftest.py` points the base at a temporary folder for every test, examples included.

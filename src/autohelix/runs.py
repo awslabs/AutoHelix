@@ -423,6 +423,11 @@ def last_activity(paths: RunPaths, data: dict, status: dict | None = None) -> fl
     return max((t for t in times if isinstance(t, (int, float))), default=None)
 
 
+def valid_name(name: str) -> bool:
+    """A readable run name: a run's, a group's, and a config's in autohelix/ (`setup NAME`)."""
+    return bool(_NAME.fullmatch(name))
+
+
 def check_group(name: str) -> str:
     """A group name as typed; '' clears a run's group."""
     if name and not _NAME.fullmatch(name):

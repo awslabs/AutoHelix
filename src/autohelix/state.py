@@ -8,7 +8,7 @@ directory — as opposed to per-run scaffolding (runs/, runtime/bin, etc.),
 which the harness manages directly.
 
 These helpers have no CLI or harness dependency, so both
-the CLI commands (`init`, `report`) and the harness can import them
+the CLI commands (`run`, `report`) and the harness can import them
 without creating an import cycle.
 """
 
