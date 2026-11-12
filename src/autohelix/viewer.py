@@ -102,11 +102,26 @@ def _bad_parts(parts) -> bool:
                for part in parts)
 
 
+def _contained(root: Path, parts) -> list[str] | None:
+    """`parts` as the components of a normalized path that stays below `root`, or None.
+    `_bad_parts` already refuses anything that could leave `root`; this is the same
+    check in the normalize-then-prefix form static analysis recognizes."""
+    if _bad_parts(parts):
+        return None
+    base = os.path.normpath(str(root))
+    full = os.path.normpath(os.path.join(base, *parts))
+    if full != base and not full.startswith(base + os.sep):
+        return None
+    relative = os.path.relpath(full, base)
+    return [] if relative == "." else relative.split(os.sep)
+
+
 def _open_dir(root: Path, parts) -> int | None:
     """A descriptor for the folder `root/parts...`, or None. `root`'s last component and
     every part below it are opened without following symlinks, each relative to the
     one before: no `..`, no absolute paths, nothing outside `root`."""
-    if _bad_parts(parts):
+    parts = _contained(root, parts)
+    if parts is None:
         return None
     fd = None
     try:
@@ -126,7 +141,8 @@ def _open_file(root: Path, parts, single_link: bool = False) -> int | None:
     """A read descriptor for the regular file `root/parts...` (opened as `_open_dir`
     opens folders), or None: never a symlink, FIFO or device, and with `single_link`
     never a file with other hard links (one planted to point at a file elsewhere)."""
-    if not parts or _bad_parts(parts):
+    parts = _contained(root, parts) if parts else None
+    if not parts:
         return None
     parent = _open_dir(root, parts[:-1])
     if parent is None:
