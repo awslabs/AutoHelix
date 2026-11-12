@@ -1477,7 +1477,8 @@ class Harness:
                     "detail": f"iteration budget reached ({max_iter})"}
             self.run_status.note(stop_reason=stop_reason)
             self.console.print()
-            self.console.print(Text(f"  Stopped: {stop_reason['detail']}"), highlight=False)
+            self.console.print(Text(f"  Stopped: {clean(stop_reason['detail'])}", no_wrap=True, overflow="ellipsis"),
+                               highlight=False)
             self.log.info(f"run stopped — {stop_reason['detail']}")
         except KeyboardInterrupt:
             self.run_status.stop("interrupted")

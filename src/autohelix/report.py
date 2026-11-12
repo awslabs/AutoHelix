@@ -164,6 +164,11 @@ def write_report(config: Config, project: Path, console, config_path: Path | Non
     info = {"last_iteration": last, "written_at": time.time(), "seconds": seconds,
             "cost_usd": (result.usage or {}).get("cost_usd")}
     (out / "report.json").write_text(json.dumps(info))
-    console.print(f"[green]Summary of iterations 1–{last} written to {out / 'report.md'}[/green]")
+    report = out / "report.md"
+    try:
+        report = report.relative_to(Path.cwd())
+    except ValueError:
+        pass
+    console.print(f"  [dim]Summary: {report}[/dim]", highlight=False, soft_wrap=True)
     return True
 
