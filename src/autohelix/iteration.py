@@ -14,6 +14,7 @@ import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
+from autohelix.launcher import write_launcher
 from autohelix.runs import RunPaths, RunState, critical_section, ensure_copies, group_members
 from autohelix.workspace import ITERATION_DIR, Copy, Repo, Scope, remove_copy
 
@@ -191,9 +192,10 @@ class IterationWorkspace:
     def call_folder(self, **sources: Path | None):
         """A private folder for one command, `iter-N-call-K/` under the run's copies
         folder, removed when the command ends (also on an error or interrupt): an empty
-        `scratch/`, plus for each named source a copy of that folder under the same name
-        (an empty folder if the source doesn't exist; no entry for None). Yields
-        {"scratch": path, <name>: path, ...}. A copy keeps what the command reads from
+        `scratch/`, `bin/` holding the `autohelix` launcher (`launcher.py`; put it first
+        on the command's PATH), plus for each named source a copy of that folder under
+        the same name (an empty folder if the source doesn't exist; no entry for None).
+        Yields {"scratch": path, "bin": path, <name>: path, ...}. A copy keeps what the command reads from
         run state fixed, whatever the command or the agent writes meanwhile."""
         self._calls += 1
         folder = ensure_copies(self._run.copies_root) / f"iter-{self.iteration}-call-{self._calls}"
@@ -204,6 +206,7 @@ class IterationWorkspace:
         try:
             paths = {"scratch": folder / "scratch"}
             paths["scratch"].mkdir()
+            paths["bin"] = write_launcher(folder / "bin")  # `autohelix`, immune to the command's env
             for name, source in sources.items():
                 if source is None:
                     continue

@@ -29,6 +29,7 @@ from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git, allocate_call,
                             claim_copies, remove_copies, short_id, write_json, write_text)
 from autohelix.iteration import IterationWorkspace
+from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks)
 from autohelix.run_status import RunStatus
@@ -863,7 +864,8 @@ class Harness:
         @contextmanager
         def gate_call(_command: str):
             with workspace.call_folder() as folders:
-                yield {"AUTOHELIX_SCRATCH": str(folders["scratch"]), "AUTOHELIX_PREVIOUS": None}
+                yield {"AUTOHELIX_SCRATCH": str(folders["scratch"]), "AUTOHELIX_PREVIOUS": None,
+                       "PATH": command_path(folders["bin"])}
 
         positions = {id(gate): index for index, gate in enumerate(self.config.gates)}
 
@@ -933,7 +935,8 @@ class Harness:
             previous = self.history.previous_observations(entry.name, iteration)
             with workspace.call_folder(previous=previous) as folders:
                 env = {**command_env, "AUTOHELIX_SCRATCH": str(folders["scratch"]),
-                       "AUTOHELIX_PREVIOUS": str(folders["previous"]) if "previous" in folders else None}
+                       "AUTOHELIX_PREVIOUS": str(folders["previous"]) if "previous" in folders else None,
+                       "PATH": command_path(folders["bin"])}
                 result = run_observe_entry(entry, checks.working_dir, project_path=self.project_path,
                                            on_progress=progress, extra_env=env)
             # Stored before anything can reject: a rejected iteration keeps its output.
@@ -1072,7 +1075,8 @@ class Harness:
         def stop_call(_command: str):
             with workspace.call_folder(observations=observations) as folders:
                 yield {"AUTOHELIX_SCRATCH": str(folders["scratch"]),
-                       "AUTOHELIX_OBSERVATIONS": str(folders["observations"])}
+                       "AUTOHELIX_OBSERVATIONS": str(folders["observations"]),
+                       "PATH": command_path(folders["bin"])}
 
         stop = workspace.stop_copy()
         try:

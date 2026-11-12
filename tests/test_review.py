@@ -251,7 +251,7 @@ def test_by_hand_previous_is_a_no_op(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "--previous does nothing outside a run" in result.stderr
     assert "not a git repository" in reviewer.calls[0]["config"].system_prompt
-    assert "previous-review" not in reviewer.calls[0]["config"].system_prompt
+    assert "last accepted iteration" not in reviewer.calls[0]["config"].system_prompt
 
 
 def test_by_hand_change_exits_2_listing_the_files(tmp_path, monkeypatch):
@@ -375,26 +375,39 @@ def test_harness_copy_is_removed_on_failure_and_interrupt(candidate, monkeypatch
     assert list(candidate.scratch.iterdir()) == []
 
 
-def test_previous_review_goes_into_the_prompt(candidate, monkeypatch):
+def _previous_file(config, cwd):
+    path = cwd / ".autohelix-iteration" / "previous.md"
+    return {"previous": path.read_bytes() if path.exists() else None}
+
+
+def test_previous_review_is_given_as_a_file(candidate, monkeypatch):
     previous = candidate.tmp / "previous"
     previous.mkdir()
-    (previous / "stdout.txt").write_text("1. parser: done\n2. docs: missing\n##autohelix[missing=1]\n")
-    reviewer = Recorder()
+    # NUL bytes and a long text must not reach argv.
+    text = b"1. parser: done\n2. docs: missing\x00\n##autohelix[missing=1]\n" + b"x" * 200_000
+    (previous / "stdout.txt").write_bytes(text)
+    reviewer = Recorder(inspect=_previous_file)
     monkeypatch.setattr("autohelix.judge.create_agent", reviewer)
 
     assert invoke(["--previous", "--", "Track the PRD."], candidate.cwd, monkeypatch).exit_code == 0
-    assert "previous-review" not in reviewer.calls[-1]["config"].system_prompt  # no $AUTOHELIX_PREVIOUS
+    assert "last accepted iteration" not in reviewer.calls[-1]["config"].system_prompt  # no $AUTOHELIX_PREVIOUS
+    assert reviewer.calls[-1]["previous"] is None
 
     monkeypatch.setenv("AUTOHELIX_PREVIOUS", str(previous))
     assert invoke(["--", "Track the PRD."], candidate.cwd, monkeypatch).exit_code == 0
-    assert "previous-review" not in reviewer.calls[-1]["config"].system_prompt  # no --previous
+    assert "last accepted iteration" not in reviewer.calls[-1]["config"].system_prompt  # no --previous
+    assert reviewer.calls[-1]["previous"] is None
 
-    assert invoke(["--previous", "--", "Track the PRD."], candidate.cwd, monkeypatch).exit_code == 0
-    system = reviewer.calls[-1]["config"].system_prompt
-    assert "your own review from the last accepted iteration" in system
-    assert "1. parser: done\n2. docs: missing" in system
+    result = invoke(["--previous", "--", "Track the PRD."], candidate.cwd, monkeypatch)
+    assert result.exit_code == 0, result.stderr
+    call = reviewer.calls[-1]
+    system = call["config"].system_prompt
+    assert call["previous"] == text
+    path = candidate.scratch.resolve() / "review" / ".autohelix-iteration" / "previous.md"
+    assert f"Your own review from the last accepted iteration is in `{path}`" in system
     assert ("Treat it as a starting point only: re-verify every item against the current code; "
             "don't keep a status because it was there before.") in system
+    assert "parser: done" not in system and len(system) < 5000
 
 
 def test_harness_reviewer_writing_a_file_is_an_integrity_violation(candidate, monkeypatch):
@@ -423,3 +436,219 @@ def test_harness_metric_from_the_mock_backend(candidate, monkeypatch):
     assert result.stdout == "ok\n##autohelix[missing=2]\n"
     [call] = read_usage(candidate.usage)
     assert call["status"] == "ok" and call["cost_usd"] == 0.05 and call["metrics"] == {"missing": 2}
+
+
+# --- review fixes -----------------------------------------------------------
+
+
+def test_symlinks_leaving_the_copy_are_removed_and_listed(candidate, monkeypatch):
+    repo = candidate.repo
+    git(repo, "checkout", "-q", "--detach", candidate.base)
+    (candidate.tmp / "outside.txt").write_text("runtime-generated status\n")
+    links = {"STATUS.md": "../../outside.txt", "abs": "/etc/hosts", "dangling": "../missing",
+             "updir": "..", "sub/up": "../../../outside.txt", "inside": "a.py", "inside_dangling": "nothing.txt",
+             "chain": "inside_out", "inside_out": "../x"}
+    (repo / "sub").mkdir()
+    for name, target in links.items():
+        os.symlink(target, repo / name)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "links")
+    monkeypatch.setenv("AUTOHELIX_CANDIDATE", git(repo, "rev-parse", "HEAD^{tree}"))
+
+    def inspect(config, cwd):
+        return {"links": sorted(p.relative_to(cwd).as_posix() for p in cwd.rglob("*") if p.is_symlink())}
+
+    reviewer = Recorder(inspect=inspect)
+    monkeypatch.setattr("autohelix.judge.create_agent", reviewer)
+    result = invoke(["--", "Check it."], candidate.cwd, monkeypatch)
+    assert result.exit_code == 0, result.stderr  # removing them isn't a change by the reviewer
+    [call] = reviewer.calls
+    assert call["links"] == ["inside", "inside_dangling"]
+    system = call["config"].system_prompt
+    assert "point outside the reviewed tree; they were not followed" in system
+    for name in ("STATUS.md", "abs", "dangling", "updir", "sub/up", "chain", "inside_out"):
+        assert f"- `{name}` → `{links[name]}`" in system
+    assert "`inside`" not in system
+
+
+def test_reviewer_changing_the_diff_or_previous_file_is_a_violation(candidate, monkeypatch):
+    previous = candidate.tmp / "previous"
+    previous.mkdir()
+    (previous / "stdout.txt").write_text("old review\n")
+    monkeypatch.setenv("AUTOHELIX_PREVIOUS", str(previous))
+    for name in ("candidate.diff", "previous.md"):
+        def tamper(config, cwd, name=name):
+            (cwd / ".autohelix-iteration" / name).write_text("all good\n")
+            return {}
+
+        monkeypatch.setattr("autohelix.judge.create_agent", Recorder(inspect=tamper))
+        result = invoke(["--previous", "--", "Check it."], candidate.cwd, monkeypatch)
+        assert result.exit_code == 2
+        assert f"the reviewer changed files: .autohelix-iteration/{name}" in result.stderr
+        assert read_usage(candidate.usage)[-1]["integrity_violation"] is True
+
+
+def test_reviewer_changing_a_candidate_file_is_a_violation(candidate, monkeypatch):
+    def edit(config, cwd):
+        (cwd / "a.py").write_text("edited\n")
+        return {}
+
+    monkeypatch.setattr("autohelix.judge.create_agent", Recorder(inspect=edit))
+    result = invoke(["--", "Check it."], candidate.cwd, monkeypatch)
+    assert result.exit_code == 2 and "the reviewer changed files: a.py" in result.stderr
+
+
+def test_too_little_time_fails_before_copying(candidate, monkeypatch):
+    monkeypatch.setenv("AUTOHELIX_COMMAND_DEADLINE", str(time.time() + 20))  # under the 30s copy margin
+    reviewer = Recorder()
+    monkeypatch.setattr("autohelix.judge.create_agent", reviewer)
+    created = []
+    monkeypatch.setattr("autohelix.review.Copy.create", lambda *a, **k: created.append(a))
+    result = invoke(["--", "Check it."], candidate.cwd, monkeypatch)
+    assert result.exit_code == 2 and "no time left" in result.stderr
+    assert reviewer.calls == [] and created == [] and list(candidate.scratch.iterdir()) == []
+
+
+def test_printed_prose_has_no_control_characters(tmp_path, monkeypatch):
+    mock_config(tmp_path, review_text="line\x00one\r\n\x1b[2Jtwo\tcol")
+    result = invoke(["--", "Check it."], tmp_path, monkeypatch)
+    assert result.exit_code == 0, result.stderr
+    assert result.stdout == "lineone\n[2Jtwo\tcol\n"
+
+
+def test_huge_integer_metric_is_an_invalid_answer(tmp_path, monkeypatch):
+    huge = '{"review": "ok", "metrics": {"m": 1' + "0" * 400 + "}}"
+    with pytest.raises(JudgeError, match="too large"):
+        parse_review(huge, None, ["m"])
+    usage = tmp_path / "usage.jsonl"
+    monkeypatch.setenv("AUTOHELIX_USAGE_FILE", str(usage))
+    monkeypatch.setenv("AUTOHELIX_LOG_DIR", str(tmp_path / "logs"))
+    mock_config(tmp_path, judge_output=huge, cost_usd=0.01)
+    result = invoke(["--metric", "m:lower", "--", "Check it."], tmp_path, monkeypatch)
+    assert result.exit_code == 2 and "too large" in result.stderr
+    calls = read_usage(usage)
+    assert [c["status"] for c in calls] == ["error", "error"]  # retried; both costs kept
+    assert sum(c["cost_usd"] for c in calls) == pytest.approx(0.02)
+
+
+def test_any_parse_exception_still_records_the_call(tmp_path, monkeypatch):
+    from autohelix.judge import call_judge
+
+    usage = tmp_path / "usage.jsonl"
+    monkeypatch.setenv("AUTOHELIX_USAGE_FILE", str(usage))
+    monkeypatch.setenv("AUTOHELIX_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setattr("autohelix.judge.create_agent", Recorder())
+
+    def parse(result):
+        raise ValueError("parser bug")
+
+    with pytest.raises(ValueError, match="parser bug"):
+        call_judge(tmp_path, judge_config(AgentConfig(backend="claude")), source="review", record={},
+                   prompt="P", parse=parse, budget=60)
+    [call] = read_usage(usage)
+    assert call["status"] == "error" and "parser bug" in call["error"] and call["cost_usd"] == 0.01
+
+
+@pytest.mark.parametrize("ignored", [False, True])
+def test_by_hand_from_a_subdirectory_covers_only_it(tmp_path, monkeypatch, ignored):
+    repo = make_repo(tmp_path / "repo")
+    (repo / "other.py").write_text("other\n")
+    (repo / "sub").mkdir()
+    (repo / "sub" / "x.py").write_text("x\n")
+    if ignored:
+        (repo / ".gitignore").write_text(".autohelix/\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "init")
+    (repo / "other.py").write_text("other changed\n")
+    (repo / "sub" / "x.py").write_text("x changed\n")
+    (repo / "sub" / "new.py").write_text("new in sub\n")
+    for state in (repo / ".autohelix", repo / "sub" / ".autohelix", repo / "sub" / "deep" / ".autohelix-iteration"):
+        state.mkdir(parents=True)
+        (state / "state.txt").write_text(f"state of {state.relative_to(repo)}\n")
+    index_before = (repo / ".git" / "index").read_bytes()
+    reviewer = Recorder(inspect=lambda config, cwd: {"diff_text": diff_path(config.system_prompt).read_text()})
+    monkeypatch.setattr("autohelix.judge.create_agent", reviewer)
+    result = invoke(["--", "Check it."], repo / "sub", monkeypatch)
+    assert result.exit_code == 0, result.stderr
+    text = reviewer.calls[0]["diff_text"]
+    assert "+x changed" in text and "+new in sub" in text
+    assert "other" not in text and "state of" not in text and ".autohelix" not in text
+    for state in (".autohelix", "sub/.autohelix", "sub/deep/.autohelix-iteration"):
+        oid = subprocess.run(["git", "hash-object", "--stdin"], cwd=repo, input=f"state of {state}\n",
+                             capture_output=True, text=True, check=True).stdout.strip()
+        assert subprocess.run(["git", "cat-file", "-e", oid], cwd=repo).returncode != 0  # never hashed
+    assert (repo / ".git" / "index").read_bytes() == index_before
+
+
+# --- the `autohelix` launcher -----------------------------------------------
+
+
+EVIL_YAML = 'print("##autohelix[missing=0]"); print("HIJACKED"); import sys; sys.exit(0)\n'
+
+
+def test_launcher_is_immune_to_the_command_environment(tmp_path):
+    import sys
+
+    import autohelix
+    from autohelix.launcher import command_path, write_launcher
+
+    evil = tmp_path / "evil"
+    evil.mkdir()
+    (evil / "yaml.py").write_text(EVIL_YAML)
+    (evil / "click.py").write_text(EVIL_YAML)
+    config = tmp_path / "autohelix.yaml"
+    config.write_text("goal: g\nagent:\n  backend: mock\n  settings: {review_metrics: {missing: 7}}\n")
+    bin_dir = write_launcher(tmp_path / "bin")
+    launcher = bin_dir / "autohelix"
+    assert launcher.stat().st_mode & 0o777 == 0o500
+    assert repr(str(Path(autohelix.__file__).resolve().parent.parent)) in launcher.read_text()
+    env = {key: value for key, value in os.environ.items() if not key.startswith("AUTOHELIX_")}
+    env.update(AUTOHELIX_CONFIG=str(config), PATH=command_path(bin_dir),
+               PYTHONPATH=os.pathsep.join([str(evil), env.get("PYTHONPATH", "")]))
+    args = ["review", "--metric", "missing:lower", "--", "Check."]
+
+    plain = subprocess.run([sys.executable, "-c", "from autohelix.cli import main; main()", *args], cwd=evil,
+                           env=env, capture_output=True, text=True)
+    assert "HIJACKED" in plain.stdout  # the attack this guards against
+
+    guarded = subprocess.run(["sh", "-c", 'autohelix "$@"', "sh", *args], cwd=evil, env=env,
+                             capture_output=True, text=True)
+    assert guarded.returncode == 0, guarded.stderr
+    assert guarded.stdout == "mock review\n##autohelix[missing=7]\n"
+
+
+def test_harness_commands_run_autohelix_through_the_launcher(tmp_path, monkeypatch):
+    """A candidate `yaml.py` on the remapped PYTHONPATH is not imported by a gate's
+    `autohelix ask` or an observe entry's `autohelix review`."""
+    from autohelix.harness import Harness
+    from autohelix.history import History
+
+    project = make_repo(tmp_path / "project")
+    (project / "src").mkdir()
+    (project / "src" / "yaml.py").write_text(EVIL_YAML)
+    (project / "hello.py").write_text("print(1)\n")
+    (project / ".gitignore").write_text(".autohelix/\n")
+    (project / "autohelix.yaml").write_text("""
+goal: g
+agent:
+  backend: mock
+  settings:
+    change_file: hello.py
+    judge_answer: "no"
+    review_metrics: {missing: 7}
+gates:
+  - ask: Is it done?
+observe:
+  - name: progress
+    review: Count the missing items.
+    metrics: {missing: lower}
+""")
+    git(project, "add", "-A")
+    git(project, "commit", "-qm", "init")
+    # As an editable install would: the project's src/ on sys.path, remapped onto the copy.
+    monkeypatch.syspath_prepend(str(project / "src"))
+    Harness(project, verbose=False).run(max_iterations=1, report=False)
+    baseline, first = History(project).load()
+    assert baseline.gates[0]["passed"] is False  # the judge's "no", not the planted exit 0
+    assert baseline.observe[0]["ok"] is True and baseline.observe[0]["metrics"] == {"missing": 7}
+    assert not first.accepted and first.gates[0]["passed"] is False

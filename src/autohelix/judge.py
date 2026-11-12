@@ -174,13 +174,14 @@ def _log_path(name: str) -> Path:
     return call_dir / f"{name}.log"
 
 
-def deadline_left() -> int | None:
-    """Seconds left before the harness's deadline for this command, minus time to
-    record usage; None outside the harness (or with an unreadable deadline)."""
+def deadline_left(margin: int = 10) -> int | None:
+    """Seconds left before the harness's deadline for this command, minus `margin`
+    (time to record usage and clean up); None outside the harness (or with an
+    unreadable deadline)."""
     raw = os.environ.get(DEADLINE_ENV)
     try:
-        return int(float(raw) - time.time()) - 10 if raw else None
-    except ValueError:
+        return int(float(raw) - time.time()) - margin if raw else None
+    except (ValueError, OverflowError):
         return None
 
 
@@ -209,15 +210,18 @@ def ask(question: str, cwd: Path, config: AgentConfig, *, yes: str | None = None
 
 def call_judge(cwd: Path, config: AgentConfig, *, source: str, record: dict, prompt: str,
                parse: Callable, budget: int, attempts: int = 2, guarded: Path | None = None,
-               allowed: tuple = (), who: str = "judge") -> tuple[Any, float | None]:
+               allowed: tuple = (), who: str = "judge",
+               also_changed: Callable[[], list[str]] | None = None) -> tuple[Any, float | None]:
     """Run a read-only agent in `cwd` until `parse(result)` accepts its answer: one
     retry on a failed call or an invalid answer, all within `budget` seconds.
 
-    `parse` returns (value, fields for the final usage record) or raises JudgeError.
+    `parse` returns (value, fields for the final usage record) or raises JudgeError
+    (an invalid answer); any other exception is recorded and re-raised.
     Each attempt records a `started` and a final usage record (`source`, plus
     `record`). The `guarded` directory (default `cwd`) is fingerprinted around each
     call: a change fails without retry and marks the record `integrity_violation`.
-    `allowed` paths may change, besides the call's log and the usage file.
+    `allowed` paths may change, besides the call's log and the usage file;
+    `also_changed()` names further changed files, checked after each call the same way.
     Returns (value, total cost of the attempts; None if any cost is unknown)."""
     total_cost: float | None = 0.0
     last_error = "no time left before the command's timeout"
@@ -250,7 +254,7 @@ def call_judge(cwd: Path, config: AgentConfig, *, source: str, record: dict, pro
         except BaseException as e:
             failure = e
         usage = {"duration_ms": int((time.monotonic() - started) * 1000), **(result.usage if result else {})}
-        if violation := _violation(guard, who):
+        if violation := _violation(guard, who, also_changed):
             # Recorded even if a wrapper script restores the files and exits 0.
             append_usage({**entry, **usage, "status": "error", "error": violation, "integrity_violation": True})
             if isinstance(failure, KeyboardInterrupt):
@@ -271,6 +275,9 @@ def call_judge(cwd: Path, config: AgentConfig, *, source: str, record: dict, pro
             if "timed out" in last_error:
                 break  # retrying would overrun the same deadline
             continue
+        except BaseException as e:  # a bug, not an invalid answer: keep the call's cost, then fail
+            append_usage({**entry, **usage, "status": "error", "error": f"{type(e).__name__}: {e}"})
+            raise
         append_usage({**entry, **usage, "status": "ok", **fields})
         return value, total_cost
     raise JudgeError(last_error)
@@ -345,10 +352,11 @@ class DirectoryGuard:
         return sorted(set(self.fingerprint.changed(self.root)) | set(new))
 
 
-def _violation(guard: DirectoryGuard, who: str = "judge") -> str | None:
+def _violation(guard: DirectoryGuard, who: str = "judge",
+               also_changed: Callable[[], list[str]] | None = None) -> str | None:
     """Why the judged files can no longer be trusted, if they can't."""
     try:
-        changed = guard.violations()
+        changed = sorted({*guard.violations(), *(also_changed() if also_changed else ())})
     except Exception as e:  # noqa: BLE001 - unverifiable counts as changed
         return f"could not verify the judged files: {e}"
     return f"the {who} changed files: {', '.join(changed[:10])}" if changed else None
