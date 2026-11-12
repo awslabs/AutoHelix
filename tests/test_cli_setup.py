@@ -339,7 +339,7 @@ def test_agent_claude_execs_with_the_skill_and_writes_nothing(project, monkeypat
     assert "`agent.backend: claude`" in prompt
     assert "Write the file directly (don't run `autohelix setup`)." in prompt
     assert f"To check it, use AutoHelix's own Python, `{sys.executable}`" in prompt
-    assert prompt.endswith('Start by asking me only: "What should this AutoHelix loop do?"')
+    assert "Start by asking" not in prompt  # the skill's first question is in SKILL.md
 
 
 def test_the_prompt_names_the_launcher_it_was_started_as(project, monkeypatch, execs, tmp_path):

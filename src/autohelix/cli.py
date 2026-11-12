@@ -98,8 +98,7 @@ def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[st
     tools = f"use AutoHelix's own Python, `{sys.executable}`" + (f" (its CLI is `{launcher}`)" if launcher else "")
     prompt = (f"Read `{skill_dir / 'SKILL.md'}` and follow it to help me set up an AutoHelix loop for this "
               f"project. {where}, with `agent.backend: {agent}` unless we decide otherwise. Write the file "
-              f"directly (don't run `autohelix setup`). To check it, {tools}. "
-              'Start by asking me only: "What should this AutoHelix loop do?"')
+              f"directly (don't run `autohelix setup`). To check it, {tools}.")
     if agent == "claude":  # --add-dir lets it read the skill; it takes several folders, hence --
         return ["claude", "--add-dir", str(skill_dir), "--", prompt]
     if agent == "codex":  # reads outside the workspace without a flag (its --add-dir grants writes)

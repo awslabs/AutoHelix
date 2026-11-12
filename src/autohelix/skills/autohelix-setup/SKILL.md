@@ -16,8 +16,9 @@ session, with persistent notes and measurements from earlier attempts.
 
 ## Understand the experiment
 
-If the session's first prompt gives a first question, ask exactly that, on its
-own, before inspecting anything; inspect after the answer.
+Unless the user has already said what the loop should do, start by asking
+only: "What should this AutoHelix loop do?" Ask it on its own, before
+inspecting anything; inspect after the answer.
 
 Inspect the project's instructions, git state, relevant code, existing
 evaluators, and any AutoHelix configs (`autohelix.yaml`, `autohelix/*.yaml`).
