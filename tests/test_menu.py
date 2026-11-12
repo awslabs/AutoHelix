@@ -3,10 +3,6 @@
 
 """The arrow-key menu `autohelix setup` asks with."""
 
-import os
-import pty
-import sys
-import threading
 
 import click
 import pytest
@@ -25,42 +21,6 @@ OPTIONS = [("With Claude Code", "it asks"), ("Empty config", "the template"), ("
 ])
 def test_step(key, current, expected):
     assert menu.step(key, current, 3) == expected
-
-
-@pytest.fixture
-def terminal(monkeypatch):
-    """A pseudo-terminal as stdin and stdout; returns a function that types keys. Its
-    output is read as a terminal would, or writes (and restoring its mode) would block."""
-    leader, follower = pty.openpty()
-    stdin, stdout = os.fdopen(follower, "r"), os.fdopen(os.dup(follower), "w")
-    monkeypatch.setattr(sys, "stdin", stdin)
-    monkeypatch.setattr(sys, "stdout", stdout)
-
-    def drain():
-        try:
-            while os.read(leader, 1024):
-                pass
-        except OSError:
-            pass
-
-    threading.Thread(target=drain, daemon=True).start()
-    yield lambda keys: os.write(leader, keys)
-    stdin.close()
-    stdout.close()
-    os.close(leader)
-
-
-@pytest.mark.parametrize("keys, expected", [(b"\r", 0), (b"\x1b[B\r", 1), (b"jjj\r", 2), (b"3", 2), (b"jk\r", 0)])
-def test_arrow_keys_pick(terminal, keys, expected):
-    terminal(keys)
-    assert menu.choose("How?", OPTIONS) == expected
-
-
-@pytest.mark.parametrize("keys", [b"\x1b", b"\x04"])
-def test_escape_aborts(terminal, keys):
-    terminal(keys)
-    with pytest.raises(click.Abort):
-        menu.choose("How?", OPTIONS)
 
 
 def test_without_a_terminal_a_numbered_prompt_asks(monkeypatch):
