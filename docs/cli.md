@@ -116,9 +116,13 @@ One invocation of `run` or `resume` is a segment; its iteration/time/cost limits
 still apply to the whole run. Only one process can own a run at a time; a PID in
 the viewer is advisory, while a process-held file lock enforces ownership.
 
-An actual main-agent failure records a rejected attempt and consumes its number;
-resuming starts at the next number. Setup failures before a call do not consume
-an iteration. Failed baseline attempts remain iteration 0 and retain their costs.
+A failed or timed-out main-agent call records a rejected attempt (unchecked,
+`agent failed: …` in the console row, `agent timed out (30m)` for a timeout),
+consumes its number, and the loop goes on to the next iteration; budgets apply
+as for any rejection. Three failed calls in a row stop the run ("the agent failed
+3 times in a row: …"), with landing and the report as at any segment end.
+Setup failures before a call (copy creation, the prompt) do not consume an
+iteration and stop the run with an error. Failed baseline attempts remain iteration 0 and retain their costs.
 
 Legacy `.autohelix/history.jsonl` state is not migrated: move or delete the old
 `.autohelix/` directory and run `git worktree prune` before starting a new run.

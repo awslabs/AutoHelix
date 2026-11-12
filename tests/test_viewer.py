@@ -55,10 +55,19 @@ def test_harness_records_finished_run(integration_project):  # noqa: F811
 
 def test_harness_records_failed_run(integration_project, monkeypatch):  # noqa: F811
     harness = Harness(integration_project)
-    monkeypatch.setattr(harness, "run_agent", lambda *a, **k: AgentRunResult(success=False, exit_code=1))
+
+    def broken(*args, **kwargs):  # the harness itself failing, not the agent (that's a rejection)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(harness, "run_agent", broken)
     with pytest.raises(AutoHelixRunError):
         harness.run(max_iterations=1)
     assert read_run_status(integration_project)["state"] == "failed"
+    # A failed agent call is a rejected iteration: the run finishes normally.
+    harness = Harness(integration_project)
+    monkeypatch.setattr(harness, "run_agent", lambda *a, **k: AgentRunResult(success=False, exit_code=1))
+    harness.run(max_iterations=2)
+    assert read_run_status(integration_project)["state"] == "finished"
 
 
 # ---------- viewer server ----------

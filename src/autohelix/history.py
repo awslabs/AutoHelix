@@ -53,6 +53,8 @@ class IterationResult:
     tree: str | None = None
     discarded: list[str] = field(default_factory=list)
     discarded_frozen: list[str] = field(default_factory=list)  # those of `discarded` that are frozen
+    # Why the main agent's call failed or timed out (the attempt was rejected unchecked).
+    agent_error: str | None = None
     rejected_ref: str | None = None
 
     @property

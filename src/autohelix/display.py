@@ -309,6 +309,7 @@ class Transcript:
         self.columns = [name for name in self.directions if name not in reviewed]
         self.tracked = [name for name in self.directions if name in reviewed]
         self.width = max(width, 40)
+        self.timeout = config.agent.timeout
 
     def _metrics(self, metrics: dict, baseline: dict | None) -> list[tuple[str, str]]:
         parts = []
@@ -352,12 +353,23 @@ class Transcript:
         if record.accepted:
             parts.append(("✓ accepted", "green"))
         else:
-            reason = Text("✗ " + outcome_reason(record.reason), style="red", no_wrap=True)
+            reason = Text("✗ " + self._rejection(record), style="red", no_wrap=True)
             reason.truncate(max(self.width - used, 12), overflow="ellipsis")
             parts.append((reason.plain, "red"))
         if tracked:
             parts.append((tracked, "dim"))
         return [_line(self.width, *parts), *self._notes(record)]
+
+    def _rejection(self, record) -> str:
+        """`agent timed out (30m)`, `agent failed: <error>`, or the failing gate / reason."""
+        error = getattr(record, "agent_error", None)
+        if error is None:
+            return outcome_reason(record.reason)
+        if clean(error).startswith("timed out"):
+            from autohelix.iteration_time import format_duration
+
+            return f"agent timed out ({format_duration(self.timeout)})" if self.timeout else "agent timed out"
+        return f"agent failed: {clean(error)}"
 
     def _tracked(self, metrics: dict, previous: dict) -> str:
         shown = []

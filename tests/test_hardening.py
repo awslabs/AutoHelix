@@ -226,9 +226,9 @@ def test_a_timed_out_agent_is_kept_and_rejected_unchecked(repo, tmp_path):
 
     harness = Harness(project, verbose=False, land_mode="manual")
     Agent(harness, act)
-    with pytest.raises(AutoHelixRunError, match="agent failed: timed out after 1s"):
-        harness.run(max_iterations=1, report=False)
+    harness.run(max_iterations=1, report=False)
     record = History(project).load()[-1]
+    assert record.reason == "Iteration 1 agent failed: timed out after 1s"
     assert not record.accepted and record.gates == [] and not ran.exists()
     assert _refs(repo, harness) == [record.rejected_ref]
     assert _git(repo, "show", f"{record.tree}:hello.py") == "half done"
@@ -250,8 +250,7 @@ def test_a_failed_agent_that_replaced_its_material_by_a_symlink(repo, tmp_path):
 
     harness = Harness(project, verbose=False, land_mode="manual")
     Agent(harness, act)
-    with pytest.raises(AutoHelixRunError, match="agent failed: crashed"):
-        harness.run(max_iterations=1, report=False)
+    harness.run(max_iterations=1, report=False)
     record = History(project).load()[-1]
     assert record.summary is None and record.rejected_ref
     assert ITERATION_DIR not in _git(repo, "ls-tree", "--name-only", record.tree).split()
@@ -474,3 +473,60 @@ def test_run_start_warnings_wrap_under_their_label(repo, capsys):
     assert ".autohelix/prompt.md is no longer read" in text
     assert "prompt.md names .autohelix/ paths in the agent's copy" in text
     assert all(not line.strip() or line.startswith("  ") for line in out.splitlines()[:12])
+
+
+# --- agent failures continue the loop ---------------------------------------------------
+
+
+def _failing(iterations, error="crashed"):
+    """An `act` that fails the agent call on the given iterations (after editing hello.py)."""
+    def act(worktree, iteration):
+        if iteration in iterations:
+            (worktree / "hello.py").write_text(f"attempt {iteration}\n")
+            return AgentRunResult(success=False, exit_code=1, error=error)
+    return act
+
+
+def test_a_timeout_then_an_accept_with_its_patch(repo):
+    from autohelix.harness import MAX_CONSECUTIVE_AGENT_FAILURES  # noqa: F401 - the documented constant
+
+    project = _project(repo)
+    _configure(project, repo)
+    harness = Harness(project, verbose=False, land_mode="manual")
+    agent = Agent(harness, _failing({1}, error="timed out after 30 minutes"))
+    harness.run(max_iterations=2, report=False)
+    records = History(project).load()
+    assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, False), (2, True)]
+    timed_out = records[1]
+    assert timed_out.agent_error == "timed out after 30 minutes" and timed_out.gates == []
+    assert timed_out.rejected_ref and timed_out.cost is not None
+    patch = agent.seen[2]["patch"]
+    assert patch and b"+attempt 1" in patch and "rejected.patch" in agent.seen[2]["prompt"]
+
+
+def test_three_agent_failures_in_a_row_stop_the_run_and_land_accepted_work(repo):
+    from autohelix.run_status import read_run_status
+
+    project = _project(repo)
+    _configure(project, repo, scope={"editable": ["hello.py"]})
+    harness = Harness(project, verbose=False)  # auto landing
+    Agent(harness, _failing({2, 3, 4}))
+    harness.run(max_iterations=10, report=False)
+    records = History(project).load()
+    assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True), (2, False), (3, False), (4, False)]
+    reason = read_run_status(project)["stop_reason"]
+    assert reason["kind"] == "agent" and reason["detail"] == "the agent failed 3 times in a row: crashed"
+    assert _git(repo, "show", "main:hello.py").endswith("# iteration 1")  # iteration 1 landed
+
+
+def test_failures_that_are_not_consecutive_dont_stop_the_run(repo):
+    from autohelix.run_status import read_run_status
+
+    project = _project(repo)
+    _configure(project, repo, scope={"editable": ["hello.py"]})
+    harness = Harness(project, verbose=False, land_mode="manual")
+    Agent(harness, _failing({1, 3, 4}))
+    harness.run(max_iterations=4, report=False)
+    records = History(project).load()
+    assert [r.accepted for r in records] == [True, False, True, False, False]
+    assert read_run_status(project)["stop_reason"]["detail"] == "iteration budget reached (4)"

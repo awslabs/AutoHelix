@@ -92,7 +92,7 @@ class TestMockAgentIntegration:
             assert r.iteration == i
             assert r.accepted is True
 
-    def test_agent_failure_aborts_and_records_failed_attempt(
+    def test_agent_failure_is_a_recorded_rejection_and_the_run_goes_on(
         self, integration_project, monkeypatch
     ):
         harness = Harness(integration_project, verbose=False)
@@ -113,15 +113,13 @@ class TestMockAgentIntegration:
             ),
         )
 
-        with pytest.raises(
-            AutoHelixRunError,
-            match="Iteration 1 agent failed: API Error: invalid model",
-        ):
-            harness.run(max_iterations=1)
+        harness.run(max_iterations=1)  # no error: a failed agent call is a rejection
 
         results = History(integration_project).load()
         assert [result.iteration for result in results] == [0, 1]
         assert not results[-1].accepted and results[-1].cost.incomplete
+        assert results[-1].reason == "Iteration 1 agent failed: API Error: invalid model"
+        assert results[-1].agent_error == "API Error: invalid model"
         assert subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=integration_project,
@@ -403,10 +401,10 @@ gates:
         subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
-        with pytest.raises(AutoHelixRunError, match="Iteration 1 agent failed"):
-            harness.run(max_iterations=1)
+        harness.run(max_iterations=1)
 
         history = History(integration_project)
+        assert history.load()[-1].reason == "Iteration 1 agent failed: Mock failure"
         assert [result.iteration for result in history.load()] == [0, 1]
 
         config_path = integration_project / "autohelix.yaml"

@@ -442,8 +442,9 @@ use only `backend`, `model`, `reasoning_effort` and `command` from here, never
 `ask` defaults to 600 seconds, a review to its command's deadline.
 
 **`agent.timeout`** is a hard kill: at the deadline the agent is stopped, even
-mid-step, and the iteration is rejected (its tree is still kept, see
-[Concepts → Rejected work](concepts.md#rejected-work)). Where the backend
+mid-step, and the iteration is rejected unchecked (its tree is still kept, see
+[Concepts → Rejected work](concepts.md#rejected-work)); the loop goes on with
+the next iteration, as after any failed agent call, until three fail in a row. Where the backend
 supports it, the agent also sees the time left, so it can wrap up and write
 notes first: Claude Code through hooks after each tool call, Codex through the
 same hook on CLI versions that support it (an older Codex warns and runs without

@@ -162,15 +162,33 @@ def test_ending_with_manual_landing(project):
 
 
 def test_an_error_comes_first_then_landing_and_the_run_page(project):
-    _configure(project, settings={"should_fail": True}, scope={"editable": ["hello.py"]})
+    _configure(project, stop=["echo broken; exit 3"], scope={"editable": ["hello.py"]})
     result, _, _ = _run(project)
     assert result.exit_code == 1
-    lines = [line.strip() for line in result.output.splitlines()]
-    error = lines.index("Error: Iteration 1 agent failed: Mock failure")
-    landing = lines.index("Nothing landed: no accepted changes.")
-    page = next(i for i, line in enumerate(lines) if line.startswith("Run page:"))
+    text = " ".join(result.output.split())  # the error line wraps at the terminal width
+    message = "Stop command failed on the baseline: echo broken; exit 3 (expected exit 0 to stop or 1 to continue)"
+    error = text.index(f"Error: {message}")
+    landing = text.index("Nothing landed: no accepted changes.")
+    page = text.index("Run page: ")
     assert error < landing < page
-    assert result.output.count("Iteration 1 agent failed") == 1  # not repeated by the CLI
+    assert result.output.count("Stop command failed on the baseline") == 1  # not repeated by the CLI
+
+
+def test_agent_failures_show_in_the_row_and_three_in_a_row_stop_the_run(project):
+    _configure(project, settings={"should_fail": True}, scope={"editable": ["hello.py"]})
+    result = CliRunner().invoke(main, ["run", "--path", str(project), "--no-report", "-n", "5"])
+    assert result.exit_code == 0, result.output
+    rows = [line.rstrip() for line in result.output.splitlines() if line.startswith("  iter ")]
+    assert len(rows) == 3 and all(row.endswith("✗ agent failed: Mock failure") for row in rows)
+    assert "  Stopped: the agent failed 3 times in a row: Mock failure" in result.output.splitlines()
+
+
+def test_a_timed_out_agent_row():
+    transcript = Transcript(Config.from_dict({"goal": "g", "agent": {"timeout": "30m"}}), 100)
+    record = _record(4, False, reason="Iteration 4 agent failed: timed out after 30 minutes",
+                     agent_error="timed out after 30 minutes")
+    [row] = transcript.row(record, {}, {})
+    assert row.plain.rstrip().endswith("✗ agent timed out (30m)")
 
 
 def test_rejected_row_in_a_run(project):

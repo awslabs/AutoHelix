@@ -62,6 +62,12 @@ Added:
 - The baseline runs every gate command and observe entry (rejecting nothing).
   A missing metric from a command entry stops the run; one from a review only
   if a gate uses it, otherwise it is a warning.
+- **A failed or timed-out agent call no longer ends the run**: it is a
+  rejected iteration (unchecked; `agent_error` in its record; `✗ agent failed:
+  …` / `✗ agent timed out (30m)` in the console) and the loop goes on, with
+  budgets as for any rejection. Three failed calls in a row stop the run ("the
+  agent failed 3 times in a row: …"); an accepted or gate-rejected iteration
+  resets the count.
 - **Rejected work is kept**: each rejected attempt's tree as
   `refs/autohelix-rejected/<id>/<n>` (also failed or timed-out agent calls;
   removed by `delete`; none when all its changes were discarded), and the next

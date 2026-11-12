@@ -113,8 +113,7 @@ def test_failed_agent_attempt_keeps_its_tree_and_stays_rejected(project):
     _configure(project, settings={"should_fail": True})
     harness = Harness(project, verbose=False, land_mode="manual")
     Spy(harness, edit=lambda worktree: (worktree / "hello.py").write_text("half done\n"))
-    with pytest.raises(AutoHelixRunError, match="agent failed"):
-        harness.run(max_iterations=1, report=False)
+    harness.run(max_iterations=1, report=False)  # the loop goes on; the budget ends it here
     record = History(project).load()[-1]
     assert record.iteration == 1 and not record.accepted
     assert record.reason == "Iteration 1 agent failed: Mock failure"

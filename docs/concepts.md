@@ -221,8 +221,11 @@ the entry succeeded, so a tracker's status moves only with accepted code.
 Every rejected attempt's frozen tree is kept as a hidden ref,
 `refs/autohelix-rejected/<id>/<n>`, including attempts whose agent call failed
 or timed out (only if freezing the copy itself fails is there nothing to keep).
-A timed-out attempt is still rejected without checks: it is kept for the record
-and the next agent, never accepted unchecked.
+A failed or timed-out attempt is rejected without checks: it is kept for the
+record and the next agent, never accepted unchecked, and the loop goes on (the
+next agent gets its `rejected.patch`). Three failed agent calls in a row stop
+the run: "the agent failed 3 times in a row: <last error>". An accepted or
+gate-rejected iteration resets the count.
 
 An attempt whose changes were all discarded (its tree equals the commit it
 started from) keeps no ref: there is nothing to keep or re-apply.

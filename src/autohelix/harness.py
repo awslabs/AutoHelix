@@ -54,6 +54,11 @@ class AutoHelixRunError(RuntimeError):
     """A run could not safely continue because infrastructure failed."""
 
 
+# A failed or timed-out agent call is a rejected iteration and the loop goes on; this
+# many in a row (within a segment) stop the run: the agent is unlikely to recover.
+MAX_CONSECUTIVE_AGENT_FAILURES = 3
+
+
 @dataclass
 class _Attempt:
     """What an iteration attempt has spent and checked so far, for its record."""
@@ -691,12 +696,15 @@ class Harness:
             if self.verbose:
                 self._status("Agent did not complete successfully")
             detail = agent_result.error or f"agent exited with status {agent_result.exit_code}"
-            # Kept for the record and the next agent (rejected.patch), never checked or accepted.
+            # Kept for the record and the next agent (rejected.patch), never checked or
+            # accepted; the loop goes on (`_run` stops after consecutive failures).
             try:
                 self._freeze(workspace, checking=False)
             except Exception as e:  # noqa: BLE001 - the agent's failure is the outcome
                 self.log.warn(f"Could not keep iteration {iteration}'s tree: {e}")
-            raise AutoHelixRunError(f"Iteration {iteration} agent failed: {detail}")
+            self.log.info(f"iter {iteration} agent failed — {detail}")
+            return self._rejected(iteration, attempt, f"Iteration {iteration} agent failed: {detail}",
+                                  agent_error=detail)
 
         self._freeze(workspace)
 
@@ -1417,6 +1425,7 @@ class Harness:
         time_reached = {"kind": "budget", "budget": "time",
                         "detail": f"time budget reached ({_format_time(self.config.max_time_seconds or 0)})"}
         iteration = start_iter
+        agent_failures = 0  # consecutive failed agent calls in this segment
         try:
             for iteration in range(start_iter, max_iter + 1):
                 if stop_reason:
@@ -1434,6 +1443,12 @@ class Harness:
 
                 if result.stop:
                     stop_reason = self._condition_stop(result.stop, iteration)
+                    break
+                agent_failures = agent_failures + 1 if result.agent_error is not None else 0
+                if agent_failures >= MAX_CONSECUTIVE_AGENT_FAILURES:
+                    stop_reason = {"kind": "agent", "iteration": iteration, "error": result.agent_error,
+                                   "detail": f"the agent failed {agent_failures} times in a row: "
+                                             f"{clean(result.agent_error, 200)}"}
                     break
 
                 # Check cost budget
