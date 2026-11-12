@@ -136,15 +136,22 @@ def _lines(text: str) -> Text:
 
 
 def fit(text: str, height: int) -> str:
-    """The run's table in `height` lines: the oldest iteration rows go first, the header and column names stay."""
+    """The run's table in `height` lines: the oldest iteration rows go first (with the
+    lines under them: summary, failures), the header and column names stay."""
     lines = text.rstrip("\n").split("\n")
     if len(lines) <= height or "" not in lines:
         return "\n".join(lines[:max(height, 1)])
     head = lines.index("") + 2  # the run's lines, the blank line, the column names
     keep = max(0, height - head - 1)
-    hidden = len(lines) - head - keep
+    rows = lines[head:]
+    # An iteration's own row has its number in the ITER column; the lines under it don't.
+    starts = lambda part: [line for line in part if line[:len("ITER")].strip()]  # noqa: E731
+    kept = rows[len(rows) - keep:] if keep else []
+    while kept and not kept[0][:len("ITER")].strip():
+        kept = kept[1:]  # don't start with the lines under a row that was left out
+    hidden = len(starts(rows)) - len(starts(kept))
     more = f"  … {hidden} earlier iteration{'' if hidden == 1 else 's'}"
-    return "\n".join(lines[:head] + [more] + (lines[-keep:] if keep else []))
+    return "\n".join(lines[:head] + [more] + kept)
 
 
 def _read_run(runs: ProjectRuns, project: Path, run_id: str | None, config_file: Path | None) -> dict | str | None:

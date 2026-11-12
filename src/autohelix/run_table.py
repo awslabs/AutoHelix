@@ -135,7 +135,7 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
         return "\n".join(lines + ["", "No runs yet." if not runs else "All runs are archived."]) + "\n"
 
     metric = metric or next(iter(metric_names(shown)), None)
-    head = ["RUN", "STATUS", "ITER"] + ([metric] if metric else []) + ["LANDING", "ACTIVE"]
+    head = ["RUN", "STATUS", "ITER"] + ([metric] if metric else []) + ["LANDING", "ACTIVE", "GOAL"]
     rows = [head]
     for run in shown:
         if run.get("error"):
@@ -143,7 +143,8 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
             continue
         rows.append([_label(run), _state(run, now), _iterations(run)]
                     + ([_metric(run, metric)] if metric else [])
-                    + [_landing(run), "now" if _live(run) else _ago(run["last_activity"], now)])
+                    + [_landing(run), "now" if _live(run) else _ago(run["last_activity"], now),
+                       run.get("title") or ""])
         rows.append(["  " + (run["config_file"] or ""), _spent(run, now)] + [""] * (len(head) - 2))
     return "\n".join(lines + [""] + _table(rows, right={2, 3} if metric else {2})) + "\n"
 
@@ -162,8 +163,9 @@ def format_run(data: dict, now: float | None = None) -> str:
     stop = (run["status"] or {}).get("stop_reason") or {}
     if not _live(run) and stop.get("detail"):
         lines.append(f"Stopped: {stop['detail']}")
-    if run["goal"]:
-        lines.append(f"Goal: {run['goal'].splitlines()[0]}")
+    title = run.get("title") or (run["goal"].splitlines()[0] if run["goal"] else None)
+    if title:
+        lines.append(f"Goal: {title}")
     metrics = run["metrics"]
     if metrics and metrics["iteration"] > 0:
         parts = [" ".join(filter(None, [f"{v['name']} {_number(v['value'])}",
@@ -175,12 +177,41 @@ def format_run(data: dict, now: float | None = None) -> str:
     names = list(dict.fromkeys(name for r in iterations for name in r["metrics"] or {}))
     rows = [["ITER", "OK"] + names + ["COST", "TIME", "SUMMARY"]]
     for r in iterations:
-        summary = (r["summary"] or ("baseline" if r["iteration"] == 0 else "")).strip()
+        first, more = _summary(r)
         rows.append([str(r["iteration"]), "✓" if r["accepted"] else "✗"]
                     + [_number((r["metrics"] or {}).get(n)) for n in names]
                     + [_money(r["cost"], r["cost_incomplete"]),
-                       format_duration(r["seconds"]) if r["seconds"] else "—",
-                       summary.splitlines()[0] if summary else ""])
+                       format_duration(r["seconds"]) if r["seconds"] else "—", first])
+        rows.extend([""] * (len(names) + 4) + [line] for line in more)
     if under_way:
         rows.append([str(under_way), "…"] + [""] * len(names) + ["", "", _state(run, now)])
     return "\n".join(lines + [""] + _table(rows, right={0, *range(2, len(names) + 4)})) + "\n"
+
+
+def _summary(r: dict) -> tuple[str, list[str]]:
+    """An iteration's SUMMARY cell and the lines under it.
+
+    Rejected: the failing gate (else the harness's reason), then the agent's summary.
+    Accepted: the agent's summary. Then failed observe entries and discarded paths."""
+    def first_line(text) -> str:
+        text = (text or "").strip()
+        return text.splitlines()[0] if text else ""
+
+    reason = r.get("reason")
+    summary = first_line(r.get("summary"))
+    failed_gate = next((g for g in r.get("gates") or [] if isinstance(g, dict) and g.get("passed") is False), None)
+    if r["iteration"] == 0 and not summary:
+        cell, more = "baseline", []
+    elif not r["accepted"]:
+        cell = f"gate failed: {failed_gate.get('text')}" if failed_gate else first_line(reason) or summary
+        more = [summary] if summary and summary != cell and summary != first_line(reason) else []
+    else:
+        cell, more = summary, []
+    for entry in r.get("observe") or []:
+        if isinstance(entry, dict) and entry.get("ok") is False:
+            more.append(f"! observe {entry.get('name')} failed" + (f": {entry['error']}" if entry.get("error") else ""))
+    discarded = r.get("discarded") or []
+    if discarded:
+        shown = ", ".join(discarded[:5]) + (f", … ({len(discarded)} paths)" if len(discarded) > 5 else "")
+        more.append(f"! discarded, outside the editable scope: {shown}")
+    return cell, more

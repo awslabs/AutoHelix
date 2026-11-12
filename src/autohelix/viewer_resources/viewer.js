@@ -178,7 +178,7 @@ function bestSoFar() {
 
 function renderStats() {
   // Best metric, then run totals (as in the terminal's run summary): time over finished
-  // iterations; cost also includes baseline reviews.
+  // iterations; cost also includes the baseline's calls.
   const its = state.iterations.filter((r) => r.iteration > 0);
   const cost = state.cost;
   const stats = [];
@@ -304,11 +304,10 @@ function renderRows() {
       el('td', { textContent: r.iteration === 0 ? '0' : String(r.iteration) }),
       el('td', {}, el('span', { className: `pill ${outcome}`, textContent: outcome })),
       el('td', { className: 'value' }, metric ? fmtNumber(v) : '', metric && r.iteration > 0 ? deltaEl(v, base) : null),
-      // Rejected rows get the short reason; the full one is in the iteration's card.
-      el('td', { className: 'summary', textContent: (r.accepted === false ? shortReason(r.summary) : r.summary) || '' }),
+      summaryCell(r),
       el('td', { className: 'num', textContent: r.seconds ? fmtDuration(r.seconds) : '' }),
       el('td', { className: 'num', textContent: fmtCost(r.cost) + (typeof r.cost === 'number' && r.cost_incomplete ? ' (incomplete)' : ''),
-        title: !r.cost_incomplete ? '' : state.config?.reviewer ? 'Some agent or reviewer costs are unavailable' : 'Cost unavailable' }),
+        title: r.cost_incomplete ? 'Some call costs are unavailable' : '' }),
     ]);
   });
   const live = liveIteration();
@@ -322,9 +321,32 @@ function renderRows() {
   $('rows').replaceChildren(...rows);
 }
 
+// Rejected rows: why (the failing gate), then the agent's one-line summary under it.
+// Observe failures and discarded changes are flagged; the details are in the card.
+function summaryCell(r) {
+  const why = r.accepted === false ? rejection(r) : '';
+  const summary = r.summary && r.summary !== r.reason ? r.summary.split('\n')[0] : '';
+  const failed = (r.observe || []).filter((o) => o.ok === false).map((o) => o.name);
+  const flags = [
+    failed.length && `${failed.join(', ')} failed`,
+    r.discarded?.length && `${r.discarded.length} out-of-scope change${r.discarded.length === 1 ? '' : 's'} discarded`,
+  ].filter(Boolean).join(' · ');
+  return el('td', { className: 'summary' },
+    why ? el('div', { className: 'why', textContent: why }) : null,
+    summary ? el('div', { textContent: summary }) : null,
+    flags ? el('div', { className: 'flag', textContent: flags }) : null);
+}
+
+// A rejection in a few words: the failing gate's text, else the harness's reason.
+function rejection(r) {
+  const gate = (r.gates || []).find((g) => g.passed === false);
+  if (gate) return gate.text.length > 60 ? `✗ ${gate.text.slice(0, 60)}…` : `✗ ${gate.text}`;
+  return shortReason(r.reason || r.summary);
+}
+
 const PHASES = {
   starting: 'Starting…', baseline: 'Measuring the baseline…', agent: 'Agent is working…',
-  checks: 'Running checks…', benchmark: 'Measuring metrics…', review: 'Reviewer is reading the change…',
+  checks: 'Running gates…', benchmark: 'Running observe entries…',
   merge: 'Merging the accepted change…', 'between iterations': 'Wrapping up…',
 };
 const phaseText = (phase) => PHASES[phase] || `${phase}…`;
@@ -386,25 +408,28 @@ function section(title, source, open = false) {
 
 function cardEl(i) {
   const summary = el('summary');
+  const said = el('p', { className: 'agent-summary', hidden: true });
   const failure = section('Why rejected', 'history.jsonl');
+  const discarded = section('Discarded changes', 'history.jsonl', true);
+  const gates = section('Gates', 'history.jsonl');
   const notes = section('Agent note', `notes/iter-${i}.md`);
-  const activity = section('Agent activity', `logs/iter-${i}/agent.log`);
-  const review = section('Review', `reviews/iter-${i}.md`);
+  const attempt = section('Changes in this iteration', null);
   const changes = section('Changes vs baseline', null);
-  const output = section('Captured output', `observations/iter-${i}/`);
-  const reviewer = section('Reviewer activity', `logs/iter-${i}/review.log`);
+  const observe = el('div', { className: 'observe' }); // one section per observe entry
+  const activity = section('Agent activity', `logs/iter-${i}/agent.log`);
   const phases = section('Call activity', `logs/iter-${i}/call-*/`);
-  notes.body.className = review.body.className = 'prose';
+  notes.body.className = 'prose';
   activity.body.className = 'log';
-  reviewer.body.className = 'log';
-  changes.body.className = 'diff';
-  output.body.className = 'artifacts';
+  attempt.body.className = changes.body.className = 'diff';
+  gates.body.className = 'gates';
+  discarded.body.className = 'entry';
   const node = el('details', { className: 'box card', open: i === selected }, summary,
-    // Outcome first, then the agent's account, the evidence, the review, and raw logs last.
-    el('div', { className: 'card-body' }, failure.node, notes.node, changes.node, output.node,
-      review.node, activity.node, reviewer.node, phases.node));
-  const card = { i, node, summary, failure, notes, activity, review, changes, output, reviewer, phases,
-                 key: undefined, expanded: { activity: new Set(), reviewer: new Set() } };
+    // Outcome first, then the agent's account, the evidence, and raw logs last.
+    el('div', { className: 'card-body' }, said, failure.node, discarded.node, gates.node, notes.node,
+      attempt.node, changes.node, observe, activity.node, phases.node));
+  const card = { i, node, summary, said, failure, discarded, gates, notes, attempt, changes, observe, activity, phases,
+                 key: undefined, attemptKey: undefined, opened: new Set(), expanded: { activity: new Set() } };
+  attempt.node.addEventListener('toggle', () => attempt.node.open && loadAttempt(card));
   node.addEventListener('toggle', () => {
     if (!node.open) return;
     if (selected !== i) { selected = i; followLive = i === liveIteration(); render(); }
@@ -423,7 +448,7 @@ function renderCards() {
     const live = i === liveIteration() && !r;
     const outcome = live ? 'running' : i === 0 ? 'baseline' : r.accepted ? 'accepted' : 'rejected';
     // Title shows only the outcome; metric values live in the table and chart.
-    const why = outcome === 'rejected' ? shortReason(r.summary) : '';
+    const why = outcome === 'rejected' ? rejection(r) : '';
     const key = JSON.stringify([outcome, why, live && state.status.phase]);
     if (card.summary.dataset.key !== key) {
       card.summary.dataset.key = key;
@@ -485,13 +510,13 @@ async function loadNote(name, body) {
 }
 
 async function refreshCards() {
-  // Only open cards are loaded. Finished iterations change only when history, notes
-  // or captures do; the running one changes constantly.
+  // Only open cards are loaded. Finished iterations change only when history or notes
+  // do (observations are saved before the record); the running one changes constantly.
   for (const [i, card] of cards) {
     if (!card.node.open) continue;
     const r = state.iterations.find((x) => x.iteration === i);
     const key = i === liveIteration() ? null
-      : JSON.stringify([r, state.notes_files.includes(`iter-${i}.md`), state.artifacts[i]]);
+      : JSON.stringify([r, state.notes_files.includes(`iter-${i}.md`)]);
     if (key !== null && key === card.key) continue;
     try {
       const d = await getJSON(`/api/iteration/${i}`);
@@ -503,12 +528,40 @@ async function refreshCards() {
 
 function fillCard(card, d) {
   const live = d.iteration === liveIteration() && !state.iterations.some((x) => x.iteration === d.iteration);
-  const reason = state.iterations.find((x) => x.iteration === d.iteration && x.accepted === false)?.summary;
+  const row = state.iterations.find((x) => x.iteration === d.iteration && x.accepted === false);
+  const reason = row && (row.reason || row.summary);
+  setText(card.said, d.summary || '');
+  show(card.said, !!d.summary);
   show(card.failure.node, !!(reason || d.failure_output));
   card.failure.body.replaceChildren(...[
     reason ? el('p', { className: 'reason', textContent: reason }) : null,
     d.failure_output ? el('pre', { textContent: d.failure_output }) : null,
   ].filter(Boolean));
+
+  const discarded = d.discarded || [];
+  show(card.discarded.node, discarded.length > 0);
+  setText(card.discarded.count, discarded.length ? `· ${discarded.length} path${discarded.length === 1 ? '' : 's'}` : '');
+  card.discarded.body.replaceChildren(...(discarded.length ? [
+    el('p', { className: 'warn', textContent: 'Changes outside the editable scope were discarded:' }),
+    el('ul', { className: 'paths' }, ...discarded.map((p) => el('li', {}, el('code', { textContent: p })))),
+  ] : []));
+
+  fillGates(card, d.gates || [], d.failure_output);
+
+  const attemptKey = d.attempt ? `${d.attempt.base}:${d.attempt.tree}` : null;
+  show(card.attempt.node, !!d.attempt);
+  if (attemptKey !== card.attemptKey) {
+    card.attemptKey = attemptKey;
+    card.attempt.loaded = null;
+    card.attempt.body.replaceChildren();
+    setText(card.attempt.count, '');
+    if (card.attempt.node.open) loadAttempt(card);
+  }
+  card.attempt.node.querySelector('summary').title = d.attempt
+    ? `git diff ${d.attempt.base.slice(0, 12)} ${d.attempt.tree.slice(0, 12)}`
+      + (d.attempt.rejected_ref ? ` (kept as ${d.attempt.rejected_ref})` : '') : '';
+
+  fillObserve(card, d);
 
   // Notes are written at the end of the agent's turn, before checks decide the outcome.
   show(card.notes.node, !!d.notes);
@@ -525,9 +578,6 @@ function fillCard(card, d) {
   ].filter(Boolean).map((x) => `· ${x}`).join(' '));
   renderEvents(card.activity.body, d.agent, card.expanded.activity);
 
-  show(card.review.node, !!d.review);
-  setHTML(card.review.body, d.review || '');
-
   show(card.changes.node, !!d.diff);
   const diffKey = JSON.stringify([d.diff, live]);
   if (card.changes.body.dataset.key !== diffKey) {
@@ -535,22 +585,10 @@ function fillCard(card, d) {
     renderDiff(card.changes.body, card.changes.count, d.diff || '', live);
   }
 
-  const files = state.artifacts[d.iteration] || [];
-  show(card.output.node, files.length > 0);
-  setText(card.output.count, files.length ? `· ${files.length} file${files.length === 1 ? '' : 's'}` : '');
-  const outKey = JSON.stringify(files);
-  if (card.output.body.dataset.key !== outKey) {
-    card.output.body.dataset.key = outKey;
-    card.output.body.replaceChildren(...files.map((a) => artifactEl(d.iteration, a)));
-  }
-
-  show(card.reviewer.node, d.reviewer.length > 0);
-  renderEvents(card.reviewer.body, d.reviewer, card.expanded.reviewer);
   const phases = (d.calls || []).filter((call) => call.events.length > 0);
   show(card.phases.node, phases.length > 0);
   if (phases.length) {
     show(card.activity.node, false);
-    show(card.reviewer.node, false);
     card.phases.body.replaceChildren(...phases.map((call, index) => {
       const heading = el('h4', { textContent: `Call ${index + 1} · ${call.role}` });
       const log = el('div', { className: 'log' });
@@ -563,20 +601,127 @@ function fillCard(card, d) {
   }
 }
 
+// Gates in list order: ✓ passed, ✗ failed, ○ not reached (pending).
+function fillGates(card, gates, failureOutput) {
+  show(card.gates.node, gates.length > 0);
+  const count = (v) => gates.filter((g) => g.passed === v).length;
+  setText(card.gates.count, gates.length ? '· ' + [
+    count(true) && `${count(true)} passed`, count(false) && `${count(false)} failed`, count(null) && `${count(null)} pending`,
+  ].filter(Boolean).join(' · ') : '');
+  const key = JSON.stringify([gates, failureOutput]);
+  if (card.gatesKey === key) return;
+  card.gatesKey = key; // a property, not an attribute: it holds output text
+  card.gates.body.replaceChildren(...gates.map((g) => {
+    const outcome = g.passed === true ? 'passed' : g.passed === false ? 'failed' : 'pending';
+    const facts = [
+      g.kind === 'metric' && typeof g.value === 'number'
+        ? `${fmtNumber(g.value)}${typeof g.reference === 'number' ? ` vs ${fmtNumber(g.reference)}` : ''}` : null,
+      typeof g.duration_s === 'number' ? fmtDuration(g.duration_s) : null,
+      g.passed === null ? 'pending' : null,
+    ].filter(Boolean).join(' · ');
+    return el('div', { className: `gate ${outcome}` },
+      el('div', {},
+        el('span', { className: 'mark', textContent: { passed: '✓', failed: '✗', pending: '○' }[outcome] }),
+        el('code', { textContent: g.text }),
+        facts ? el('span', { className: 'muted', textContent: `  ${facts}` }) : null),
+      g.passed === false && g.reason ? el('p', { className: 'reason', textContent: g.reason }) : null,
+      // The failing command's output tail ("Why rejected" shows it too when it is the same).
+      g.passed === false && g.output && g.output !== failureOutput ? el('pre', { textContent: g.output }) : null);
+  }));
+}
+
+// One section per observe entry, in the order they ran.
+function fillObserve(card, d) {
+  const key = JSON.stringify(d.observe);
+  if (card.observeKey === key) return;
+  card.observeKey = key;
+  card.observe.replaceChildren(...(d.observe || []).map((o) => {
+    const id = o.legacy ? ':legacy' : o.name;
+    const s = section(o.legacy ? 'Captured output' : o.name,
+      `runs/<id>/observations/iter-${d.iteration}/${o.legacy ? '' : o.name + '/'}`, card.opened.has(id));
+    s.node.hidden = false;
+    s.body.className = 'entry';
+    s.node.addEventListener('toggle', () => (s.node.open ? card.opened.add(id) : card.opened.delete(id)));
+    const metrics = Object.entries(o.metrics || {}).map(([k, v]) => `${k} ${fmtNumber(v)}`).join(' · ');
+    const failed = o.ok === false;
+    setText(s.count, [
+      o.review ? 'review' : null,
+      failed ? `failed${o.error ? `: ${o.error}` : ''}` : null,
+      !o.legacy && !o.ran && o.ok == null ? (isLive(d) ? 'running' : 'not recorded') : null,
+      metrics || null,
+      o.files.length ? `${o.files.length} file${o.files.length === 1 ? '' : 's'}` : null,
+    ].filter(Boolean).map((x) => `· ${x}`).join(' '));
+    if (failed) s.node.classList.add('failed');
+    const parts = [];
+    if (failed) parts.push(el('p', { className: 'reason', textContent: `Failed${o.error ? `: ${o.error}` : ''}; its metrics are missing.` }));
+    if (o.html) {
+      const prose = el('div', { className: 'prose' });
+      prose.innerHTML = o.html; // rendered by the server from Markdown with raw HTML disabled
+      parts.push(prose);
+    } else if (o.stdout) {
+      parts.push(el('pre', { className: 'output', textContent: o.stdout }));
+    } else if (!o.legacy && o.stdout === null && SNAPSHOT) {
+      parts.push(el('p', { className: 'muted', textContent: 'Output is not saved in this file; see autohelix view --web.' }));
+    }
+    if (o.stderr) {
+      parts.push(el('details', { className: 'artifact' }, el('summary', { textContent: 'stderr' }),
+        el('div', { className: 'artifact-body' }, el('pre', { textContent: o.stderr }))));
+    }
+    if (o.files.length) {
+      const prefix = o.legacy ? '' : `${o.name}/`;
+      parts.push(el('div', { className: 'artifacts' }, ...o.files.map((a) => artifactEl(d.iteration, a, prefix))));
+    }
+    if (o.stdout_file && !SNAPSHOT) {
+      parts.push(el('a', { className: 'raw', href: artifactUrl(d.iteration, o.stdout_file), target: '_blank', rel: 'noopener', textContent: 'stdout.txt' }));
+    }
+    s.body.replaceChildren(...parts);
+    return s.node;
+  }));
+}
+
+function isLive(d) {
+  return d.iteration === liveIteration() && !state.iterations.some((x) => x.iteration === d.iteration);
+}
+
+// The attempt's own change (start commit to frozen tree), loaded when its section opens.
+async function loadAttempt(card) {
+  const key = card.attemptKey;
+  if (!key || card.attempt.loaded === key) return;
+  card.attempt.loaded = key;
+  let d;
+  try { d = await getJSON(`/api/iteration/${card.i}/diff`); }
+  catch {
+    d = { diff: null, error: SNAPSHOT ? 'Not saved in this file; see autohelix view --web.' : 'Could not load the diff.' };
+    if (!SNAPSHOT) card.attempt.loaded = null; // retry on the next open
+  }
+  if (card.attemptKey !== key) return;
+  if (d.diff) renderDiff(card.attempt.body, card.attempt.count, d.diff, false);
+  else {
+    setText(card.attempt.count, '');
+    card.attempt.body.replaceChildren(el('p', { className: 'muted', textContent: d.error || 'No changes.' }));
+  }
+}
+
 function fmtSize(bytes) {
   return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
-function artifactEl(iteration, a) {
-  const url = api(`/api/artifact/${iteration}/${encodeURIComponent(a.name)}`);
+// A file in observations/iter-N/, by its path there; each component encoded on its own.
+function artifactUrl(iteration, path) {
+  return api(`/api/artifact/${iteration}/${path.split('/').map(encodeURIComponent).join('/')}`);
+}
+
+function artifactEl(iteration, a, prefix = '') {
+  const url = artifactUrl(iteration, a.path);
+  const name = a.path.startsWith(prefix) ? a.path.slice(prefix.length) : a.path;
   const body = el('div', { className: 'artifact-body' });
   const item = el('details', { className: 'artifact' },
-    el('summary', {}, el('span', { textContent: a.name }), el('span', { className: 'muted', textContent: ` · ${fmtSize(a.size)}` })),
+    el('summary', {}, el('span', { textContent: name }), el('span', { className: 'muted', textContent: ` · ${fmtSize(a.size)}` })),
     body);
   item.addEventListener('toggle', async () => {
     if (!item.open || body.childElementCount) return;
-    if (/\.(png|jpe?g|gif|webp)$/i.test(a.name)) {
-      body.append(el('img', { src: url, alt: a.name }));
+    if (/\.(png|jpe?g|gif|webp)$/i.test(name)) {
+      body.append(el('img', { src: url, alt: name }));
     } else {
       const text = await (await fetch(url, { cache: 'no-store' })).text();
       body.append(el('pre', { textContent: text.length > 262144 ? text.slice(0, 262144) + '\n…' : text }));
@@ -619,6 +764,12 @@ function highlightYaml(text) {
   return nodes;
 }
 
+// "bench (speed ↑)", as the console header lists observe entries.
+function observeLabel(o) {
+  const metrics = Object.entries(o.metrics || {}).map(([k, dir]) => `${k} ${dir === 'lower' ? '↓' : '↑'}`);
+  return metrics.length ? `${o.name} (${metrics.join(', ')})` : o.name;
+}
+
 function renderConfig() {
   const c = state.config;
   $('config').hidden = !c?.text;
@@ -634,8 +785,9 @@ function renderConfig() {
     c.max_time_seconds && fmtDuration(c.max_time_seconds),
   ].filter(Boolean).join(', ');
   const parts = [
-    c.agent && ['Agent', c.agent + (c.reviewer ? ' + reviewer' : '')],
-    c.checks?.length && ['Checks', c.checks.length === 1 ? c.checks[0] : `${c.checks.length} commands`, c.checks.join('\n')],
+    c.agent && ['Agent', c.agent],
+    c.gates?.length && ['Gates', c.gates.join(' · '), c.gates.join('\n')],
+    c.observe?.length && ['Observe', c.observe.map(observeLabel).join(' · ')],
     c.scope?.length && ['Editable', c.scope.join(', ')],
     budget && ['Budget', budget],
   ].filter(Boolean);
@@ -777,14 +929,19 @@ async function getJSON(url) {
 function render() {
   const names = metricNames();
   if (!names.includes(metric)) metric = names[0] || null;
-  // The page is about one run: its id is the title; the project is the way back to the list.
-  const project = state.project || state.title;
-  const title = state.run_id || state.title;
+  // The page is about one run: the goal's title (its first line) heads it, the run id and
+  // project sit above as the way back to the list. The rest of the goal is below the title.
+  const project = state.project;
+  const title = state.title || state.run_id || project;
   setText('title', title);
-  document.title = `${title} · ${project} · AutoHelix${SNAPSHOT ? ' report' : ''}`;
-  if (SNAPSHOT) { show('kind', true); setText('kind', `${project} · run report · saved ${fmtClock(SNAPSHOT.saved_at)}`); }
-  else if (state.run_id) { show('crumbs', true); setText('crumb-project', project); setText('crumb-run', state.run_id); }
-  setText('goal', (state.goal || '').trim());
+  document.title = `${title} · ${state.run_id || project} · AutoHelix${SNAPSHOT ? ' report' : ''}`;
+  if (SNAPSHOT) {
+    show('kind', true);
+    setText('kind', [project, state.run_id, `run report · saved ${fmtClock(SNAPSHOT.saved_at)}`].filter(Boolean).join(' · '));
+  } else if (state.run_id) { show('crumbs', true); setText('crumb-project', project); setText('crumb-run', state.run_id); }
+  const goal = (state.goal || '').trim();
+  const [first, ...rest] = goal.split('\n');
+  setText('goal', state.title && first.trim() === state.title ? rest.join('\n').trim() : goal);
   renderStatus();
   renderConfig();
   renderReport();

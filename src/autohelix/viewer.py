@@ -6,8 +6,10 @@
 Two pages share one server: `/` lists the project's runs, `/run/<id>/` shows one
 run. The pages poll a few JSON routes. There are no write routes. Every file read
 is derived from a run id that must name an existing run directory, an iteration
-number, or a file name that must match an entry in a fixed directory listing
-(notes/, observations/iter-N/). The unprefixed `/api/...` routes serve the
+number, a file name that must match an entry in notes/, or a relative path inside
+one iteration's observations/iter-N/ folder, opened one component at a time
+without following symlinks (`_open_inside`). Git only gets object names from
+history records that are plain hex. The unprefixed `/api/...` routes serve the
 server's default run.
 
 `write_static` saves the same page as one file, output/report.html, with the
@@ -19,6 +21,7 @@ import json
 import os
 import re
 import socket
+import stat
 import subprocess
 import threading
 import time
@@ -31,7 +34,7 @@ from urllib.parse import quote, unquote, urlsplit
 from markdown_it import MarkdownIt
 
 from autohelix.agents import AgentEventKind
-from autohelix.config import load_config
+from autohelix.config import MetricGate, load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History
 from autohelix.runs import RunPaths, git, is_archived, last_activity
@@ -44,6 +47,7 @@ from autohelix.workspace import ITERATION_DIR
 MAX_TEXT = 256 * 1024
 MAX_EVENTS = 3000  # merged events kept per log; tool output is clipped to keep this small
 MAX_ARTIFACT = 20 * 1024 * 1024
+MAX_FILES = 500  # captured files listed per observe entry
 COMMIT = re.compile(r"[0-9a-f]{7,64}")
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
@@ -58,13 +62,101 @@ ASSETS = {
     "/logo-light.svg": ("autohelix-light.svg", "image/svg+xml"),
     "/logo-dark.svg": ("autohelix-dark.svg", "image/svg+xml"),
 }
-# Raw HTML in notes/reviews is shown as text, never rendered.
+# Raw HTML in notes and review output is shown as text, never rendered.
 _MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
 CSP = "default-src 'self'; object-src 'none'; frame-ancestors 'none'"
+# The lines `autohelix review` prints for its numbers. The review's own prose has
+# them escaped ("##autohelix ["), so only the command's lines match.
+METRIC_LINE = re.compile(r"^[ \t]*##autohelix\[[^\]\n]*\][ \t]*(?:\n|$)", re.MULTILINE)
+OUTPUT_FILES = ("stdout.txt", "stderr.txt")  # an observe entry's own output, beside its captures
 
 
 def _markdown(text: str | None) -> str | None:
     return _MARKDOWN.render(text) if text else None
+
+
+def review_markdown(text: str | None) -> str | None:
+    """A review entry's stdout as HTML, without its `##autohelix[...]` metric lines."""
+    return _markdown(METRIC_LINE.sub("", text).strip()) if text else None
+
+
+def _field(record, name: str):
+    """A history field that older records (and older `IterationResult`s) lack."""
+    return getattr(record, name, None) if record is not None else None
+
+
+def _object(value) -> str | None:
+    """A git object name from a history record, or None: never an option or a rev expression."""
+    return value if isinstance(value, str) and COMMIT.fullmatch(value) else None
+
+
+_OPEN = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+
+
+def _open_inside(folder: Path, parts: list[str]) -> int | None:
+    """A read descriptor for the regular file `folder/parts...`, or None.
+
+    `folder` and every component below it are opened without following symlinks,
+    each relative to the one before: no `..`, no absolute paths, nothing outside
+    `folder`, and no FIFOs or devices."""
+    if not parts or any(part in ("", ".", "..") or "/" in part or "\0" in part for part in parts):
+        return None
+    fds: list[int] = []
+    try:
+        fds.append(os.open(folder, _OPEN | os.O_DIRECTORY))
+        for part in parts[:-1]:
+            fds.append(os.open(part, _OPEN | os.O_DIRECTORY, dir_fd=fds[-1]))
+        fd = os.open(parts[-1], _OPEN | os.O_NONBLOCK, dir_fd=fds[-1])
+    except OSError:
+        return None
+    finally:
+        for parent in fds:
+            os.close(parent)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        return None
+    return fd
+
+
+def _read_inside(folder: Path, parts: list[str], limit: int) -> bytes | None:
+    """The whole file, through `_open_inside`; None if it is larger than `limit`."""
+    fd = _open_inside(folder, parts)
+    if fd is None:
+        return None
+    with os.fdopen(fd, "rb") as f:
+        return None if os.fstat(f.fileno()).st_size > limit else f.read()
+
+
+def _read_text_inside(folder: Path, parts: list[str]) -> str | None:
+    """`_read_text` through `_open_inside`."""
+    fd = _open_inside(folder, parts)
+    if fd is None:
+        return None
+    with os.fdopen(fd, "rb") as f:
+        size = f.seek(0, 2)
+        f.seek(max(0, size - MAX_TEXT))
+        text = f.read().decode("utf-8", errors="replace")
+    return text if size <= MAX_TEXT else "[… earlier content omitted …]\n" + text
+
+
+def _tree_files(folder: Path, skip: tuple[str, ...] = ()) -> list[dict]:
+    """Regular files below a folder as `{"path": "a/b.txt", "size"}`, at most MAX_FILES;
+    symlinks (to files or folders) are left out, and so are `skip` names at the top."""
+    out: list[dict] = []
+    for top, dirs, names in os.walk(folder):
+        dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(top, d)))
+        for name in sorted(names):
+            if top == str(folder) and name in skip:
+                continue
+            try:
+                info = os.lstat(os.path.join(top, name))
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                out.append({"path": (Path(top) / name).relative_to(folder).as_posix(), "size": info.st_size})
+                if len(out) >= MAX_FILES:
+                    return out
+    return out
 
 
 def _read_text(path: Path) -> str | None:
@@ -132,9 +224,10 @@ class RunData:
         if config:
             summary.update(
                 agent=" · ".join(filter(None, [config.agent.backend, config.agent.model])),
-                checks=[gate.text for gate in config.gates],
+                gates=[gate.text for gate in config.gates],
+                observe=[{"name": entry.name, "review": entry.review is not None, "metrics": entry.metrics}
+                         for entry in config.observe],
                 scope=config.editable,
-                reviewer=any(entry.review is not None for entry in config.observe),
                 max_iterations=config.max_iterations,
                 max_cost_usd=config.max_cost_usd,
                 max_time_seconds=config.max_time_seconds,
@@ -142,15 +235,26 @@ class RunData:
         return summary
 
     def iterations(self, records) -> list[dict]:
-        """One row per iteration; the summary is the commit subject, or the rejection reason."""
+        """One row per iteration (`view --json`'s `iterations`, add-only).
+
+        `summary` is the agent's one-line summary; records without one fall back to the
+        commit subject, or the rejection reason. `reason` is why it was rejected."""
         subjects = self._subjects([r.commit for r in records if r.commit])
-        return [
-            {"iteration": r.iteration, "accepted": r.accepted, "metrics": r.metrics,
-             "summary": (r.reason if r.reason != "baseline" else None) or subjects.get(r.commit),
-             "cost": r.cost.cost_usd, "cost_incomplete": r.cost.incomplete,
-             "seconds": (r.usage.get("wall_clock_ms") or 0) / 1000 or None}
-            for r in records
-        ]
+        rows = []
+        for r in records:
+            reason = r.reason if r.reason != "baseline" else None
+            summary = _field(r, "summary")
+            rows.append({
+                "iteration": r.iteration, "accepted": r.accepted, "metrics": r.metrics,
+                "summary": (summary if isinstance(summary, str) and summary.strip() else None)
+                           or reason or subjects.get(r.commit),
+                "reason": reason,
+                "cost": r.cost.cost_usd, "cost_incomplete": r.cost.incomplete,
+                "seconds": (r.usage.get("wall_clock_ms") or 0) / 1000 or None,
+                "gates": r.gates, "observe": r.observe,
+                "discarded": [p for p in _field(r, "discarded") or [] if isinstance(p, str)],
+            })
+        return rows
 
     def state(self) -> dict:
         self._refresh_current()
@@ -159,7 +263,7 @@ class RunData:
         total_cost = summarize_costs([usage for row in records for usage in row.cost_usages])
         iterations = self.iterations(records)
         return {
-            "title": getattr(config, "title", None) or self.project.name,
+            "title": (config.title or None) if config and isinstance(config.goal, str) else None,
             "project": self.project.name,
             "goal": config.goal if config else None,
             "directions": config.metric_directions() if config else {},
@@ -167,7 +271,6 @@ class RunData:
             "run_id": self.paths.run_id,
             "config": self._config_summary(config, config_path),
             "notes_files": sorted((e.name for e in _files(self.root / "notes")), key=_note_order) if self.paths.run_id else [],
-            "artifacts": self._artifacts() if self.paths.run_id else {},
             "iterations": iterations,
             "cost": {
                 "cost_usd": total_cost.cost_usd,
@@ -182,11 +285,14 @@ class RunData:
         html = _markdown(_read_text(self.root / "output" / "report.md"))
         return {"html": html, **(read_report_info(self.project, self.paths.run_id) or {})} if html else None
 
-    def iteration(self, n: int, logs: bool = True, diff: bool = True) -> dict:
+    def iteration(self, n: int, logs: bool = True, diff: bool = True, outputs: bool = True) -> dict:
+        """One iteration's card. Without `outputs` (report.html), observe entries keep their
+        status and review text but not their stdout, stderr or captured files."""
         self._refresh_current()
         if not self.paths.run_id:
-            return {"iteration": n, "failure_output": None, "notes": None, "review": None,
-                    "diff": None, "agent": [], "calls": [], "agent_clipped": False, "reviewer": []}
+            return {"iteration": n, "failure_output": None, "notes": None, "diff": None, "agent": [],
+                    "calls": [], "agent_clipped": False, "gates": [], "observe": [], "summary": None,
+                    "discarded": [], "attempt": None}
         records = self.history.load()
         record = next((r for r in records if r.iteration == n), None)
         # The baseline is the code the run started from: the parent of the first accepted commit.
@@ -228,30 +334,121 @@ class RunData:
             phases.append({"role": call["role"], "usage": call.get("usage", {}), "log": log,
                            "events": self._events(Path(log)) if logs and log else []})
         agent_events = [event for call in phases if call["role"] == "agent" for event in call["events"]]
-        review_events = [event for call in phases if call["role"] == "reviewer" for event in call["events"]]
+        config = self._config()[0]
+        if record is not None:
+            gates = record.gates
+        else:  # still running: nothing is recorded until it ends
+            gates = [{"text": gate.text, "kind": "metric" if isinstance(gate, MetricGate) else "command",
+                      "passed": None} for gate in (config.gates if config else [])]
+        summary = _field(record, "summary")
+        base, tree = _object(_field(record, "base")), _object(_field(record, "tree"))
+        rejected_ref = _field(record, "rejected_ref")
         return {
             "iteration": n,
             "failure_output": record.failure_output if record else None,
             "notes": _markdown(next(filter(None, map(_read_text, notes)), None)),
-            "review": _markdown(_read_text(self.root / "reviews" / f"iter-{n}.md")),
             "diff": changes,
             "agent": agent_events,
             "calls": phases,
             "agent_clipped": any(self.paths.run_dir / call["log"] in self._clipped
                                  for call in phases if call.get("log")),
-            "reviewer": review_events,
+            "gates": gates,
+            "observe": self.observations(n, record, config, outputs=outputs),
+            "summary": summary if isinstance(summary, str) and summary.strip() else None,
+            "discarded": [p for p in _field(record, "discarded") or [] if isinstance(p, str)],
+            # What `/iteration/<n>/diff` compares: the commit the attempt started from and its frozen tree.
+            "attempt": {"base": base, "tree": tree, "commit": record.commit if record else None,
+                        "rejected_ref": rejected_ref if isinstance(rejected_ref, str) else None}
+                       if base and tree else None,
         }
+
+    def observations(self, n: int, record, config, outputs: bool = True) -> list[dict]:
+        """One section per observe entry: those the record lists (in the order they ran),
+        then folders in observations/iter-N/ it doesn't (a running iteration's, in config
+        order), then any files directly in that folder (the layout before named entries).
+
+        Review entries (the stored config's `review:` entries; without a readable config,
+        entries whose folder holds only stdout.txt) get their stdout rendered as Markdown,
+        minus the metric lines."""
+        folder = self.root / "observations" / f"iter-{n}"
+        order = [entry.name for entry in config.observe] if config else []
+        reviews = {entry.name for entry in config.observe if entry.review is not None} if config else None
+        recorded = {}
+        for item in (record.observe if record else []):
+            if isinstance(item, dict) and isinstance(item.get("name"), str):
+                recorded.setdefault(item["name"], item)
+        try:
+            listing = [] if folder.is_symlink() else list(os.scandir(folder))
+        except OSError:
+            listing = []
+        on_disk = {e.name for e in listing if e.is_dir(follow_symlinks=False) and not e.name.startswith(".")}
+        rank = {name: index for index, name in enumerate(order)}
+        names = list(recorded) + sorted(on_disk - set(recorded), key=lambda d: (rank.get(d, len(rank)), d))
+        sections = []
+        for name in names:
+            item = recorded.get(name, {})
+            here = folder / name if name in on_disk else None
+            stdout = _read_text_inside(folder, [name, "stdout.txt"]) if here else None
+            stderr = _read_text_inside(folder, [name, "stderr.txt"]) if here else None
+            files = _tree_files(here, skip=OUTPUT_FILES) if here else []
+            review = name in reviews if reviews is not None else bool(stdout) and not stderr and not files
+            sections.append({
+                "name": name, "review": review, "ran": name in recorded,
+                "ok": item.get("ok"), "error": item.get("error"), "return_code": item.get("return_code"),
+                "duration_s": item.get("duration_s"), "metrics": item.get("metrics") or {},
+                "stdout": stdout if outputs else None,
+                "stdout_file": f"{name}/stdout.txt" if here and stdout is not None else None,
+                "stderr": stderr if outputs else None,
+                "html": review_markdown(stdout) if review else None,
+                "files": [{**f, "path": f"{name}/{f['path']}"} for f in files] if outputs else [],
+            })
+        legacy = sorted(({"path": e.name, "size": e.stat(follow_symlinks=False).st_size}
+                         for e in listing if e.is_file(follow_symlinks=False)), key=lambda f: f["path"])
+        if legacy:
+            sections.append({"name": None, "legacy": True, "review": False, "ran": False, "ok": None,
+                             "error": None, "return_code": None, "duration_s": None, "metrics": {},
+                             "stdout": None, "stdout_file": None, "stderr": None, "html": None,
+                             "files": legacy if outputs else []})
+        return sections
+
+    def attempt_diff(self, n: int) -> dict:
+        """`/iteration/<n>/diff`: the attempt's own change, from the commit it started from
+        to its frozen tree (kept by the run ref, or `rejected_ref` for a rejected one)."""
+        self._refresh_current()
+        record = next((r for r in self.history.load() if r.iteration == n), None) if self.paths.run_id else None
+        if record is None:
+            return {"diff": None, "error": "This iteration has no record yet."}
+        base, tree = _object(_field(record, "base")), _object(_field(record, "tree"))
+        if not (base and tree):
+            return {"diff": None, "error": "This iteration's record names no starting commit and tree."}
+        key = f"{base}:{tree}"
+        if key not in self._diffs:
+            try:
+                result = self._repo().git("diff", "--no-ext-diff", "--no-textconv", base, tree, "--",
+                                          check=False, timeout=10)
+            except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                return {"diff": None, "error": f"Could not read the diff: {exc}"}
+            if result.returncode:
+                missing = [what for what, name in (("starting commit", base), ("tree", tree))
+                           if self._repo().git("cat-file", "-e", name, check=False, timeout=5).returncode]
+                return {"diff": None, "error": (
+                    f"The attempt's {' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} no longer "
+                    "in the repository (its run or rejected ref was deleted)." if missing
+                    else "Could not read the diff: " + os.fsdecode(result.stderr).strip())}
+            text = result.stdout.decode(errors="replace")
+            self._diffs[key] = text[:MAX_TEXT] + ("\n[… diff cut …]\n" if len(text) > MAX_TEXT else "")
+        return {"diff": self._diffs[key], "error": None}
 
     def snapshot(self) -> dict:
         """The page's data keyed by route, for report.html: no logs or captured output,
         and one diff, baseline to final code, on the last accepted iteration."""
-        state = {**self.state(), "artifacts": {}}
+        state = self.state()
         accepted = [r["iteration"] for r in state["iterations"] if r["iteration"] > 0 and r["accepted"]]
         final = accepted[-1] if accepted else None
         routes = {"/api/state": state}
         for r in state["iterations"]:
             n = r["iteration"]
-            routes[f"/api/iteration/{n}"] = self.iteration(n, logs=False, diff=n == final)
+            routes[f"/api/iteration/{n}"] = self.iteration(n, logs=False, diff=n == final, outputs=False)
         for name in state["notes_files"]:
             # The page builds this URL with encodeURIComponent, which leaves !'()* as is.
             routes["/api/notes/" + quote(name, safe="!'()*")] = self.note(name)
@@ -275,38 +472,23 @@ class RunData:
             prefix = ""
         return self._agent_copy(n) / prefix
 
-    def _artifacts(self) -> dict[int, list[dict]]:
-        """Captured files per iteration, from observations/iter-N/."""
-        out = {}
-        try:
-            entries = list(os.scandir(self.root / "observations"))
-        except OSError:
-            return out
-        for entry in entries:
-            match = re.fullmatch(r"iter-(\d+)", entry.name)
-            if match and entry.is_dir(follow_symlinks=False):
-                files = sorted(({"name": e.name, "size": e.stat().st_size} for e in _files(Path(entry.path))),
-                               key=lambda a: a["name"])
-                if files:
-                    out[int(match[1])] = files
-        return dict(sorted(out.items()))
-
     def note(self, name: str) -> dict | None:
         if not self.paths.run_id:
             return None
         entry = next((e for e in _files(self.root / "notes") if e.name == name), None)
         return {"name": name, "html": _markdown(_read_text(Path(entry.path)))} if entry else None
 
-    def artifact(self, n: int, name: str) -> tuple[bytes, str] | None:
+    def artifact(self, n: int, parts: list[str]) -> tuple[bytes, str] | None:
+        """A file in observations/iter-N/, by its path there (`bench/results/log.json`)."""
         if not self.paths.run_id:
             return None
-        entry = next((e for e in _files(self.root / "observations" / f"iter-{n}") if e.name == name), None)
-        if entry is None or entry.stat().st_size > MAX_ARTIFACT:
+        data = _read_inside(self.root / "observations" / f"iter-{n}", parts, MAX_ARTIFACT)
+        if data is None:
             return None
         # Anything that is not a plain image is served as text, so captured
         # HTML/SVG/JS can never run in the viewer's origin.
-        mime = IMAGE_TYPES.get(Path(name).suffix.lower(), "text/plain; charset=utf-8")
-        return Path(entry.path).read_bytes(), mime
+        mime = IMAGE_TYPES.get(Path(parts[-1]).suffix.lower(), "text/plain; charset=utf-8")
+        return data, mime
 
     def _events(self, path: Path) -> list[dict]:
         """Incrementally parse a log, merging streamed text into one event."""
@@ -488,6 +670,7 @@ class ProjectRuns:
         try:
             config = load_config(self.project, config_file=path)[0]
             summary = {"file": relative, "goal": (config.goal.strip() or None) if isinstance(config.goal, str) else None,
+                       "title": (config.title or None) if isinstance(config.goal, str) else None,
                        "directions": config.metric_directions(),
                        "max_iterations": config.max_iterations, "max_cost_usd": config.max_cost_usd,
                        "max_time_seconds": config.max_time_seconds, "land": config.land}
@@ -548,6 +731,7 @@ class ProjectRuns:
             "last_activity": last_activity(paths, data, status or {}),
             "config_file": config.get("file"),
             "goal": config.get("goal"),
+            "title": config.get("title"),  # the goal's first line, cut (Config.title)
             "status": status and {k: status.get(k) for k in (
                 "state", "phase", "iteration", "iteration_started_at", "phase_started_at", "stopped_at",
                 "stop_reason", "max_iterations")},
@@ -618,11 +802,14 @@ def make_server(project: Path, port: int = 8765, config_file: Path | None = None
             return 200, rd.state()
         if match := re.fullmatch(r"/iteration/(\d{1,9})", path):
             return 200, rd.iteration(int(match[1]))
+        if match := re.fullmatch(r"/iteration/(\d{1,9})/diff", path):
+            return 200, rd.attempt_diff(int(match[1]))
         if match := re.fullmatch(r"/notes/([^/]+)", path):
             if note := rd.note(unquote(match[1])):
                 return 200, note
-        if match := re.fullmatch(r"/artifact/(\d{1,9})/([^/]+)", path):
-            if found := rd.artifact(int(match[1]), unquote(match[2])):
+        # Each path component is decoded on its own, so an encoded "/" can't add one.
+        if match := re.fullmatch(r"/artifact/(\d{1,9})/(.+)", path):
+            if found := rd.artifact(int(match[1]), [unquote(part) for part in match[2].split("/")]):
                 return 200, *found
         return None
 

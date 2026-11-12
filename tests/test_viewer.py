@@ -94,7 +94,8 @@ def test_state_lists_iterations_and_status(viewer):
     assert state["status"]["state"] == "finished"
     assert state["goal"].startswith("Test the integration")
     assert state["config"]["file"] == "autohelix.yaml"
-    assert state["config"]["checks"] == ["true"]
+    assert state["config"]["gates"] == ["true"]
+    assert state["title"] == "Test the integration"
     assert "goal: Test the integration" in state["config"]["text"]
     # The run finished, so it wrote a summary (the mock agent's fixed text).
     assert state["report"]["html"] == "<p>Mock summary of the run.</p>\n"
@@ -106,7 +107,8 @@ def test_iteration_detail_has_notes_and_diff(viewer):
     assert "<strong>the obvious</strong>" in detail["notes"]
     assert "<script>" not in detail["notes"]  # Raw HTML is escaped, not rendered.
     assert "Modified in iteration 2" in detail["diff"]
-    assert detail["review"] is None
+    assert [(g["text"], g["passed"]) for g in detail["gates"]] == [("true", True)]
+    assert detail["observe"] == [] and detail["discarded"] == []
     assert isinstance(detail["agent"], list)
 
 
@@ -143,19 +145,20 @@ def test_notes_list_and_note_route(viewer):
 
 
 def test_artifacts_listed_and_served_safely(viewer, integration_project):  # noqa: F811
-    obs = RunPaths(integration_project).observations / "iter-2"
+    obs = RunPaths(integration_project).observations / "iter-2" / "bench"
     obs.mkdir(parents=True, exist_ok=True)
     (obs / "page.html").write_text("<script>alert(1)</script>")
     (obs / "plot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-    state = json.loads(get(viewer + "/api/state")[1])
-    assert {"page.html", "plot.png"} <= {a["name"] for a in state["artifacts"]["2"]}
+    sections = json.loads(get(viewer + "/api/iteration/2")[1])["observe"]
+    assert {"bench/page.html", "bench/plot.png"} <= {a["path"] for a in sections[0]["files"]}
 
-    request = urllib.request.Request(viewer + "/api/artifact/2/page.html")
+    request = urllib.request.Request(viewer + "/api/artifact/2/bench/page.html")
     with urllib.request.urlopen(request) as response:
         assert response.headers["Content-Type"].startswith("text/plain")  # never rendered as HTML
-    with urllib.request.urlopen(viewer + "/api/artifact/2/plot.png") as response:
+    with urllib.request.urlopen(viewer + "/api/artifact/2/bench/plot.png") as response:
         assert response.headers["Content-Type"] == "image/png"
     assert get(viewer + "/api/artifact/2/..%2F..%2Fhistory.jsonl")[0] == 404
+    assert get(viewer + "/api/artifact/2/bench/../../../history.jsonl")[0] == 404
 
 
 def test_diff_is_relative_to_baseline(viewer):
@@ -278,7 +281,6 @@ def test_stopped_run_saves_static_page(integration_project):  # noqa: F811
     routes = data["routes"]
     assert routes["/api/state"]["status"]["state"] == "finished"
     assert routes["/api/state"]["report"]["last_iteration"] == 2
-    assert routes["/api/state"]["artifacts"] == {}
     assert set(routes) >= {"/api/state", "/api/iteration/0", "/api/iteration/1", "/api/iteration/2"}
     assert all(routes[f"/api/iteration/{n}"]["agent"] == [] for n in (0, 1, 2))
     # One diff: baseline to the final code, on the last accepted iteration.
@@ -431,10 +433,11 @@ def test_dashboard_json_and_once(measured_project):
     assert lines[0].startswith(f"test_project  ") and lines[0].endswith(" @ " + subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip())
     assert lines[1].startswith("2 runs") and lines[1].endswith("1 archived (not listed; see --json)")
-    assert lines[3].split() == ["RUN", "STATUS", "ITER", "speed", "LANDING", "ACTIVE"]
+    assert lines[3].split() == ["RUN", "STATUS", "ITER", "speed", "LANDING", "ACTIVE", "GOAL"]
     rows = {line.split()[0]: line for line in lines[4:] if not line.startswith(" ")}
     assert set(rows) == {first, second}
     assert rows[first].split()[1:5] == ["finished", "2/2", "120.0", "landed"]
+    assert rows[first].endswith("Test the integration")
     assert rows[second].split()[1:7] == ["finished", "1/1", "130.0", "1", "commit", "to"]
     assert "  autohelix.yaml" in result.output
 
