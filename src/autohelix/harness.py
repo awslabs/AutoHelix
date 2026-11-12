@@ -22,7 +22,7 @@ from rich.table import Table
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import load_config
+from autohelix.config import MetricGate, load_config
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay
 from autohelix.history import History, IterationResult
@@ -30,7 +30,7 @@ from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, 
                             claim_copies, remove_copies, short_id, write_json, write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
-                              run_observe, run_stop_checks)
+                              run_observe_entry, run_stop_checks)
 from autohelix.run_status import RunStatus
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
 from autohelix.formatting import format_cost, format_delta, format_duration, format_total_cost
@@ -60,7 +60,24 @@ class _Attempt:
     monotonic: float
     agent_usage: dict = field(default_factory=dict)
     agent_attempted: bool = False
-    constraints: list = field(default_factory=list)
+    evaluation: "_Evaluation | None" = None
+
+
+@dataclass
+class _Evaluation:
+    """What an evaluation (gate commands, observe entries, metric gates) has run and
+    checked so far: filled in as it goes, so a rejection or error keeps it."""
+
+    gates: list[dict]  # IterationResult.gates
+    constraints: list = field(default_factory=list)  # the gate commands' CommandResults
+    observe: list[dict] = field(default_factory=list)  # IterationResult.observe
+    metrics: dict[str, float] = field(default_factory=dict)  # from the entries that succeeded
+    rejection: str | None = None
+    failure_output: str | None = None
+
+
+def _tail(output: str, lines: int = 15) -> str:
+    return "\n".join(output.strip().splitlines()[-lines:])
 
 
 class _IterationSpinner:
@@ -266,20 +283,21 @@ class Harness:
 
         return "\n".join(lines)
 
-    def _check_metric_gates(self, metrics: dict[str, float]) -> str | None:
-        """Check metric gates against the last accepted iteration, in list order.
-        Returns the first rejection reason, or None if all pass."""
-        gates = self.config.metric_gates()
-        if not gates:
-            return None
-        directions = self.config.metric_directions()
-        records = self.history.load()
-        for gate in gates:
-            failure = metric_gate_failure(gate, directions[gate.metric], metrics.get(gate.metric),
-                                          metric_reference(records, gate.metric))
-            if failure:
-                return failure
-        return None
+    def _new_evaluation(self) -> _Evaluation:
+        """Every gate in list order, none reached yet."""
+        return _Evaluation(gates=[{"text": gate.text, "kind": "metric" if isinstance(gate, MetricGate) else "command",
+                                   "passed": None} for gate in self.config.gates])
+
+    def _check_metric_gate(self, gate: MetricGate, item: dict, metrics: dict[str, float], records) -> str | None:
+        """Compare one metric gate with the last accepted iteration and record it in
+        `item`. Returns the rejection reason, or None if it passes."""
+        direction = self.config.metric_directions().get(gate.metric, "higher")
+        value, reference = metrics.get(gate.metric), metric_reference(records, gate.metric)
+        failure = metric_gate_failure(gate, direction, value, reference)
+        item.update(passed=failure is None, value=value, reference=reference)
+        if failure:
+            item["reason"] = failure
+        return failure
 
     def _print_header(self, max_iter: int, start_iter: int = 1) -> None:
         """Print a compact run header summarizing config."""
@@ -701,7 +719,7 @@ class Harness:
             if result is None:
                 result = self._rejected(iteration, attempt, (str(failure) or "interrupted") if failure else "interrupted")
             try:
-                self._complete_record(result, attempt.started_at, attempt.monotonic, attempt.constraints)
+                self._complete_record(result, attempt.started_at, attempt.monotonic, attempt.evaluation)
                 # Failures before the agent call don't consume the iteration.
                 if attempt.agent_attempted:
                     workspace.record(result)
@@ -767,18 +785,15 @@ class Harness:
             if len(reverted) > 5:
                 self.console.print(f"    [dim]... and {len(reverted) - 5} more[/dim]")
 
-        metrics, attempt.constraints = self._evaluate(workspace, iteration)
-        failed = [r for r in attempt.constraints if not r.passed]
-        if failed:
-            return self._rejected(iteration, attempt, f"gate failed: {self._gate_text(failed[0].command)}", metrics={},
-                                  failure_output="\n".join(failed[0].output.strip().splitlines()[-15:]))
+        evaluation = attempt.evaluation = self._new_evaluation()
+        self._evaluate(workspace, iteration, evaluation)
+        metrics = evaluation.metrics
         if self.verbose:
             for name, value in metrics.items():
                 self.console.print(f"  {self._metric_label(name)} [cyan]{value}[/cyan]")
-        if gate_failed := self._check_metric_gates(metrics):
-            if self.verbose:
-                self.console.print(f"  [red]✗[/red] {gate_failed}")
-            return self._rejected(iteration, attempt, gate_failed, metrics=metrics)
+        if evaluation.rejection:
+            return self._rejected(iteration, attempt, evaluation.rejection, metrics=metrics,
+                                  failure_output=evaluation.failure_output)
 
         # Publish the validated tree to this run, independently of landing.
         self.run_status.phase("accept")
@@ -786,7 +801,7 @@ class Harness:
             self._status("Accepting changes...")
         result = IterationResult(iteration=iteration, accepted=True, metrics=metrics,
                                  calls=[{"role": "agent", "usage": attempt.agent_usage}])
-        self._complete_record(result, attempt.started_at, attempt.monotonic, attempt.constraints)
+        self._complete_record(result, attempt.started_at, attempt.monotonic, evaluation)
         workspace.accept(self._build_commit_message(iteration, metrics, summary=workspace.summary), result)
 
         # Stop commands see accepted content in a fresh copy. Errors (and interrupts,
@@ -803,13 +818,36 @@ class Harness:
         """A gate command's display text (`ask: <question>` for ask entries)."""
         return next((gate.text for gate in self.config.gate_commands() if gate.command == command), command)
 
-    def _evaluate(self, workspace: IterationWorkspace, iteration: int) -> tuple[dict[str, float], list]:
-        """Run gate commands, then observe entries (if they pass, or always for the baseline), in a
-        checks copy of T, verifying T's files after every command. Saves outputs and
-        captures; raises CandidateRejected if a command or judge changed the candidate."""
+    def _candidate_env(self, workspace: IterationWorkspace) -> dict[str, str]:
+        """What gate, observe and stop commands are told about the candidate: its tree
+        (T; A's tree at the baseline), the commit it is built on (A), and the project."""
+        return {
+            "AUTOHELIX_CANDIDATE": workspace.candidate(),
+            "AUTOHELIX_BASE": workspace.base,
+            "AUTOHELIX_PROJECT": str(self.project_path),
+        }
+
+    def _evaluate(self, workspace: IterationWorkspace, iteration: int, evaluation: _Evaluation) -> None:
+        """Evaluate T in a checks copy (HEAD at A), verifying T's files after every command,
+        filling in `evaluation` as it goes:
+
+        1. gate commands in list order; the first failure rejects and skips the rest;
+        2. observe entries top to bottom, each output saved under
+           `observations/iter-N/<name>/`; a failed entry contributes no metrics and the
+           next one runs. After each entry, the metric gates on its metrics (gates list
+           order); a failure rejects and skips the remaining entries.
+
+        At the baseline (iteration 0) nothing rejects: every gate command and entry runs
+        and metric gates aren't checked. Raises CandidateRejected if a command or judge
+        changed the candidate."""
         baseline = iteration == 0
         checks = workspace.eval_copy("checks")
-        command_env = self._command_env(iteration)
+        command_env = {**self._command_env(iteration), **self._candidate_env(workspace),
+                       "AUTOHELIX_OBSERVATIONS": None}
+        self.history.clear_observations(iteration)  # a baseline retry's earlier attempt
+        records = self.history.load()  # the reference for metric gates: the last accepted iteration
+        where = "baseline" if baseline else f"iter {iteration}"
+        notes: list[str] = []  # printed once the live display is gone
 
         def verify(command: str) -> None:
             # Checks are read-only: one command must not alter what a later one validates.
@@ -819,11 +857,28 @@ class Harness:
                 changed = ["its copy was removed or replaced"]
             if changed:
                 raise CandidateRejected(f"checks modified candidate files: {command} ({', '.join(changed[:5])})")
+            if violation := self._integrity_violation(iteration):
+                raise CandidateRejected(violation)
+
+        @contextmanager
+        def gate_call(_command: str):
+            with workspace.call_folder() as folders:
+                yield {"AUTOHELIX_SCRATCH": str(folders["scratch"]), "AUTOHELIX_PREVIOUS": None}
+
+        positions = {id(gate): index for index, gate in enumerate(self.config.gates)}
+
+        def gate_result(spec, result) -> None:
+            evaluation.constraints.append(result)
+            item = evaluation.gates[positions[id(spec)]]
+            item.update(passed=result.passed, return_code=result.return_code,
+                        duration_s=None if result.duration_s is None else round(result.duration_s, 3))
+            if not result.passed:
+                item["output"] = _tail(result.output)
+            self.log.info(f"{where} gate: {spec.text} — {'passed' if result.passed else 'FAILED'}")
 
         spinner = _IterationSpinner(iteration)
         spinner.set_phase("checks")
         progress = None if baseline else (lambda _phase, command, _elapsed: spinner.set_detail(command))
-        run = dict(project_path=self.project_path, extra_env=command_env, after_command=verify, on_progress=progress)
         if not baseline:
             self.log.info(f"iter {iteration} gates started")
             self.run_status.phase("checks")
@@ -832,41 +887,83 @@ class Harness:
         display = (Status("Running baseline...", console=self.console, spinner="dots") if baseline
                    else Live(spinner, console=self.console, refresh_per_second=10, transient=True))
         with display:
-            constraints = run_gate_commands(self.config.gate_commands(), checks.working_dir, **run)
-            for r in constraints:
-                self.log.info(f"{'baseline' if baseline else f'iter {iteration}'} gate: {self._gate_text(r.command)} — "
-                              f"{'passed' if r.passed else 'FAILED'}")
-            observed = []
+            run_gate_commands(self.config.gate_commands(), checks.working_dir, project_path=self.project_path,
+                              extra_env=command_env, after_command=verify, on_progress=progress,
+                              stop_on_failure=not baseline, per_command=gate_call, on_result=gate_result)
+            failed = next((r for r in evaluation.constraints if not r.passed), None)
             # At the baseline, gate commands only guard against mutation; failing is fine.
-            if baseline or all(r.passed for r in constraints):
+            if failed is not None and not baseline:
+                evaluation.rejection = f"gate failed: {self._gate_text(failed.command)}"
+                evaluation.failure_output = _tail(failed.output)
+            elif self.config.observe:
                 spinner.set_phase("benchmark")
                 spinner.set_detail("")
                 if not baseline:
                     self.run_status.phase("benchmark")
                     self.log.info(f"iter {iteration} observe started")
-                observed = run_observe(self.config.observe, checks.working_dir, **run)
+                self._observe(workspace, iteration, checks, evaluation, command_env, records,
+                              verify=verify, progress=progress, notes=notes)
 
         if not baseline:
-            for r in constraints:
+            for r in evaluation.constraints:
                 if not r.passed:
-                    self.console.print(f"  [red]✗[/red] {self._gate_text(r.command)}")
+                    self.console.print(f"  [red]✗[/red] {self._gate_text(r.command)}", highlight=False)
                     if self.verbose:
                         self.console.print(Panel(r.output[:2000], title="Gate output", border_style="red"))
                 elif self.verbose:
-                    self.console.print(f"  [green]✓[/green] {self._gate_text(r.command)}")
-        metrics: dict[str, float] = {}
-        for index, (entry, result) in enumerate(zip(self.config.observe, observed)):
-            metrics.update(result.values)
-            if result.output:
-                self.history.save_stdout(iteration, result.output, index=index if len(observed) > 1 else None)
-            for capture in entry.capture:
-                self.history.save_capture(iteration, checks.working_dir / capture)
+                    self.console.print(f"  [green]✓[/green] {self._gate_text(r.command)}", highlight=False)
+        for note in notes:
+            self.console.print(note, highlight=False)
         workspace.remove(checks)
-        if metrics and not baseline:
-            self.log.info(f"iter {iteration} observe: " + ", ".join(f"{k}={v:g}" for k, v in metrics.items()))
+        if evaluation.metrics and not baseline:
+            self.log.info(f"iter {iteration} observe: "
+                          + ", ".join(f"{k}={v:g}" for k, v in evaluation.metrics.items()))
         if violation := self._integrity_violation(iteration):
             raise CandidateRejected(violation)
-        return metrics, constraints
+
+    def _observe(self, workspace: IterationWorkspace, iteration: int, checks, evaluation: _Evaluation,
+                 command_env: dict, records, *, verify, progress, notes: list[str]) -> None:
+        """Observe entries in order (see `_evaluate`), each with its own call folder and,
+        as `$AUTOHELIX_PREVIOUS`, a copy of its output from the last accepted iteration."""
+        baseline = iteration == 0
+        where = "baseline" if baseline else f"iter {iteration}"
+        gates = [(index, gate) for index, gate in enumerate(self.config.gates) if isinstance(gate, MetricGate)]
+        declared = self.config.metric_names()
+        for entry in self.config.observe:
+            previous = self.history.previous_observations(entry.name, iteration)
+            with workspace.call_folder(previous=previous) as folders:
+                env = {**command_env, "AUTOHELIX_SCRATCH": str(folders["scratch"]),
+                       "AUTOHELIX_PREVIOUS": str(folders["previous"]) if "previous" in folders else None}
+                result = run_observe_entry(entry, checks.working_dir, project_path=self.project_path,
+                                           on_progress=progress, extra_env=env)
+            # Stored before anything can reject: a rejected iteration keeps its output.
+            self.history.save_stdout(iteration, entry.name, result.output)
+            for capture in entry.capture:
+                if problem := self.history.save_capture(iteration, entry.name, checks.working_dir, capture):
+                    self.log.warn(f"{where} observe {entry.name}: {problem}")
+            evaluation.observe.append(result.record())
+            if result.ok:
+                evaluation.metrics.update(result.values)
+                for name, error in result.errors.items():
+                    self.log.info(f"{where} observe {entry.name}: metric '{name}' missing — {error}")
+            else:
+                notes.append(f"  [yellow]![/yellow] observe {entry.name} failed ({result.error}); "
+                             "its metrics are missing")
+                self.log.info(f"{where} observe {entry.name} failed — {result.error}")
+            verify(entry.command)
+            if baseline:
+                continue
+            # Metric gates waiting for this entry, in gates list order; a gate on a
+            # metric nobody declares (not a valid config) is checked after the last entry.
+            last = entry is self.config.observe[-1]
+            for index, gate in gates:
+                if not (gate.metric in entry.metrics or last and gate.metric not in declared):
+                    continue
+                if failure := self._check_metric_gate(gate, evaluation.gates[index], evaluation.metrics, records):
+                    notes.append(f"  [red]✗[/red] {failure}")
+                    self.log.info(f"iter {iteration} {failure}")
+                    evaluation.rejection = failure
+                    return
 
     @contextmanager
     def _watch_checkout(self):
@@ -896,12 +993,17 @@ class Harness:
     def _relative_log(self, path):
         return self.paths.relative_log(path)
 
-    def _complete_record(self, result, started_at, iter_start, constraints=()):
+    def _complete_record(self, result, started_at, iter_start, evaluation: _Evaluation | None = None):
         from dataclasses import asdict
 
         result.started_at = started_at
         result.ended_at = time.time()
-        result.constraints = [asdict(check) for check in constraints]
+        if evaluation is not None:
+            result.constraints = [asdict(check) for check in evaluation.constraints]
+            result.gates = [dict(item) for item in evaluation.gates]
+            result.observe = [dict(item) for item in evaluation.observe]
+        else:
+            result.constraints, result.gates, result.observe = [], [], []
         agents = [call for call in result.calls if call["role"] == "agent"]
         for call in agents:
             call["usage"]["wall_clock_ms"] = int((time.monotonic() - iter_start) * 1000)
@@ -952,17 +1054,31 @@ class Harness:
         """Run the stop commands in a fresh copy of the accepted tip. Returns (stop,
         errors): stop is {"command", "reason"} if one exited 0; errors are the results
         that exited with anything other than 0 or 1 (or timed out). Changing the
-        files or a judge violation is an error."""
+        files or a judge violation is an error.
+
+        Each command also gets `$AUTOHELIX_OBSERVATIONS`, a copy (made for that call)
+        of the accepted iteration's `observations/iter-N/` (empty if it observed
+        nothing), and its own `$AUTOHELIX_SCRATCH`."""
         self.run_status.phase("stop check", iteration)
         runtime = self.paths.runtime
         runtime.mkdir(parents=True, exist_ok=True)
         metrics_path = runtime / "metrics.json"
         metrics_path.write_text(json.dumps(metrics))
-        env = {**self._command_env(iteration), "AUTOHELIX_METRICS": str(metrics_path)}
+        env = {**self._command_env(iteration), **self._candidate_env(workspace),
+               "AUTOHELIX_METRICS": str(metrics_path), "AUTOHELIX_PREVIOUS": None}
+        observations = self.paths.observations / f"iter-{iteration}"
+
+        @contextmanager
+        def stop_call(_command: str):
+            with workspace.call_folder(observations=observations) as folders:
+                yield {"AUTOHELIX_SCRATCH": str(folders["scratch"]),
+                       "AUTOHELIX_OBSERVATIONS": str(folders["observations"])}
+
         stop = workspace.stop_copy()
         try:
             with Status("Checking stop conditions...", console=self.console, spinner="dots"):
-                results = run_stop_checks(self.config, stop.working_dir, project_path=self.project_path, extra_env=env)
+                results = run_stop_checks(self.config, stop.working_dir, project_path=self.project_path, extra_env=env,
+                                          per_command=stop_call)
             if changed := stop.changed():
                 raise AutoHelixRunError("stop commands modified accepted files: " + ", ".join(changed[:5]))
         finally:
@@ -1000,12 +1116,13 @@ class Harness:
 
         Returns the stop condition the baseline already meets, if any."""
         workspace = self._baseline_workspace()
+        evaluation = self._new_evaluation()
         try:
             self.log.info("baseline capture started")
             self.run_status.phase("baseline", 0)
             self._start_command_usage(0)
             try:
-                metrics, _ = self._evaluate(workspace, 0)
+                self._evaluate(workspace, 0, evaluation)
             except CandidateRejected as e:
                 # A mutating check would reject every iteration; refuse before agent spend.
                 reason = str(e)
@@ -1020,19 +1137,27 @@ class Harness:
                 raise AutoHelixRunError(reason) from e
 
             # A missing number is a setup error, except a review's that no gate uses: an
-            # LLM's answer missing once may be flakiness.
+            # LLM's answer missing once may be flakiness. A failed entry produces none.
+            metrics = evaluation.metrics
             missing = set(self.config.metric_directions()) - set(metrics)
+            failures = {item["name"]: item["error"] for item in evaluation.observe if not item["ok"]}
+
+            def why(names) -> str:
+                entries = dict.fromkeys(self.config.metric_source(name).name for name in sorted(names))
+                failed = [f"{name} {failures[name]}" for name in entries if name in failures]
+                return f" ({'; '.join(failed)})" if failed else ""
             gated = {gate.metric for gate in self.config.metric_gates()}
             advisory = {name for name in missing
                         if self.config.metric_source(name).review is not None and name not in gated}
             if advisory:
-                text = f"Baseline review did not report metric(s): {', '.join(sorted(advisory))}"
+                text = f"Baseline review did not report metric(s): {', '.join(sorted(advisory))}{why(advisory)}"
                 self.console.print(f"  [yellow]![/yellow] {text}", highlight=False)
                 self.log.warn(text)
             if missing - advisory:
                 names = ", ".join(sorted(missing - advisory))
                 self.log.info(f"baseline FAILED — missing metrics: {names}")
-                raise RuntimeError(f"Baseline benchmark did not produce required metric(s): {names}")
+                raise RuntimeError(f"Baseline benchmark did not produce required metric(s): {names}"
+                                   f"{why(missing - advisory)}")
             if metrics:
                 metric_str = ", ".join(f"{name}: {value:g}" for name, value in metrics.items())
                 self.console.print(f"  baseline │ {metric_str}", highlight=False)
@@ -1049,12 +1174,12 @@ class Harness:
                         f"Stop command failed on the baseline: {errors[0].command} "
                         "(expected exit 0 to stop or 1 to continue)"
                     )
-            self._complete_record(baseline, time.time(), time.monotonic())
+            self._complete_record(baseline, time.time(), time.monotonic(), evaluation)
             self._write_baseline(baseline)
             return baseline.stop
         except BaseException as error:
             baseline = IterationResult(iteration=0, accepted=False, reason=f"baseline failed: {error}")
-            self._complete_record(baseline, time.time(), time.monotonic())
+            self._complete_record(baseline, time.time(), time.monotonic(), evaluation)
             if any(r.iteration == 0 and r.accepted for r in self.history.load()):
                 raise
             self._write_baseline(baseline)

@@ -8,7 +8,7 @@ import logging
 import os
 import shutil
 from dataclasses import dataclass, field, asdict, fields
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from autohelix.costs import CostSummary, summarize_costs
@@ -34,6 +34,14 @@ class IterationResult:
     ended_at: float | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
     constraints: list[dict[str, Any]] = field(default_factory=list)
+    # One item per gate, in list order: {"text", "kind": "command"|"metric", "passed":
+    # true|false|null (not reached)}; commands that ran add "return_code" and
+    # "duration_s", a failed one its "output" tail; checked metric gates add "value",
+    # "reference" and, failed, "reason". Empty if evaluation never started.
+    gates: list[dict[str, Any]] = field(default_factory=list)
+    # One item per observe entry that ran, in order: {"name", "ok", "return_code",
+    # "error", "metrics", "duration_s"}.
+    observe: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def usage(self):
@@ -70,27 +78,67 @@ class History:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def save_stdout(self, iteration: int, output: str, index: int | None = None) -> None:
-        """Save command stdout to the iteration directory.
+    def entry_dir(self, iteration: int, name: str) -> Path:
+        """`observations/iter-N/<name>/`, one observe entry's output, created."""
+        if not name or name.startswith(".") or "/" in name or os.sep in name:
+            raise ValueError(f"Not an observe entry name: {name!r}")
+        d = self.iter_dir(iteration) / name
+        d.mkdir(exist_ok=True)
+        return d
 
-        Args:
-            iteration: The iteration number.
-            output: The stdout+stderr text.
-            index: If several observe entries, the entry's index (0-based).
-                   None means single command (saves as stdout.txt).
-        """
-        d = self.iter_dir(iteration)
-        if index is not None:
-            path = d / f"stdout-{index}.txt"
+    def clear_observations(self, iteration: int) -> None:
+        """Remove what an earlier attempt at this iteration (a baseline retry) stored."""
+        d = self._observations_dir / f"iter-{iteration}"
+        if d.is_symlink() or d.is_file():
+            d.unlink()
+        elif d.is_dir():
+            shutil.rmtree(d)
+
+    def save_stdout(self, iteration: int, name: str, output: str) -> None:
+        """Save an observe entry's stdout+stderr as `observations/iter-N/<name>/stdout.txt`."""
+        (self.entry_dir(iteration, name) / "stdout.txt").write_text(output)
+
+    def save_capture(self, iteration: int, name: str, root: Path, capture: str) -> str | None:
+        """Copy a captured file (or folder) from `root` (the checks copy) into the entry's
+        folder at the same relative path, so captures with one basename don't collide.
+        Returns why it was skipped, or None (saved, or nothing there to save). Paths
+        escaping the copy, and symlinks (at or above the path, or inside a folder), are
+        never followed."""
+        rel = PurePosixPath(capture)
+        parts = [part for part in rel.parts if part not in ("", ".")]
+        if rel.is_absolute() or not parts or ".." in parts:
+            return f"capture {capture!r} skipped: not a path inside the copy"
+        if parts == ["stdout.txt"]:
+            return f"capture {capture!r} skipped: stdout.txt holds the entry's output"
+        source = root
+        for part in parts:
+            source = source / part
+            if source.is_symlink():
+                return f"capture {capture!r} skipped: {'/'.join(source.relative_to(root).parts)} is a symlink"
+        if not source.exists():
+            return None
+        target = self.entry_dir(iteration, name).joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, target, symlinks=True, dirs_exist_ok=True,
+                            ignore=lambda folder, names: [n for n in names
+                                                          if os.path.islink(os.path.join(folder, n))])
+        elif source.is_file():
+            shutil.copy2(source, target)
         else:
-            path = d / "stdout.txt"
-        path.write_text(output)
+            return f"capture {capture!r} skipped: not a file or folder"
+        return None
 
-    def save_capture(self, iteration: int, src_path: Path) -> None:
-        """Copy a captured file into the iteration directory."""
-        d = self.iter_dir(iteration)
-        if src_path.exists():
-            shutil.copy2(src_path, d / src_path.name)
+    def previous_observations(self, name: str, before: int) -> Path | None:
+        """`observations/iter-K/<name>/` of the most recent accepted iteration K < `before`
+        (the baseline and accepted no-ops count) that has one; rejected iterations never
+        count."""
+        for record in reversed(self.load()):
+            if record.accepted and record.iteration < before:
+                d = self._observations_dir / f"iter-{record.iteration}" / name
+                if d.is_dir() and not d.is_symlink():
+                    return d
+        return None
 
     def _invalidate_cache(self) -> None:
         """Invalidate the cached results."""

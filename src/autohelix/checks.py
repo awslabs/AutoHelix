@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -114,37 +115,51 @@ class CommandResult:
     output: str
     return_code: int
     stdout: str = ""
+    timed_out: bool = False
+    duration_s: float | None = None
 
 
 # A check command may run its own agent (e.g. `autohelix ask`), which needs up to
 # the agent runner's grace (3 s) plus 2 s to stop it on SIGTERM; wait longer.
 CHECK_KILL_GRACE = 8
 
+# Per-command variables: a context manager given the command, yielding the variables to
+# add for that one call (a value of None unsets the variable) and cleaning up after it.
+PerCommand = Callable[[str], AbstractContextManager]
+
 
 def _command_env(project_path: Path | None, cwd: Path, timeout: int,
-                 extra_env: dict[str, str] | None) -> dict[str, str]:
+                 extra_env: dict[str, str | None] | None) -> dict[str, str]:
     """Environment for a check command: sys.path remapped to the copy, harness-provided
-    variables, and the command's deadline (for tools that run their own agents)."""
+    variables (None removes one, so a variable can't leak in from the harness's own
+    environment), and the command's deadline (for tools that run their own agents)."""
     env = build_worktree_env(project_path, cwd) if project_path else os.environ.copy()
-    env.update(extra_env or {})
+    for key, value in (extra_env or {}).items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
     env["AUTOHELIX_COMMAND_DEADLINE"] = str(time.time() + timeout)
     return env
 
 
-def run_command(
-    command: str,
-    cwd: Path,
-    timeout: int = DEFAULT_CHECK_TIMEOUT,
-    project_path: Path | None = None,
-    on_progress: ProgressCallback | None = None,
-    extra_env: dict[str, str] | None = None,
-) -> CommandResult:
-    """Run a single command."""
-    env = _command_env(project_path, cwd, timeout, extra_env)
+@dataclass
+class _Execution:
+    return_code: int
+    stdout: str = ""
+    stderr: str = ""
+    timed_out: bool = False
+    error: str | None = None  # could not start
+    duration_s: float = 0.0
 
+
+def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str], phase: str,
+             on_progress: ProgressCallback | None) -> _Execution:
+    """Run a shell command in its own process group, killed (the whole group) at the
+    timeout or on an interrupt. A timed-out command keeps the output it wrote."""
     start = time.monotonic()
     if on_progress:
-        on_progress("gate", command, 0.0)
+        on_progress(phase, command, 0.0)
 
     proc: subprocess.Popen | None = None
     try:
@@ -165,37 +180,56 @@ def run_command(
             except subprocess.TimeoutExpired:
                 elapsed = time.monotonic() - start
                 if on_progress:
-                    on_progress("gate", command, elapsed)
+                    on_progress(phase, command, elapsed)
                 if elapsed > timeout:
                     # Kill the whole process group, not just the /bin/sh wrapper,
                     # so a timed-out pytest/benchmark doesn't keep running detached.
                     _kill_process_group(proc, grace=CHECK_KILL_GRACE)
-                    proc.communicate()
-                    return CommandResult(
-                        command=command,
-                        passed=False,
-                        output=f"Timeout after {timeout}s",
-                        return_code=-1,
-                    )
-
-        return CommandResult(
-            command=command,
-            passed=proc.returncode == 0,
-            output=stdout + stderr,
-            return_code=proc.returncode,
-            stdout=stdout,
-        )
+                    stdout, stderr = proc.communicate()
+                    return _Execution(-1, stdout or "", stderr or "", timed_out=True,
+                                      duration_s=time.monotonic() - start)
+        return _Execution(proc.returncode, stdout or "", stderr or "", duration_s=time.monotonic() - start)
     except KeyboardInterrupt:
         if proc is not None:
             _kill_process_group(proc, grace=CHECK_KILL_GRACE)
         raise
     except Exception as e:
-        return CommandResult(
-            command=command,
-            passed=False,
-            output=str(e),
-            return_code=-1,
-        )
+        return _Execution(-1, error=str(e), duration_s=time.monotonic() - start)
+
+
+def run_command(
+    command: str,
+    cwd: Path,
+    timeout: int = DEFAULT_CHECK_TIMEOUT,
+    project_path: Path | None = None,
+    on_progress: ProgressCallback | None = None,
+    extra_env: dict[str, str | None] | None = None,
+) -> CommandResult:
+    """Run a single command."""
+    env = _command_env(project_path, cwd, timeout, extra_env)
+    run = _execute(command, cwd, timeout, env, "gate", on_progress)
+    if run.timed_out:
+        output = f"Timeout after {timeout}s"
+        if run.stdout or run.stderr:
+            output += "\n" + run.stdout + run.stderr
+        return CommandResult(command=command, passed=False, output=output, return_code=-1,
+                             stdout=run.stdout, timed_out=True, duration_s=run.duration_s)
+    if run.error is not None:
+        return CommandResult(command=command, passed=False, output=run.error, return_code=-1,
+                             duration_s=run.duration_s)
+    return CommandResult(
+        command=command,
+        passed=run.return_code == 0,
+        output=run.stdout + run.stderr,
+        return_code=run.return_code,
+        stdout=run.stdout,
+        duration_s=run.duration_s,
+    )
+
+
+@contextmanager
+def _no_extra(_command: str):
+    yield {}
 
 
 def run_gate_commands(
@@ -203,19 +237,31 @@ def run_gate_commands(
     cwd: Path,
     project_path: Path | None = None,
     on_progress: ProgressCallback | None = None,
-    extra_env: dict[str, str] | None = None,
+    extra_env: dict[str, str | None] | None = None,
     after_command: Callable[[str], None] | None = None,
+    stop_on_failure: bool = False,
+    per_command: PerCommand | None = None,
+    on_result: Callable[[CommandSpec, CommandResult], None] | None = None,
 ) -> list[CommandResult]:
-    """Run gate commands in order and return results. `after_command` runs after each
-    command (e.g. to verify the candidate) and may raise to stop the phase."""
+    """Run gate commands in order and return results; with `stop_on_failure`, the first
+    failure ends the phase (later commands don't run). `per_command` adds variables for
+    each call (see `PerCommand`); `after_command` runs after each command (e.g. to
+    verify the candidate) and may raise to stop the phase; `on_result` sees each
+    result as soon as it exists (before `after_command`)."""
     results = []
     for c in commands:
-        results.append(run_command(
-            c.command, cwd, timeout=c.timeout, project_path=project_path, on_progress=on_progress,
-            extra_env=extra_env,
-        ))
+        with (per_command or _no_extra)(c.command) as added:
+            result = run_command(
+                c.command, cwd, timeout=c.timeout, project_path=project_path, on_progress=on_progress,
+                extra_env={**(extra_env or {}), **added},
+            )
+        results.append(result)
+        if on_result:
+            on_result(c, result)
         if after_command:
             after_command(c.command)
+        if stop_on_failure and not result.passed:
+            break
     return results
 
 
@@ -242,16 +288,19 @@ def run_stop_checks(
     config: Config,
     cwd: Path,
     project_path: Path | None = None,
-    extra_env: dict[str, str] | None = None,
+    extra_env: dict[str, str | None] | None = None,
     on_progress: ProgressCallback | None = None,
+    per_command: PerCommand | None = None,
 ) -> list[StopCheckResult]:
-    """Run stop commands in order until one exits 0; return the results of those run."""
+    """Run stop commands in order until one exits 0; return the results of those run.
+    `per_command` adds variables for each call (see `PerCommand`)."""
     results: list[StopCheckResult] = []
     for c in config.stop:
-        r = run_command(
-            c.command, cwd, timeout=c.timeout, project_path=project_path,
-            on_progress=on_progress, extra_env=extra_env,
-        )
+        with (per_command or _no_extra)(c.command) as added:
+            r = run_command(
+                c.command, cwd, timeout=c.timeout, project_path=project_path,
+                on_progress=on_progress, extra_env={**(extra_env or {}), **added},
+            )
         lines = [line.strip() for line in r.stdout.splitlines() if line.strip()]
         results.append(StopCheckResult(
             command=c.command, return_code=r.return_code, output=r.output,
@@ -331,12 +380,24 @@ def parse_metric_output(
 
 @dataclass
 class ObserveResult:
-    """Result of running an observe entry."""
+    """Result of running an observe entry. A failed entry (non-zero exit, timeout, could
+    not run; a review that left a declared number out) contributes no values."""
 
     command: str
     values: dict[str, float]  # parsed metric name -> value
     output: str
     errors: dict[str, str]  # metric name -> error message for values not found
+    name: str = ""
+    ok: bool = True
+    return_code: int = 0
+    error: str | None = None  # why the entry failed: "exited 2", "timed out after 30m", ...
+    duration_s: float | None = None
+
+    def record(self) -> dict:
+        """The entry as the history record lists it (`IterationResult.observe`)."""
+        return {"name": self.name, "ok": self.ok, "return_code": self.return_code, "error": self.error,
+                "metrics": dict(self.values),
+                "duration_s": None if self.duration_s is None else round(self.duration_s, 3)}
 
 
 def run_observe_entry(
@@ -345,108 +406,56 @@ def run_observe_entry(
     timeout: int | None = None,
     project_path: Path | None = None,
     on_progress: ProgressCallback | None = None,
-    extra_env: dict[str, str] | None = None,
+    extra_env: dict[str, str | None] | None = None,
 ) -> ObserveResult:
     """Run an observe entry and extract its declared metric values from the output.
     A review entry's numbers count only from `##autohelix[name=value]` lines."""
+    from autohelix.iteration_time import format_duration
+
     timeout = timeout if timeout is not None else mc.timeout
-
     env = _command_env(project_path, cwd, timeout, extra_env)
+    run = _execute(mc.command, cwd, timeout, env, "observe", on_progress)
+    output = run.stdout + run.stderr
 
-    start = time.monotonic()
-    if on_progress:
-        on_progress("observe", mc.command, 0.0)
-
-    proc: subprocess.Popen | None = None
-    try:
-        proc = subprocess.Popen(
-            mc.command,
-            shell=True,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            start_new_session=True,
-        )
-        while True:
-            try:
-                stdout, stderr = proc.communicate(timeout=2.0)
-                break
-            except subprocess.TimeoutExpired:
-                elapsed = time.monotonic() - start
-                if on_progress:
-                    on_progress("observe", mc.command, elapsed)
-                if elapsed > timeout:
-                    # Kill the whole process group (see run_command).
-                    _kill_process_group(proc, grace=CHECK_KILL_GRACE)
-                    proc.communicate()
-                    errors = {name: f"Timeout after {timeout}s" for name in mc.metrics}
-                    return ObserveResult(
-                        command=mc.command, values={}, output="", errors=errors,
-                    )
-
-        output = stdout + stderr
-
-        values: dict[str, float] = {}
-        errors: dict[str, str] = {}
-
-        # The unnamed-metric fallback is only safe when a single metric is
-        # declared; with several, it would copy the lone emitted value into
-        # every declared name (see parse_metric_output).
-        allow_unnamed_fallback = len(mc.metrics) == 1
-        structured = parse_structured_metrics(stdout)
-        for name in mc.metrics:
-            if mc.review is not None:  # the review's prose can't carry a number
-                value = structured.get(name)
-            else:
-                value = parse_metric_output(
-                    output, metric_name=name, allow_unnamed_fallback=allow_unnamed_fallback
-                )
-            if value is not None:
-                values[name] = value
-            else:
-                errors[name] = (
-                    f"Could not parse metric value from output. "
-                    f"Recommended: print '##autohelix[{name}=<number>]' from your benchmark script."
-                )
-
+    def failed(error: str, return_code: int) -> ObserveResult:
         return ObserveResult(
-            command=mc.command,
-            values=values,
-            output=output,
-            errors=errors,
-        )
-    except KeyboardInterrupt:
-        if proc is not None:
-            _kill_process_group(proc, grace=CHECK_KILL_GRACE)
-        raise
-    except Exception as e:
-        errors = {name: str(e) for name in mc.metrics}
-        return ObserveResult(
-            command=mc.command, values={}, output="", errors=errors,
+            command=mc.command, values={}, output=output if run.error is None else run.error,
+            errors={name: f"observe entry {mc.name or mc.command!r} failed ({error})" for name in mc.metrics},
+            name=mc.name, ok=False, return_code=return_code, error=error, duration_s=run.duration_s,
         )
 
+    if run.timed_out:
+        return failed(f"timed out after {format_duration(int(timeout))}", -1)
+    if run.error is not None:
+        return failed(f"could not run: {run.error}", -1)
+    if run.return_code != 0:
+        return failed(f"exited {run.return_code}", run.return_code)
 
-def run_observe(
-    entries: list[ObserveEntry],
-    cwd: Path,
-    project_path: Path | None = None,
-    on_progress: ProgressCallback | None = None,
-    extra_env: dict[str, str] | None = None,
-    after_command: Callable[[str], None] | None = None,
-) -> list[ObserveResult]:
-    """Run observe entries in order and return full results (values + output)."""
-    results: list[ObserveResult] = []
-    for obs in entries:
-        cmd_result = run_observe_entry(obs, cwd, project_path=project_path, on_progress=on_progress,
-                                    extra_env=extra_env)
-        results.append(cmd_result)
-        if after_command:
-            after_command(obs.command)
-        for name, error in cmd_result.errors.items():
-            logger.warning("Metric '%s' failed: %s", name, error)
-    return results
+    values: dict[str, float] = {}
+    errors: dict[str, str] = {}
+    # The unnamed-metric fallback is only safe when a single metric is
+    # declared; with several, it would copy the lone emitted value into
+    # every declared name (see parse_metric_output).
+    allow_unnamed_fallback = len(mc.metrics) == 1
+    structured = parse_structured_metrics(run.stdout)
+    for name in mc.metrics:
+        if mc.review is not None:  # the review's prose can't carry a number
+            value = structured.get(name)
+        else:
+            value = parse_metric_output(
+                output, metric_name=name, allow_unnamed_fallback=allow_unnamed_fallback
+            )
+        if value is not None:
+            values[name] = value
+        else:
+            errors[name] = (
+                f"Could not parse metric value from output. "
+                f"Recommended: print '##autohelix[{name}=<number>]' from your benchmark script."
+            )
+    if mc.review is not None and errors:  # a review that leaves a declared number out fails
+        return failed(f"did not report {', '.join(errors)}", run.return_code)
+    return ObserveResult(command=mc.command, values=values, output=output, errors=errors,
+                         name=mc.name, return_code=run.return_code, duration_s=run.duration_s)
 
 
 def metric_reference(records, metric: str) -> float | None:

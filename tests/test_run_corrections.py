@@ -299,7 +299,7 @@ def test_checks_cannot_modify_candidate_but_capture_new_files(project, preexisti
         else:
             result = harness.run_iteration(1)
             assert result.accepted
-            assert (harness.paths.observations / "iter-1" / "metric.txt").read_text() == "new metric output\n"
+            assert (harness.paths.observations / "iter-1" / "bench" / "metric.txt").read_text() == "new metric output\n"
             assert git(project, "cat-file", "-e", f"{harness.paths.ref}:metric.txt", check=False).returncode
     finally:
         harness.close()

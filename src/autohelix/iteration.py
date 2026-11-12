@@ -11,10 +11,11 @@ commands each get a new copy; accepting publishes exactly T.
 import filecmp
 import os
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
 
 from autohelix.runs import RunPaths, RunState, critical_section, ensure_copies, group_members
-from autohelix.workspace import ITERATION_DIR, Copy, Repo, Scope
+from autohelix.workspace import ITERATION_DIR, Copy, Repo, Scope, remove_copy
 
 
 def _copy_notes(notes: Path, target: Path) -> None:
@@ -137,6 +138,9 @@ class IterationWorkspace:
         # The group as of this iteration's start: what its copies show of other runs.
         self.members = group_members(run.paths, run.data)
         self.refs = (run.paths.ref, *(paths.ref for paths, _ in self.members))
+        self._calls = 0  # per-command folders made so far (`call_folder`)
+        self._call_folders: list[Path] = []
+        self._candidate: tuple[str, str] | None = None  # (T, its tree hash)
 
     def _copy(self, role: str, files: str, head: str) -> Copy:
         path = ensure_copies(self._run.copies_root) / f"iter-{self.iteration}-{role}"
@@ -176,6 +180,50 @@ class IterationWorkspace:
     def unchanged(self) -> None:
         """Evaluate A itself (the baseline): T is A's tree."""
         self.tree = self.base
+
+    def candidate(self) -> str:
+        """T as a tree hash (at the baseline, A's tree): `$AUTOHELIX_CANDIDATE`."""
+        if self._candidate is None or self._candidate[0] != self.tree:
+            self._candidate = (self.tree, self.repo.out("rev-parse", f"{self.tree}^{{tree}}"))
+        return self._candidate[1]
+
+    @contextmanager
+    def call_folder(self, **sources: Path | None):
+        """A private folder for one command, `iter-N-call-K/` under the run's copies
+        folder, removed when the command ends (also on an error or interrupt): an empty
+        `scratch/`, plus for each named source a copy of that folder under the same name
+        (an empty folder if the source doesn't exist; no entry for None). Yields
+        {"scratch": path, <name>: path, ...}. A copy keeps what the command reads from
+        run state fixed, whatever the command or the agent writes meanwhile."""
+        self._calls += 1
+        folder = ensure_copies(self._run.copies_root) / f"iter-{self.iteration}-call-{self._calls}"
+        if os.path.lexists(folder):  # left by a crashed process
+            remove_copy(folder)
+        folder.mkdir(mode=0o700)
+        self._call_folders.append(folder)
+        try:
+            paths = {"scratch": folder / "scratch"}
+            paths["scratch"].mkdir()
+            for name, source in sources.items():
+                if source is None:
+                    continue
+                target = paths[name] = folder / name
+                if source.is_dir() and not source.is_symlink():
+                    shutil.copytree(source, target, symlinks=True)
+                else:
+                    target.mkdir()
+            yield paths
+        finally:
+            self._remove_call_folder(folder)
+
+    def _remove_call_folder(self, folder: Path) -> None:
+        try:
+            remove_copy(folder)
+        except Exception as e:  # noqa: BLE001 - never mask the command's outcome
+            self._warn(f"Could not remove {folder}: {e}")
+        finally:
+            if folder in self._call_folders:
+                self._call_folders.remove(folder)
 
     def eval_copy(self, role: str) -> Copy:
         """A fresh copy of T with HEAD at A, plus the complete change (new files
@@ -248,3 +296,5 @@ class IterationWorkspace:
         self._release_agent()
         for copy in list(self.copies):
             self.remove(copy)
+        for folder in list(self._call_folders):
+            self._remove_call_folder(folder)
