@@ -14,9 +14,10 @@ import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
+from autohelix.formatting import SUMMARY_LIMIT, clean
 from autohelix.launcher import write_launcher
 from autohelix.runs import RunPaths, RunState, critical_section, ensure_copies, group_members
-from autohelix.workspace import ITERATION_DIR, Copy, Repo, Scope, remove_copy
+from autohelix.workspace import ITERATION_DIR, Copy, Repo, Scope, diff_args, remove_copy
 
 
 def _copy_notes(notes: Path, target: Path) -> None:
@@ -118,6 +119,9 @@ def save_notes(paths: RunPaths, copy, iteration: int) -> None:
     os.replace(temporary, link)
 
 
+REJECTED_PATCH_LIMIT = 2 * 1024 * 1024  # bytes; larger rejected changes are named, not written
+
+
 class IterationWorkspace:
     """Create, snapshot, evaluate and publish one iteration's candidate."""
 
@@ -131,6 +135,7 @@ class IterationWorkspace:
         self.tree: str | None = None  # T
         self.summary: str | None = None
         self.discarded: list[str] = []  # out-of-scope names dropped at freeze (repository-relative)
+        self.rejected_diff = ""  # the command showing a rejected change too large for rejected.patch
         self.copies: list[Copy] = []
         self.agent: Copy | None = None
         self.result = None  # the accepted result, once recorded
@@ -158,20 +163,29 @@ class IterationWorkspace:
         return self.agent
 
     def _write_rejected_patch(self) -> None:
-        """If the latest iteration was rejected and its tree kept, its change against
-        this copy's HEAD (the tip, which a rejection doesn't move, so it applies
-        cleanly) as `.autohelix-iteration/rejected.patch`. Only the latest rejection;
-        none after an accept, or if the attempt changed nothing."""
-        records = self._history.load()
-        last = max(records, key=lambda r: r.iteration, default=None)
+        """If the latest iteration was rejected and its tree kept, its change
+        (`base..tree`) as `.autohelix-iteration/rejected.patch`. It was built on this
+        copy's HEAD (a rejection doesn't move the run's ref), so it applies cleanly; if
+        the tip moved meanwhile, there is none. Only the latest rejection; none after an
+        accept, or if the attempt changed nothing. Above REJECTED_PATCH_LIMIT bytes no
+        file is written: `rejected_diff` then names the `git diff` that shows it (the
+        copy reaches the tree through its alternates)."""
+        last = self._history.latest()
         if last is None or last.accepted or last.iteration == 0 or not last.tree or not last.rejected_ref:
             return
+        base = last.base or self.base
+        if base != self.base:
+            self._warn(f"No rejected.patch: iteration {last.iteration} was built on {base[:12]}, "
+                       f"not the current tip {self.base[:12]}")
+            return
         try:
-            diff = self.repo.git("diff", "--binary", "--no-ext-diff", "--no-textconv", self.base, last.tree).stdout
+            diff = self.repo.git(*diff_args(base, last.tree)).stdout
         except RuntimeError as e:  # e.g. the tree was removed meanwhile
             self._warn(f"Could not write rejected.patch for iteration {last.iteration}: {e}")
             return
-        if diff:
+        if len(diff) > REJECTED_PATCH_LIMIT:
+            self.rejected_diff = f"git diff {base} {last.tree}"
+        elif diff:
             (self.agent.working_dir / ITERATION_DIR / "rejected.patch").write_bytes(diff)
 
     def keep_rejected(self) -> str | None:
@@ -183,6 +197,11 @@ class IterationWorkspace:
         ref = self._run.paths.rejected_ref(self.iteration)
         self.repo.git("update-ref", ref, self.tree)
         return ref
+
+    def drop_rejected(self) -> None:
+        """Remove a kept tree left under this iteration's number (an earlier attempt
+        with the same number that was never recorded, e.g. killed)."""
+        self.repo.git("update-ref", "-d", self._run.paths.rejected_ref(self.iteration), check=False)
 
     def write_prompt(self, prompt: str) -> None:
         """Keep this iteration's prompt as `.autohelix-iteration/prompt.md` in the agent's copy."""
@@ -201,7 +220,9 @@ class IterationWorkspace:
                 pinned()
             summary = copy.working_dir / ITERATION_DIR / "commit_summary.txt"
             if summary.is_file() and not summary.is_symlink() and not summary.parent.is_symlink():
-                self.summary = summary.read_text(errors="replace").strip().split("\n")[0] or None
+                with summary.open("rb") as stream:  # the agent's file: only its first line, cleaned
+                    first = stream.read(4096).decode(errors="replace").strip().split("\n")[0]
+                self.summary = clean(first, SUMMARY_LIMIT) or None
         finally:
             self._release_agent()
         self.tree, self.discarded = tree, discarded
@@ -274,7 +295,7 @@ class IterationWorkspace:
         copy = self._copy(role, self.tree, self.base)
         state = copy.working_dir / ITERATION_DIR
         state.mkdir(parents=True, exist_ok=True)
-        diff = self.repo.git("diff", "--no-ext-diff", "--no-textconv", self.base, self.tree)
+        diff = self.repo.git(*diff_args(self.base, self.tree))
         (state / "candidate.diff").write_bytes(diff.stdout)
         return copy
 

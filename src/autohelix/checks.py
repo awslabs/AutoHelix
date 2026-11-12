@@ -134,13 +134,26 @@ def _end_group(proc) -> None:
     """SIGKILL whatever is left of a command's process group (its own session, from
     `start_new_session`), also after the shell itself exited: a background child must not
     keep running, and writing files, once the harness has checked them. A child that
-    starts a session of its own escapes this (until commands run in a sandbox)."""
+    starts a session of its own escapes this (until commands run in a sandbox).
+
+    PID reuse: once the shell is reaped, its PID (the group's id) is free again only
+    when no member of the group is left; a new process could then take it as its own
+    group id before this kill, a narrow race. Closing it means not reaping the shell
+    until after the kill (waitid with WNOWAIT, then reading the pipes ourselves instead
+    of `communicate`), which `subprocess` doesn't offer; left as is."""
     if not isinstance(getattr(proc, "pid", None), int):
         return
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except OSError:  # nothing left
         pass
+
+
+def _text(data) -> str:
+    """Command output as text: bytes decoded leniently (invalid UTF-8 can't lose it)."""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace").replace("\r\n", "\n")
+    return data or ""
 
 
 def _drain(proc) -> tuple[str, str]:
@@ -154,14 +167,14 @@ def _drain(proc) -> tuple[str, str]:
                 stream.close()
         proc.wait()
         return "", ""
-    return stdout or "", stderr or ""
+    return _text(stdout), _text(stderr)
 
 
 def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str], phase: str,
              on_progress: ProgressCallback | None) -> _Execution:
     """Run a shell command in its own process group. The whole group is killed when the
-    command ends (whatever its background children were doing), at the timeout, and on
-    an interrupt. A timed-out command keeps the output it wrote."""
+    command ends (whatever its background children were doing, and however it ends), at
+    the timeout, and on an interrupt. A timed-out command keeps the output it wrote."""
     start = time.monotonic()
     if on_progress:
         on_progress(phase, command, 0.0)
@@ -174,7 +187,6 @@ def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str], phase: 
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
             env=env,
             start_new_session=True,
         )
@@ -193,15 +205,16 @@ def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str], phase: 
                     _end_group(proc)
                     stdout, stderr = _drain(proc)
                     return _Execution(-1, stdout, stderr, timed_out=True, duration_s=time.monotonic() - start)
-        _end_group(proc)
-        return _Execution(proc.returncode, stdout or "", stderr or "", duration_s=time.monotonic() - start)
+        return _Execution(proc.returncode, _text(stdout), _text(stderr), duration_s=time.monotonic() - start)
     except KeyboardInterrupt:
         if proc is not None:
             _kill_process_group(proc, grace=CHECK_KILL_GRACE)
-            _end_group(proc)
         raise
     except Exception as e:
         return _Execution(-1, error=str(e), duration_s=time.monotonic() - start)
+    finally:
+        if proc is not None:
+            _end_group(proc)
 
 
 def run_command(

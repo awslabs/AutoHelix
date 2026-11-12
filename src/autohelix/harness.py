@@ -25,7 +25,8 @@ from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay, Transcript, clean, header_lines
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git, allocate_call,
-                            claim_copies, remove_copies, short_id, unlanded, write_json, write_text)
+                            claim_copies, critical_section, remove_copies, short_id, unlanded, write_json,
+                            write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
@@ -33,7 +34,8 @@ from autohelix.checks import (metric_gate_failure, metric_reference, preflight_c
 from autohelix.run_status import RunStatus
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
 from autohelix.formatting import format_cost, format_total_cost
-from autohelix.prompt_template import build_prompt_variables, load_template, render_template, uses_old_layout
+from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
+                                       uses_old_layout)
 from autohelix.run_log import RunLog
 from autohelix.sandbox import ensure_clean_working_tree, ensure_editable_files_ready
 from autohelix.workspace import (SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, CandidateRejected,
@@ -462,13 +464,13 @@ class Harness:
                 parts.append(f"{secs:.1f}s")
         return " | ".join(parts)
 
-    def build_prompt(self, iteration: int, worktree_dir: Path, members=()) -> str:
+    def build_prompt(self, iteration: int, worktree_dir: Path, members=(), rejected_diff: str = "") -> str:
         """Build the prompt for the agent using the template; `members` are the other
         runs of the group, as `group_members` returns them."""
         template = load_template(self.config)
         variables = build_prompt_variables(
             self.config, self.history, iteration, worktree_dir,
-            group=self.run_info.get("group"), members=members,
+            group=self.run_info.get("group"), members=members, rejected_diff=rejected_diff,
         )
         return render_template(template, variables)
 
@@ -628,6 +630,7 @@ class Harness:
         # be shown to the agent as this iteration's observations.
         self.history.clear_observations(iteration)
         workspace = IterationWorkspace(iteration, self.run_state, self.history, self.repo, warn=self.log.warn)
+        workspace.drop_rejected()  # from an earlier attempt with this number that was never recorded
         result: IterationResult | None = None
         failure: BaseException | None = None
         interrupted_after_accept = False
@@ -651,16 +654,17 @@ class Harness:
             if result is None:
                 result = self._rejected(iteration, attempt, (str(failure) or "interrupted") if failure else "interrupted")
             try:
-                self._describe_attempt(result, workspace)
-                if not result.accepted and attempt.agent_attempted:
-                    try:
-                        result.rejected_ref = workspace.keep_rejected()
-                    except Exception as e:  # noqa: BLE001 - never mask the iteration's outcome
-                        self.log.warn(f"Could not keep iteration {iteration}'s rejected tree: {e}")
-                self._complete_record(result, attempt.started_at, attempt.monotonic, attempt.evaluation)
-                # Failures before the agent call don't consume the iteration.
-                if attempt.agent_attempted:
-                    workspace.record(result)
+                with critical_section():  # Ctrl-C waits until the attempt is recorded
+                    self._describe_attempt(result, workspace)
+                    if not result.accepted and attempt.agent_attempted:
+                        try:
+                            result.rejected_ref = workspace.keep_rejected()
+                        except Exception as e:  # noqa: BLE001 - never mask the iteration's outcome
+                            self.log.warn(f"Could not keep iteration {iteration}'s rejected tree: {e}")
+                    self._complete_record(result, attempt.started_at, attempt.monotonic, attempt.evaluation)
+                    # Failures before the agent call don't consume the iteration.
+                    if attempt.agent_attempted:
+                        workspace.record(result)
             except BaseException as e:
                 if failure is None:
                     failure = e
@@ -691,7 +695,8 @@ class Harness:
         if self.verbose:
             self.console.print(f"  Working dir: {agent_copy.working_dir}")
         self.run_status.note(worktree=str(agent_copy.working_dir))
-        prompt = self.build_prompt(iteration, agent_copy.working_dir, workspace.members)
+        prompt = self.build_prompt(iteration, agent_copy.working_dir, workspace.members,
+                                   rejected_diff=workspace.rejected_diff)
         workspace.write_prompt(prompt)
         if self.verbose:
             self.console.print(Panel(prompt.strip(), title="[bold]Agent Prompt[/bold]", border_style="dim"))
@@ -710,7 +715,7 @@ class Harness:
             detail = agent_result.error or f"agent exited with status {agent_result.exit_code}"
             # Kept for the record and the next agent (rejected.patch), never checked or accepted.
             try:
-                self._freeze(workspace)
+                self._freeze(workspace, checking=False)
             except Exception as e:  # noqa: BLE001 - the agent's failure is the outcome
                 self.log.warn(f"Could not keep iteration {iteration}'s tree: {e}")
             raise AutoHelixRunError(f"Iteration {iteration} agent failed: {detail}")
@@ -747,11 +752,12 @@ class Harness:
                 self.log.info(f"iter {iteration} stop check failed — {e}")
         return result
 
-    def _freeze(self, workspace: IterationWorkspace) -> None:
+    def _freeze(self, workspace: IterationWorkspace, checking: bool = True) -> None:
         """Freeze the candidate: out-of-scope changes never reach the tree. The viewer
-        shows the pin from "preparing checks" on (viewer.FROZEN_PHASES)."""
+        shows the pin from "preparing checks" on (viewer.FROZEN_PHASES); a failed agent's
+        attempt is frozen only to be kept (`checking=False`), never checked."""
         workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen)),
-                         pinned=lambda: self.run_status.phase("preparing checks"))
+                         pinned=(lambda: self.run_status.phase("preparing checks")) if checking else None)
         self.run_status.note(worktree=None)
         reverted = self._discarded(workspace)
         if reverted and self.verbose:
@@ -870,8 +876,11 @@ class Harness:
                     if not baseline:
                         self.run_status.phase("benchmark")
                         self.log.info(f"iter {iteration} observe started")
-                    self._observe(workspace, iteration, checks, evaluation, command_env, records,
-                                  verify=verify, progress=progress, notes=notes)
+                    try:
+                        self._observe(workspace, iteration, checks, evaluation, command_env, records,
+                                      verify=verify, progress=progress, notes=notes)
+                    finally:
+                        self.run_status.note(entry=None)
         finally:
             # The row shows the outcome (`_print_iteration_summary`); details with --verbose.
             if self.verbose and not baseline:
@@ -907,6 +916,7 @@ class Harness:
         gates = [(index, gate) for index, gate in enumerate(self.config.gates) if isinstance(gate, MetricGate)]
         declared = self.config.metric_names()
         for entry in self.config.observe:
+            self.run_status.note(entry=entry.name)  # the viewer marks the running entry
             previous = self.history.previous_observations(entry.name, iteration)
             with workspace.call_folder(previous=previous) as folders:
                 env = {**command_env, "AUTOHELIX_SCRATCH": str(folders["scratch"]),
@@ -933,7 +943,11 @@ class Harness:
                 notes.append(f"  [yellow]![/yellow] observe {entry.name} failed ({result.error}); "
                              "its metrics are missing")
                 self.log.info(f"{where} observe {entry.name} failed — {result.error}")
-            verify(entry.command)
+            try:
+                verify(entry.command)
+            except CandidateRejected as e:  # it ran, but by changing what it observes: a failure
+                record.update(ok=False, error=str(e))
+                raise
             if baseline:
                 continue
             # Metric gates waiting for this entry, in gates list order; a gate on a
@@ -1354,6 +1368,10 @@ class Harness:
                                "prompt is used. To keep a custom prompt, move it next to your config, set "
                                "`prompt_template: <file>` there, and update its .autohelix/ paths to "
                                f"{ITERATION_DIR}/. Otherwise delete it.", highlight=False)
+        if self.config.prompt_template and (unknown := unknown_variables(load_template(self.config))):
+            self.console.print(f"  [yellow]WARN[/yellow] {self.config.prompt_template.name} uses variables the "
+                               f"prompt doesn't have (they render empty): {', '.join(unknown)}. See "
+                               "prompt_template.build_prompt_variables for the names.", highlight=False)
         if self.config.prompt_template and uses_old_layout(load_template(self.config)):
             self.console.print(f"  [yellow]WARN[/yellow] {self.config.prompt_template.name} names .autohelix/ paths "
                                f"in the agent's copy; they are now {ITERATION_DIR}/ (notes written to the old "

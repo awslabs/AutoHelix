@@ -46,6 +46,17 @@ ATTR_SOURCE_LIMITATION = (
     "git lacks --attr-source (needs 2.41+): an out-of-scope .gitattributes edit by the agent "
     "can change how in-scope files are stored. Published code still equals checked code.")
 GITLINK = "160000"
+
+
+def diff_args(*args: str) -> tuple[str, ...]:
+    """`git diff` arguments for every diff the harness writes (candidate.diff,
+    rejected.patch, a review's diff), the same whatever the user's git config: `a/` and
+    `b/` prefixes on paths from the repository root (even in a subdirectory, or with
+    `diff.noprefix`/`diff.mnemonicPrefix`/`diff.relative`), no color, no external diff
+    or textconv, binary changes included, so `git apply` takes them anywhere."""
+    return ("-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "-c", "color.diff=never",
+            "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv",
+            "--src-prefix=a/", "--dst-prefix=b/", "--no-relative", *args)
 # The harness's per-iteration material in agent and reviewer copies (prompt, notes,
 # history, other runs of the group); never part of a candidate.
 ITERATION_DIR = ".autohelix-iteration"

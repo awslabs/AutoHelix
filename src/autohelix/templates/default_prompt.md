@@ -15,6 +15,7 @@ Recent history:
 Last accepted: {{ "the baseline (iter-0)" if last.iteration == 0 else "iter-" ~ last.iteration }}; your copy holds its code.
 {% else %}
 Iteration {{ last.iteration }} was rejected: {{ last.reason }}
+Your copy holds the last accepted code.
 {% endif %}
 {% if last.gates %}
 {{ "Its" if last.accepted else "Its rejected attempt's" }} gate results:
@@ -33,7 +34,9 @@ Read the latest observations ({{ "its" if last.accepted else "what the rejected 
 {% endfor %}
 {% endif %}
 {% if rejected_patch %}
-The previous attempt was rejected (failure output above). Its changes are in `{{ rejected_patch }}`; `git apply` it if it was close, or start over.
+The previous attempt was rejected{% if last.failure_output %} (failure output above){% endif %}. Its changes are in `{{ rejected_patch }}`; `git apply` it if it was close, or start over.
+{% elif rejected_diff %}
+The previous attempt was rejected{% if last.failure_output %} (failure output above){% endif %}. Its changes are too large for a patch file; see them with `{{ rejected_diff }}` (`| git apply` them if it was close), or start over.
 {% endif %}
 {% endif %}
 {% if discarded %}

@@ -38,7 +38,7 @@ from pathlib import Path
 
 from autohelix.agents import AgentConfig
 from autohelix.judge import JudgeError, _last_json_object, call_judge, deadline_left
-from autohelix.workspace import ITERATION_DIR, Copy, Repo
+from autohelix.workspace import ITERATION_DIR, Copy, Repo, diff_args
 
 DEFAULT_TIMEOUT = 1800  # standalone; in the harness, the command's deadline
 MARGIN = 10  # seconds kept before the command's deadline, to record usage
@@ -284,8 +284,7 @@ def candidate_target(previous: bool) -> Iterator[Target]:
         state = copy.working_dir / ITERATION_DIR
         state.mkdir(parents=True, exist_ok=True)
         diff = state / "candidate.diff"
-        diff.write_bytes(repo.git("diff", "--binary", "--no-ext-diff", "--no-textconv",
-                                  copy.head, copy.files).stdout)
+        diff.write_bytes(repo.git(*diff_args(copy.head, copy.files)).stdout)
         shown = None
         if previous and os.environ.get(PREVIOUS_ENV):
             stdout = Path(os.environ[PREVIOUS_ENV]) / "stdout.txt"
@@ -343,8 +342,7 @@ def checkout_target(cwd: Path, base: str) -> Iterator[Target]:
         git = dict(work_tree=repo.root, index=index, user_checkout=True, cwd=cwd)
         repo.git("add", "-A", "--", ".", *STATE_EXCLUDES, **git)
         diff = scratch / "candidate.diff"
-        diff.write_bytes(repo.git("diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv",
-                                  base_id, "--", ".", *STATE_EXCLUDES, **git).stdout)
+        diff.write_bytes(repo.git(*diff_args("--cached", base_id, "--", ".", *STATE_EXCLUDES), **git).stdout)
         yield Target(cwd=cwd, guarded=cwd, diff=diff)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)

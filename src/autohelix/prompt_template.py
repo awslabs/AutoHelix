@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 from jinja2 import BaseLoader, Environment, TemplateSyntaxError
 
+from autohelix.formatting import SUMMARY_LIMIT, clean, clean_block
+
 if TYPE_CHECKING:
     from autohelix.config import Config
     from autohelix.history import History
@@ -86,8 +88,10 @@ def build_prompt_variables(
     *,
     group: str | None = None,
     members=(),
+    rejected_diff: str = "",
 ) -> dict[str, Any]:
-    """The variables a prompt template gets: a stable, documented contract.
+    """The variables a prompt template gets: a stable, documented contract
+    (`VARIABLES`; agent-written text in them is cleaned of control characters).
 
     - `goal`: the config's goal, whole; `title`: its first line (`Config.title`).
     - `iteration`: this iteration's number (the baseline is 0); `worktree`: the agent's
@@ -103,6 +107,8 @@ def build_prompt_variables(
       hints, else "".
     - `rejected_patch`: `.autohelix-iteration/rejected.patch` if the copy has one (the
       latest iteration was rejected and its tree was kept), else "".
+    - `rejected_diff`: when that change is too large for the patch file, the `git diff`
+      command that shows it, else "".
     - `discarded`: the out-of-scope paths the latest iteration's changes to were dropped.
     - `last`: the latest iteration (the baseline before iteration 1), or None:
       `{"iteration", "accepted", "reason", "summary", "failure_output", "gates": [{"text",
@@ -118,9 +124,9 @@ def build_prompt_variables(
     from autohelix.workspace import ITERATION_DIR
 
     state = Path(worktree_dir) / ITERATION_DIR
-    summary = history.format_summary()
-    records = [r for r in history.load() if r.iteration < iteration]
-    latest = max(records, key=lambda r: r.iteration, default=None)
+    latest = history.latest(before=iteration)
+    # The latest rejection's failure output is shown in full (`last`), not in the history too.
+    summary = history.format_summary(without_output=latest.iteration if latest and not latest.accepted else None)
 
     variables: dict[str, Any] = {
         "goal": config.goal.strip(),
@@ -137,7 +143,8 @@ def build_prompt_variables(
         "notes_path": str(state / "notes" / f"iter-{iteration}.md"),
         "hints": "",
         "rejected_patch": f"{ITERATION_DIR}/rejected.patch" if (state / "rejected.patch").is_file() else "",
-        "discarded": list(latest.discarded) if latest else [],
+        "rejected_diff": rejected_diff,
+        "discarded": [clean(path) for path in latest.discarded] if latest else [],
         "last": _describe_last(latest) if latest else None,
         "time_limit": format_duration(config.agent.timeout) if config.agent.timeout is not None else "",
         "group": group or "",
@@ -166,15 +173,38 @@ def _describe_last(record) -> dict[str, Any]:
     return {
         "iteration": record.iteration,
         "accepted": record.accepted,
-        "reason": record.reason or "",
-        "summary": record.summary or "",
-        "failure_output": record.failure_output or "",
-        "gates": [{"text": gate.get("text", ""), "kind": gate.get("kind", "command"),
+        "reason": clean(record.reason),
+        "summary": clean(record.summary, SUMMARY_LIMIT),
+        "failure_output": clean_block(record.failure_output).strip(),
+        "gates": [{"text": clean(gate.get("text")), "kind": gate.get("kind", "command"),
                    "status": status.get(gate.get("passed"), "pending")} for gate in record.gates],
-        "observe": [{"name": item.get("name", ""), "ok": bool(item.get("ok")), "error": item.get("error") or "",
-                     "path": f"{ITERATION_DIR}/observations/iter-{record.iteration}/{item.get('name', '')}/"}
+        "observe": [{"name": clean(item.get("name")), "ok": bool(item.get("ok")), "error": clean(item.get("error")),
+                     "path": f"{ITERATION_DIR}/observations/iter-{record.iteration}/{clean(item.get('name'))}/"}
                     for item in record.observe],
     }
+
+
+# The documented variables (`build_prompt_variables`); a custom template naming others
+# gets a warning at run start (`unknown_variables`).
+VARIABLES = frozenset({
+    "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable", "frozen",
+    "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "last", "time_limit", "group",
+    "group_runs",
+})
+
+
+def unknown_variables(template: str) -> list[str]:
+    """Names a template uses that are not prompt variables (nor Jinja globals), sorted:
+    e.g. `constraints` or `history_summary` from before config v2. A template that
+    doesn't parse reports none (rendering shows the error)."""
+    from jinja2 import meta
+
+    env = _create_env()
+    try:
+        names = meta.find_undeclared_variables(env.parse(template))
+    except TemplateSyntaxError:
+        return []
+    return sorted(names - VARIABLES - set(env.globals))
 
 
 def _describe_gate(gate) -> str:

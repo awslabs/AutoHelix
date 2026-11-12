@@ -287,9 +287,9 @@ def test_observations_are_cleared_when_an_iteration_starts(project, log):
         seen = {}
         original = harness.build_prompt
 
-        def build_prompt(iteration, worktree_dir, members=()):
+        def build_prompt(iteration, worktree_dir, members=(), **kwargs):
             seen["shown"] = sorted(p.name for p in (worktree_dir / ".autohelix-iteration" / "observations").iterdir())
-            return original(iteration, worktree_dir, members)
+            return original(iteration, worktree_dir, members, **kwargs)
 
         harness.build_prompt = build_prompt
         record = harness.run_iteration(1)

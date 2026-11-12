@@ -4,9 +4,7 @@
 """Console output: live display of agent and reviewer sessions, and the run's
 transcript (header, baseline and iteration rows)."""
 
-import re
 import time as _time
-import unicodedata
 from collections import deque
 
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
@@ -15,7 +13,7 @@ from rich.segment import Segment
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind
-from autohelix.formatting import format_delta
+from autohelix.formatting import clean, format_delta  # noqa: F401 - clean: re-exported
 
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -249,19 +247,7 @@ def event_presenter(event: AgentEvent) -> tuple[str, str]:
 
 # -- The run's transcript: header, a baseline line, two lines per iteration -------
 
-_ESCAPES = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|.)", re.S)
-_BIDI = set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A))
-
 LABEL = 11  # "  iter 12  ": where the duration column (and the summary line) starts
-
-
-def clean(text) -> str:
-    """Agent-written text made safe to print as one line: terminal escape sequences,
-    control and bidirectional-override characters removed, whitespace collapsed."""
-    text = _ESCAPES.sub("", str(text or ""))
-    kept = (" " if ch in "\t\n\r\v\f" else ch for ch in text
-            if ch in "\t\n\r\v\f" or (unicodedata.category(ch) != "Cc" and ord(ch) not in _BIDI))
-    return " ".join("".join(kept).split())
 
 
 def _line(width: int, *parts: tuple[str, str]) -> Text:

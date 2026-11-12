@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from autohelix.config import capture_problem
+from autohelix.formatting import SUMMARY_LIMIT, clean, clean_block
 from autohelix.costs import CostSummary, summarize_costs
 from autohelix.runs import RunPaths, SCHEMA
 
@@ -308,15 +309,25 @@ class History:
 
         return best
 
+    def latest(self, before: int | None = None) -> IterationResult | None:
+        """The latest iteration's record (below `before`): the highest number and, of
+        records sharing it (a retried baseline), the last one written."""
+        records = [r for r in self.load() if before is None or r.iteration < before]
+        if not records:
+            return None
+        top = max(r.iteration for r in records)
+        return [r for r in records if r.iteration == top][-1]
+
     def get_recent(self, n: int = 5) -> list[IterationResult]:
         """Get the n most recent iteration results."""
         results = self.load()
         return results[-n:] if len(results) > n else results
 
-    def format_summary(self) -> str:
+    def format_summary(self, without_output: int | None = None) -> str:
         """The last 5 iterations for the agent prompt, one line each: metrics (accepted)
         or the rejection reason, then the agent's one-line summary; below it a
-        rejection's failure output and any observe entry that failed."""
+        rejection's failure output (not for iteration `without_output`, which the prompt
+        shows in full) and any observe entry that failed. Agent-written text is cleaned."""
         results = self.load()
         if not results:
             return "No previous iterations."
@@ -328,13 +339,14 @@ class History:
                 line = f"- iter {r.iteration}: {metrics_str + ' ' if metrics_str else ''}(accepted)"
             else:
                 line = f"- iter {r.iteration}: rejected ({r.reason})"
-            lines.append(line + (f" — {r.summary}" if r.summary else ""))
+            lines.append(clean_block(line).replace("\n", " ")
+                         + (f" — {clean(r.summary, SUMMARY_LIMIT)}" if r.summary else ""))
             # Include failure output so agent can understand what went wrong
-            if not r.accepted and r.failure_output:
-                for output_line in r.failure_output.splitlines():
+            if not r.accepted and r.failure_output and r.iteration != without_output:
+                for output_line in clean_block(r.failure_output).splitlines():
                     lines.append(f"    {output_line}")
             for item in r.observe:
                 if not item.get("ok", True):
-                    lines.append(f"    observe {item.get('name')} failed: {item.get('error')}")
+                    lines.append(f"    observe {clean(item.get('name'))} failed: {clean(item.get('error'))}")
 
         return "\n".join(lines)

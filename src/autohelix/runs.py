@@ -773,8 +773,12 @@ def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
         remove_copies(paths.copies, warn or (lambda message: None))
         git(paths.project, "update-ref", "-d", paths.pin, check=False)
         kept = git(paths.project, "for-each-ref", "--format=%(refname)", paths.rejected_refs, check=False)
-        for ref in kept.stdout.split() if kept.returncode == 0 else []:
-            git(paths.project, "update-ref", "-d", ref, check=False)
+        if kept.returncode == 0 and kept.stdout.split():  # in one transaction
+            from autohelix.workspace import run_git
+
+            run_git(["git", "-c", "gc.auto=0", "update-ref", "--stdin"], cwd=paths.project, capture_output=True,
+                    text=True, start_new_session=True,
+                    input="".join(f"delete {ref}\n" for ref in kept.stdout.split()))
         tip = git(paths.project, "rev-parse", "--verify", paths.ref, check=False)
         if tip.returncode == 0:
             git(paths.project, "update-ref", "--no-deref", "-d", paths.ref, tip.stdout.strip())

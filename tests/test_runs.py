@@ -525,7 +525,7 @@ def test_same_harness_failed_restart_does_not_land_old_tip(project):
 def test_prompt_setup_failure_does_not_consume_attempt(project, monkeypatch):
     harness = Harness(project)
     harness._capture_baseline()
-    monkeypatch.setattr(harness, "build_prompt", lambda *a: (_ for _ in ()).throw(ValueError("bad prompt")))
+    monkeypatch.setattr(harness, "build_prompt", lambda *a, **k: (_ for _ in ()).throw(ValueError("bad prompt")))
     with pytest.raises(AutoHelixRunError, match="bad prompt"):
         harness.run_iteration(1)
     assert [row.iteration for row in harness.history.load()] == [0]
