@@ -32,12 +32,50 @@ def _create_env() -> Environment:
     )
 
 
-def load_template(project_path: Path) -> str:
-    """Load prompt template from .autohelix/prompt.md or return default."""
-    template_path = project_path / ".autohelix" / "prompt.md"
-    if template_path.exists():
-        return template_path.read_text()
-    return DEFAULT_TEMPLATE
+def load_template(config) -> str:
+    """The agent prompt template: the config's `prompt_template:` file, else the built-in
+    one (so new features reach every project). `.autohelix/prompt.md` is no longer read."""
+    path = getattr(config, "prompt_template", None)
+    if path is None:
+        return DEFAULT_TEMPLATE
+    try:
+        return Path(path).read_text()
+    except OSError as e:
+        raise RuntimeError(f"Cannot read prompt_template {path}: {e}") from e
+
+
+def describe_member(paths, data: dict) -> str:
+    """One line about another run of the group: where its state is in the copy, how far
+    it got, its latest accepted metric values (what landing it would deliver, as the
+    metric gates compare), whether it is running, and its code's ref."""
+    from autohelix.history import History
+    from autohelix.run_status import read_run_status
+
+    where = f"`.autohelix-iteration/runs/{paths.run_id}/`"
+    try:  # another run's state: unreadable or odd values must not stop this run
+        records = History(paths.project, paths.run_id).load()
+        attempts = max((r.iteration for r in records), default=0)
+        parts = [f"{attempts} iteration{'s' * (attempts != 1)}"]
+        latest = next((r for r in reversed(records) if r.accepted and r.metrics), None)
+        if latest:
+            parts.append("latest accepted " + ", ".join(
+                f"{name} {value:g}" if isinstance(value, (int, float)) else f"{name} {value}"
+                for name, value in latest.metrics.items()))
+        # From its status file, not a lock probe: probing would briefly block the user's
+        # own commands on that run, and this runs every iteration.
+        running = (read_run_status(paths.project, paths.run_id) or {}).get("state") == "running"
+        parts.append("running" if running else "finished")
+    except Exception as e:  # noqa: BLE001
+        return f"{where} (unreadable: {e}; code at `autohelix/{paths.run_id}`)"
+    return f"{where} ({', '.join(parts)}; code at `autohelix/{paths.run_id}`)"
+
+
+def uses_old_layout(template: str) -> bool:
+    """Whether a prompt template names the copy's material at `.autohelix/` (before 0.2)."""
+    import re
+
+    return bool(re.search(r"\.autohelix/(notes|review\.md|commit_summary|observations|hints|peer_notes|history)",
+                          template))
 
 
 def build_prompt_variables(
@@ -45,8 +83,12 @@ def build_prompt_variables(
     history: History,
     iteration: int,
     worktree_dir: Path,
+    *,
+    group: str | None = None,
+    members=(),
 ) -> dict[str, Any]:
-    """Build template variables for the agent prompt."""
+    """Build template variables for the agent prompt. `members` are the other runs of
+    the run's `group`, as `runs.group_members` returns them."""
     from autohelix.iteration_time import format_duration
 
     variables: dict[str, Any] = {
@@ -93,20 +135,9 @@ def build_prompt_variables(
     # Review
     variables["has_reviewer"] = config.reviewer is not None
 
-    # Peer notes from parallel workers. The parallel wrapper symlinks peer
-    # dirs into .autohelix/peer_notes/<worker>/; prepare_worktree carries
-    # them into each iteration worktree.
-    peers_dir = history.paths.peer_notes
-    peers: list[str] = []
-    if peers_dir.exists():
-        peers = sorted(p.name for p in peers_dir.iterdir() if p.is_dir())
-    variables["peers"] = peers
-    import json
-    import os
-    try:
-        variables["peer_runs"] = json.loads(os.environ.get("AUTOHELIX_PEER_RUNS", "{}"))
-    except ValueError:
-        variables["peer_runs"] = {}
+    # Other runs of the group: their state is copied into .autohelix-iteration/runs/<id>/.
+    variables["group"] = group or ""
+    variables["group_runs"] = [describe_member(paths, data) for paths, data in members]
 
     # Hints from `autohelix hint` command
     hints_path = history.paths.hints

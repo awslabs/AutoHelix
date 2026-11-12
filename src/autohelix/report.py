@@ -72,7 +72,8 @@ The summary covers iterations 1–{last} (iteration 0 is the baseline measuremen
 State paths are relative to {paths.run_dir}; candidate code is in the current working directory.
 - history.jsonl: one record per iteration (accepted, metrics, rejection reason and \
 failure output, commit, cost and time).
-- notes/: notes the agent wrote during the run (iter-N.md, plus shared notes).
+- notes/: notes the agent wrote during the run (iter-N.md, plus shared notes), as of the last \
+iteration; notes.N/ is the version saved with iteration N.
 - reviews/iter-N.md: reviewer feedback, if a reviewer was configured.
 - logs/iter-N/call-*/agent.log: full agent transcripts. They are large; search them rather \
 than reading them whole.
@@ -126,7 +127,8 @@ def write_report(config: Config, project: Path, console, config_path: Path | Non
     before = git(project, "rev-parse", "--verify", paths.ref, check=False).stdout.strip()
     tip = before or run_tip(paths)
     root = claim_copies(paths, lambda message: console.print(f"[yellow]{message}[/yellow]"))
-    copy = Copy.create(Repo(project), ensure_copies(root) / "iter-report", files=tip, head=tip)
+    copy = Copy.create(Repo(project), ensure_copies(root) / "iter-report", files=tip, head=tip,
+                       refs=(paths.ref,))  # the prompt names `autohelix/<id>`
     started = time.monotonic()
     try:
         with Live(display, console=console, refresh_per_second=10, transient=True):

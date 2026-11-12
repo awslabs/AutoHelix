@@ -8,7 +8,6 @@ import pytest
 from autohelix.checks import run_stop_checks
 from autohelix.config import Config
 from autohelix.harness import AutoHelixRunError, Harness
-from autohelix.parallel import core as parallel
 from autohelix.history import History
 from autohelix.prompt_template import build_prompt_variables
 from autohelix.run_status import read_run_status
@@ -296,25 +295,3 @@ def test_report_prompt_says_why_the_run_ended(project):
     config = Config.from_dict({"goal": "g"})
     prompt = build_report_prompt(config, project, None, project / "draft.md")
     assert "The run ended because: stop condition met at iteration 1: done enough." in prompt
-
-
-@pytest.mark.parametrize("reason", [
-    {"kind": "condition"},
-    {"kind": "budget", "budget": "cost"},
-    {"kind": "budget", "budget": "time"},
-])
-@pytest.mark.parametrize("no_report", [False, True])
-def test_parallel_worker_stops_early_and_respects_report_option(tmp_path, monkeypatch, reason, no_report):
-    segments, reports = [], []
-    worker = parallel.Worker(index=1, name="w", config_file=tmp_path / "c.yaml", worktree=tmp_path,
-                             branch="b", shared_dir=tmp_path, budget=5)
-    monkeypatch.setattr(parallel, "_run_segment", lambda w, upto, verbose, args: segments.append(upto))
-    monkeypatch.setattr(parallel, "sync_own_notes", lambda w: None)
-    monkeypatch.setattr(parallel, "_write_worker_report", lambda w: reports.append(w.name))
-    monkeypatch.setattr(parallel, "read_run_status",
-                        lambda *a: {"stop_reason": reason} if len(segments) >= 2 else {})
-    parallel.run_worker(worker, sync_every=1, verbose=False,
-                        run_args=["--no-report"] if no_report else None)
-    assert worker.error is None
-    assert segments == [1, 2]
-    assert reports == ([] if no_report else ["w"])

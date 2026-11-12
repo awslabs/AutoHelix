@@ -36,9 +36,10 @@ A useful loop answers five questions:
 ### Tips
 
 - Keep checks and evaluation criteria outside the editable scope.
-- After `autohelix init`, inspect `.autohelix/prompt.md` to see exactly what the
-  agent will receive. You can edit it before running to customize the agent's
-  instructions. See [Prompt Template](#prompt-template).
+- To see exactly what the agent receives, read `.autohelix-iteration/prompt.md`
+  in an agent copy (also saved with each iteration's logs), or the built-in
+  template (`src/autohelix/templates/default_prompt.md`). See
+  [Prompt Template](#prompt-template).
 - AutoHelix already retains iteration evidence and agent memory. When findings
   should also be user-facing and revisable, keep them in an editable,
   version-controlled file. The [research example](../examples/research/) uses
@@ -73,7 +74,8 @@ made; no stash, no remote). This means:
   commands in the checks phase (so build-then-test works) and deleted afterwards. If
   generated code should be accepted, generating it is the agent's job.
 - In a checks copy, plain `git diff` shows changes to tracked files; new files show as
-  untracked. The complete change is in `.autohelix/candidate.diff`.
+  untracked. The complete change is in `.autohelix-iteration/candidate.diff`; that is
+  the only harness material a checks copy gets (no notes, history or prompt).
 - Accepted commits advance the run's hidden `refs/autohelix/<id>` first.
 - A process-held per-run lock lets only one process write a run at a time.
 - PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo).
@@ -101,11 +103,11 @@ baseline command that modifies the code it checks (for example a formatter witho
 
 ## Notes
 
-The agent's persistent memory across iterations. Stored in `.autohelix/runs/<id>/notes/` and presented to the agent as `.autohelix/notes/`.
+The agent's persistent memory across iterations. Stored in `.autohelix/runs/<id>/notes/` (a link to the latest saved version, `notes.<n>/`) and presented to the agent as `.autohelix-iteration/notes/`.
 
 `notes/` is the **sole agent-owned region** and the only thing that round-trips
 between the main project and each iteration's agent copy. Everything else the agent
-sees in `.autohelix/` (observations, hints, the latest review) is read-only
+sees in `.autohelix-iteration/` (history, observations, hints, the latest review, other runs of its group) is read-only
 reference — copied *into* the copy but never copied back. That asymmetry is
 the whole contract: the agent freely structures `notes/` however the prompt
 directs (per-iteration files, a journal, subdirectories), and only `notes/`
@@ -116,6 +118,8 @@ Key properties:
 - **Survive rejection** — notes are saved during final cleanup, so even rejected iterations contribute learnings
 - **Copied into agent copies** — the agent sees notes from all previous iterations
 - **Agent-managed** — the agent decides what to write and how to organize notes
+- **Versioned** — each save is a new version (`notes.<n>/`), so a note the agent deletes stays deleted, and the notes as of any iteration remain
+- **Shared in a group** — runs started with the same `--group` see each other's notes (read-only copies, in `.autohelix-iteration/runs/<id>/notes/`)
 - **Per run** — each `autohelix run` starts with empty notes; `resume` continues a run's notes; `archive` keeps them, `delete` removes them
 
 Notes are the primary mechanism for the agent to build on previous attempts. They're more effective than full session context because the agent curates what's worth remembering.
@@ -146,7 +150,7 @@ All backends implement the same interface: receive a prompt, work in a directory
 
 An optional second agent that provides qualitative feedback between iterations. It runs after constraints and metric gates pass but *before* acceptance into the run. Landing on the user's branch may happen later, particularly in manual mode.
 
-It is a full agent working in its own fresh copy of the candidate, with tool access: it inspects the code itself, and `.autohelix/candidate.diff` holds the complete change. Its entire instruction is the `reviewer.prompt` you configure, plus where to write the result — it does **not** automatically receive the goal or metrics, so include whatever context you want it to consider in the prompt. Example:
+It is a full agent working in its own fresh copy of the candidate, with tool access: it inspects the code itself, and `.autohelix-iteration/candidate.diff` holds the complete change. Its entire instruction is the `reviewer.prompt` you configure, plus where to write the result — it does **not** automatically receive the goal or metrics, so include whatever context you want it to consider in the prompt. Example:
 
 ```yaml
 reviewer:
@@ -158,14 +162,14 @@ reviewer:
   # auto_memory: false       # independent reviews (default)
 ```
 
-- The reviewer verdict is **advisory**. Ordinary errors still allow acceptance (with a placeholder review). A reviewer that changes the candidate's files invalidates its verdict and rejects the iteration. Feedback under `.autohelix/` is allowed. Backend read-only restrictions remain best effort.
+- The reviewer verdict is **advisory**. Ordinary errors still allow acceptance (with a placeholder review). A reviewer that changes the candidate's files invalidates its verdict and rejects the iteration. Feedback under `.autohelix-iteration/` is allowed. Backend read-only restrictions remain best effort.
 - Each review is archived to `.autohelix/runs/<id>/reviews/iter-N.md`. There is no standing "latest review" file — the latest is derived from the highest-numbered `iter-N.md`.
-- The **latest** review is materialized into the next iteration's agent copy as `.autohelix/review.md` so the main agent can read it; the `reviews/` archive itself is never copied into a copy.
+- The **latest** review is materialized into the next iteration's agent copy as `.autohelix-iteration/review.md` so the main agent can read it; the `reviews/` archive itself is never copied into a copy.
 - The intended reviewer view omits the review archive and removes the materialized latest `review.md` before its call. Agents can still reach shared project state and git metadata; the directory layout does not isolate that access. `auto_memory: false`, the default, disables Claude Code's cross-session memory.
 
 ## Prompt Template
 
-The prompt sent to the agent each iteration is built from a [Jinja2](https://jinja.palletsprojects.com/) template. `autohelix init` writes the default template to `.autohelix/prompt.md` — reading it is the quickest way to see exactly what the agent receives each iteration (goal, constraints, metrics, where to read notes, the "write notes when done" instruction). Edit that file to customize it; if it's absent, AutoHelix falls back to the built-in default.
+The prompt sent to the agent each iteration is built from a [Jinja2](https://jinja.palletsprojects.com/) template: the built-in one (`src/autohelix/templates/default_prompt.md`: goal, constraints, metrics, where to read notes, the "write notes when done" instruction), so new features reach every project. Most configs only need `goal:`. To replace the whole prompt, point `prompt_template:` in the config at a template file (a path relative to the config file, so it is versioned with it); copying the built-in template is the easiest start. `.autohelix/prompt.md` is no longer read.
 
 Available template variables:
 
@@ -180,34 +184,33 @@ Available template variables:
 | `{{editable}}` / `{{frozen}}` | Scope patterns (whichever is configured) |
 | `{{iteration_time}}` | Per-iteration time budget as a compact duration (e.g. `15m`); empty if unset |
 | `{{has_reviewer}}` | True when a reviewer is configured (gates the review.md hint) |
-| `{{peers}}` | Names of parallel peer workers, if running under `autohelix parallel` |
+| `{{group}}` / `{{group_runs}}` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group |
 | `{{has_hints}}` | True when `autohelix hint` has left a non-empty `hints.md` |
 
-Because customizing the template freezes a copy at `.autohelix/prompt.md`, it won't pick up future changes to the built-in default — delete it to return to the default.
+A custom template is a copy: it won't pick up future changes to the built-in one. Remove `prompt_template:` to return to it.
 
 ### Use case: a soft hold-out eval
 
 Editing the template is also how you can keep an evaluation *out of the agent's view* — useful for measuring generalization without the agent optimizing against the eval itself. Two prompt-only levers:
 
-- **Don't list the eval command.** Drop the `{{observables}}` (or `{{constraints}}`) loop from your `prompt.md`. The command still runs and its metric still gates/ranks the run — it just isn't named in the prompt, so the agent isn't handed the exact thing to target.
-- **Fence the agent into its worktree.** Add an explicit instruction to only read and write inside `{{worktree}}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in-scope to reverse-engineer.
+- **Don't list the eval command.** Drop the `{{observables}}` (or `{{constraints}}`) loop from your `prompt_template:` file. The command still runs and its metric still gates/ranks the run — it just isn't named in the prompt, so the agent isn't handed the exact thing to target.
+- **Fence the agent into its copy.** Add an explicit instruction to only read and write inside `{{worktree}}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in-scope to reverse-engineer.
 
-This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence — in testing, Claude declined to read an out-of-worktree eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: copies live outside the project, but the agent runs as you, so one that is determined (or explicitly told to cheat) can still reach the project and anything else on disk by absolute path. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
+This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence — in testing, Claude declined to read an out-of-copy eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: copies live outside the project, but the agent runs as you, so one that is determined (or explicitly told to cheat) can still reach the project and anything else on disk by absolute path. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
 
 ## Runs and run state
 
 `.autohelix/` is gitignored locally; AutoHelix leaves `.gitignore` unchanged.
-`prompt.md` is project-wide, and `current` points to the selected run. State is
-scoped to `.autohelix/runs/<id>/`:
+`current` points to the selected run. State is scoped to `.autohelix/runs/<id>/`:
 
 ```
 .autohelix/
-├── prompt.md
 ├── current
 ├── runs/<id>/
 │   ├── run.json                # identity (base commit, target branch, config), archived flag
 │   ├── history.jsonl           # schema 1 result/core fields and model calls
-│   ├── notes/                  # agent memory; round-trips
+│   ├── notes -> notes.<n>      # agent memory; round-trips (link to the latest version)
+│   ├── notes.<n>/              # the notes as saved after iteration n (all kept)
 │   ├── observations/iter-N/    # stdout and captured artifacts
 │   ├── reviews/iter-N.md       # reviewer feedback archive
 │   ├── hints.md
@@ -222,9 +225,30 @@ scoped to `.autohelix/runs/<id>/`:
 The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
 project; see [Candidate Copies](#candidate-copies).
 
-The agent still sees a small `.autohelix/` view inside its copy. Only `notes/`
-round-trips; observations, hints, peer notes and latest `review.md` are reference
-material. The review archive never enters a copy.
+The agent's copy holds no `.autohelix/` (nothing in a copy looks like project
+state). What the harness provides is in `.autohelix-iteration/`, which is never
+part of a candidate (it is left out when the copy is frozen):
+
+```
+<copy>/
+├── <code at the run's tip>
+├── .git/                       private; refs: branches, tags, this run's (and its group's)
+└── .autohelix-iteration/
+    ├── prompt.md  hints.md     this iteration's prompt; hints
+    ├── notes/                  this run's notes: the only thing saved back
+    ├── history.jsonl           this run's iterations
+    ├── observations/iter-K/  logs/iter-K/
+    ├── review.md               the latest review (with a reviewer)
+    ├── commit_summary.txt      written by the agent: the commit's first line
+    └── runs/<other-id>/        other runs of the group: run.json, history.jsonl, notes/
+```
+
+Only `notes/` round-trips: when the copy is frozen it is saved as a new version,
+`runs/<id>/notes.<n>/`, and the `runs/<id>/notes` link switches to it in one
+step, so a note the agent deletes stays deleted and other runs never read a
+half-saved mix. Everything else is reference material. The review archive never
+enters a copy. The reviewer's copy gets the same material plus
+`candidate.diff`; a checks copy gets only `candidate.diff`, a stop copy none of it.
 
 A run is a line of work: `autohelix run` starts one, `autohelix resume` continues
 one (by default the config's most recently active), `archive` sets one aside and

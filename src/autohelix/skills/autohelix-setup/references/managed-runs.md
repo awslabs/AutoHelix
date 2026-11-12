@@ -45,11 +45,13 @@ changes.
 When new evidence suggests a useful next step, use the installed hint command:
 
 ```sh
-autohelix hint --path PROJECT 'H1: Evidence and suggested next step.'
+autohelix hint -p PROJECT --run ID 'H1: Evidence and suggested next step.'
 ```
 
-Hints are copied into subsequent worktrees; they do not interrupt the current
-turn. Send a hint before the next worktree is prepared. Use a recognizable ID
+Hints are copied into the next iteration's copy (`.autohelix-iteration/hints.md`);
+they do not interrupt the current turn. Send a hint before the next iteration's
+copy is prepared. Without `--run`, the hint goes to the run in `.autohelix/current`
+(the most recently selected one); name the run when several are running. Use a recognizable ID
 and briefly record its evidence and rationale outside the editable candidate.
 Avoid repeating advice the iteration agents already follow.
 
@@ -83,3 +85,24 @@ iteration. Do not archive or delete runs, reset accepted code, or extend the
 agreed effort without authorization.
 A run that finishes writes its summary to `.autohelix/runs/<id>/output/report.md`; after an
 interrupted run, `autohelix report` writes one when requested.
+
+## Orchestrate several runs
+
+To compare approaches (models, prompts, budgets, or the same setup several
+times), start K runs of one group, each in its own background session:
+
+```sh
+autohelix run -p PROJECT --group perf -c a.yaml --name a
+autohelix run -p PROJECT --group perf -c b.yaml --name b
+```
+
+Runs of a group see each other's notes and history (copied into each
+iteration's `.autohelix-iteration/runs/<id>/`) and code (refs
+`autohelix/<id>` in the iteration's git), and land manually by default.
+Follow them with `autohelix dashboard --json` (`--once` for a table; add
+`--metric NAME` to compare one metric). Each run keeps its own budget, stop
+conditions and cost; there are no group commands. When they finish, compare
+the latest accepted metrics and diffs (`git diff main autohelix/<id>`), land
+the winner with `autohelix land <id>`, and `autohelix archive` the rest (an
+archived run leaves the group). Report which run won and why. Use
+`resume <id> --group NAME` to add an existing run (`--group ''` removes it).

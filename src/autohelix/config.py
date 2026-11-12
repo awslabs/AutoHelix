@@ -60,7 +60,7 @@ DEFAULT_CHECK_TIMEOUT = 1800
 
 KNOWN_TOP_LEVEL_KEYS = {
     "goal", "constraints", "constraint", "metrics", "observables",
-    "scope", "agent", "acceptance", "budget", "reviewer", "report", "stop", "name", "land",
+    "scope", "agent", "acceptance", "budget", "reviewer", "report", "stop", "name", "land", "prompt_template",
 }
 
 
@@ -139,7 +139,9 @@ class Config:
     iteration_time_seconds: int | None = None
     report: bool = True  # write a summary (output/report.md) when a run finishes
     name: str | None = None
-    land: str = "auto"
+    land: str | None = None  # the landing mode of new runs; unset: auto (manual with --group)
+    # A Jinja file replacing the built-in agent prompt, resolved against the config file's folder.
+    prompt_template: Path | None = None
     _parse_errors: dict[str, str] = field(default_factory=dict, repr=False)
 
     def metric_directions(self) -> dict[str, str]:
@@ -175,7 +177,7 @@ class Config:
         if self.name is not None and (not isinstance(self.name, str)
                 or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", self.name)):
             error("name must use lowercase letters, digits or hyphens, with at most 32 characters")
-        if self.land not in ("auto", "manual"):
+        if self.land is not None and self.land not in ("auto", "manual"):
             error("land must be auto or manual")
 
         # Check for unknown keys (typo detection)
@@ -264,9 +266,11 @@ class Config:
                     f"Metric gate references unknown metric '{gate.metric}'"
                 )
 
-        for key in ("constraints", "stop"):
+        for key in ("constraints", "stop", "prompt_template"):
             if key in self._parse_errors:
                 error(self._parse_errors[key])
+        if self.prompt_template is not None and not self.prompt_template.is_file():
+            error(f"prompt_template not found: {self.prompt_template}")
         for c in self.stop:
             if not c.command.strip():
                 error("Stop command is empty")
@@ -440,7 +444,7 @@ class Config:
             iteration_time_seconds=iteration_time_seconds,
             report=data.get("report") is not False,
             name=data.get("name"),
-            land=data.get("land", "auto"),
+            land=data.get("land"),
             _parse_errors=parse_errors,
         )
 
@@ -493,4 +497,10 @@ def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Co
     with open(config_path) as f:
         data = yaml.safe_load(f) or {}
 
-    return Config.from_dict(data), data
+    config = Config.from_dict(data)
+    template = data.get("prompt_template")
+    if isinstance(template, str) and template.strip():
+        config.prompt_template = (config_path.resolve().parent / Path(template).expanduser()).resolve()
+    elif template is not None:
+        config._parse_errors["prompt_template"] = "prompt_template must be a path to a template file"
+    return config, data

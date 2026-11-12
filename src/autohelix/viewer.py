@@ -39,6 +39,7 @@ from autohelix.replay import LogTail
 from autohelix.report import read_report_info
 from autohelix.run_status import read_run_status
 from autohelix.state import read_stored_config_path
+from autohelix.workspace import ITERATION_DIR
 
 MAX_TEXT = 256 * 1024
 MAX_EVENTS = 3000  # merged events kept per log; tool output is clipped to keep this small
@@ -200,10 +201,18 @@ class RunData:
         elif record.accepted and base and record.commit:
             changes = self._diff(base, record.commit)
         # While an iteration runs, its own notes live in the worktree; a copy in notes/
-        # may be left over from an earlier, failed attempt at the same iteration.
-        notes = [self.root / "notes" / f"iter-{n}.md", self._worktree(n) / ".autohelix" / "notes" / f"iter-{n}.md"]
+        # may be left over from an earlier, failed attempt at the same iteration. Once it
+        # finished, the version saved with it (the last attempt's: `notes.N-k` after a
+        # retry) shows the note as of N, even if the agent later edited or removed it.
+        latest = self.root / "notes" / f"iter-{n}.md"
+        live = self._worktree(n) / ITERATION_DIR / "notes" / f"iter-{n}.md"
         if record is None:
-            notes.reverse()
+            notes = [live, latest]
+        else:
+            versions = sorted(self.root.glob(f"notes.{n}"), key=str) + sorted(
+                self.root.glob(f"notes.{n}-*"), key=lambda p: int(p.name.rsplit("-", 1)[1])
+                if p.name.rsplit("-", 1)[1].isdigit() else 0)
+            notes = [v / f"iter-{n}.md" for v in reversed(versions)] + [latest]
         log_dir = self.paths.logs / f"iter-{n}"
         calls = record.calls if record else []
         if record is None:
@@ -380,7 +389,8 @@ class RunData:
                     for old in folder.glob(f"view-{run}-*.index"):
                         old.unlink(missing_ok=True)  # an earlier iteration's copy
                     repo.git("read-tree", base, index=index, timeout=5)
-                repo.git("add", "-A", "--", ".", work_tree=copy, index=index, timeout=5)
+                repo.git("add", "-A", "--", ".", *repo.unfrozen_excludes(copy, index, timeout=5),
+                         work_tree=copy, index=index, timeout=5)
                 diff = repo.git("diff", "--cached", "--no-ext-diff", "--no-textconv", base, "--",
                                 work_tree=copy, index=index, timeout=5)
         except (OSError, RuntimeError, subprocess.TimeoutExpired):
@@ -480,7 +490,7 @@ class ProjectRuns:
             summary = {"file": relative, "goal": (config.goal.strip() or None) if isinstance(config.goal, str) else None,
                        "directions": config.metric_directions(),
                        "max_iterations": config.max_iterations, "max_cost_usd": config.max_cost_usd,
-                       "max_time_seconds": config.max_time_seconds}
+                       "max_time_seconds": config.max_time_seconds, "land": config.land}
         except Exception:
             summary = {"file": relative, "invalid": True}
         self._configs[path] = (mtime, summary)
@@ -556,6 +566,9 @@ class ProjectRuns:
             },
             "target_branch": target,
             "landing": self._landing(target_tip, tip),
+            "group": data.get("group"),
+            # Recorded at creation; older runs follow the config (else auto).
+            "land": data.get("land") or config.get("land") or "auto",
         }
 
 

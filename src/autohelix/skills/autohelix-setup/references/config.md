@@ -45,11 +45,11 @@ budget:
   validation. Alternatively, `scope.frozen` prevents changes to specified
   paths/patterns. Choose one; do not combine them. Without either, code changes
   are unrestricted by scope.
-- Prefer relative paths. Worktrees and scope isolate repository changes, not
+- Prefer relative paths. Copies and scope isolate repository changes, not
   host access: processes can still write to external files and use credentials
   available to the agent.
 - Absolute agent/Python executable paths can select an environment. Source,
-  evaluation inputs, and normal capture outputs should resolve in the worktree;
+  evaluation inputs, and normal capture outputs should resolve in the copy;
   an absolute path to the original checkout can accidentally evaluate old code.
 
 ## Observations and acceptance
@@ -59,7 +59,7 @@ one key. Each entry takes:
 
 - `command`: the evaluation or evidence-gathering command.
 - `values`: optional mapping of metric names to `higher` or `lower`.
-- `capture`: optional list of files to preserve from the worktree.
+- `capture`: optional list of files to preserve from the checks copy.
 - `capture_stdout`: defaults to `true`.
 - `timeout`: seconds; defaults to 1,800.
 

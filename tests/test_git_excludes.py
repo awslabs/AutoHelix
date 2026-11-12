@@ -56,7 +56,7 @@ def project_layout(tmp_path, request):
         common_repo = project
     elif request.param == "worker":
         project = tmp_path / "worker"
-        git(source, "worktree", "add", "-b", "parallel/worker-1", str(project))
+        git(source, "worktree", "add", "-b", "worker-1", str(project))
         assert (project / ".git").is_file()
         common_repo = source
     else:

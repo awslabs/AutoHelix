@@ -39,21 +39,25 @@ Frozen (changes to these files will be reverted): {{ frozen | join(', ') }}
 
 Read before starting:
 {% if has_reviewer %}
-- .autohelix/review.md
+- .autohelix-iteration/review.md
 {% endif %}
-- .autohelix/notes/iter-*.md — your own notes from past iterations
+- .autohelix-iteration/notes/iter-*.md — your own notes from past iterations
 {% if observables %}
-- .autohelix/observations/iter-*/ — captured metric outputs, one dir per iteration
-{% endif %}
-{% if peers %}
-- .autohelix/peer_notes/*/iter-*.md — what parallel peers have tried (one dir per peer)
+- .autohelix-iteration/observations/iter-*/ — captured metric outputs, one dir per iteration
 {% endif %}
 {% if has_hints %}
-- .autohelix/hints.md
+- .autohelix-iteration/hints.md
 {% endif %}
 
-{% if peers %}
-To see a peer's accepted code: `git show autohelix/<run-id>:<file>` (peer runs: {% for peer, run_id in peer_runs.items() %}{{ peer }}={{ run_id }}{% if not loop.last %}, {% endif %}{% endfor %}). Build on it or explore a different approach.
+{% if group_runs %}
+Other runs in group `{{ group }}` (copies of their state as of this iteration's start, read-only):
+{% for line in group_runs %}
+- {{ line }}
+{% endfor %}
+Each has run.json, history.jsonl and notes/. Their accepted code is on the refs above, in this
+copy's git: `git diff autohelix/<id>`, `git show autohelix/<id>:<file>`,
+`git checkout autohelix/<id> -- <file>`. Build on it or explore a different approach. If you
+adopt code from another run, name that run in your summary (e.g. "adopted the parser from k3f9").
 {% endif %}
 
 {% if iteration_time %}
@@ -62,10 +66,10 @@ To check remaining time: bash "$AUTOHELIX_TIME_LEFT_SCRIPT"
 Stop new experiments before the deadline, write notes, and exit cleanly.
 {% endif %}
 
-You MUST write notes when done — write to {{ worktree }}/.autohelix/notes/iter-{{ iteration }}.md.
+You MUST write notes when done — write to {{ worktree }}/.autohelix-iteration/notes/iter-{{ iteration }}.md.
 Record what you tried, what worked or failed, and what to try next.
 Notes persist even if your changes are rejected, so they are the only way to pass knowledge to future iterations.
 
 Make changes to improve toward the goal.
 Do not create git commits; AutoHelix commits accepted changes for you.
-When done, write a one-line summary of what you changed and why to {{ worktree }}/.autohelix/commit_summary.txt
+When done, write a one-line summary of what you changed and why to {{ worktree }}/.autohelix-iteration/commit_summary.txt

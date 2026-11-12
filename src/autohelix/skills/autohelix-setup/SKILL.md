@@ -10,8 +10,8 @@ Use the installed `autohelix` CLI; a source checkout is not required.
 Follow the requested mode: preparation, launch, or management through completion
 of the agreed execution. Preparing a configuration does not start a run.
 
-AutoHelix gives each attempt a git worktree, runs configured checks and
-measurements, and merges accepted changes. Each iteration starts a fresh agent
+AutoHelix gives each attempt a private copy of the code, runs configured checks
+and measurements on what it froze, and commits accepted changes to the run. Each iteration starts a fresh agent
 session, with persistent notes and measurements from earlier attempts.
 
 ## Understand the experiment
@@ -54,11 +54,11 @@ proposed commands as unimplemented rather than putting invented paths into YAML
 as though ready to run.
 
 Use project-relative paths for code and check commands so they resolve inside
-iteration worktrees. Check commands must use the intended environment and load
+iteration copies. Check commands must use the intended environment and load
 the candidate code, rather than accidentally importing an editable install from
 the original checkout. An absolute path to an agent or Python executable can
 select the intended environment; candidate code, evaluation inputs, and ordinary
-capture outputs should still resolve in the worktree. Make external output
+capture outputs should still resolve in the copy. Make external output
 locations deliberate: rejecting code does not restore external files.
 
 Always validate the YAML and inspect its structure, declared metric names and

@@ -38,13 +38,13 @@ the evaluator or executing it.
 
 Use representative cases and protect evaluation criteria by default, while
 allowing changes that fit the user's experiment. Inspect how the evaluator
-would load the candidate inside its worktree. Editable installs and absolute
+would load the candidate inside its copy. Editable installs and absolute
 imports can accidentally evaluate the original checkout.
 
 AutoHelix remaps project source paths visible in its own Python environment
-into the worktree's `PYTHONPATH` for checks and agents. A separate evaluator
+into the copy's `PYTHONPATH` for checks and agents. A separate evaluator
 environment or a hardcoded import may still select the original code. When that
-risk applies, propose an import-location probe from a disposable worktree using
+risk applies, propose an import-location probe from a disposable copy using
 the intended check environment. An import can itself trigger expensive work;
 inspect the code before treating a `__file__` probe as cheap execution.
 
@@ -113,7 +113,7 @@ and distinguish them from a strict all-inclusive financial limit. See
 
 ## Check the lifecycle
 
-Worktree rollback restores repository code, not shared output directories,
+Rejecting an iteration discards repository code, not shared output directories,
 databases, model checkpoints, or remote state. For external artifacts, use
 deliberate locations and an explicit promotion/recovery procedure. Capturing a
 checkpoint reference does not implement that procedure.

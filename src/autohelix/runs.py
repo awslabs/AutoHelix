@@ -33,9 +33,9 @@ def short_id(run_id: str) -> str:
 
 
 def git(project: Path, *args: str, check: bool = True):
-    import subprocess
+    from autohelix.workspace import run_git
 
-    result = subprocess.run(
+    result = run_git(
         ["git", "-c", "gc.auto=0", *args], cwd=project, capture_output=True,
         text=True, start_new_session=True,
     )
@@ -144,10 +144,6 @@ class RunPaths:
     def ref(self): return f"refs/autohelix/{self.run_id}"
     @property
     def pin(self): return f"refs/autohelix-tmp/{self.run_id}"  # the frozen candidate tree
-    @property
-    def prompt(self): return self.root / "prompt.md"
-    @property
-    def peer_notes(self): return self.root / "peer_notes"
     @property
     def lock(self): return self.project_runtime / "locks" / f"{self.run_id}.lock"
 
@@ -425,6 +421,22 @@ def last_activity(paths: RunPaths, data: dict, status: dict | None = None) -> fl
     return max((t for t in times if isinstance(t, (int, float))), default=None)
 
 
+def check_group(name: str) -> str:
+    """A group name as typed; '' clears a run's group."""
+    if name and not _NAME.fullmatch(name):
+        raise RuntimeError("group must use lowercase letters, digits or hyphens, with at most 32 characters.")
+    return name
+
+
+def group_members(paths: RunPaths, data: dict) -> list[tuple[RunPaths, dict]]:
+    """The other non-archived runs in the project with this run's group, most recently active first."""
+    group = data.get("group")
+    if not group:
+        return []
+    return [(p, d) for p, d in project_runs(paths.project)
+            if p.run_id != paths.run_id and d.get("group") == group and not is_archived(d)]
+
+
 def has_baseline(paths: RunPaths) -> bool:
     from autohelix.history import History
 
@@ -489,19 +501,25 @@ def _resuming(paths: RunPaths, data: dict) -> str:
     last = History(paths.project, paths.run_id).get_last_iteration()
     when = last_activity(paths, data)
     ago = f", last active {_ago(time.time() - when)}" if when else ""
-    return f"Resuming {short_id(paths.run_id)}: {last} iteration{'s' * (last != 1)}{ago}."
+    back = (f" It was archived; resuming brings it back into group {data['group']}."
+            if is_archived(data) and data.get("group") else "")
+    return f"Resuming {short_id(paths.run_id)}: {last} iteration{'s' * (last != 1)}{ago}.{back}"
 
 
-def _new_run_notices(project: Path, config_path: str, target: str | None) -> list[tuple[str, str]]:
-    """What `run` says about this config's other runs: it never refuses."""
+def _new_run_notices(project: Path, config_path: str, target: str | None,
+                     group: str | None = None) -> list[tuple[str, str]]:
+    """What `run` says about this config's other runs: it never refuses. Runs of a
+    group are meant to run side by side, so a live one isn't worth a warning."""
     notices = []
     runs = project_runs(project, config_path)
     for paths, _ in runs:
-        if is_live(paths):
+        if not group and is_live(paths):
             notices.append(("warn", f"{short_id(paths.run_id)} is also running for this config. Both land on "
                             f"{target or 'their branch'}; whichever finishes second may not fast-forward "
                             f"(its commits stay on autohelix/{paths.run_id})."))
     latest = next(((p, d) for p, d in runs if not is_archived(d)), None)
+    if group and latest and latest[1].get("group") == group:
+        return notices  # a fellow member: unlanded and side by side is the point of a group
     if latest and not is_live(latest[0]):
         paths, data = latest
         short = short_id(paths.run_id)
@@ -535,14 +553,15 @@ def _owned(paths: RunPaths, config_path: str) -> tuple[dict, RunLock, list[tuple
 
 
 def select_run(project: Path, config: Path, *, name: str | None = None, new: bool = False,
-               run_id: str | None = None, create: bool = True, ready=None
+               run_id: str | None = None, create: bool = True, ready=None,
+               group: str | None = None, land_mode: str | None = None,
                ) -> tuple[RunPaths, dict, RunLock, list[tuple[str, str]]]:
     """Select and own a run atomically before creating any per-run state.
 
     `run_id` resumes that run; `new` creates one (`autohelix run`); otherwise the
     config's most recently active run that isn't archived resumes, preferring
     runs with a baseline (`autohelix resume`), else one is created unless
-    `create` is false.
+    `create` is false. A new run records `group` (if any) and `land_mode`.
     Returns notices, `(level, text)`, for the caller to print. `ready` runs the
     caller's readiness checks before a new run is allocated; raising refuses the
     start without leaving an identity, ref or pointer."""
@@ -585,8 +604,8 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
             ready()
         base = git(project, "rev-parse", "HEAD").stdout.strip()
         target = git(project, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip().removeprefix("refs/heads/") or None
-        notices = _new_run_notices(project, config_path, target)
-        # Suffixes are unique across the repository: parallel workers share its refs.
+        notices = _new_run_notices(project, config_path, target, group)
+        # Suffixes are unique across the repository (refs of old-format ids included).
         taken = {short_id(ref) for ref in git(project, "for-each-ref", "--format=%(refname:lstrip=2)",
                                               "refs/autohelix/").stdout.split()}
         taken |= {short_id(p.name) for p in RunPaths(project).runs.glob("*")}
@@ -612,7 +631,8 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
                 raise RuntimeError(created.stderr.strip())
             data = {"schema": SCHEMA, "id": candidate, "name": name, "config_path": config_path,
                     "created_at": time.time(), "base_commit": base, "target_branch": target,
-                    "ref": paths.ref}
+                    "ref": paths.ref, **({"group": group} if group else {}),
+                    **({"land": land_mode} if land_mode else {})}
             try:
                 write_json(paths.identity, data)
             except BaseException:

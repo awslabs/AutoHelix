@@ -106,11 +106,6 @@ def _cli(*args):
 def test_live_view_exits_with_hints_instead_of_waiting(tmp_path):
     result = _cli("view", "-p", tmp_path)
     assert result.exit_code == 1 and "No .autohelix/" in result.output
-    marker = tmp_path / ".autohelix" / "parallel" / "run.json"
-    marker.parent.mkdir(parents=True)
-    marker.write_text(json.dumps({"workers": [{"name": "w1", "worktree": "/tmp/w1"}]}))
-    result = _cli("view", "-p", tmp_path)
-    assert result.exit_code == 1 and "/tmp/w1" in result.output
 
 
 @pytest.mark.parametrize("command", ["view", "dashboard"])

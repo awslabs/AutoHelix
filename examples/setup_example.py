@@ -26,7 +26,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 # environment, agent-written code, etc.) — they aren't copy-and-run, so setup
 # points at their README instead of scaffolding.
 REFERENCE_EXAMPLES = {"posttrain"}
-CUSTOM_SETUP_EXAMPLES = {"nested-autohelix"}
 
 
 def git_init_repo(directory: Path) -> None:
@@ -62,7 +61,7 @@ def list_bundled() -> list[str]:
     return sorted(
         d.name for d in SCRIPT_DIR.iterdir()
         if d.is_dir()
-        and d.name not in REFERENCE_EXAMPLES | CUSTOM_SETUP_EXAMPLES
+        and d.name not in REFERENCE_EXAMPLES
         and (d / "autohelix.yaml").exists()
     )
 
@@ -116,7 +115,6 @@ def print_list() -> None:
         )
         for name in bundled | reference
     }
-    entries["nested-autohelix"] = "dedicated setup - see README"
     entries["algotune"] = "fetch tasks with examples/algotune/setup.py"
     entries["kernelbench"] = "download tasks with examples/kernelbench/setup.py"
 
@@ -160,12 +158,6 @@ Fetched task suites have their own setup.py:
     if name in REFERENCE_EXAMPLES:
         readme = SCRIPT_DIR / name / "README.md"
         print(f"'{name}' is a reference example that needs manual setup.")
-        print(f"See {readme} for instructions.")
-        return 1
-
-    if name in CUSTOM_SETUP_EXAMPLES:
-        readme = SCRIPT_DIR / name / "README.md"
-        print(f"'{name}' has a dedicated task-suite setup.")
         print(f"See {readme} for instructions.")
         return 1
 

@@ -13,7 +13,8 @@ goal: |
 
 # Optional run identity prefix and landing policy
 # name: experiment      # lowercase letters/digits/hyphens, at most 32 characters
-# land: auto            # default: land at segment end; manual retains only the run ref
+# land: auto            # new runs: land at segment end (manual: only the run ref; default auto, manual with --group)
+# prompt_template: prompts/agent.md   # rare: replaces the built-in agent prompt
 
 # Must pass (exit 0) or iteration is rejected
 constraints:
@@ -88,11 +89,19 @@ budget:
 `name` is an optional readable part of newly generated run ids
 (`20261111-1432-<name>-k3f9`); it does not select an existing run. It accepts lowercase letters, digits and hyphens, with
 at most 32 characters. Without a name, nondefault config filename stems supply
-the name. `land` is optional: `auto` (default) fast-forwards accepted code to the
+the name. `land` is optional: `auto` fast-forwards accepted code to the
 starting branch when a run segment ends, while `manual` keeps it on the run ref
-until `autohelix land`. CLI `--name` and `--land` override these values. A bare
-`autohelix resume` picks the config path's most recently active run, or name one;
-neither depends on those optional fields.
+until `autohelix land`. It is the default for new runs only: each run records
+its mode when it starts (`--land`; else `manual` for a run started with
+`--group`, whatever `land:` says; else `land:`; else `auto`) and keeps it; `resume --land` changes it. CLI
+`--name` and `--land` override these values.
+
+`prompt_template` is optional: a Jinja file that replaces the built-in agent
+prompt, as a path relative to the config file (see
+[Concepts → Prompt Template](concepts.md#prompt-template)).
+
+A bare `autohelix resume` picks the config path's most recently active run, or
+name one; neither depends on `name` or `land`.
 
 ## Example Configs
 

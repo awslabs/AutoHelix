@@ -208,6 +208,27 @@ rm -rf /path/to/artifacts/<task>/*   # 3. only if you configured an external art
 
 Find `<initial-commit>` with `git log --oneline` (the one before "AutoHelix iteration 1").
 
+### 5. Several runs side by side
+
+To try a goal several ways at once (another model, prompt or budget), start
+runs of one group, each in its own terminal:
+
+```bash
+autohelix run --group perf -c a.yaml
+autohelix run --group perf -c b.yaml
+```
+
+Each iteration's agent sees the other runs of its group: their notes, history and
+accepted code. Compare them with `autohelix dashboard`, then land the winner and
+archive the rest (group runs land manually by default):
+
+```bash
+autohelix land k3f9
+autohelix archive m2x7
+```
+
+See [CLI → Groups](cli.md#groups).
+
 ## Built-in Examples
 
 The examples require a source checkout. List everything available there with

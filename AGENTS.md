@@ -6,8 +6,8 @@ the conventions in [`CLAUDE.md`](./CLAUDE.md) — read that for full detail.
 ## Quick orientation
 
 - AutoHelix runs AI agents in an iterative optimization loop. Each iteration is
-  isolated in a git worktree, validated against constraints, and only merged when
-  it passes. Start in `src/autohelix/harness.py`.
+  isolated in private copies of the code, validated against constraints, and only
+  accepted when it passes. Start in `src/autohelix/harness.py`.
 - See [`README.md`](./README.md) for user-facing docs and the config reference.
 
 ## Working rules

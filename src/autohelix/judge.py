@@ -240,7 +240,7 @@ def ask(question: str, cwd: Path, config: AgentConfig, *, yes: str | None = None
 
 
 # Directories a judge's working directory may hold outside git that aren't candidate code.
-CACHE_DIRS = frozenset({".git", ".autohelix", "__pycache__", ".pytest_cache", ".mypy_cache",
+CACHE_DIRS = frozenset({".git", ".autohelix", ".autohelix-iteration", "__pycache__", ".pytest_cache", ".mypy_cache",
                         ".ruff_cache", "node_modules", ".venv", "venv", ".tox"})
 
 
@@ -264,7 +264,7 @@ def directory_files(root: Path) -> list[str]:
     found = []
     for name in names:
         parts = name.split("/")
-        if ".autohelix" in parts or parts[-1] == ".git":
+        if ".autohelix" in parts or ".autohelix-iteration" in parts or parts[-1] == ".git":
             continue
         path = root / name
         if path.is_dir() and not path.is_symlink():

@@ -161,6 +161,8 @@ function runRow(run) {
   const file = run.config_file;
   const tr = el('tr', { className: run.archived ? 'archived' : '', tabIndex: 0 },
     el('td', {}, el('a', { className: 'run-id', href, textContent: run.id }),
+      run.group ? el('span', { className: 'muted', title: 'Group: runs that see each other\'s notes and code' },
+        ` (${run.group})`) : null,
       file ? el('div', { className: 'status-sub run-config', textContent: file, title: 'Config file' }) : null),
     statusCell(run),
     iterationsCell(run),

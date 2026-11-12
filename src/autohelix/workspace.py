@@ -46,12 +46,39 @@ ATTR_SOURCE_LIMITATION = (
     "git lacks --attr-source (needs 2.41+): an out-of-scope .gitattributes edit by the agent "
     "can change how in-scope files are stored. Published code still equals checked code.")
 GITLINK = "160000"
+# The harness's per-iteration material in agent and reviewer copies (prompt, notes,
+# history, other runs of the group); never part of a candidate.
+ITERATION_DIR = ".autohelix-iteration"
+# Never frozen: the project's own state folder (only in a copy if an inner run made it)
+# and the harness's material. Excluded by pathspec, so their files are never hashed.
+_UNFROZEN = (".autohelix", ITERATION_DIR)
+# Transient lock contention from a concurrent git process on the same repository
+# (packed-refs, reflogs, a ref's own lock); a CAS mismatch is not one.
+# Matched by the lock file's name (`<path>.lock'`), which git prints in every language.
+_LOCK_ERRORS = (".lock'", "Another git process seems to be running")
+_LOCK_RETRIES = (0.05, 0.1, 0.2, 0.4, 0.8)
 
 
 def git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if key not in SCRUBBED_GIT_ENV}
     env.update(extra or {})
     return env
+
+
+def is_lock_error(stderr) -> bool:
+    text = stderr if isinstance(stderr, str) else os.fsdecode(stderr or b"")
+    return any(marker in text for marker in _LOCK_ERRORS)
+
+
+def run_git(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """`subprocess.run` for git on the user's repository, retried briefly while
+    another git process (a concurrent run) holds one of its lock files."""
+    for delay in (*_LOCK_RETRIES, None):
+        result = subprocess.run(argv, **kwargs)
+        if not result.returncode or delay is None or not is_lock_error(result.stderr):
+            return result
+        time.sleep(delay)
+    return result
 
 
 class CandidateRejected(RuntimeError):
@@ -63,7 +90,7 @@ class Repo:
 
     def __init__(self, project: Path):
         self.project = Path(project).resolve()
-        result = subprocess.run(
+        result = run_git(
             ["git", "rev-parse", "--absolute-git-dir", "--git-common-dir", "--show-toplevel",
              "--show-object-format", "--show-prefix"],
             cwd=self.project, env=git_env(), capture_output=True, text=True,
@@ -82,7 +109,7 @@ class Repo:
             timeout: float | None = None, user_checkout: bool = False) -> subprocess.CompletedProcess:
         argv = ["git", "--git-dir", str(self.git_dir), *(["--work-tree", str(work_tree)] if work_tree else []),
                 *(_SAFE_USER if user_checkout else _SAFE), *args]
-        result = subprocess.run(
+        result = run_git(
             argv, cwd=cwd or work_tree or self.root, input=input, capture_output=True,
             env=git_env({"GIT_INDEX_FILE": str(index)} if index else None), start_new_session=True,
             timeout=timeout,
@@ -94,6 +121,16 @@ class Repo:
 
     def out(self, *args: str, **kwargs) -> str:
         return os.fsdecode(self.git(*args, **kwargs).stdout).strip()
+
+    def unfrozen_excludes(self, work_tree: Path, index: Path, **kwargs) -> list[str]:
+        """Pathspecs keeping `.autohelix/` and `.autohelix-iteration/` out of an `add -A`
+        in a copy, so their files are never hashed. `add` refuses an exclude naming an
+        ignored folder; an ignored folder isn't added anyway, so it needs none."""
+        unfrozen = [f"{self.prefix}{name}" for name in _UNFROZEN]
+        ignored = set(_records(self.git("check-ignore", "-z", "--stdin", work_tree=work_tree, index=index,
+                                        input="\0".join(unfrozen).encode() + b"\0", check=False,
+                                        **kwargs).stdout))
+        return [f":(top,exclude){name}" for name in unfrozen if name not in ignored]
 
 
 def path_in_scope(path: str, patterns) -> bool:
@@ -256,11 +293,13 @@ class Copy:
     `files` is the tree materialized in the folder; `head` is the commit its
     private HEAD and index point at, so plain `git diff` there shows the change.
     The copies folder (`path.parent`) is the run's; git discovery should stop
-    at it (see `env`).
+    at it (see `env`). Its `.git` lists branches, tags, remotes and only the
+    given `refs` (the run's own, plus its group's).
     """
 
-    def __init__(self, repo: Repo, path: Path, files: str, head: str):
+    def __init__(self, repo: Repo, path: Path, files: str, head: str, refs: tuple[str, ...] = ()):
         self.repo, self.path, self.files, self.head = repo, path, files, head
+        self.refs = tuple(refs)
         self.working_dir = path / repo.prefix if repo.prefix else path
         # The harness index lives outside the copies folder, where agents can't plant a
         # symlink that would make git write through it into the user's index.
@@ -275,14 +314,14 @@ class Copy:
         return {"GIT_CEILING_DIRECTORIES": str(self.path.parent)}
 
     @classmethod
-    def create(cls, repo: Repo, path: Path, *, files: str, head: str) -> "Copy":
+    def create(cls, repo: Repo, path: Path, *, files: str, head: str, refs=()) -> "Copy":
         path = Path(path)
         _check_root(path.parent)
         if path.exists() or path.is_symlink():  # left over from an interrupted segment
             remove_copy(path)
         files = repo.out("rev-parse", "--verify", files)
         head = repo.out("rev-parse", "--verify", head + "^{commit}")
-        copy = cls(repo, path, files, head)
+        copy = cls(repo, path, files, head, refs)
         path.mkdir()
         try:
             copy.index.unlink(missing_ok=True)
@@ -308,7 +347,7 @@ class Copy:
                    "-q", "--template=", f"--object-format={repo.object_format}", str(path), cwd=path)
         (private / "objects" / "info" / "alternates").write_text(f"{repo.objects}\n")
         refs = repo.git("for-each-ref", "--format=%(objectname) %(refname)",
-                        "refs/heads", "refs/tags", "refs/remotes", "refs/autohelix").stdout
+                        "refs/heads", "refs/tags", "refs/remotes", *self.refs).stdout
         (private / "packed-refs").write_bytes(refs)
         (private / "HEAD").write_text(f"{self.head}\n")
         listing = repo.git("config", "-z", "--get-regexp", _COPIED_CONFIG, check=False).stdout
@@ -318,7 +357,8 @@ class Copy:
         user = repo.objects.parent / "info" / "exclude"
         (private / "info").mkdir(exist_ok=True)
         (private / "info" / "exclude").write_text(
-            (user.read_text() if user.is_file() else "") + f"\n/{repo.prefix}.autohelix/\n")
+            (user.read_text() if user.is_file() else "")
+            + "".join(f"\n/{repo.prefix}{name}/" for name in _UNFROZEN) + "\n")
         # The private index starts stat-valid for `files`, then points at `head`.
         shutil.copyfile(self.index, private / "index")
         if self.files != self.head:  # entries unchanged between the two keep their stat data
@@ -335,15 +375,16 @@ class Copy:
                 raise CandidateRejected(f"submodule changes are not supported: {name}")
         attributes = [f"--attr-source={self.files}"] if repo.attr_source else []
         self._check_index()
+        unfrozen = [f"{repo.prefix}{name}" for name in _UNFROZEN]
         try:
-            repo.git(*attributes, "add", "-A", "--", ".", work_tree=self.path, index=self.index)
+            repo.git(*attributes, "add", "-A", "--", ".", *repo.unfrozen_excludes(self.path, self.index),
+                     work_tree=self.path, index=self.index)
         except RuntimeError as e:  # e.g. an unreadable file or an embedded repo without commits
             raise CandidateRejected(f"could not snapshot the candidate: {e}") from e
-        state = f"{repo.prefix}.autohelix"
         changes = self._changes()
         # Reset to `files` in the index only; git drops new entries that conflict with a restored path.
         reset = [f"{old_mode} {old_oid}\t{name}" for name, (old_mode, old_oid) in changes.items()
-                 if name == state or name.startswith(state + "/") or not scope.allows(name)]
+                 if not scope.allows(name) or any(name == d or name.startswith(d + "/") for d in unfrozen)]
         if reset:
             repo.git("update-index", "-z", "--index-info", index=self.index,
                      input=b"".join(os.fsencode(line) + b"\0" for line in reset))

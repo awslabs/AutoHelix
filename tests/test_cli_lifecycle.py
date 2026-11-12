@@ -257,12 +257,6 @@ def test_delete_refuses_a_live_run(project):  # noqa: F811
     assert result.exit_code == 1 and "is running" in result.output and paths.run_dir.exists()
 
 
-def test_parallel_refuses_flags_resume_cannot_take(project):  # noqa: F811
-    result = CliRunner().invoke(main, ["parallel", "--worker", str(project / "autohelix.yaml"),
-                                       "-p", str(project), "--name", "x"])
-    assert result.exit_code == 2 and "'--name' is managed by `parallel`" in result.output
-
-
 def test_the_time_budget_counts_prior_time_longer_than_the_uptime(project, monkeypatch):  # noqa: F811
     configure(project, budget={"time": "1h"})
     paths = started(project)

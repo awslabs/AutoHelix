@@ -1,5 +1,5 @@
 # All paths below are relative to the project root — they resolve inside the
-# per-iteration worktree, so use relative paths (src/, tests/), not absolute.
+# per-iteration copy, so use relative paths (src/, tests/), not absolute.
 
 goal: |
   Describe what you want the agent to optimize.

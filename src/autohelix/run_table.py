@@ -80,6 +80,11 @@ def _iterations(run: dict) -> str:
     return f"{n}/{p['max_iterations']}" if p["max_iterations"] else str(n)
 
 
+def _label(run: dict) -> str:
+    """The run's id, with its group after it: `20261111-1432-k3f9 (perf)`."""
+    return f"{run['id']} ({run['group']})" if run.get("group") else run["id"]
+
+
 def _landing(run: dict) -> str:
     landing = run["landing"]  # None without a target branch or tip
     if not landing:
@@ -136,7 +141,7 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
         if run.get("error"):
             rows.append([run["id"], f"unreadable: {run['error']}"] + [""] * (len(head) - 2))
             continue
-        rows.append([run["id"], _state(run, now), _iterations(run)]
+        rows.append([_label(run), _state(run, now), _iterations(run)]
                     + ([_metric(run, metric)] if metric else [])
                     + [_landing(run), "now" if _live(run) else _ago(run["last_activity"], now)])
         rows.append(["  " + (run["config_file"] or ""), _spent(run, now)] + [""] * (len(head) - 2))
@@ -148,7 +153,7 @@ def format_run(data: dict, now: float | None = None) -> str:
     now = time.time() if now is None else now
     run = data["run"]
     under_way = _under_way(run)
-    lines = [" · ".join([run["id"], _state(run, now)] + ([f"iteration {under_way}"] if under_way else []))]
+    lines = [" · ".join([_label(run), _state(run, now)] + ([f"iteration {under_way}"] if under_way else []))]
     second = [run["config_file"], _spent(run, now), f"iterations {_iterations(run)}"]
     landing = _landing(run)
     if landing != "—":

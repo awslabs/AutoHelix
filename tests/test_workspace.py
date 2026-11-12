@@ -255,14 +255,24 @@ def test_agent_git_activity_stays_in_the_copy(repo_dir, copies):
     assert blob(repo_dir, tree, "code.py") == b"print('committed')\n"
 
 
-def test_peer_refs_resolve_through_alternates(repo_dir, copies):
+def test_copies_list_only_the_refs_they_are_given(repo_dir, copies):
     head = git(repo_dir, "rev-parse", "HEAD").stdout.strip()
-    git(repo_dir, "update-ref", "refs/autohelix/peer", head)
+    for run in ("own", "member", "stranger"):
+        git(repo_dir, "update-ref", f"refs/autohelix/{run}", head)
     git(repo_dir, "stash", "list")
-    _, _, copy = agent_copy(repo_dir, copies)
-    shown = subprocess.run(["git", "show", "autohelix/peer:code.py"], cwd=copy.path,
-                           capture_output=True, text=True, env={**os.environ, **copy.env})
-    assert shown.stdout == "print('baseline')\n"
+    repo = Repo(repo_dir)
+    copy = Copy.create(repo, copies / "iter-1-agent", files=head, head=head,
+                       refs=("refs/autohelix/own", "refs/autohelix/member"))
+
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=copy.path, capture_output=True, text=True,
+                              env={**os.environ, **copy.env})
+
+    assert run("show", "autohelix/member:code.py").stdout == "print('baseline')\n"
+    listed = run("for-each-ref", "--format=%(refname)").stdout.split()
+    assert "refs/autohelix/own" in listed and "refs/autohelix/member" in listed and "refs/heads/main" in listed
+    assert "refs/autohelix/stranger" not in listed
+    assert run("rev-parse", "--verify", "autohelix/stranger").returncode != 0
     assert not (copy.path / ".git" / "refs" / "stash").exists()
 
 
@@ -327,12 +337,33 @@ def test_subdirectory_project(repo_dir, copies, ignored):
     assert copy.working_dir == copy.path / "proj"
     (copy.working_dir / "code.py").write_text("edited\n")
     (copy.path / "code.py").write_text("outside the project\n")
-    (copy.working_dir / ".autohelix" / "notes").mkdir(parents=True)
-    (copy.working_dir / ".autohelix" / "notes" / "n.md").write_text("notes")
+    for folder in (".autohelix", ".autohelix-iteration"):
+        (copy.working_dir / folder / "notes").mkdir(parents=True)
+        (copy.working_dir / folder / "notes" / "n.md").write_text(f"notes in {folder}")
     tree, discarded = copy.snapshot(Scope(prefix=repo.prefix, editable=("code.py",)))
-    assert [n for n in discarded if ".autohelix" not in n] == ["code.py"]
+    assert discarded == ["code.py"]  # the state folders never reach the index at all
     assert blob(repo_dir, tree, "proj/code.py") == b"edited\n"
     assert not any(".autohelix" in name for name in names(repo_dir, tree))
+    assert (copy.path / ".git" / "info" / "exclude").read_text().endswith(
+        "\n/proj/.autohelix/\n/proj/.autohelix-iteration/\n")
+
+
+def test_the_freeze_never_hashes_harness_material(repo_dir, copies):
+    """Seeded material and an inner run's state are excluded by pathspec, not reset
+    afterwards: their contents never enter the user's object store."""
+    repo, head, copy = agent_copy(repo_dir, copies)
+    secret = {folder: f"unique {folder} {os.urandom(8).hex()}\n" for folder in (".autohelix", ".autohelix-iteration")}
+    for folder, text in secret.items():
+        (copy.path / folder / "logs").mkdir(parents=True)
+        (copy.path / folder / "logs" / "seeded.txt").write_text(text)
+    (copy.path / "code.py").write_text("print('edited')\n")
+    tree, discarded = copy.snapshot(Scope())
+    assert discarded == [] and names(repo_dir, tree) == {"code.py", "test_code.py"}
+    for text in secret.values():
+        oid = subprocess.run(["git", "hash-object", "--stdin"], cwd=repo_dir, input=text.encode(),
+                             capture_output=True, check=True).stdout.decode().strip()
+        assert subprocess.run(["git", "cat-file", "-e", oid], cwd=repo_dir).returncode != 0
+    assert subprocess.run(["git", "cat-file", "-e", f"{tree}:code.py"], cwd=repo_dir).returncode == 0
 
 
 def test_linked_worktree_project(repo_dir, tmp_path):
@@ -517,7 +548,7 @@ def test_agent_conditions_reject_instead_of_crashing(repo_dir, copies):
     shutil.rmtree(copy.path / "scratch")
     (copy.path / ".autohelix").write_text("a file, not the state folder")
     tree, discarded = copy.snapshot(Scope())
-    assert ".autohelix" not in names(repo_dir, tree) and ".autohelix" in discarded
+    assert ".autohelix" not in names(repo_dir, tree) and ".autohelix" not in discarded  # never staged
     (copy.path / "code.py").chmod(0)
     assert copy.changed() == ["code.py"]
     (copy.path / "code.py").chmod(0o644)

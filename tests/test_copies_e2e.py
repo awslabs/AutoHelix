@@ -150,7 +150,7 @@ def test_commit_summary_first_line_from_the_agent_copy(project, monkeypatch):  #
     real = harness.run_agent
 
     def agent(cwd, prompt, iteration):
-        (cwd / ".autohelix" / "commit_summary.txt").write_text("First line\nSecond line\n")
+        (cwd / ".autohelix-iteration" / "commit_summary.txt").write_text("First line\nSecond line\n")
         return real(cwd, prompt, iteration)
 
     monkeypatch.setattr(harness, "run_agent", agent)
