@@ -43,7 +43,9 @@ preferences the user states.
 
 Defaults: `budget: {iterations: 3}` and nothing else (no cost or time limit),
 and no timeouts (no `timeout:` on gates or observe entries, no `agent.timeout`):
-the built-in defaults apply. Set any of these only when the user asks. The
+the built-in defaults apply. No metric gates (`- metric: … regress:/improve:`)
+either: the agent sees the numbers and decides. Set any of these only when the
+user asks. The
 iteration prompt already tells the agent to leave its edits uncommitted; don't
 repeat that in `goal:`.
 
