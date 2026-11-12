@@ -48,7 +48,7 @@ class TestConfigFromDict:
 
     def test_gates_keep_list_order(self):
         config = Config.from_dict({"goal": "x", "observe": [BENCH], "gates": [
-            "a", {"metric": "speed", "regress": "5%"}, {"ask": "Good?"}, {"metric": "speed", "improve": 0}]})
+            "a", {"metric": "speed", "regress": "5%"}, {"ask": "Good?"}, {"metric": "speed", "improve": "0%"}]})
         assert [type(gate).__name__ for gate in config.gates] == ["CommandSpec", "MetricGate", "CommandSpec",
                                                                     "MetricGate"]
         assert config.metric_gates() == [MetricGate("speed", "regress", 5.0), MetricGate("speed", "improve", 0.0)]
@@ -64,26 +64,63 @@ class TestConfigFromDict:
         assert gate.label == "ask: Does it keep the 'public' API?"
         assert gate.timeout == 1200
         assert shlex.split(gate.command) == [
-            "autohelix", "ask", "Does it keep the 'public' API?", "--yes", "it's kept", "--no", "a $name changed",
+            "autohelix", "ask", "--yes", "it's kept", "--no", "a $name changed",
             "--agent", "codex", "--model", "gpt 6", "--effort", "high", "--timeout", "1200",
-            "--command", "/opt/codex x",
+            "--command", "/opt/codex x", "--", "Does it keep the 'public' API?",
         ]
 
     def test_ask_gate_minimal_and_agent_timeout(self):
         plain = Config.from_dict({"goal": "x", "gates": [{"ask": "Done?"}]}).gates[0]
-        assert plain.command == "autohelix ask 'Done?'" and plain.timeout == 1800
+        assert plain.command == "autohelix ask -- 'Done?'" and plain.timeout == 1800
         timed = Config.from_dict({"goal": "x", "gates": [
             {"ask": "Done?", "timeout": "1h", "agent": {"timeout": "5m"}}]}).gates[0]
-        assert shlex.split(timed.command)[-2:] == ["--timeout", "300"]  # the agent's own limit wins
-        assert shlex.split(Config.from_dict({"goal": "x", "gates": [{"ask": "Done?", "timeout": 90}]})
-                           .gates[0].command)[-2:] == ["--timeout", "90"]
+        assert shlex.split(timed.command)[2:] == ["--timeout", "300", "--", "Done?"]  # the agent's own limit
         assert timed.timeout == 3600
+        assert shlex.split(Config.from_dict({"goal": "x", "gates": [{"ask": "Done?", "timeout": 90}]})
+                           .gates[0].command)[2:] == ["--timeout", "90", "--", "Done?"]
+
+    def test_entry_agent_timeout_alone_lengthens_the_command_timeout(self):
+        config = Config.from_dict({"goal": "x", "gates": [{"ask": "Done?", "agent": {"timeout": "40m"}}],
+                                   "observe": [{"name": "r", "review": "Go", "agent": {"timeout": 300}}]})
+        assert config.gates[0].timeout == 40 * 60 + 60
+        assert config.observe[0].timeout == 360
+
+    @pytest.mark.parametrize("question", ["--help", "-n ok?", "--yes", "- dash"])
+    def test_questions_and_prompts_starting_with_a_dash_stay_text(self, question):
+        from click.testing import CliRunner
+
+        import autohelix.judge as judge
+        from autohelix.cli import main
+        from autohelix.judge import Answer
+
+        config = Config.from_dict({"goal": "x", "gates": [{"ask": question, "yes": "fine"}],
+                                   "observe": [{"name": "r", "review": question}]})
+        words = shlex.split(config.gates[0].command)
+        assert words[-2:] == ["--", question]
+        assert shlex.split(config.observe[0].command)[-2:] == ["--", question]
+        seen = []
+
+        def fake_ask(asked, cwd, agent, **kwargs):
+            seen.append((asked, kwargs["yes"]))
+            return Answer(yes=False, reason="checked", cost_usd=0.0)
+
+        original = judge.ask
+        judge.ask = fake_ask
+        try:
+            result = CliRunner().invoke(main, words[1:])
+        finally:
+            judge.ask = original
+        assert result.exit_code == 1, result.output  # asked, and the answer was no
+        assert seen == [(question, "fine")]
 
     def test_metric_gate_thresholds(self):
-        for value, expected in (("5%", 5.0), (5, 5.0), (5.5, 5.5), ("0%", 0.0), (" 2.5 % ", 2.5)):
+        for value, expected in (("5%", 5.0), ("0.5%", 0.5), ("0%", 0.0), (" 2.5 % ", 2.5)):
             assert parse_threshold(value) == expected
-        for value in ("-1%", -1, True, "five", float("nan"), None, [5]):
+        for value in ("-1%", True, "five%", "nan%", "inf%", "5", None, [5]):
             with pytest.raises(ValueError):
+                parse_threshold(value)
+        for value in (5, 0.05, 0):
+            with pytest.raises(ValueError, match="write the percentage with %"):
                 parse_threshold(value)
 
     def test_observe_command_entry(self):
@@ -107,18 +144,18 @@ class TestConfigFromDict:
         config = Config.from_dict({"goal": "x", "observe": [{
             "name": "progress", "review": "List items; report `missing`. Don't trust 'STATUS'.",
             "previous": True, "metrics": {"missing": "lower", "done": "higher"},
-            "agent": {"backend": "claude", "model": "opus"}, "timeout": 600,
+            "agent": {"backend": "Claude", "model": "opus"}, "timeout": 600,
         }]})
         entry = config.observe[0]
         assert entry.review == "List items; report `missing`. Don't trust 'STATUS'."
         assert entry.capture == [] and entry.timeout == 600
         assert shlex.split(entry.command) == [
-            "autohelix", "review", "List items; report `missing`. Don't trust 'STATUS'.", "--previous",
+            "autohelix", "review", "--previous",
             "--metric", "missing:lower", "--metric", "done:higher", "--agent", "claude", "--model", "opus",
-            "--timeout", "600",
+            "--timeout", "600", "--", "List items; report `missing`. Don't trust 'STATUS'.",
         ]
         assert Config.from_dict({"goal": "x", "observe": [{"name": "r", "review": "Go"}]}).observe[0].command \
-            == "autohelix review Go"
+            == "autohelix review -- Go"
 
     def test_stop_commands(self):
         config = Config.from_dict({"goal": "x", "stop": ["a", {"command": "b", "timeout": "1m"}]})
@@ -227,7 +264,10 @@ class TestEntryErrors:
         ({"metric": "speed"}, "exactly one of `regress: N%` or `improve: N%`"),
         ({"metric": "speed", "regress": "5%", "improve": "1%"}, "exactly one of `regress: N%` or `improve: N%`"),
         ({"metric": "speed", "regress": "-5%"}, "regress: must be a percentage of 0% or more"),
-        ({"metric": "nope", "improve": 0}, "metric 'nope' is not declared"),
+        ({"metric": "nope", "improve": "0%"}, "metric 'nope' is not declared"),
+        ({"metric": "speed", "regress": 0.05}, "write the percentage with %, e.g. 0.05%"),
+        ({"ask": "Q?", "timeout": "5m", "agent": {"timeout": "5m"}}, "must be shorter than the entry's timeout"),
+        ({"ask": "Q?", "agent": {"backend": "gemini"}}, "(must be claude or codex)"),
         ({"command": ""}, "`command:` must be a non-empty string"),
         ({"command": "x", "timeout": "soon"}, "timeout: 'soon' is not a valid duration"),
         ({"command": "x", "timeout": 0}, "is not a valid duration"),
@@ -257,6 +297,7 @@ class TestEntryErrors:
         ({"name": "b", "review": "y", "previous": "yes"}, "`previous:` must be true or false"),
         ({"name": "b", "review": "y", "agent": {"backend": "opencode"}}, "OpenCode has no read-only mode"),
         ({"name": "b", "review": "y", "agent": {"auto_memory": True}}, "unknown key `auto_memory`"),
+        ({"name": "b", "review": "y", "timeout": 60, "agent": {"timeout": 90}}, "must be shorter than the entry's"),
         ("python bench.py", "expected a mapping"),
     ])
     def test_observe_entry_errors(self, entry, message):
@@ -276,6 +317,41 @@ class TestEntryErrors:
     def test_stop_entry_errors(self):
         assert any("unknown key `ask`" in e for e in errors({"goal": "g", "stop": [{"ask": "Done?"}]}))
 
+    def test_top_level_opencode_needs_a_backend_on_ask_and_review_entries(self):
+        data = {"goal": "g", "agent": {"backend": "OpenCode"},
+                "gates": ["pytest", {"ask": "Q?"}, {"ask": "R?", "agent": {"backend": "claude"}}],
+                "observe": [{"name": "bench", "command": "x"}, {"name": "r", "review": "y"}]}
+        found = sorted(e for e in errors(data) if "read-only" in e)
+        assert found == ["gates entry 2: opencode has no read-only mode; set agent.backend on this entry",
+                         "observe entry `r`: opencode has no read-only mode; set agent.backend on this entry"]
+
+    def test_backends_are_lowercased(self):
+        config = Config.from_dict({"goal": "g", "agent": {"backend": "Codex"},
+                                   "gates": [{"ask": "Q?", "agent": {"backend": "CLAUDE"}}]})
+        assert config.agent.backend == "codex"
+        assert shlex.split(config.gates[0].command)[2:4] == ["--agent", "claude"]
+        assert not errors({"goal": "g", "agent": {"backend": "Codex"}})
+
+    @pytest.mark.parametrize("value, message", [
+        ({"min_chars": "x"}, "agent.require_notes.min_chars must be an integer"),
+        ({"max_retries": 1.5}, "agent.require_notes.max_retries must be an integer"),
+        ({"min_char": 10}, "Unknown key agent.require_notes.min_char"),
+        ([1], "agent.require_notes must be true, false or a mapping"),
+        ("yes", "agent.require_notes must be true, false or a mapping"),
+    ])
+    def test_require_notes_errors(self, value, message):
+        found = errors({"goal": "g", "agent": {"require_notes": value}})
+        assert any(message in e for e in found), found
+
+    def test_require_notes_values(self):
+        notes = Config.from_dict({"goal": "g", "agent": {"require_notes": {"min_chars": 10}}}).agent.require_notes
+        assert (notes.min_chars, notes.max_retries) == (10, 3)
+
+    @pytest.mark.parametrize("value", [0, -1, True, "abc", 2.5, "3"])
+    def test_iterations_must_be_a_positive_integer(self, value):
+        found = errors({"goal": "g", "budget": {"iterations": value}})
+        assert any("budget.iterations must be a positive integer" in e for e in found), found
+
     def test_unknown_agent_key_is_an_error(self):
         assert any("Unknown key agent.colour" in e for e in errors({"goal": "g", "agent": {"colour": "blue"}}))
 
@@ -293,8 +369,9 @@ class TestDurations:
         for value, seconds in ((90, 90), ("90s", 90), ("30m", 1800), ("2h30m", 9000)):
             config = Config.from_dict({"goal": "g", **make(value)})
             assert (config.agent.timeout if where == "agent.timeout" else config.max_time_seconds) == seconds
-        for value in ("soon", 0, -5, True):
+        for value in ("soon", 0, -5, True, 1e300, "31d", "721h", 30 * 86400 + 1):
             assert any(where in e for e in errors({"goal": "g", **make(value)})), value
+        assert not errors({"goal": "g", **make(30 * 86400)})
 
     def test_entry_timeouts(self):
         config = Config.from_dict({"goal": "g", "gates": [{"command": "x", "timeout": "2m"}],
@@ -363,6 +440,15 @@ class TestMetricGateFailure:
         assert metric_gate_failure(self.improve(50), "lower", -0.001, 0) is None  # any strict improvement
         assert metric_gate_failure(self.improve(50), "lower", 0, 0)
         assert metric_gate_failure(self.improve(0), "lower", 0, 1) is None  # count 1 -> 0
+
+    def test_non_finite_values_fail(self):
+        for value in (float("inf"), float("-inf"), float("nan")):
+            assert "not a finite number" in metric_gate_failure(self.regress(5), "higher", value, 100)
+            assert "not a finite number" in metric_gate_failure(self.improve(0), "lower", value, 100)
+
+    def test_non_finite_references_are_skipped(self):
+        records = [_record(0, {"s": 10}), _record(1, {"s": float("inf")}), _record(2, {"s": float("nan")})]
+        assert metric_reference(records, "s") == 10
 
     def test_missing_value_fails_and_missing_reference_passes(self):
         assert "was not measured" in metric_gate_failure(self.regress(5), "higher", None, 100)
@@ -505,7 +591,12 @@ class TestParseDuration:
             parse_duration("1.5h")
 
     def test_large_value(self):
-        assert parse_duration("99999h") == 99999 * 3600
+        assert parse_duration("720h") == 30 * 24 * 3600
+
+    def test_over_30_days_rejected(self):
+        for value in ("721h", "99999h", 1e300, 30 * 24 * 3600 + 1):
+            with pytest.raises(ValueError, match="at most 30 days"):
+                parse_duration(value)
 
     def test_all_zero_components(self):
         with pytest.raises(ValueError, match="positive"):

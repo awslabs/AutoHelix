@@ -15,8 +15,7 @@ def _status(**info) -> dict:
     now = time.time()
     return {"state": "running", "iteration": 2, "phase": "agent", "phase_started_at": now - 5,
             "iteration_started_at": now - 65,
-            "calls": [{"role": "agent", "log": "logs/iter-2/call-001-agent/agent.log"},
-                      {"role": "reviewer", "log": "logs/iter-2/call-002-reviewer/review.log"}], **info}
+            "calls": [{"role": "agent", "log": "logs/iter-2/call-001-agent/agent.log"}], **info}
 
 
 def test_status_line():
@@ -33,12 +32,10 @@ def test_log_for_follows_phases(tmp_path, run_paths):
     logs = run_paths.logs
     agent = logs / "iter-2" / "call-001-agent" / "agent.log"
     assert W.log_for(tmp_path, _status(), None)[:2] == (agent, "Iteration 2 · agent")
-    assert W.log_for(tmp_path, _status(phase="review"), agent)[:2] == (logs / "iter-2" / "call-002-reviewer" / "review.log", "Iteration 2 · reviewer")
     assert W.log_for(tmp_path, _status(phase="report"), agent)[:2] == (logs / "report.log", "Summary")
-    assert W.log_for(tmp_path, _status(iteration=0, phase="review"), None)[1] == "Baseline · reviewer"
     # Between phases the panel stays put; a watcher started then shows the agent log.
-    review = logs / "iter-2" / "call-002-reviewer" / "review.log"
-    assert W.log_for(tmp_path, _status(phase="accept"), review) is None
+    shown = logs / "iter-2" / "call-002-command" / "ask.log"
+    assert W.log_for(tmp_path, _status(phase="accept"), shown) is None
     assert W.log_for(tmp_path, _status(phase="checks"), None)[0] == agent
     # Agent panel time counts from the iteration's start, not the phase's.
     assert W.log_for(tmp_path, _status(phase="checks"), None)[2] == pytest.approx(time.time() - 65, abs=2)

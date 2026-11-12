@@ -46,6 +46,28 @@ RENAMED_AGENT_KEYS = {
 }
 
 
+def _require_notes(value: Any, errors: list[str]) -> RequireNotesConfig | None:
+    """`require_notes:`: true for the defaults, a mapping to override them, false or absent for off."""
+    if value is None or value is False:
+        return None
+    if value is True:
+        return RequireNotesConfig()
+    if not isinstance(value, dict):
+        errors.append(f"agent.require_notes must be true, false or a mapping, got {value!r}")
+        return None
+    config = RequireNotesConfig()
+    for key in value:
+        if key not in ("min_chars", "max_retries"):
+            errors.append(f"Unknown key agent.require_notes.{key} (known: min_chars, max_retries)")
+    for key in ("min_chars", "max_retries"):
+        if key in value:
+            if type(value[key]) is not int:
+                errors.append(f"agent.require_notes.{key} must be an integer, got {value[key]!r}")
+            else:
+                setattr(config, key, value[key])
+    return config
+
+
 @dataclass
 class AgentConfig:
     """Configuration for an agent backend."""
@@ -107,19 +129,8 @@ class AgentConfig:
             errors.append(f"agent.backend must be a string, got {backend!r}")
             backend = "claude"
 
-        # require_notes: bare True -> defaults; dict -> overrides; falsey/absent -> off
-        require_notes: RequireNotesConfig | None = None
-        raw_require_notes = data.get("require_notes")
-        if isinstance(raw_require_notes, dict):
-            require_notes = RequireNotesConfig(
-                min_chars=int(raw_require_notes.get("min_chars", 50)),
-                max_retries=int(raw_require_notes.get("max_retries", 3)),
-            )
-        elif raw_require_notes:  # True (or any truthy scalar)
-            require_notes = RequireNotesConfig()
-
         return cls(
-            backend=backend,
+            backend=backend.lower(),
             command=data.get("command"),
             model=data.get("model"),
             reasoning_effort=data.get("reasoning_effort"),
@@ -127,7 +138,7 @@ class AgentConfig:
             settings=settings,
             extra_args=[str(arg) for arg in extra_args],
             auto_memory=bool(data.get("auto_memory", False)),
-            require_notes=require_notes,
+            require_notes=_require_notes(data.get("require_notes"), errors),
         ), errors
 
     @classmethod

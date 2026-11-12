@@ -65,6 +65,11 @@ class TestParseStructuredMetrics:
     def test_negative_value(self):
         assert parse_structured_metrics("##autohelix[delta=-0.5]") == {"delta": -0.5}
 
+    def test_non_finite_values_are_not_produced(self):
+        output = "##autohelix[speed=1e999]\n##autohelix[lat=-1e999]\n##autohelix[ok=2]"
+        assert parse_structured_metrics(output) == {"ok": 2.0}
+        assert parse_metric_output("##autohelix[speed=1e999]", "speed") is None
+
     def test_no_structured_lines(self):
         assert parse_structured_metrics("speed: 42\nno structured output here") == {}
 

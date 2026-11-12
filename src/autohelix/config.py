@@ -16,12 +16,15 @@ from autohelix.agents import AgentConfig
 from autohelix.iteration_time import parse_duration_string
 
 
+MAX_DURATION = 30 * 24 * 3600  # 30 days
+
+
 def parse_duration(value: str | int | float) -> int:
     """Parse a duration string like '1h', '30m', '2h30m' into total seconds.
 
     Also accepts an integer (treated as seconds). Unlike the optional variant
-    in iteration_time, this requires a positive result and raises on invalid
-    or empty/zero input.
+    in iteration_time, this requires a positive result of at most 30 days and
+    raises on invalid or empty/zero input.
     """
     if isinstance(value, bool):
         raise ValueError(f"Duration must be a string or number, got bool ({value})")
@@ -31,6 +34,8 @@ def parse_duration(value: str | int | float) -> int:
             raise ValueError("Duration must be a finite number, got NaN")
         if value == float("inf") or value == float("-inf"):
             raise ValueError(f"Duration must be a finite number, got {value}")
+        if value > MAX_DURATION:
+            raise ValueError(f"Duration must be at most 30 days, got {value}")
         secs = int(value)
         if secs <= 0:
             raise ValueError(f"Duration must be positive, got {value}")
@@ -43,6 +48,8 @@ def parse_duration(value: str | int | float) -> int:
     total = parse_duration_string(s)
     if total <= 0:
         raise ValueError(f"Duration must be positive, got '{s}'")
+    if total > MAX_DURATION:
+        raise ValueError(f"Duration must be at most 30 days, got '{s}'")
     return total
 
 
@@ -272,9 +279,9 @@ class Config:
         agent, agent_errors = AgentConfig.parse(data.get("agent"))
         errors.extend(agent_errors)
 
-        observe = _parse_observe(data.get("observe"), errors)
+        observe = _parse_observe(data.get("observe"), agent.backend, errors)
         declared = {name: entry for entry in observe for name in entry.metrics}
-        gates = _parse_gates(data.get("gates"), declared, errors)
+        gates = _parse_gates(data.get("gates"), declared, agent.backend, errors)
         stop = _parse_stop(data.get("stop"), errors)
 
         # Parse scope (`or {}` guards a present-but-empty `scope:` key)
@@ -298,6 +305,11 @@ class Config:
             elif key not in ("iterations", "cost", "time"):
                 errors.append(f"Unknown key budget.{key} (known: iterations, cost, time)")
         max_iterations = budget.get("iterations", 5)
+        if max_iterations is None:
+            max_iterations = 5
+        elif type(max_iterations) is not int or max_iterations < 1:
+            errors.append(f"budget.iterations must be a positive integer, got {max_iterations!r}")
+            max_iterations = 5
 
         max_cost_usd = None
         raw_cost = budget.get("cost")
@@ -390,9 +402,12 @@ def _command_text(entry: dict, key: str, where: str, errors: list[str]) -> str |
     return value
 
 
-def _entry_agent(entry: dict, timeout: int | None, where: str, errors: list[str]) -> list[str]:
-    """The flags an `ask:` or `review:` entry's `agent:` mapping becomes. The entry's
-    `timeout` also bounds its agent, unless `agent.timeout` sets that."""
+def _entry_agent(entry: dict, timeout: int | None, backend: str, where: str,
+                 errors: list[str]) -> tuple[list[str], int]:
+    """The flags an `ask:` or `review:` entry's `agent:` mapping becomes, and the entry's
+    command timeout. The entry's `timeout:` also bounds its agent, unless `agent.timeout`
+    sets that; `agent.timeout` alone makes the command timeout a minute longer.
+    `backend` is the top-level one, the entry's default."""
     agent = entry.get("agent")
     if agent is None:
         agent = {}
@@ -401,49 +416,55 @@ def _entry_agent(entry: dict, timeout: int | None, where: str, errors: list[str]
         agent = {}
     _check_keys(agent, ENTRY_AGENT_KEYS, f"{where} agent", errors)
     flags: list[str] = []
-    backend = agent.get("backend")
-    if backend is not None:
-        if backend not in ("claude", "codex", "mock"):
-            errors.append(f"{where}: agent.backend {backend!r} can't be used here"
-                          + (" (OpenCode has no read-only mode)" if backend == "opencode" else
+    own = agent.get("backend")
+    if own is not None:
+        own = str(own).lower()
+        if own not in ("claude", "codex", "mock"):
+            errors.append(f"{where}: agent.backend {own!r} can't be used here"
+                          + (" (OpenCode has no read-only mode)" if own == "opencode" else
                              " (must be claude or codex)"))
-        flags += ["--agent", str(backend)]
+        flags += ["--agent", own]
+    elif backend == "opencode":
+        errors.append(f"{where}: opencode has no read-only mode; set agent.backend on this entry")
     for key, flag in (("model", "--model"), ("reasoning_effort", "--effort")):
         if agent.get(key) is not None:
             flags += [flag, str(agent[key])]
+    agent_timeout = None
     if agent.get("timeout") is not None:
-        timeout = _duration(agent["timeout"], f"{where} agent.timeout", errors)
-    if timeout is not None:
-        flags += ["--timeout", str(timeout)]
+        agent_timeout = _duration(agent["timeout"], f"{where} agent.timeout", errors)
+    if agent_timeout is not None and timeout is not None and agent_timeout >= timeout:
+        errors.append(f"{where}: agent.timeout ({agent_timeout}s) must be shorter than the entry's "
+                      f"timeout ({timeout}s), which stops the whole command")
+    if agent_timeout is not None or timeout is not None:
+        flags += ["--timeout", str(agent_timeout or timeout)]
     if agent.get("command") is not None:
         flags += ["--command", str(agent["command"])]
-    return flags
+    command_timeout = timeout or (agent_timeout + 60 if agent_timeout else DEFAULT_CHECK_TIMEOUT)
+    return flags, command_timeout
 
 
-def _render(*words: str) -> str:
-    return " ".join(shlex.quote(word) for word in words)
+def _render(command: list[str], flags: list[str], text: str) -> str:
+    """`command flags -- text`, each word quoted: a text starting with `-` is not an option."""
+    return " ".join(shlex.quote(word) for word in [*command, *flags, "--", text])
 
 
 def parse_threshold(value: Any) -> float:
-    """A metric gate's percentage: "5%", 5 or 5.0; must be >= 0."""
-    if isinstance(value, bool):
+    """A metric gate's percentage, written with %: "5%", "0.5%"; must be >= 0."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        raise ValueError(f"write the percentage with %, e.g. {value:g}%, got {value!r}")
+    if not isinstance(value, str) or not value.strip().endswith("%"):
         raise ValueError(f"expected a percentage such as 5%, got {value!r}")
-    if isinstance(value, str):
-        text = value.strip().removesuffix("%").strip()
-        try:
-            number = float(text)
-        except ValueError:
-            raise ValueError(f"expected a percentage such as 5%, got {value!r}") from None
-    elif isinstance(value, (int, float)):
-        number = float(value)
-    else:
-        raise ValueError(f"expected a percentage such as 5%, got {value!r}")
+    try:
+        number = float(value.strip().removesuffix("%").strip())
+    except ValueError:
+        raise ValueError(f"expected a percentage such as 5%, got {value!r}") from None
     if not math.isfinite(number) or number < 0:
         raise ValueError(f"must be a percentage of 0% or more, got {value!r}")
     return number
 
 
-def _parse_gates(value: Any, declared: dict[str, ObserveEntry], errors: list[str]) -> list[CommandSpec | MetricGate]:
+def _parse_gates(value: Any, declared: dict[str, ObserveEntry], backend: str,
+                 errors: list[str]) -> list[CommandSpec | MetricGate]:
     gates: list[CommandSpec | MetricGate] = []
     for index, entry in enumerate(_entries(value, "gates", errors), start=1):
         where = f"gates entry {index}"
@@ -471,16 +492,16 @@ def _parse_gates(value: Any, declared: dict[str, ObserveEntry], errors: list[str
             _check_keys(entry, ("ask", "yes", "no", "timeout", "agent"), where, errors)
             question = _command_text(entry, "ask", where, errors)
             timeout = _timeout(entry, where, errors)
-            words = ["autohelix", "ask", question or ""]
+            flags = []
             for key in ("yes", "no"):
                 if entry.get(key) is not None:
                     if not isinstance(entry[key], str):
                         errors.append(f"{where}: `{key}:` must be a string")
-                    words += [f"--{key}", str(entry[key])]
-            words += _entry_agent(entry, timeout, where, errors)
+                    flags += [f"--{key}", str(entry[key])]
+            agent_flags, command_timeout = _entry_agent(entry, timeout, backend, where, errors)
             if question is not None:
-                gates.append(CommandSpec(command=_render(*words), timeout=timeout or DEFAULT_CHECK_TIMEOUT,
-                                         label=f"ask: {' '.join(question.split())}"))
+                gates.append(CommandSpec(command=_render(["autohelix", "ask"], flags + agent_flags, question),
+                                         timeout=command_timeout, label=f"ask: {' '.join(question.split())}"))
         else:
             _check_keys(entry, ("metric", "regress", "improve"), where, errors)
             metric = entry.get("metric")
@@ -500,7 +521,7 @@ def _parse_gates(value: Any, declared: dict[str, ObserveEntry], errors: list[str
     return gates
 
 
-def _parse_observe(value: Any, errors: list[str]) -> list[ObserveEntry]:
+def _parse_observe(value: Any, backend: str, errors: list[str]) -> list[ObserveEntry]:
     entries: list[ObserveEntry] = []
     names: set[str] = set()
     metric_owner: dict[str, str] = {}
@@ -556,24 +577,23 @@ def _parse_observe(value: Any, errors: list[str]) -> list[ObserveEntry]:
             metrics[metric] = direction
 
         capture: list[str] = []
+        command_timeout = timeout or DEFAULT_CHECK_TIMEOUT
         if review:
             previous = entry.get("previous", False)
             if not isinstance(previous, bool):
                 errors.append(f"{where}: `previous:` must be true or false")
-            words = ["autohelix", "review", text or ""]
-            if previous is True:
-                words.append("--previous")
+            flags = ["--previous"] if previous is True else []
             for metric, direction in metrics.items():
-                words += ["--metric", f"{metric}:{direction}"]
-            words += _entry_agent(entry, timeout, where, errors)
-            command = _render(*words)
+                flags += ["--metric", f"{metric}:{direction}"]
+            agent_flags, command_timeout = _entry_agent(entry, timeout, backend, where, errors)
+            command = _render(["autohelix", "review"], flags + agent_flags, text or "")
         else:
             command = text or ""
             capture = _paths(entry.get("capture"), f"{where} capture", errors)
         if text is None or not isinstance(name, str):
             continue
         entries.append(ObserveEntry(name=name, command=command, metrics=metrics, capture=capture,
-                                    timeout=timeout or DEFAULT_CHECK_TIMEOUT, review=text if review else None))
+                                    timeout=command_timeout, review=text if review else None))
     return entries
 
 

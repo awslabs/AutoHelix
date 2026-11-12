@@ -5,6 +5,7 @@
 
 import glob as globmod
 import logging
+import math
 import os
 import re
 import shutil
@@ -273,9 +274,11 @@ def parse_structured_metrics(output: str) -> dict[str, float]:
     results = {}
     for match in re.finditer(r"##autohelix\[(\w+)=([0-9.eE+-]+)\]", output):
         try:
-            results[match.group(1)] = float(match.group(2))
+            value = float(match.group(2))
         except ValueError:
             continue
+        if math.isfinite(value):  # 1e999 is not a measurement; treat it as not produced
+            results[match.group(1)] = value
     return results
 
 
@@ -307,6 +310,11 @@ def parse_metric_output(
     # If only one structured metric was reported, use it regardless of name
     if allow_unnamed_fallback and len(structured) == 1:
         return next(iter(structured.values()))
+
+    # A structured line for this name that isn't a finite number reports nothing; the
+    # name match below would read "1" out of "##autohelix[speed=1e999]".
+    if metric_name and f"##autohelix[{metric_name}=" in output:
+        return None
 
     # Then, try to match the metric name from config (e.g., "throughput: 1234")
     if metric_name:
@@ -447,8 +455,10 @@ def metric_reference(records, metric: str) -> float | None:
     no-op doesn't re-measure it. If that record lacks the metric (a gate added later),
     the most recent commit-creating accepted record (or the baseline) that has it."""
     for record in reversed(records):
-        if record.accepted and (record.commit or record.iteration == 0) and metric in record.metrics:
-            return record.metrics[metric]
+        value = record.metrics.get(metric)
+        if (record.accepted and (record.commit or record.iteration == 0) and isinstance(value, (int, float))
+                and math.isfinite(value)):
+            return value
     return None
 
 
@@ -458,9 +468,12 @@ def metric_gate_failure(gate: MetricGate, direction: str, value: float | None,
 
     Percentages are of |reference|: with a reference of 0, `regress:` means no worse
     than 0 and `improve:` any strict improvement. A missing value fails; a missing
-    reference (nothing measured it yet) passes."""
+    reference (nothing measured it yet) passes; a non-finite value fails. Non-finite
+    references are skipped by `metric_reference`."""
     if value is None:
         return f"metric gate: {gate.metric} was not measured"
+    if not math.isfinite(value):
+        return f"metric gate: {gate.metric} is not a finite number ({value})"
     if reference is None:
         return None
     gain = value - reference if direction == "higher" else reference - value  # > 0: better

@@ -133,7 +133,7 @@ class TestBuildReportPrompt:
 
     def test_points_at_files_and_baseline(self, project):
         prompt = self._prompt(project)
-        for path in ("history.jsonl", "notes/", "reviews/", "agent.log", "autohelix.yaml"):
+        for path in ("history.jsonl", "notes/", "agent.log", "autohelix.yaml"):
             assert path in prompt
         assert f"`{RunPaths(project).read_identity()['base_commit']}`" in prompt
 

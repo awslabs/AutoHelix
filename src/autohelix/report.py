@@ -74,7 +74,6 @@ State paths are relative to {paths.run_dir}; candidate code is in the current wo
 failure output, commit, cost and time).
 - notes/: notes the agent wrote during the run (iter-N.md, plus shared notes), as of the last \
 iteration; notes.N/ is the version saved with iteration N.
-- reviews/iter-N.md: reviewer feedback, if a reviewer was configured.
 - logs/iter-N/call-*/agent.log: full agent transcripts. They are large; search them rather \
 than reading them whole.
 {git}

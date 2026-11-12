@@ -788,3 +788,19 @@ def test_ask_from_an_agent_without_log_dir_records_absolute_log(tmp_path, monkey
     [call] = read_usage(usage)
     assert Path(call["log"]).is_absolute() and Path(call["log"]).exists()
 
+
+
+def test_old_reviewer_call_costs_still_count_toward_the_budget_on_resume(project):
+    configure(project, budget={"cost": 0.55, "iterations": 5})
+    first = Harness(project)
+    first.run(max_iterations=1, report=False)
+    run_id = first.paths.run_id
+    # A record written when a built-in reviewer still ran: its call stays in the history.
+    record = first.history.load()[-1]
+    record.calls.append({"role": "reviewer", "usage": {"cost_usd": 0.5}, "log": None})
+    first.history.update(record)
+    assert first.history.load()[-1].cost.cost_usd == pytest.approx(0.6)
+    resumed = Harness(project, run_id=run_id)
+    resumed.run(report=False)
+    assert [r.iteration for r in resumed.history.load()] == [0, 1]  # 0.6 >= 0.55: nothing more runs
+    assert json.loads(resumed.paths.status.read_text())["stop_reason"]["budget"] == "cost"

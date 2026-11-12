@@ -140,7 +140,7 @@ class TestBuildPromptVariables:
         config = Config.from_dict({
             "goal": "Make it fast.",
             "gates": ["pytest -q", {"ask": "Keeps the API?"}, {"metric": "speed", "regress": "5%"},
-                      {"metric": "speed", "improve": 0}],
+                      {"metric": "speed", "improve": "0%"}],
             "observe": [{"name": "bench", "command": "python bench.py", "metrics": {"speed": "higher"}},
                         {"name": "review", "review": "Review the diff."}],
             "scope": {"editable": ["src/"], "frozen": ["src/fixtures/"]},

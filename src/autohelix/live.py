@@ -6,8 +6,7 @@
 `dashboard` redraws the run table (run_table.format_runs). `view` shows one
 run's table (run_table.format_run) above the log being written for what the
 run is doing, which its status (runs/<id>/runtime/status.json) says: the
-agent's during an iteration, the reviewer's during a review, the summary
-agent's while the summary is written.
+agent's during an iteration, the summary agent's while the summary is written.
 """
 
 import time
@@ -56,7 +55,7 @@ def status_line(status: dict | None, now: float | None = None) -> str:
 def log_for(project: Path, status: dict | None, current: Path | None, run_id: str | None = None) -> tuple[Path, str, float] | None:
     """The log to show for this status: (path, panel title, when it started).
 
-    Between the agent, review and summary phases (checks, merge, …) the panel stays
+    Between the agent and summary phases (checks, merge, …) the panel stays
     on what it showed; a watcher started then shows the iteration's agent log.
     """
     if not status:
@@ -67,19 +66,14 @@ def log_for(project: Path, status: dict | None, current: Path | None, run_id: st
     logs = paths.logs
     phase, n = status.get("phase"), status.get("iteration")
     phase_start = status.get("phase_started_at", time.time())
-    if phase in {"agent", "review"} and status.get("log"):
+    if phase == "agent" and status.get("log"):
         label = "Baseline" if n == 0 else f"Iteration {n}"
-        return Path(status["log"]), f"{label} · {'reviewer' if phase == 'review' else 'agent'}", phase_start
+        return Path(status["log"]), f"{label} · agent", phase_start
     if phase == "report":
         return logs / "report.log", "Summary", phase_start
     if n is None:
         return None
     label = "Baseline" if n == 0 else f"Iteration {n}"
-    if phase == "review":
-        review = next((call for call in reversed(status.get("calls", [])) if call["role"] == "reviewer"), None)
-        if review and review.get("log"):
-            return paths.run_dir / review["log"], f"{label} · reviewer", phase_start
-        return None
     if n == 0:
         return None  # the baseline only runs commands; the status line covers it
     agent = next((call for call in status.get("calls", []) if call["role"] == "agent"), None)
@@ -111,8 +105,7 @@ class LogFollower:
         if choice and (choice[0], choice[2]) != (self.current, self.started):
             self.current, title, self.started = choice
             self.tail = None
-            self.display = LiveDisplay(console=self.console, title=title,
-                                       border_style="magenta" if "reviewer" in title else "blue", verbose=True)
+            self.display = LiveDisplay(console=self.console, title=title, border_style="blue", verbose=True)
         if self.tail is None and self.current is not None and self.current.is_file():
             self.tail = LogTail(self.current, self.backend)
         if self.tail is not None:

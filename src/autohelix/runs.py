@@ -110,8 +110,6 @@ class RunPaths:
     @property
     def logs(self): return self.run_dir / "logs"
     @property
-    def reviews(self): return self.run_dir / "reviews"
-    @property
     def observations(self): return self.run_dir / "observations"
     @property
     def hints(self): return self.run_dir / "hints.md"
