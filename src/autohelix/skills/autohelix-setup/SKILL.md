@@ -17,7 +17,8 @@ session, with persistent notes and measurements from earlier attempts.
 ## Understand the experiment
 
 Inspect the project's instructions, git state, relevant code, existing
-evaluators, and any `autohelix.yaml`. Preserve existing work and configuration.
+evaluators, and any AutoHelix configs (`autohelix.yaml`, `autohelix/*.yaml`).
+Preserve existing work and configuration.
 Check `autohelix --help` and relevant subcommand help against the installed
 version. The harness and the target project may use different environments.
 
@@ -36,11 +37,19 @@ evidence and review feedback without inventing a numeric score.
 Read [the configuration reference](references/config.md) when writing or editing
 the configuration.
 
-For a new setup, `autohelix init` creates the runtime directory and a config
-template; it requires a git repository. For an existing setup, preserve its
-runtime state; convert a config in the first format (`constraints:`,
-`metrics:`, `reviewer:`, ...), which no longer loads, with the user's
-agreement.
+Write the config file yourself, at the path you were given (the session's first
+prompt may name it); never run `autohelix setup` or `autohelix init`. Without a
+path, ask: `autohelix.yaml` for the project's one loop, or
+`autohelix/<name>.yaml` when it has or will have several. Configs live only
+there. `name:` defaults to the file's stem, so runs of `autohelix/perf.yaml`
+are named like `20261112-1400-perf-0mws`. A `prompt_template:` file and helper
+scripts can live in subfolders of `autohelix/` (every `.yaml` file directly in
+it is a config); `prompt_template:` is relative to the config's folder, while
+commands and scope paths stay relative to the project root. If the target holds
+the commented template `autohelix setup` writes, complete it there. Preserve
+other configs and the run state in `.autohelix/`; convert a config in the first
+format (`constraints:`, `metrics:`, `reviewer:`, ...), which no longer loads,
+with the user's agreement.
 
 Define a goal (its first line is the run's title), editable scope, gates,
 observe entries (commands, optional reviews), optional metric gates or a
@@ -68,16 +77,26 @@ Always validate the YAML and inspect its structure, declared metric names and
 gate references, scope/input paths, command and dependency setup, working
 directory/import paths, and expected output/capture locations without executing
 the configured commands. Inspect how declared metrics would be emitted; output
-files may not exist until evaluation. Use the installed package for validation:
+files may not exist until evaluation. Validate the config file from the project
+root with AutoHelix's own Python: a plain `python` may lack the package (pipx,
+`uv tool`, a venv that isn't active). Use the one the session's first prompt
+names, else the interpreter on the first line of the `autohelix` executable
+(`autohelix --version` checks the install):
 
-```python
+```sh
+PY=$(head -1 "$(command -v autohelix)" | sed 's/^#! *//')  # or the Python you were given
+$PY - <<'EOF'
 from pathlib import Path
 from autohelix.config import load_config
 
-config, raw = load_config(Path("."))
+config, raw = load_config(Path("."), Path("autohelix/perf.yaml"))  # the config file
 for issue in config.validate(raw):
     print(f"{issue.level}: {issue.message}")
+EOF
 ```
+
+If that first line isn't a Python interpreter, use the `python` of the
+environment AutoHelix is installed in.
 
 Resolve validation errors and explain material warnings. This static review is
 separate from executing checks, measurements, or evidence-gathering commands.
@@ -105,7 +124,7 @@ Present the config as an inspectable experiment agreement: goal, editable scope,
 requirements, evidence/acceptance, and budget. Explain the intended agent
 behavior and the current enforcement, accounting, and verification limits;
 scope and run budgets do not provide total security or an absolute spending cap.
-For setup-only requests, show the complete generated `autohelix.yaml` in a
+For setup-only requests, show the complete generated config file in a
 fenced YAML block in the final response, including the full goal and all
 configured fields. Show the file as written, rather than an excerpt of its
 "main settings." Comments are optional; keep them sparse and useful for
@@ -120,9 +139,13 @@ and measurements from acceptance decisions. Explain what was verified and what
 remains open, then give verification and launch commands. File links and a
 durable explanation can supplement this walkthrough.
 
-AutoHelix needs a clean committed working tree before a run. Include generated
-configuration in the handoff; resolve outstanding work according to the user's
-instructions without discarding or committing unrelated changes.
+Setup is preparation only: don't start a run unless the user asks for one.
+The config must be committed before a run (the first baseline needs a clean
+committed working tree); `autohelix run` creates `.autohelix/` itself. The
+launch command is `autohelix run` for `autohelix.yaml`, `autohelix run <name>`
+for `autohelix/<name>.yaml`. Include the generated configuration in the
+handoff; resolve outstanding work according to the user's instructions without
+discarding or committing unrelated changes.
 Keep the iteration prompt's instruction to leave candidate edits uncommitted:
 AutoHelix validates and commits accepted changes. A setup commit before launch
 is different from an iteration agent or supervisor making extra commits while
