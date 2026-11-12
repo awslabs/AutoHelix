@@ -343,6 +343,87 @@ def ask(question: str, yes_means: str | None, no_means: str | None, rubric: str 
     raise SystemExit(0 if answer.yes else 1)
 
 
+def _review_metrics(ctx, param, values: tuple[str, ...]) -> list[str]:
+    import re
+
+    names: list[str] = []
+    for value in values:
+        name, _, direction = value.rpartition(":")
+        if not re.fullmatch(r"\w+", name) or direction not in ("higher", "lower"):
+            raise click.BadParameter(f"{value!r}: expected NAME:higher or NAME:lower")
+        if name in names:
+            raise click.BadParameter(f"{name!r} is given twice")
+        names.append(name)
+    return names
+
+
+@main.command()
+@click.argument("prompt")
+@click.option("--previous", is_flag=True,
+              help="Include this entry's review from the last accepted iteration (in a run).")
+@click.option("--metric", "metrics", multiple=True, metavar="NAME:higher|lower", callback=_review_metrics,
+              help="A number the review must report, printed as ##autohelix[NAME=value]. Repeatable.")
+@click.option("--agent", "agent_type", type=click.Choice(["claude", "codex", "opencode", "mock"]),
+              help="Agent backend (default: agent.backend from the config, else claude).")
+@click.option("--model", help="Model (default: agent.model from the config).")
+@click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
+@click.option("--timeout", type=click.IntRange(min=1),
+              help="Seconds before giving up (default: the command's timeout in a run, else 1800).")
+@click.option("--command", "agent_command",
+              help="The backend's executable (default: agent.command from the config, unless --agent "
+                   "names another backend).")
+@click.option("--base", help="Outside a run: the commit the working tree is compared with (default HEAD).")
+def review(prompt: str, previous: bool, metrics: list[str], agent_type: str | None, model: str | None,
+           effort: str | None, timeout: int | None, agent_command: str | None, base: str | None):
+    """Review a change with an agent; prints the review as feedback.
+
+    PROMPT is the review request; put it after `--` (`autohelix review -- "..."`)
+    so a prompt starting with `-` isn't read as an option. The agent gets
+    read-only tools and no project settings; agent settings come from
+    $AUTOHELIX_CONFIG or ./autohelix.yaml.
+
+    In a run (an `observe:` entry's `review:`), it reviews a fresh copy of the
+    candidate. By hand, it reviews the current directory; the change is the
+    working tree (new files included) against --base.
+
+    Prints the review, then one ##autohelix[NAME=value] line per --metric.
+    Exits 0 on success, 2 if no valid review was produced, a requested number
+    is missing, or the reviewer changed files.
+    """
+    import signal
+
+    from autohelix.formatting import format_cost
+    from autohelix.judge import JudgeError, judge_config, load_base_config
+    from autohelix.review import DEFAULT_TIMEOUT, review as run_review, review_schema
+    from autohelix.usage_log import ENV as USAGE_ENV
+
+    def _terminate(signum, frame):  # the harness timed this command out: stop the agent too
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _terminate)
+    cwd = Path.cwd()
+    try:
+        if not prompt.strip():
+            raise JudgeError("the review prompt is empty")
+        config = judge_config(load_base_config(cwd), agent=agent_type, model=model, effort=effort,
+                              timeout=timeout, command=agent_command, schema=review_schema(metrics),
+                              default_timeout=DEFAULT_TIMEOUT)
+        result = run_review(prompt, cwd, config, metrics=metrics, previous=previous, base=base,
+                            timeout=timeout,
+                            warn=lambda message: click.echo(f"autohelix review: {message}", err=True))
+    except JudgeError as e:
+        click.echo(f"autohelix review: no valid review: {e}", err=True)
+        raise SystemExit(2)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except Exception as e:  # noqa: BLE001 - a failed review is never a success
+        click.echo(f"autohelix review: failed: {type(e).__name__}: {e}", err=True)
+        raise SystemExit(2)
+    click.echo(result.output())
+    if not os.environ.get(USAGE_ENV):
+        click.echo(f"autohelix review: ok · {format_cost(result.cost_usd, precision=4)}", err=True)
+
+
 @main.command()
 @click.argument("message")
 @click.option("--path", "-p", type=click.Path(exists=True), default=".", help="Project directory")

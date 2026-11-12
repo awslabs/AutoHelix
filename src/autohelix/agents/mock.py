@@ -64,7 +64,7 @@ class MockAgent:
             Path(draft).write_text("Mock summary of the run.\n")
             return AgentRunResult(success=True, exit_code=0)
 
-        if self.config.read_only:  # a judge call (`autohelix ask`)
+        if self.config.read_only:  # a judge call (`autohelix ask` or `review`)
             return self._judge(settings, log_path, prompt, worktree_path)
 
         # Check if we should fail
@@ -141,6 +141,14 @@ class MockAgent:
             return AgentRunResult(success=False, exit_code=1, error="Mock judge failure", usage=usage)
         if "judge_output" in settings:
             return AgentRunResult(success=True, exit_code=0, usage=usage, final_text=str(settings["judge_output"]))
+        schema = self.config.output_schema or {}
+        if "review" in schema.get("properties", {}):  # `autohelix review`
+            # `review_text` (default "mock review"), `review_metrics` (the numbers; none by
+            # default, so a review asked for numbers fails unless they are set).
+            reply = {"review": settings.get("review_text", "mock review")}
+            if "review_metrics" in settings:
+                reply["metrics"] = settings["review_metrics"]
+            return AgentRunResult(success=True, exit_code=0, usage=usage, final_text=json.dumps(reply))
         answer = {"answer": settings.get("judge_answer", "yes"),
                   "reason": settings.get("judge_reason", "mock judgment")}
         return AgentRunResult(success=True, exit_code=0, usage=usage, final_text=json.dumps(answer))
