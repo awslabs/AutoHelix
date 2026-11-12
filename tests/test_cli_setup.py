@@ -339,7 +339,7 @@ def test_agent_claude_execs_with_the_skill_and_writes_nothing(project, monkeypat
     assert "`agent.backend: claude`" in prompt
     assert "Write the file directly (don't run `autohelix setup`)." in prompt
     assert f"To check it, use AutoHelix's own Python, `{sys.executable}`" in prompt
-    assert prompt.endswith("Start by asking what I want to achieve.")
+    assert prompt.endswith('Start by asking me only: "What should this AutoHelix loop do?"')
 
 
 def test_the_prompt_names_the_launcher_it_was_started_as(project, monkeypatch, execs, tmp_path):
@@ -465,7 +465,7 @@ def test_one_agent_asks_once_and_the_default_starts_it(project, monkeypatch, exe
     agents(["codex"])(monkeypatch)
     result = setup(input="\n")
     assert result.exit_code == 0, result.output
-    assert "AutoHelix setup · autohelix.yaml" in result.output
+    assert " · setup · autohelix.yaml\n  Project  " in result.output
     assert "How do you want to write it?\n  1. With Codex  it asks what you want" in result.output
     assert "  2. Empty config  the commented template, to edit by hand\nChoose [1]:" in result.output
     assert "Which agent?" not in result.output

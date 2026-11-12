@@ -99,7 +99,7 @@ def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[st
     prompt = (f"Read `{skill_dir / 'SKILL.md'}` and follow it to help me set up an AutoHelix loop for this "
               f"project. {where}, with `agent.backend: {agent}` unless we decide otherwise. Write the file "
               f"directly (don't run `autohelix setup`). To check it, {tools}. "
-              "Start by asking what I want to achieve.")
+              'Start by asking me only: "What should this AutoHelix loop do?"')
     if agent == "claude":  # --add-dir lets it read the skill; it takes several folders, hence --
         return ["claude", "--add-dir", str(skill_dir), "--", prompt]
     if agent == "codex":  # reads outside the workspace without a flag (its --add-dir grants writes)
@@ -202,8 +202,9 @@ def setup(name: str | None, path: str, agent: str | None):
     elif found and _interactive():
         from autohelix.menu import choose
 
-        click.echo(click.style("AutoHelix setup", bold=True) + click.style(
-            f" · {relative}" + (f" in {project}" if elsewhere else ""), dim=True) + "\n")
+        click.echo("  " + click.style("AutoHelix", bold=True) + click.style(f" {_get_version()}", dim=True)
+                   + f" · setup · {relative}")
+        click.echo("  " + click.style(f"{'Project':<9}", dim=True) + str(project) + "\n")
         drafts = "it asks what you want to achieve, then writes the config"
         with_agent = (f"With {SETUP_AGENTS[found[0]]}", drafts) if len(found) == 1 else ("With an agent", drafts)
         if choose("How do you want to write it?",

@@ -16,7 +16,8 @@ session, with persistent notes and measurements from earlier attempts.
 
 ## Understand the experiment
 
-If the session's first prompt says to start by asking, ask first, then inspect.
+If the session's first prompt gives a first question, ask exactly that, on its
+own, before inspecting anything; inspect after the answer.
 
 Inspect the project's instructions, git state, relevant code, existing
 evaluators, and any AutoHelix configs (`autohelix.yaml`, `autohelix/*.yaml`).
@@ -27,10 +28,17 @@ a venv that isn't active). Check `autohelix --help` and relevant subcommand
 help against the installed version. The harness and the target project may use
 different environments.
 
-Establish the desired improvement and propose useful loop designs from the
-project's available evidence, including missing evaluators that would help.
-Carry forward the user's budget and agent preferences; resolve missing
-information that changes the experiment without imposing a fixed questionnaire.
+Recommend, don't interview. From the user's answer and the project (its
+tests, benchmarks, instructions), choose everything yourself: scope, gates,
+observe entries, backend, budget. Then propose the complete config once and ask
+whether they want anything different. Ask before that only when the project
+can't tell you something that changes the loop materially, such as there being
+no way yet to check or measure the goal. Don't ask about budgets, timeouts,
+models or reviews: pick defaults, say what you picked. Carry forward any
+preferences the user states.
+
+Budget: iterations only (`budget: {iterations: 10}`, or what fits the work),
+with no cost or time limit unless the user asks for one.
 
 For help choosing gates, measurements, feedback, and budgets, read
 [loop design](references/loop-design.md). For concrete patterns, read the
