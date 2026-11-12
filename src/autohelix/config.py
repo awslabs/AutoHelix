@@ -509,6 +509,9 @@ def _parse_gates(value: Any, declared: dict[str, ObserveEntry], backend: str,
             if command is not None:
                 gates.append(CommandSpec(command=command, timeout=timeout or DEFAULT_CHECK_TIMEOUT))
         elif kind == "ask":
+            # Unquoted `yes:` / `no:` keys are YAML booleans.
+            entry = {{True: "yes", False: "no"}.get(key, key) if isinstance(key, bool) else key: value
+                     for key, value in entry.items()}
             _check_keys(entry, ("ask", "yes", "no", "timeout", "agent"), where, errors)
             question = _command_text(entry, "ask", where, errors)
             timeout = _timeout(entry, where, errors)

@@ -84,8 +84,11 @@ Added:
   captured files; a review as Markdown), gates in list order with pending
   ones, the agent's summary per iteration, each iteration's own diff
   (rejected attempts included), and the goal's title.
-- Console: a failed gate prints its text (`ask: <question>` for `ask:`
-  entries); a failed observe entry prints why its metrics are missing.
+- Console: the header lists the goal's title, agent, gates and observe
+  entries by name; one row per iteration with the rejection reason (the
+  failing gate's text) in the status column and the agent's summary
+  below; the ending is plain lines (stop reason, totals, what landed, next
+  commands), with an error printed first.
 
 Hardening:
 

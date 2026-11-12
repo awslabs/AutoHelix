@@ -118,16 +118,15 @@ yes/no question to a read-only agent (exit 0 for yes):
 ```yaml
 gates:
   - ask: Does the change keep the public API of sort.py?
-    "yes": Every public function keeps its name and signature.   # optional
-    "no": A public function was removed, renamed or changed.     # optional
+    yes: Every public function keeps its name and signature.   # optional
+    no: A public function was removed, renamed or changed.     # optional
     # timeout: 15m
     # agent: {backend: codex, model: gpt-5.5, reasoning_effort: high, timeout: 10m}
 ```
 
 - `ask: <question>` becomes `autohelix ask [flags] -- "<question>"`: flags first,
   then `--`, so a question starting with `-` stays a question.
-- `"yes":` and `"no":` say what each answer means (`--yes`, `--no`). Quote
-  them: unquoted, YAML reads `yes` and `no` as true and false.
+- `yes:` and `no:` say what each answer means (`--yes`, `--no`).
 - `agent:` takes only `backend` (`claude` or `codex`), `model`,
   `reasoning_effort`, `timeout` and `command`; they become flags. Unset ones come
   from the top-level `agent:`, except that naming another backend drops the

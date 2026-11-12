@@ -793,3 +793,14 @@ class TestBudgetConfig:
         issues = config.validate()
         errors = [i for i in issues if i.level == "error"]
         assert any("bool" in i.message for i in errors)
+
+
+def test_ask_gate_accepts_unquoted_yes_and_no_keys():
+    """YAML reads unquoted `yes:` / `no:` keys as booleans; they still mean --yes / --no."""
+    import yaml
+
+    config = Config.from_dict(yaml.safe_load(
+        "goal: g\ngates:\n  - ask: Keeps the API?\n    yes: kept\n    no: changed\n"))
+    assert not [i for i in config.validate() if i.level == "error"]
+    assert shlex.split(config.gates[0].command) == [
+        "autohelix", "ask", "--yes", "kept", "--no", "changed", "--", "Keeps the API?"]
