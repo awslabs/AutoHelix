@@ -650,56 +650,56 @@ CONFIG_DIR = "autohelix"
 
 
 class ConfigNotFound(FileNotFoundError):
-    """No config by that name, or no single config for a bare command; `configs`
-    lists the project's configs (project-relative) for the caller's own advice."""
+    """No config by that name, or no single config for a bare command. The message
+    states what was found; `configs` lists the project's configs (project-relative)
+    so each caller can add its own advice."""
 
     def __init__(self, message: str, configs: list[str]):
         super().__init__(message)
         self.configs = configs
 
 
+def _files(project: Path, pattern: str) -> list[str]:
+    """Files matching `pattern` directly in autohelix/, project-relative; dotfiles
+    (editor backups, lock files) are not configs."""
+    folder = project / CONFIG_DIR
+    if not folder.is_dir():
+        return []
+    return sorted(f"{CONFIG_DIR}/{p.name}" for p in folder.glob(pattern)
+                  if p.is_file() and not p.name.startswith("."))
+
+
 def project_configs(project: Path) -> list[str]:
     """The project's configs, project-relative: autohelix.yaml, then the `.yaml` files
     directly in autohelix/ (its subfolders hold prompt templates and helper scripts)."""
-    configs = [CONFIG_FILE] if (project / CONFIG_FILE).is_file() else []
-    folder = project / CONFIG_DIR
-    if folder.is_dir():
-        configs += sorted(f"{CONFIG_DIR}/{p.name}" for p in folder.glob("*.yaml") if p.is_file())
-    return configs
+    return ([CONFIG_FILE] if (project / CONFIG_FILE).is_file() else []) + _files(project, "*.yaml")
 
 
 def find_config(project: Path, name: str | None = None) -> Path:
     """The config `name` names (autohelix/<name>.yaml), else autohelix.yaml, else the
-    only config in autohelix/. Raises ConfigNotFound otherwise."""
+    only config in autohelix/. Raises ConfigNotFound otherwise, and ValueError for a
+    name that is a path."""
     configs = project_configs(project)
     listed = ", ".join(configs)
     if name is not None:
         if not re.fullmatch(r"[\w-][\w.-]*", name) or name.endswith((".yaml", ".yml")):
-            raise ConfigNotFound(f"{name!r} is not a config name: name a config in {CONFIG_DIR}/ "
-                                 f"(`perf` for {CONFIG_DIR}/perf.yaml), or give a file with -c PATH.", configs)
+            raise ValueError(f"{name!r} is not a config name: name a config in {CONFIG_DIR}/ "
+                             f"without .yaml (`perf` for {CONFIG_DIR}/perf.yaml).")
         relative = f"{CONFIG_DIR}/{name}.yaml"
-        if relative not in configs:
-            raise ConfigNotFound(f"No config {relative}. " + (f"Configs: {listed}." if configs else
-                                 f"Write one with `autohelix setup {name}`."), configs)
-        return project / relative
+        if relative in configs:
+            return project / relative
+        misnamed = f"{CONFIG_DIR}/{name}.yml"
+        found = (f" (found {misnamed}; configs end in .yaml)" if (project / misnamed).is_file() else "")
+        raise ConfigNotFound(f"No config {relative}{found}." + (f" Configs: {listed}." if configs else ""), configs)
     if (project / CONFIG_FILE).is_file():
         return project / CONFIG_FILE
     if len(configs) == 1:
         return project / configs[0]
     if configs:
-        raise ConfigNotFound(f"Several configs: {listed}. Pick one: `autohelix run <name>` "
-                             f"(for {CONFIG_DIR}/<name>.yaml) or -c PATH.", configs)
-    raise ConfigNotFound(f"No config found in {project}: no {CONFIG_FILE} or {CONFIG_DIR}/*.yaml. "
-                         "Write one with `autohelix setup`.", configs)
-
-
-def default_config(project: Path) -> Path:
-    """find_config's answer, else autohelix.yaml (which may not exist): for observers
-    that show what they can without a config."""
-    try:
-        return find_config(project)
-    except ConfigNotFound:
-        return project / CONFIG_FILE
+        raise ConfigNotFound(f"Several configs: {listed}.", configs)
+    misnamed = (["autohelix.yml"] if (project / "autohelix.yml").is_file() else []) + _files(project, "*.yml")
+    found = f" (found {', '.join(misnamed)}; configs end in .yaml)" if misnamed else ""
+    raise ConfigNotFound(f"No config found in {project}{found}.", configs)
 
 
 def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Config, dict[str, Any]]:

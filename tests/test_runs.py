@@ -539,7 +539,7 @@ def test_report_owns_run_and_restores_ref_before_removal(project, monkeypatch):
 
     harness = Harness(project, land_mode="manual")
     with pytest.raises(RuntimeError, match="is running"):
-        write_report(harness.config, project, Console(), run_id=harness.paths.run_id)
+        write_report(harness.config, project, Console(), harness.config_file, run_id=harness.paths.run_id)
     harness.run(max_iterations=1, report=False)
     expected = harness.run_state.expected_tip
 
@@ -548,7 +548,7 @@ def test_report_owns_run_and_restores_ref_before_removal(project, monkeypatch):
         return AgentRunResult(success=True)
 
     monkeypatch.setattr("autohelix.agents.create_agent", lambda *a, **k: SimpleNamespace(run=run))
-    assert not write_report(harness.config, project, Console(), run_id=harness.paths.run_id)
+    assert not write_report(harness.config, project, Console(), harness.config_file, run_id=harness.paths.run_id)
     assert git(project, "rev-parse", harness.paths.ref).stdout.strip() == expected
     assert not harness.paths.copies.exists()
 

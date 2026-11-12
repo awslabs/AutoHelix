@@ -84,12 +84,11 @@ def ensure_runtime_ignored(project_path: Path) -> None:
 
 
 def read_stored_config_path(project_path: Path, run_id: str | None = None) -> Path | None:
-    """The selected run's original config; observers may override it explicitly."""
+    """The selected run's config as recorded, None without a run. The file may be
+    gone; callers must not put another config in its place."""
     from autohelix.runs import RunPaths
 
     paths = RunPaths(project_path, run_id)
     if not paths.run_id:
         return None
-    stored = paths.read_identity()["config_path"]
-    candidate = project_path / stored
-    return candidate if candidate.exists() else None
+    return project_path / paths.read_identity()["config_path"]

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import click
 
-from autohelix.config import ConfigNotFound, find_config, load_config
+from autohelix.config import CONFIG_DIR, CONFIG_FILE, ConfigNotFound, find_config, load_config, project_configs
 from autohelix.harness import Harness
 from autohelix.history import History
 from autohelix.runs import (NoRunToResume, RunPaths, RunLock, archive as archive_run, check_group,
@@ -24,6 +24,7 @@ from autohelix.state import (
     ensure_runtime_ignored,
     read_stored_config_path,
 )
+from autohelix.workspace import SCRUBBED_GIT_ENV
 
 
 def _get_version() -> str:
@@ -115,9 +116,6 @@ def _segment_options(command):
     for option in reversed([
         click.option("--path", "-p", type=click.Path(exists=True, file_okay=False), default=".",
                      help="Project directory (default: current dir)"),
-        click.option("--config", "-c", "config_file", type=click.Path(exists=True, dir_okay=False),
-                     help="Config file (default: autohelix.yaml, else the only autohelix/*.yaml; "
-                          "for resume RUN_ID, the run's own)"),
         click.option("--verbose", is_flag=True, help="Show agent command details and heartbeat messages"),
         click.option("--no-report", is_flag=True, help="Don't write the run summary when the run finishes"),
         click.option("--land", "land_mode", type=click.Choice(["auto", "manual"]),
@@ -137,17 +135,69 @@ def _group(value: str | None) -> str | None:
 
 
 def _git_project(path: str) -> Path:
-    """The project directory, refused outside git before anything (.autohelix/
-    included) is created there."""
+    """The project directory, refused before anything (.autohelix/ included) is
+    created there unless it is in a git checkout with a commit to start from.
+
+    Inherited GIT_* variables (a git hook, `rebase -x`) are dropped first, so these
+    checks and the excludes reach the checkout's own repository."""
+    for key in SCRUBBED_GIT_ENV:
+        os.environ.pop(key, None)
     project = Path(path).resolve()
-    try:
-        inside = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=project, capture_output=True).returncode == 0
-    except OSError:  # no git at all
-        inside = False
-    if not inside:
+
+    def git(*args: str):
+        try:
+            return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True)
+        except OSError:  # no git at all
+            return None
+
+    inside = git("rev-parse", "--is-inside-work-tree")
+    if inside is None or inside.returncode:
         raise click.ClickException("Not a git repository. AutoHelix requires git.\n"
                                    "Run: git init && git add -A && git commit -m 'init'")
+    if inside.stdout.strip() != "true":
+        raise click.ClickException(f"{project} is not in a git working tree (a bare repository, or inside "
+                                   ".git/); run AutoHelix in a checkout.")
+    if git("rev-parse", "--verify", "-q", "HEAD").returncode:
+        raise click.ClickException("No commits yet; a run starts from a commit.\n"
+                                   "Run: git add -A && git commit -m 'init'")
     return project
+
+
+def _ancestor_configs(project: Path) -> str:
+    """For a project without a config: the nearest folder above it, up to the top of
+    its repository, that has one (`run` from src/ by mistake)."""
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=project, capture_output=True, text=True)
+    if top.returncode:
+        return ""
+    top_path = Path(top.stdout.strip()).resolve()
+    for folder in project.parents:
+        if not folder.is_relative_to(top_path):
+            break
+        if configs := project_configs(folder):
+            return f" {folder} has {', '.join(configs)}; run from there or pass -p {folder}."
+    return ""
+
+
+def _segment_config(project: Path, name: str | None, command: str) -> Path:
+    """The config a segment uses (`find_config`), its errors with this command's advice."""
+    pick = "Name a run: `autohelix resume <id>`." if command == "resume" else "Pick one: `autohelix run <name>`."
+    try:
+        config = find_config(project, name)
+    except ValueError as e:
+        raise click.BadParameter(str(e), param_hint="CONFIG") from e
+    except ConfigNotFound as e:
+        if e.configs:
+            advice = " " + pick if name is None else ""
+        else:
+            advice = _ancestor_configs(project) or (
+                " " + pick if command == "resume" else f" Write one with `autohelix setup{f' {name}' if name else ''}`.")
+        raise click.ClickException(str(e) + advice) from e
+    others = [Path(c).stem for c in project_configs(project) if c != CONFIG_FILE]
+    if name is None and config == project / CONFIG_FILE and others:
+        example = "resume their runs by id" if command == "resume" else f"`autohelix run {others[0]}`"
+        click.echo(click.style(f"Using {CONFIG_FILE}; {CONFIG_DIR}/ also has: {', '.join(others)} ({example})",
+                               dim=True))
+    return config
 
 
 def _start(project: Path, config: Path | None, **selection) -> Harness:
@@ -187,28 +237,23 @@ def _segment(harness: Harness, iterations: int | None, report: bool) -> None:
 @click.option("--name", help="Readable part of the new run's id (default: the config's name:, else its file name).")
 @click.option("--group", help="Share notes and code with the project's other runs of this group "
                               "(landing defaults to manual).")
-def run(config_name: str | None, path: str, config_file: str | None, verbose: bool, no_report: bool,
-        land_mode: str | None, iterations: int | None, name: str | None, group: str | None):
+def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None,
+        iterations: int | None, name: str | None, group: str | None):
     """Start a new run of the optimization loop.
 
     Always a new run, with its own budget, notes and history; to continue one,
     use `autohelix resume`. CONFIG names a config in autohelix/ (`perf` for
-    autohelix/perf.yaml); without it (or --config), the run reads
-    autohelix.yaml, else the only config in autohelix/.
+    autohelix/perf.yaml); without it, the run reads autohelix.yaml, else the
+    only config in autohelix/.
 
     With --group NAME, each iteration's agent also sees the other non-archived
     runs of that group: their notes and history, and their code on
     autohelix/<id>. Start several, compare them on the dashboard, land the
     winner and archive the rest.
     """
-    if config_name and config_file:
-        raise click.UsageError("Give a config name or --config, not both.")
     group = _group(group)
     project = _git_project(path)
-    try:
-        config = Path(config_file).resolve() if config_file else find_config(project, config_name)
-    except ConfigNotFound as e:
-        raise click.ClickException(str(e)) from e
+    config = _segment_config(project, config_name, "run")
     harness = _start(project, config, verbose=verbose, new=True, name=name, land_mode=land_mode,
                      group=group or None)
     _segment(harness, iterations, not no_report)
@@ -220,12 +265,12 @@ def run(config_name: str | None, path: str, config_file: str | None, verbose: bo
 @click.option("--iterations", "-n", type=click.IntRange(min=1), help="How many more iterations to run.")
 @click.option("--until", type=click.IntRange(min=1), help="Run up to iteration N (repeatable; for scripts).")
 @click.option("--group", help="Set or change the run's group from its next iteration; '' clears it.")
-def resume(run_id: str | None, path: str, config_file: str | None, verbose: bool, no_report: bool,
-           land_mode: str | None, iterations: int | None, until: int | None, group: str | None):
+def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None, iterations: int | None, until: int | None, group: str | None):
     """Continue a run: RUN_ID (or its last part), else this config's latest.
 
-    The config is --config, else the one a bare `autohelix run` reads. Its
-    latest is the most recently active run for the config that isn't
+    A run uses the config it started with; without RUN_ID, the config is the
+    one a bare `autohelix run` reads, and its latest is the most recently
+    active run for that config that isn't
     archived, preferring runs that captured their baseline. Without -n or --until it runs to
     budget.iterations; cost and time budgets stay run totals from the config.
     The run keeps its landing mode and group unless --land or --group changes
@@ -236,14 +281,7 @@ def resume(run_id: str | None, path: str, config_file: str | None, verbose: bool
     group = _group(group)
     project = _git_project(path)
     selected = _run_id(project, run_id)
-    config = Path(config_file).resolve() if config_file else None
-    if config is None and selected is None:
-        try:
-            config = find_config(project)
-        except ConfigNotFound as e:
-            found = f"Several configs: {', '.join(e.configs)}." if e.configs else "No config found."
-            raise click.ClickException(f"{found} Name a run (`autohelix resume <id>`) "
-                                       "or a config (-c PATH).") from e
+    config = None if selected else _segment_config(project, None, "resume")
     harness = _start(project, config, verbose=verbose, run_id=selected, create=False, land_mode=land_mode,
                      group=group)
     if iterations:
@@ -508,10 +546,8 @@ def _mode_options(command):
 @main.command()
 @click.argument("run_id", required=False)
 @_mode_options
-@click.option("--config", "-c", "config_file", type=click.Path(exists=True, dir_okay=False, path_type=Path),
-              help="Config file (default: the run's own, else the project's)")
 def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, port: int | None,
-         open_browser: bool, config_file: Path | None):
+         open_browser: bool):
     """One run, live in the terminal: RUN_ID (or its last part), else the current run.
 
     On top, the run's status, budgets, latest accepted metrics, landing state
@@ -527,15 +563,14 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
     mode = _mode(as_json, once, web, port, open_browser)
     run_id = _run_id(path, run_id)
     if mode == "live":
-        _view_live(path.resolve(), run_id, config_file)
+        _view_live(path.resolve(), run_id)
         return
     try:
         selected = RunPaths(path, run_id).run_id
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
     if mode == "web":
-        _serve(path, port, open_browser, f"/run/{selected}/" if selected else "/",
-               config_file=config_file, run_id=run_id)
+        _serve(path, port, open_browser, f"/run/{selected}/" if selected else "/", run_id=run_id)
         return
     from autohelix.viewer import ProjectRuns
 
@@ -544,13 +579,13 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
         raise click.ClickException(f"No run {run_id!r} in {path.resolve()}" if run_id else
                                    "No current run; start one with `autohelix run` or name one.")
     try:
-        data = runs.run(selected, config_file)
+        data = runs.run(selected)
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
     click.echo(json.dumps(data, indent=2) if as_json else run_table.format_run(data), nl=as_json)
 
 
-def _view_live(project_path: Path, run_id: str | None, config_file: Path | None) -> None:
+def _view_live(project_path: Path, run_id: str | None) -> None:
     from rich.console import Console
 
     from autohelix.live import view as live_view
@@ -560,12 +595,13 @@ def _view_live(project_path: Path, run_id: str | None, config_file: Path | None)
         console.print(f"[red]No runs in {project_path}.[/red] Start one with `autohelix run`.")
         raise SystemExit(1)
     try:
-        config, _ = load_config(project_path, config_file=config_file or read_stored_config_path(project_path, run_id))
+        # The run's own config, even when its file is gone (then none); the lookup only without a run.
+        config, _ = load_config(project_path, config_file=read_stored_config_path(project_path, run_id))
         backend = config.agent.backend
     except Exception:  # noqa: BLE001 - the log parser can tell backends apart on its own
         backend = None
     try:
-        live_view(project_path, backend, console, run_id=run_id, config_file=config_file)
+        live_view(project_path, backend, console, run_id=run_id)
     except KeyboardInterrupt:
         console.print("[dim]Stopped watching. The run is unaffected.[/dim]")
 
@@ -636,13 +672,13 @@ def _serve(project: Path, port: int | None, open_browser: bool, page: str, **opt
 @main.command()
 @click.argument("run_id", required=False)
 @click.option("--path", "-p", type=click.Path(exists=True), default=".")
-@click.option("--config", "-c", "config_file", type=click.Path(exists=True), help="Path to config file (default: the run's own)")
-def report(run_id: str | None, path: str, config_file: str | None):
+def report(run_id: str | None, path: str):
     """Write (or rewrite) a run's summary (RUN_ID or its last part, default the current run).
 
     One agent call reads the run's history, notes, reviews, logs and commits, and writes
     the selected run's output/report.md. `run` and `resume` do this automatically when a run
-    finishes; use this after an interrupted run or to regenerate it.
+    finishes; use this after an interrupted run or to regenerate it. It reads the config
+    the run started with.
     """
     from rich.console import Console
 
@@ -651,24 +687,24 @@ def report(run_id: str | None, path: str, config_file: str | None):
     console = Console()
     project_path = Path(path).resolve()
     run_id = _run_id(project_path, run_id)
-    try:
-        resolved_config = (Path(config_file).resolve() if config_file else
-                           read_stored_config_path(project_path, run_id) or find_config(project_path))
-        config, _ = load_config(project_path, config_file=resolved_config)
-    except FileNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise SystemExit(1)
-
-    if not RunPaths(project_path, run_id).run_id or History(project_path, run_id).get_last_iteration() == 0:
+    paths = RunPaths(project_path, run_id)
+    if not paths.run_id or History(project_path, run_id).get_last_iteration() == 0:
         console.print("[yellow]No iterations run yet. Nothing to report.[/yellow]")
         raise SystemExit(1)
+    config_path = read_stored_config_path(project_path, run_id)
+    try:
+        config, _ = load_config(project_path, config_file=config_path)
+    except FileNotFoundError:
+        console.print(f"[red]Error:[/red] Run {short_id(paths.run_id)} was started with "
+                      f"{paths.read_identity()['config_path']}, which is gone; restore it to write the report.")
+        raise SystemExit(1)
 
-    if not write_report(config, project_path, console, resolved_config, run_id=run_id):
+    if not write_report(config, project_path, console, config_path, run_id=run_id):
         raise SystemExit(1)
     from autohelix.viewer import write_static
 
-    write_static(project_path, resolved_config, run_id=run_id)
-    console.print(f"[dim]Run page saved to {RunPaths(project_path, run_id).output / 'report.html'}[/dim]")
+    write_static(project_path, run_id=run_id)
+    console.print(f"[dim]Run page saved to {paths.output / 'report.html'}[/dim]")
 
 
 if __name__ == "__main__":

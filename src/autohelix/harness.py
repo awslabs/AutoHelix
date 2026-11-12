@@ -164,7 +164,11 @@ class Harness:
         self.project_path = Path(project_path).resolve()
         if config_file is None:  # always an explicit file: run.json and $AUTOHELIX_CONFIG name it
             if run_id:
-                config_file = self.project_path / RunPaths(self.project_path, run_id).read_identity()["config_path"]
+                stored = RunPaths(self.project_path, run_id).read_identity()["config_path"]
+                config_file = self.project_path / stored
+                if not config_file.exists():
+                    raise FileNotFoundError(f"Run {short_id(run_id)} was started with {stored}, which is gone; "
+                                            "restore it, or start a new run with `autohelix run <name>`.")
             else:
                 config_file = find_config(self.project_path)
         self.config_file = config_file = Path(config_file)
@@ -1314,7 +1318,7 @@ class Harness:
         from autohelix.viewer import write_static
 
         try:
-            path = write_static(self.project_path, self.config_file, run_id=self.paths.run_id)
+            path = write_static(self.project_path, run_id=self.paths.run_id)
             self.console.print(f"[dim]  Run page: {path.relative_to(self.project_path)}[/dim]", highlight=False)
         except Exception as e:  # noqa: BLE001 - never hide the run's own outcome
             self.console.print(f"[yellow]Could not save report.html: {e}[/yellow]")

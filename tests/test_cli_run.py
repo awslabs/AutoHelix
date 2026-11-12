@@ -11,6 +11,8 @@ from autohelix.harness import AutoHelixRunError
 def test_run_returns_nonzero_for_infrastructure_failure(tmp_path, monkeypatch):
     subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
     (tmp_path / "autohelix.yaml").write_text("goal: x\n")
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "init", "--allow-empty"],
+                   cwd=tmp_path, capture_output=True, check=True)
 
     class FailingHarness:
         def __init__(self, *args, **kwargs):

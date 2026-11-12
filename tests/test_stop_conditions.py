@@ -295,5 +295,5 @@ def test_report_prompt_says_why_the_run_ended(project):
     _configure(project, "stop:\n  - '[ \"$AUTOHELIX_ITERATION\" -ge 1 ] && echo done enough'\n")
     _run(project, 3)
     config = Config.from_dict({"goal": "g"})
-    prompt = build_report_prompt(config, project, None, project / "draft.md")
+    prompt = build_report_prompt(config, project, project / "autohelix.yaml", project / "draft.md")
     assert "The run ended because: stop condition met at iteration 1: done enough." in prompt

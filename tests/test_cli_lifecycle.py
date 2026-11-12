@@ -160,15 +160,15 @@ def test_ids_sort_by_start_and_commands_accept_the_suffix(project, tmp_path, mon
     assert "bench is a folder: use -p bench" in result.output
 
 
-def test_resume_with_another_config_warns(project):  # noqa: F811
+def test_resume_with_another_config_warns(project, capsys):  # noqa: F811
     paths = started(project)
     other = project / "other.yaml"
     other.write_text((project / "autohelix.yaml").read_text())
     git(project, "add", ".")
     git(project, "commit", "-qm", "other config")
-    result = cli(project, "resume", short_id(paths.run_id), "-c", str(other), "-n", "1", "--no-report")
-    assert result.exit_code == 0, result.output
-    assert "was started with autohelix.yaml; this segment uses other.yaml" in result.output
+    capsys.readouterr()
+    Harness(project, run_id=paths.run_id, config_file=other).close()  # the API only: the CLI has no -c
+    assert "was started with autohelix.yaml; this segment uses other.yaml" in " ".join(capsys.readouterr().out.split())
 
 
 def test_the_time_budget_is_checked_before_an_iteration(project):  # noqa: F811
