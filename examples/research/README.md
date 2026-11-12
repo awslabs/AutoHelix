@@ -41,11 +41,11 @@ For remote CPU or GPU experiments:
   repository.
 - Give each run a unique remote directory so concurrent or rejected candidates
   cannot overwrite one another.
-- Copy a machine-readable result back into the iteration worktree for
+- Copy a machine-readable result back into the iteration's copy for
   validation and review.
 - Record seeds and relevant data, dependency, and hardware versions.
 - Keep a quick experiment that uses the same result schema as the full run.
 
 Remote files and jobs are external state. AutoHelix can discard a rejected
-worktree, but it cannot undo remote side effects. Write candidates to isolated
+candidate, but it cannot undo remote side effects. Write candidates to isolated
 locations and promote or clean them up explicitly.

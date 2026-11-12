@@ -99,7 +99,7 @@ class MockAgent:
         # Optionally write notes
         notes_content = settings.get("notes_content")
         if notes_content:
-            notes_dir = worktree_path / ".autohelix" / "notes"
+            notes_dir = worktree_path / ".autohelix-iteration" / "notes"
             notes_dir.mkdir(parents=True, exist_ok=True)
             notes_path = notes_dir / "notes.md"
 

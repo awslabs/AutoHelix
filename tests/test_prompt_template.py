@@ -64,15 +64,27 @@ class TestRenderTemplate:
 
 class TestLoadTemplate:
     def test_default_template(self, tmp_path):
-        template = load_template(tmp_path)
-        assert "{{ goal }}" in template
+        (tmp_path / ".autohelix").mkdir()
+        (tmp_path / ".autohelix" / "prompt.md").write_text("Old copy: {{ goal }}")  # no longer read
+        template = load_template(Config.from_dict({"goal": "g"}))
+        assert "{{ goal }}" in template and "Old copy" not in template
 
-    def test_custom_template(self, tmp_path):
-        autohelix_dir = tmp_path / ".autohelix"
-        autohelix_dir.mkdir()
-        (autohelix_dir / "prompt.md").write_text("Custom: {{ goal }}")
-        template = load_template(tmp_path)
-        assert template == "Custom: {{ goal }}"
+    def test_prompt_template_is_relative_to_the_config(self, tmp_path):
+        from autohelix.config import load_config
+
+        (tmp_path / "configs" / "prompts").mkdir(parents=True)
+        (tmp_path / "configs" / "prompts" / "agent.md").write_text("Custom: {{ goal }}")
+        (tmp_path / "configs" / "a.yaml").write_text("goal: g\nprompt_template: prompts/agent.md\n")
+        config, raw = load_config(tmp_path, tmp_path / "configs" / "a.yaml")
+        assert load_template(config) == "Custom: {{ goal }}"
+        assert not [i for i in config.validate(raw) if i.level == "error"]
+
+    def test_a_missing_prompt_template_is_a_config_error(self, tmp_path):
+        from autohelix.config import load_config
+
+        (tmp_path / "autohelix.yaml").write_text("goal: g\nprompt_template: nope.md\n")
+        config, raw = load_config(tmp_path)
+        assert any("prompt_template not found" in i.message for i in config.validate(raw))
 
 
 class TestBuildPromptVariables:
@@ -122,6 +134,6 @@ class TestBuildPromptVariables:
         config = self._make_config(iteration_time_seconds=900)
         history = History(tmp_path)
         variables = build_prompt_variables(config, history, iteration=1, worktree_dir=tmp_path)
-        rendered = render_template(load_template(tmp_path), variables)
+        rendered = render_template(load_template(config), variables)
         assert "Time budget: 15m." in rendered
         assert "timed out" not in rendered

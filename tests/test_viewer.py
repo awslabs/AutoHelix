@@ -176,9 +176,12 @@ def test_running_iteration_shows_copy_diff(viewer, integration_project):  # noqa
     private_index = (copy.path / ".git" / "index").read_bytes()
     (copy.path / "hello.py").write_text('print("work in progress")\n')
     (copy.path / "brand_new.py").write_text("NEW = 1\n")  # untracked: plain git diff would miss it
+    (copy.path / ".autohelix-iteration" / "notes").mkdir(parents=True)  # the harness's material
+    (copy.path / ".autohelix-iteration" / "notes" / "iter-3.md").write_text("SEEDED NOTE\n")
     diff = json.loads(get(viewer + "/api/iteration/3")[1])["diff"]
     assert '+print("work in progress")' in diff
     assert "+NEW = 1" in diff
+    assert "SEEDED NOTE" not in diff and ".autohelix-iteration" not in diff
     assert (copy.path / ".git" / "index").read_bytes() == private_index
     copy.remove()
 

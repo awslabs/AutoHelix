@@ -31,7 +31,7 @@ class TestInitCommand:
         result = runner.invoke(main, ["init", str(git_project)])
         assert result.exit_code == 0, result.output
         assert (git_project / ".autohelix").is_dir()
-        assert (git_project / ".autohelix" / "prompt.md").is_file()
+        assert not (git_project / ".autohelix" / "prompt.md").exists()  # the prompt is built in
 
     def test_creates_config_template(self, runner, git_project):
         result = runner.invoke(main, ["init", str(git_project)])
@@ -42,12 +42,6 @@ class TestInitCommand:
         assert "goal:" in content
         assert "Describe what you want" in content
 
-    def test_creates_prompt_template(self, runner, git_project):
-        result = runner.invoke(main, ["init", str(git_project)])
-        assert result.exit_code == 0, result.output
-        prompt_path = git_project / ".autohelix" / "prompt.md"
-        assert prompt_path.exists()
-        assert "{{ goal }}" in prompt_path.read_text()
 
     def test_locally_excludes_autohelix_and_pycache(self, runner, git_project):
         result = runner.invoke(main, ["init", str(git_project)])

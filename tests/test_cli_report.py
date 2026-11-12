@@ -118,50 +118,6 @@ class TestReportCommand:
         assert (out / "report.md").read_text() == "old"
 
 
-class TestParallelGuard:
-    def _write_marker(self, tmp_path, workers):
-        marker = tmp_path / ".autohelix" / "parallel" / "run.json"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps({"workers": workers}))
-
-    def test_report_warns_when_parallel_marker_present(self, runner, tmp_path):
-        (tmp_path / "autohelix.yaml").write_text("goal: test\n")
-        (tmp_path / ".autohelix").mkdir()
-        self._write_marker(tmp_path, [
-            {"name": "worker-1", "worktree": "/tmp/proj-parallel/worker-1", "branch": "parallel/worker-1"},
-            {"name": "worker-2", "worktree": "/tmp/proj-parallel/worker-2", "branch": "parallel/worker-2"},
-        ])
-
-        result = runner.invoke(main, ["report", "-p", str(tmp_path)])
-        assert result.exit_code == 1
-        assert "run with `autohelix parallel`" in result.output
-        assert "/tmp/proj-parallel/worker-1" in result.output
-        assert "/tmp/proj-parallel/worker-2" in result.output
-        # Still falls through to the normal empty-state message.
-        assert "No iterations" in result.output
-
-    def test_report_no_warning_without_marker(self, runner, tmp_path):
-        (tmp_path / "autohelix.yaml").write_text("goal: test\n")
-        (tmp_path / ".autohelix").mkdir()
-
-        result = runner.invoke(main, ["report", "-p", str(tmp_path)])
-        assert result.exit_code == 1
-        assert "autohelix parallel" not in result.output
-
-    def test_malformed_marker_is_ignored(self, runner, tmp_path):
-        (tmp_path / "autohelix.yaml").write_text("goal: test\n")
-        (tmp_path / ".autohelix").mkdir()
-        marker = tmp_path / ".autohelix" / "parallel" / "run.json"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("{not valid json")
-
-        result = runner.invoke(main, ["report", "-p", str(tmp_path)])
-        assert result.exit_code == 1
-        # No crash, no parallel warning — just the normal empty-state message.
-        assert "No iterations" in result.output
-        assert "autohelix parallel" not in result.output
-
-
 class TestBuildReportPrompt:
     def _prompt(self, project):
         config, _ = load_config(project)

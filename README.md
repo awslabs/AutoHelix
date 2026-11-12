@@ -53,7 +53,7 @@ climb for as long as you want.
 ## How it works
 
 <p align="center">
-  <img alt="AutoHelix iteration loop: worktree → agent → checks → merge or discard → repeat" src="assets/how-it-works.svg" width="760">
+  <img alt="AutoHelix iteration loop: copy → agent → checks → merge or discard → repeat" src="assets/how-it-works.svg" width="760">
 </p>
 
 You define a **goal**, the **constraints** that must hold, and the **metrics**
@@ -218,7 +218,6 @@ A run is defined by a single `autohelix.yaml`. Every field is documented in
 my-project/
 ├── autohelix.yaml       # your config
 └── .autohelix/          # runtime state (gitignored)
-    ├── prompt.md        # customizable project prompt
     ├── current          # selected run id
     ├── runs/<id>/       # one persistent state directory per run
     │   ├── run.json     # identity, starting commit, target branch
@@ -320,11 +319,12 @@ and control how the agent organizes its persistent notes. See
 </details>
 
 <details>
-<summary><b>Parallel runs</b> (alpha)</summary>
+<summary><b>Several runs at once</b></summary>
 
-`autohelix parallel` executes multiple AutoHelix runs concurrently, each with its own config and
-worktree, sharing notes at a configurable frequency so each agent can see what the others
-have tried. See [CLI → parallel](docs/cli.md#autohelix-parallel-alpha).
+Runs started with `autohelix run --group NAME` run side by side in one project and see each
+other's notes, history and accepted code at the start of every iteration. Compare them on
+`autohelix dashboard`, `autohelix land` the winner and `autohelix archive` the rest. See
+[CLI → Groups](docs/cli.md#groups).
 
 </details>
 
@@ -349,7 +349,7 @@ Compared to other tools, AutoHelix adds a minimal amount of structure to ensure 
 | Goal-directed | ✓ any metric(s) | ✓ val loss | ✓ task list | ✓ boolean | ✗ |
 | Agent-agnostic | ✓ | ✓ | ✓ | ✗ | ✗ |
 | Validation gates | ✓ | ~ self-checks | ✗ | ✗ | ✗ |
-| Isolation on failure | ✓ worktree | ~ self-resets | ✗ | ✗ | ✗ |
+| Isolation on failure | ✓ private copy | ~ self-resets | ✗ | ✗ | ✗ |
 | Fresh context each iteration | ✓ | ✗ | ✓ | ✗ | ✗ |
 | Memory across iterations | ✓ notes, metrics, artifacts | session | progress file | session | session |
 | Scope enforcement | ✓ | ~ by instruction | ✗ | ✗ | ✗ |

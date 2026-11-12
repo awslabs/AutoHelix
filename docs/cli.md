@@ -59,7 +59,7 @@ autohelix init [path]
 Creates:
 
 - `autohelix.yaml` — config template (won't overwrite existing)
-- `.autohelix/` — project runtime directory and prompt template
+- `.autohelix/` — project runtime directory
 - Local git exclusions for `.autohelix/` and `__pycache__/` in the repository's
   shared `info/exclude`; `.gitignore` is unchanged.
 
@@ -74,7 +74,7 @@ negation rules in your `.gitignore`, then retry. AutoHelix leaves that file unch
 Start a new run of the optimization loop. Requires `autohelix init` to have been run first.
 
 ```bash
-autohelix run [-p PATH] [-c CONFIG] [-n ITERATIONS] [--name NAME] [--land auto|manual] [--verbose] [--no-report]
+autohelix run [-p PATH] [-c CONFIG] [-n ITERATIONS] [--name NAME] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
 ```
 
 ### Options
@@ -85,7 +85,8 @@ autohelix run [-p PATH] [-c CONFIG] [-n ITERATIONS] [--name NAME] [--land auto|m
 | `--config`, `-c` | Path to config file (default: `autohelix.yaml` in project) |
 | `--path`, `-p` | Project directory (default: current dir) |
 | `--name NAME` | Readable part of the new run's id, lowercase letters/digits/hyphens, up to 32 characters (default: the config file's name, none for `autohelix.yaml`) |
-| `--land auto\|manual` | Land accepted code at segment end (default auto, or `land:` in the config), or retain it only on the run ref |
+| `--group NAME` | Make the run part of a [group](#groups): it sees the other runs of the group (their notes, history and code), and lands manually by default |
+| `--land auto\|manual` | Land accepted code at the end of each segment, or retain it only on the run ref until `autohelix land`. Stored with the run. Default: `manual` with `--group`, else `land:` in the config, else `auto` |
 | `--verbose` | Show agent command details, file paths, heartbeats |
 | `--no-report` | Don't write the run summary when the run finishes |
 
@@ -95,7 +96,8 @@ because of other runs, but says what it sees: a run of the same config that is
 still running (both will land on the same branch, and whichever finishes second
 may not fast-forward), a previous run with commits that haven't landed (this
 run starts from your branch without them), or otherwise just which run came
-before. Scripts that want to continue where they left off should call
+before. Runs started with `--group` don't warn about each other: running side
+by side is the point. Scripts that want to continue where they left off should call
 `resume`, not `run`.
 
 When the run finishes (not when interrupted), it writes a summary to `.autohelix/runs/<id>/output/report.md` — see [Configuration → Report](config.md#report).
@@ -120,6 +122,28 @@ an iteration. Failed baseline attempts remain iteration 0 and retain their costs
 Legacy `.autohelix/history.jsonl` state is not migrated: move or delete the old
 `.autohelix/` directory and run `git worktree prune` before starting a new run.
 
+### Groups
+
+Runs started with the same `--group NAME` share what they learn. At the start
+of each iteration the agent's copy gets, for every other non-archived run of the
+project in that group (running or finished), its `run.json`, `history.jsonl` and
+`notes/` in `.autohelix-iteration/runs/<id>/`, and the copy's git has its ref,
+so `git diff autohelix/<id>`, `git show autohelix/<id>:path` and
+`git checkout autohelix/<id> -- path` work there. The prompt lists them, one
+line each, with their latest accepted metrics. Code taken from another run is
+checked like any other change; the prompt asks the agent to name the run it
+came from in its summary.
+
+That is all a group does: budgets, stop conditions, `resume`, `land`,
+`archive` and `delete` stay per run. A typical flow: start K runs with
+`--group perf` (one per terminal, or in the background), follow them on
+[`autohelix dashboard`](#autohelix-dashboard) (`--metric` picks the column to
+compare), `autohelix land <winner>`, and `autohelix archive` the rest. Group
+runs land manually by default: with auto landing the first to finish would land
+and every other would diverge from it for good. `resume --group NAME` moves a
+run into a group (from its next iteration) and `resume --group ''` takes it
+out; archiving a run takes it out of its group, and resuming it brings it back.
+
 ### Run ids
 
 A run's id is the local date and time it started, its name if it has one, and
@@ -133,7 +157,7 @@ repository; git commands need the full id (`git merge autohelix/20261111-1432-k3
 Continue a run.
 
 ```bash
-autohelix resume [RUN_ID] [-n MORE | --until N] [-p PATH] [-c CONFIG] [--land auto|manual] [--verbose] [--no-report]
+autohelix resume [RUN_ID] [-n MORE | --until N] [-p PATH] [-c CONFIG] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
 ```
 
 | Option | Description |
@@ -141,6 +165,8 @@ autohelix resume [RUN_ID] [-n MORE | --until N] [-p PATH] [-c CONFIG] [--land au
 | `-n`, `--iterations` | How many **more** iterations to run |
 | `--until N` | Run up to iteration N (a total: running it twice does nothing the second time) |
 | `--config`, `-c` | Config file (default: the one the run started with; another one is used for this segment, with a warning) |
+| `--land auto\|manual` | Change the run's landing mode (stored; default: keep it) |
+| `--group NAME` | Put the run in group NAME from its next iteration (stored); `--group ''` takes it out of its group |
 
 Other options as for `run`. Without `RUN_ID`, resumes the most recently active
 run of the config that isn't [archived](#autohelix-archive), preferring runs
@@ -229,7 +255,7 @@ autohelix dashboard [-p PATH] --json
 autohelix dashboard [-p PATH] --web [--port 8765] [--open]
 ```
 
-By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C: the id; the status (with the phase while running), with time and cost so far underneath; iterations of the run's budget; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; and when the run was last active. The header names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
+By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C: the id, with its group after it (`20261111-1432-k3f9 (perf)`); the status (with the phase while running), with time and cost so far underneath; iterations of the run's budget; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; and when the run was last active. The header names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
 
 `--web` serves the same rows as a live page instead (`--port`, default 8765, and `--open` go with it). There the metric's change against the run's own baseline is in the tooltip, and the metric is picked from a menu in the column header. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel). Archived runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view --web`](#autohelix-view) page. It is the same server as `autohelix view --web`, with the same `127.0.0.1`-only binding.
 
@@ -240,6 +266,7 @@ By default the terminal shows one row per run in `.autohelix/runs/`, redrawn eve
 - `schema` (1), `project` (folder name), `host`, `path` (absolute), `path_display` (with `~` for your home folder), and the checkout's `branch` (`null` when detached) and short `commit`.
 - `runs`, most recently active first. Each run has:
   - `id`, `name`, `archived` (true or false), `created_at`, `last_activity`;
+  - `group` (`null` outside a group) and `land` (`auto` or `manual`: the run's landing mode);
   - `config_file` and `goal`, read from the config file as it is now in the checkout;
   - `status`: the last segment's `state` (`running`, `finished`, `interrupted`, `failed`, or `crashed` when its process is gone), `phase`, `iteration`, `iteration_started_at`, `phase_started_at`, `stopped_at`, `stop_reason` (`kind`, `detail`, …) and `max_iterations`; `null` before the first segment;
   - `accepted`: the number of accepted iterations;
@@ -288,7 +315,7 @@ stop:
 - An invalid answer or failed call is retried once. The command stays inside the timeout of the check that runs it.
 - **Scripts own the exit code.** `ask` exits non-zero when it can't answer; a script that swallows that (`autohelix ask ... || true`) and exits 0 passes.
 - **Judges can't change what they judge.** Each call fingerprints the files in its directory first. If the call changes one or adds a non-ignored file, it ends without retry: standalone ask exits 2, and in a run the call's usage record keeps an `integrity_violation` flag that rejects the iteration even if a wrapper script restores the files and exits 0.
-- **Limits.** The judge reads the same directory the agent worked in, including `.autohelix/notes/` and gitignored files, which scope enforcement doesn't revert. Keep criteria files out of `scope.editable`. Running the judge on a clean copy (without notes, gitignored files or agent instruction files) is planned.
+- **Limits.** The judge reads the directory it runs in. In a run that is the checks or stop copy: the candidate's files, with no notes or other harness material, but with any new or gitignored files earlier commands left there. Keep criteria files out of `scope.editable`.
 
 ## `autohelix report`
 
@@ -303,27 +330,3 @@ autohelix report [RUN_ID] [-p PATH] [--config PATH]
 | `--config`, `-c` | Path to config file (default: the run's own) |
 
 `autohelix run` and `resume` write the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. One agent call reads the run's history, notes, reviews, logs and commits and writes `.autohelix/runs/<id>/output/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
-
-## `autohelix parallel` (alpha)
-
-Run multiple workers concurrently, each with its own config file and git worktree. Point them at the same goal to explore it in parallel, or give each a different one.
-
-```bash
-autohelix parallel --worker A.yaml --worker B.yaml [--sync-notes-every N]
-autohelix parallel                                 # resume this repo's previous workers
-```
-
-| Option | Description |
-|--------|-------------|
-| `--worker` | Per-worker config file (repeatable — one worker per flag) |
-| `--sync-notes-every` | Sync notes between workers every N iterations (default: 1) |
-| `--path`, `-p` | Target git repo (default: current dir) |
-| `--verbose` | Verbose per-worker output |
-
-Per-worker settings (model, timeout, agent, budget) come from each worker's own config file, not from command-line flags.
-
-Each worker runs fully async in a worktree on its own branch (`parallel/worker-N`), driven to its config's `budget.iterations`. Workers only ever write their own branch, so they never conflict. Every `--sync-notes-every` iterations, each worker's notes are mirrored to a shared directory that peers symlink into `.autohelix/peer_notes/` — so agents can read what the others have tried, but not overwrite it. Peers' accepted code is visible from an agent's copy as `autohelix/<peer-run-id>` (e.g. `git show autohelix/<id>:file`); those refs are a snapshot taken when the iteration starts.
-
-Worktrees and branches **persist** across runs and nothing is deleted automatically: re-running `autohelix parallel` (or a bare invocation with no `--worker`) resumes each worker's run from where it stopped (each worker segment is an `autohelix resume <id> --until N`), reusing the recorded configs and sync interval. When workers share a single metric, results are shown as a leaderboard ranked by that metric (the first metric declared in each config); the branches are the deliverable, left for you to `git merge` the winner and remove the rest.
-
-Iterations come from each worker's `budget.iterations`; model, timeout, agent backend, and all other per-worker settings live in each worker's config file.

@@ -33,10 +33,11 @@ from autohelix.checks import preflight_check, run_constraints, run_observables, 
 from autohelix.run_status import RunStatus
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
 from autohelix.formatting import format_cost, format_delta, format_duration, format_total_cost
-from autohelix.prompt_template import build_prompt_variables, load_template, render_template
+from autohelix.prompt_template import build_prompt_variables, load_template, render_template, uses_old_layout
 from autohelix.run_log import RunLog
 from autohelix.sandbox import ensure_clean_working_tree, ensure_editable_files_ready
-from autohelix.workspace import SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, CandidateRejected, Copy, Repo, Scope
+from autohelix.workspace import (SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, CandidateRejected, Copy,
+                                 Repo, Scope)
 from autohelix.state import (
     GitExcludeError,
     ensure_runtime_ignored,
@@ -136,10 +137,15 @@ class Harness:
     def __init__(self, project_path: Path, verbose: bool = False, heartbeat_seconds: int = 30,
                  config_file: Path | None = None, *, new: bool = False,
                  run_id: str | None = None, name: str | None = None,
-                 land_mode: str | None = None, create: bool = True):
+                 land_mode: str | None = None, create: bool = True, group: str | None = None):
         """Own one run: `run_id`, a new one (`new`, as `autohelix run`), or the config's
         most recently active run (as `autohelix resume`; created if there is none,
-        unless `create` is false)."""
+        unless `create` is false).
+
+        A new run records its landing mode (`land_mode`, else the config's `land:`,
+        else auto, or manual with a `group`) and its `group`. On resume `land_mode`
+        and `group` change the stored ones (`group=''` clears it) once the segment
+        starts; otherwise the run keeps its own."""
         self.project_path = Path(project_path).resolve()
         if run_id and config_file is None:
             selected = RunPaths(self.project_path, run_id).read_identity()
@@ -159,13 +165,26 @@ class Harness:
         # every child's git (agent, checks, judges) to the user's repository.
         for key in SCRUBBED_GIT_ENV:
             os.environ.pop(key, None)
-        self.land_mode = land_mode or self.config.land
         self._preflight_done = False
         self.paths, self.run_info, self._ownership, notices = select_run(
             self.project_path, config_file or self.project_path / "autohelix.yaml",
             new=new, run_id=run_id, name=name if name is not None else self.config.name,
-            create=create, ready=self._first_start_ready,
+            create=create, ready=self._first_start_ready, group=group or None,
+            # A group lands manually unless --land says otherwise: the config's `land:` is
+            # the default for runs on their own (auto landing in a group diverges the rest).
+            land_mode=land_mode or ("manual" if group else self.config.land or "auto"),
         )
+        # Stored on resume when the segment starts (`_run`): the mode and group asked for.
+        self._identity_changes: dict = {}
+        if land_mode and self.run_info.get("land") != land_mode:
+            self._identity_changes["land"] = land_mode
+        if group is not None and (self.run_info.get("group") or "") != group:
+            self._identity_changes["group"] = group or None
+            short = short_id(self.paths.run_id)
+            notices.append(("info", f"{short} joins group {group} from its next iteration." if group
+                            else f"{short} leaves group {self.run_info['group']}."))
+        # Runs from before landing modes were recorded follow the config, as they did.
+        self.land_mode = land_mode or self.run_info.get("land") or self.config.land or "auto"
         for level, text in notices:
             self.console.print(f"[yellow]{text}[/yellow]" if level == "warn" else f"[dim]{text}[/dim]", highlight=False)
         try:
@@ -219,7 +238,7 @@ class Harness:
 
     def _build_commit_message(self, iteration: int, metrics: dict[str, float], summary: str | None = None) -> str:
         """Build a commit message with metric deltas and the agent's summary (first line
-        of its `.autohelix/commit_summary.txt`, read when the copy was frozen)."""
+        of its `.autohelix-iteration/commit_summary.txt`, read when the copy was frozen)."""
         if summary:
             lines = [summary, "", f"AutoHelix iteration {iteration}"]
         else:
@@ -446,7 +465,7 @@ class Harness:
             # Mark the whole .opencode/ tree as gitignored within the worktree so
             # scope enforcement (revert_out_of_scope, which keys off
             # --exclude-standard) treats this harness-managed tooling like
-            # .autohelix/ and doesn't flag/delete it as an out-of-scope change.
+            # .autohelix-iteration/ and doesn't flag/delete it as an out-of-scope change.
             (worktree_path / ".opencode" / ".gitignore").write_text("*\n")
         except OSError:
             pass
@@ -524,11 +543,13 @@ class Harness:
                 parts.append(f"{secs:.1f}s")
         return " | ".join(parts)
 
-    def build_prompt(self, iteration: int, worktree_dir: Path) -> str:
-        """Build the prompt for the agent using the template."""
-        template = load_template(self.project_path)
+    def build_prompt(self, iteration: int, worktree_dir: Path, members=()) -> str:
+        """Build the prompt for the agent using the template; `members` are the other
+        runs of the group, as `group_members` returns them."""
+        template = load_template(self.config)
         variables = build_prompt_variables(
-            self.config, self.history, iteration, worktree_dir
+            self.config, self.history, iteration, worktree_dir,
+            group=self.run_info.get("group"), members=members,
         )
         return render_template(template, variables)
 
@@ -588,12 +609,12 @@ class Harness:
         require_notes = self.config.agent.require_notes
         if require_notes is not None:
             notes_file = (
-                worktree_path / ".autohelix" / "notes" / f"iter-{iteration}.md"
+                worktree_path / ITERATION_DIR / "notes" / f"iter-{iteration}.md"
             )
             # Retry counter lives under runtime/state/ so it never clutters
             # the agent's notes dir. Reset here so each iteration starts fresh.
             retry_file = (
-                worktree_path / ".autohelix" / "runtime" / "state" / f"iter-{iteration}.retries"
+                worktree_path / ITERATION_DIR / "runtime" / "state" / f"iter-{iteration}.retries"
             )
             try:
                 retry_file.parent.mkdir(parents=True, exist_ok=True)
@@ -682,7 +703,7 @@ class Harness:
             settings=self.config.agent.settings,
             extra_args=self.config.agent.extra_args,
             auto_memory=self.config.reviewer.auto_memory,
-            system_prompt="Read the candidate without editing it. Only .autohelix/review.md may be written.",
+            system_prompt=f"Read the candidate without editing it. Only {ITERATION_DIR}/review.md may be written.",
         )
 
     def _build_reviewer_prompt(self, worktree_path: Path) -> str:
@@ -693,8 +714,8 @@ class Harness:
         prompt = self.config.reviewer.prompt.strip()
         # Use absolute path - Claude Code resolves relative paths against project root,
         # not cwd, so we must be explicit about the worktree location
-        review_path = worktree_path / ".autohelix" / "review.md"
-        diff = worktree_path / ".autohelix" / "candidate.diff"
+        review_path = worktree_path / ITERATION_DIR / "review.md"
+        diff = worktree_path / ITERATION_DIR / "candidate.diff"
         return (f"{prompt}\n\nThe complete change under review, including new files, is in {diff}."
                 f"\n\nWrite your review to {review_path}")
 
@@ -757,7 +778,7 @@ class Harness:
             except RuntimeError:  # removed or replaced its copy
                 changed = True
             if result.success and not changed:
-                source = review.working_dir / ".autohelix" / "review.md"
+                source = review.working_dir / ITERATION_DIR / "review.md"
                 if source.is_file() and not source.is_symlink():
                     self.paths.reviews.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, self.paths.reviews / f"iter-{iteration}.md")
@@ -840,7 +861,8 @@ class Harness:
         if self.verbose:
             self.console.print(f"  Working dir: {agent_copy.working_dir}")
         self.run_status.note(worktree=str(agent_copy.working_dir))
-        prompt = self.build_prompt(iteration, agent_copy.working_dir)
+        prompt = self.build_prompt(iteration, agent_copy.working_dir, workspace.members)
+        workspace.write_prompt(prompt)
         if self.verbose:
             self.console.print(Panel(prompt.strip(), title="[bold]Agent Prompt[/bold]", border_style="dim"))
             self.console.print()
@@ -1342,6 +1364,15 @@ class Harness:
         remove_copies(self.run_state.copies_root, self.log.warn)  # left by a segment that crashed
         if not self.repo.attr_source:
             self.console.print(f"  [yellow]WARN[/yellow] {ATTR_SOURCE_LIMITATION}")
+        if (self.project_path / ".autohelix" / "prompt.md").exists():
+            self.console.print("  [yellow]WARN[/yellow] .autohelix/prompt.md is no longer read: the built-in "
+                               "prompt is used. To keep a custom prompt, move it next to your config, set "
+                               "`prompt_template: <file>` there, and update its .autohelix/ paths to "
+                               f"{ITERATION_DIR}/. Otherwise delete it.", highlight=False)
+        if self.config.prompt_template and uses_old_layout(load_template(self.config)):
+            self.console.print(f"  [yellow]WARN[/yellow] {self.config.prompt_template.name} names .autohelix/ paths "
+                               f"in the agent's copy; they are now {ITERATION_DIR}/ (notes written to the old "
+                               "place are lost).", highlight=False)
 
         # Run preflight checks before the baseline (silent on success); a first
         # start already ran them before allocating the run.
@@ -1352,7 +1383,12 @@ class Harness:
         self._segment_started = True
         self._segment_target_tip = self._target_tip()
         flags = [self.run_info.pop("archived", None), self.run_info.pop("lifecycle", None)]
-        if any(flags):
+        for key, value in self._identity_changes.items():  # `resume --land` / `--group`
+            if value is None:
+                self.run_info.pop(key, None)
+            else:
+                self.run_info[key] = value
+        if any(flags) or self._identity_changes:
             write_json(self.paths.identity, self.run_info)  # resuming brings an archived run back
 
         # Capture baseline on first run

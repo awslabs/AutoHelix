@@ -25,7 +25,7 @@ def _harness(project, monkeypatch, *, reviewer_cost=0.04, success=True, write_re
     def review(**kwargs):
         calls.append(kwargs["iteration"])
         if write_review:
-            (kwargs["worktree_path"] / ".autohelix" / "review.md").write_text("Review")
+            (kwargs["worktree_path"] / ".autohelix-iteration" / "review.md").write_text("Review")
         usage = {"input_tokens": 50, "cost_model": "review-model"}
         if reviewer_cost is not None:
             usage["cost_usd"] = reviewer_cost

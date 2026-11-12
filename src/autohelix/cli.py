@@ -14,9 +14,8 @@ import click
 from autohelix.config import load_config
 from autohelix.harness import Harness
 from autohelix.history import History
-from autohelix.runs import (NoRunToResume, RunPaths, RunLock, archive as archive_run, delete as delete_run,
-                            land as land_run, resolve_run, run_tip, short_id)
-from autohelix.formatting import format_total_cost
+from autohelix.runs import (NoRunToResume, RunPaths, RunLock, archive as archive_run, check_group,
+                            delete as delete_run, land as land_run, resolve_run, run_tip, short_id)
 from autohelix import run_table
 from autohelix.skill import skill
 from autohelix.state import (
@@ -25,38 +24,6 @@ from autohelix.state import (
     ensure_runtime_ignored,
     read_stored_config_path,
 )
-
-
-def _parallel_marker_path(project_path: Path) -> Path:
-    """Location of the parallel-run marker (points at resumable worktree state)."""
-    return project_path / ".autohelix" / "parallel" / "run.json"
-
-
-def _warn_if_parallel(project_path: Path, console) -> None:
-    """If this repo was driven by `autohelix parallel`, warn that top-level
-    commands (report/view) see nothing — the run state lives in the workers'
-    worktrees, not here. Lists where to point instead. Best-effort only.
-    """
-    import json as _json
-
-    marker = _parallel_marker_path(project_path)
-    if not marker.exists():
-        return
-    try:
-        data = _json.loads(marker.read_text())
-        workers = data.get("workers", [])
-    except (OSError, ValueError):
-        return
-    if not workers:
-        return
-    console.print(
-        "[yellow]This repo was run with `autohelix parallel`.[/yellow] "
-        "Top-level state is empty — each worker keeps its own state in its worktree."
-    )
-    console.print("  Point at a worker instead, e.g.:")
-    for w in workers:
-        console.print(f"    [cyan]-p {w.get('worktree')}[/cyan]", highlight=False)
-    console.print()
 
 
 def _get_version() -> str:
@@ -134,14 +101,8 @@ def init(path: str):
         click.echo(f"Already initialized ({autohelix_dir})")
         return
 
-    # Create .autohelix/ structure. `notes/` is the agent-owned memory dir; the
-    # default prompt teaches the iter-N.md convention, but it is free-form.
+    # The agent prompt is built in (a config can replace it with `prompt_template:`).
     autohelix_dir.mkdir()
-
-    # Write prompt template
-    from autohelix.prompt_template import DEFAULT_TEMPLATE
-
-    (autohelix_dir / "prompt.md").write_text(DEFAULT_TEMPLATE)
 
     # Write config template if none exists
     config_path = project_path / "autohelix.yaml"
@@ -174,11 +135,19 @@ def _segment_options(command):
         click.option("--verbose", is_flag=True, help="Show agent command details and heartbeat messages"),
         click.option("--no-report", is_flag=True, help="Don't write the run summary when the run finishes"),
         click.option("--land", "land_mode", type=click.Choice(["auto", "manual"]),
-                     help="Fast-forward the target branch at the end (auto, the default) or leave it to "
-                          "`autohelix land` (manual)."),
+                     help="Fast-forward the target branch at the end of each segment (auto) or leave it to "
+                          "`autohelix land` (manual). Stored with the run; a new run's default is the config's "
+                          "land:, else auto (manual with --group)."),
     ]):
         command = option(command)
     return command
+
+
+def _group(value: str | None) -> str | None:
+    try:
+        return None if value is None else check_group(value)
+    except RuntimeError as error:
+        raise click.BadParameter(str(error), param_hint="--group") from error
 
 
 def _start(path: str, config_file: str | None, **selection) -> Harness:
@@ -217,14 +186,22 @@ def _segment(harness: Harness, iterations: int | None, report: bool) -> None:
 @_segment_options
 @click.option("--iterations", "-n", type=click.IntRange(min=1), help="Iterations to run (default: budget.iterations)")
 @click.option("--name", help="Readable part of the new run's id.")
+@click.option("--group", help="Share notes and code with the project's other runs of this group "
+                              "(landing defaults to manual).")
 def run(path: str, config_file: str | None, verbose: bool, no_report: bool, land_mode: str | None,
-        iterations: int | None, name: str | None):
+        iterations: int | None, name: str | None, group: str | None):
     """Start a new run of the optimization loop.
 
     Always a new run, with its own budget, notes and history; to continue one,
     use `autohelix resume`. Reads autohelix.yaml (or --config).
+
+    With --group NAME, each iteration's agent also sees the other non-archived
+    runs of that group: their notes and history, and their code on
+    autohelix/<id>. Start several, compare them on the dashboard, land the
+    winner and archive the rest.
     """
-    harness = _start(path, config_file, verbose=verbose, new=True, name=name, land_mode=land_mode)
+    harness = _start(path, config_file, verbose=verbose, new=True, name=name, land_mode=land_mode,
+                     group=_group(group) or None)
     _segment(harness, iterations, not no_report)
 
 
@@ -233,19 +210,23 @@ def run(path: str, config_file: str | None, verbose: bool, no_report: bool, land
 @_segment_options
 @click.option("--iterations", "-n", type=click.IntRange(min=1), help="How many more iterations to run.")
 @click.option("--until", type=click.IntRange(min=1), help="Run up to iteration N (repeatable; for scripts).")
+@click.option("--group", help="Set or change the run's group from its next iteration; '' clears it.")
 def resume(run_id: str | None, path: str, config_file: str | None, verbose: bool, no_report: bool,
-           land_mode: str | None, iterations: int | None, until: int | None):
+           land_mode: str | None, iterations: int | None, until: int | None, group: str | None):
     """Continue a run: RUN_ID (or its last part), else this config's latest.
 
     The latest is the most recently active run for the config that isn't
     archived, preferring runs that captured their baseline. Without -n or --until it runs to
     budget.iterations; cost and time budgets stay run totals from the config.
-    Exits 3 when there is no run to resume.
+    The run keeps its landing mode and group unless --land or --group changes
+    them. Exits 3 when there is no run to resume.
     """
     if iterations and until:
         raise click.UsageError("Use either -n (more iterations) or --until (up to an iteration), not both.")
+    group = _group(group)
     selected = _run_id(Path(path), run_id)
-    harness = _start(path, config_file, verbose=verbose, run_id=selected, create=False, land_mode=land_mode)
+    harness = _start(path, config_file, verbose=verbose, run_id=selected, create=False, land_mode=land_mode,
+                     group=group)
     if iterations:
         until = harness.history.get_last_iteration() + iterations
     _segment(harness, until, not no_report)
@@ -307,184 +288,6 @@ def delete(run_ids: tuple[str, ...], path: str, force: bool):
         except RuntimeError as e:
             raise click.ClickException(str(e)) from e
         click.echo(f"Deleted {short_id(paths.run_id)}.")
-
-
-@main.command(context_settings={"ignore_unknown_options": True})
-@click.option("--worker", "worker_configs", multiple=True,
-              type=click.Path(exists=True),
-              help="Per-worker config file (repeatable). One worker per --worker. "
-                   "Omit to resume the repo's previous parallel run.")
-@click.option("--path", "-p", type=click.Path(exists=True), default=".",
-              help="Target git repo (default: current dir)")
-@click.option("--sync-notes-every", "sync_every", type=int, default=None,
-              help="Sync notes between workers every N iterations (default: 1).")
-@click.option("--verbose", is_flag=True, help="Verbose per-worker run output")
-@click.argument("run_args", nargs=-1, type=click.UNPROCESSED)
-def parallel(worker_configs: tuple[str, ...], path: str, sync_every: int | None,
-             verbose: bool, run_args: tuple[str, ...]):
-    """Run multiple AutoHelix workers in parallel on the same goal.
-
-    Each --worker config becomes an independent worker in its own git worktree
-    (branch parallel/worker-N). Workers share notes via symlinks so each agent
-    can read what peers have tried. Notes are synced every --sync-notes-every iterations.
-
-    Per-worker settings (model, timeout, agent, budget, etc.) come from each
-    worker's own config file, not from the command line.
-
-    Run with no --worker to resume the repo's previous parallel run (from -p or
-    the current dir): the recorded configs and sync interval are reused.
-    Completed iterations are not repeated.
-
-    \b
-        autohelix parallel --worker a.yaml --worker b.yaml --worker c.yaml
-        autohelix parallel --worker a.yaml --worker b.yaml --sync-notes-every 3
-        autohelix parallel                 # resume previous run in this repo
-    """
-    import json as json_mod
-
-    from rich.console import Console
-
-    from autohelix.parallel import leaderboard, run_parallel
-
-    console = Console()
-
-    repo = Path(path).resolve()
-
-    # Resume: with no --worker, reconstruct the run from the repo's marker.
-    if not worker_configs:
-        marker = _parallel_marker_path(repo)
-        data = None
-        if marker.exists():
-            try:
-                data = json_mod.loads(marker.read_text())
-            except (OSError, ValueError):
-                data = None
-        recorded = (data or {}).get("configs")
-        if not recorded:
-            raise click.UsageError(
-                "No --worker given and no previous parallel run found in this repo "
-                f"({repo}). Pass --worker <config> (repeatable), or run from the repo "
-                "of a prior `autohelix parallel` to resume it."
-            )
-        missing = [c for c in recorded if not Path(c).exists()]
-        if missing:
-            raise click.UsageError(
-                "Cannot resume — worker config(s) no longer exist: "
-                + ", ".join(missing)
-            )
-        worker_configs = tuple(recorded)
-        if sync_every is None:
-            sync_every = (data or {}).get("sync_every", 1)
-        if not run_args:
-            run_args = tuple((data or {}).get("run_args", []))
-        console.print(f"  [dim]Resuming previous run ({len(worker_configs)} workers).[/dim]")
-
-    if sync_every is None:
-        sync_every = 1
-
-    # Workers run `autohelix resume <id> --until N`: run-only and selection flags would fail there.
-    forbidden = {"-n", "--iterations", "--until", "-c", "--config", "-p", "--path", "--name", "--new", "--run"}
-    for arg in run_args:
-        flag = arg.split("=", 1)[0]
-        if flag in forbidden:
-            raise click.UsageError(
-                f"'{flag}' is managed by `parallel` and cannot be forwarded to workers. "
-                "Set per-worker iterations via budget.iterations in each config; "
-                "config/path are wrapper-controlled."
-            )
-
-    configs = [Path(c).resolve() for c in worker_configs]
-
-    fwd = f"  [dim]forwarding: {' '.join(run_args)}[/dim]" if run_args else ""
-    console.print(f"\n  [bold]AutoHelix parallel[/bold] — {len(configs)} workers, sync notes every {sync_every}{fwd}\n")
-    for i, cfg in enumerate(configs, start=1):
-        console.print(f"  [dim]worker-{i}:[/dim] {cfg.name}", highlight=False)
-    console.print()
-
-    workers = run_parallel(repo, configs, sync_every=sync_every,
-                           verbose=verbose, run_args=list(run_args))
-
-    # Write a small marker recording where the resumable state lives and how the
-    # run was launched. The worktrees remain the source of truth (they hold each
-    # worker's live .autohelix/ state); the marker lets top-level report/view
-    # warn that the main repo's state is empty and point at the workers, and lets
-    # a bare `autohelix parallel` resume without re-listing --worker configs.
-    marker = _parallel_marker_path(repo)
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(json_mod.dumps({
-        "configs": [str(c) for c in configs],
-        "sync_every": sync_every,
-        "run_args": list(run_args),
-        "workers": [
-            {"name": w.name, "worktree": str(w.worktree), "branch": w.branch}
-            for w in workers
-        ],
-    }, indent=2))
-
-    ranked = leaderboard(workers)
-    scored_metrics = {w.best_metric for w in ranked if w.best_score is not None}
-    is_ranked = len(scored_metrics) <= 1
-    heading = "Leaderboard" if is_ranked else "Results"
-    console.print(f"\n  [bold]{heading}[/bold]")
-    for i, w in enumerate(ranked, start=1):
-        prefix = f"   {i}." if is_ranked else "   •"
-        hist = History(w.worktree, w.run_id)
-        results = hist.load()
-        usages = hist.cost_usages
-        cost_text = format_total_cost(usages) if usages else None
-        cost = (
-            f"  cost={cost_text}" if cost_text and cost_text.startswith("$")
-            else f"  {cost_text}" if cost_text else ""
-        )
-        delta = ""
-        delta_style = ""
-        if w.best_score is not None and w.best_metric:
-            baseline_r = next((r for r in results if r.iteration == 0), None)
-            if baseline_r and w.best_metric in baseline_r.metrics:
-                baseline_val = baseline_r.metrics[w.best_metric]
-                if baseline_val != 0 and baseline_val != w.best_score:
-                    from autohelix.formatting import format_delta
-                    delta_text = format_delta(w.best_score, baseline_val)
-                    pct = (w.best_score - baseline_val) / baseline_val * 100
-                    improved = (pct < 0) if w.direction == "lower" else (pct > 0)
-                    delta_style = "green" if improved else "red"
-                    delta = f" ({delta_text})"
-        if w.error:
-            console.print(f"{prefix} {w.name}  [red]error: {w.error}[/red]")
-        elif w.best_score is not None:
-            # delta_style is only set when the score differs from baseline; guard
-            # against empty markup tags (`[][/]`), which raise MarkupError.
-            delta_markup = f" [{delta_style}]{delta}[/{delta_style}]" if delta_style else delta
-            console.print(f"{prefix} {w.name}  {w.best_metric}={w.best_score:g}{delta_markup}  {cost}", highlight=False)
-        else:
-            console.print(f"{prefix} {w.name}  [dim]no score[/dim]  {cost}", highlight=False)
-
-    # Worktrees and branches are left in place so a re-run resumes each worker
-    # and the user can merge the winner or discard the rest.
-    root = repo.parent / f"{repo.name}-parallel"
-    branches = [w.branch for w in workers]
-    # Only offer to merge a worker that actually produced a score — merging an
-    # errored/no-score branch is a footgun.
-    best = ranked[0] if ranked and ranked[0].best_score is not None else None
-
-    console.print(f"\n  [dim]Code on branches: {', '.join(branches)}[/dim]")
-    console.print(f"  [dim]Worktrees (resumable state) at: {root}[/dim]")
-    console.print(f"\n  [dim]Re-run `autohelix parallel` (from {repo}) to resume each worker from where it stopped.[/dim]")
-    if best:
-        losers = [w for w in workers if w.branch != best.branch]
-        console.print(f"\n  [bold]Best:[/bold] {best.name}", highlight=False)
-        console.print("\n  [dim]# from your main repo, on a clean branch you want the result on:[/dim]")
-        console.print(f"    [cyan]git merge {best.branch}[/cyan]", highlight=False)
-        if losers:
-            console.print("\n  [dim]# inspect a loser before discarding:[/dim]")
-            console.print(f"    [cyan]git diff HEAD..{losers[0].branch}[/cyan]", highlight=False)
-        console.print("\n  [dim]# when done — removes worktrees and deletes branches (unmerged work is lost):[/dim]")
-        for b in branches:
-            console.print(f"    [cyan]git worktree remove {root / b.split('/')[-1]}[/cyan]", highlight=False)
-        console.print(f"    [cyan]git branch -D {' '.join(branches)}[/cyan]", highlight=False)
-    console.print()
-    if any(w.error for w in workers):
-        raise click.ClickException("One or more parallel workers failed; see worker errors above.")
 
 
 @main.command()
@@ -645,12 +448,8 @@ def _view_live(project_path: Path, run_id: str | None, config_file: Path | None)
     from rich.console import Console
 
     from autohelix.live import view as live_view
-    from autohelix.run_status import read_run_status
 
     console = Console()
-    if _parallel_marker_path(project_path).exists() and read_run_status(project_path) is None:
-        _warn_if_parallel(project_path, console)  # lists the workers to view instead
-        raise SystemExit(1)
     if not (project_path / ".autohelix").is_dir():
         console.print(f"[red]No .autohelix/ in {project_path}.[/red] Run this in an AutoHelix project.")
         raise SystemExit(1)
@@ -754,7 +553,6 @@ def report(run_id: str | None, path: str, config_file: str | None):
         raise SystemExit(1)
 
     if not RunPaths(project_path, run_id).run_id or History(project_path, run_id).get_last_iteration() == 0:
-        _warn_if_parallel(project_path, console)
         console.print("[yellow]No iterations run yet. Nothing to report.[/yellow]")
         raise SystemExit(1)
 

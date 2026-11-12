@@ -218,7 +218,8 @@ class TestPrepareWorktree:
 
         prepare_state(RunPaths(git_project), wt)
 
-        wt_ah = wt.working_dir / ".autohelix"
+        wt_ah = wt.working_dir / ".autohelix-iteration"
+        assert not (wt.working_dir / ".autohelix").exists()  # nothing in a copy looks like project state
         assert (wt_ah / "notes" / "iter1.md").read_text() == "some notes\n"
         assert (wt_ah / "hints.md").read_text() == "try harder\n"
         assert (wt_ah / "observations" / "iter-0" / "stdout.txt").exists()
@@ -231,7 +232,7 @@ class TestPrepareWorktree:
 
         ah = git_project / ".autohelix"
         ah.mkdir(parents=True, exist_ok=True)
-        # These should be copied
+        # The project's template is not the iteration's prompt
         (ah / "prompt.md").write_text("Goal: {{goal}}\n")
         (ah / "history.jsonl").write_text("{}\n")
         (ah / "notes").mkdir()
@@ -243,15 +244,16 @@ class TestPrepareWorktree:
         (ah / "logs" / "iter-1" / "agent.log").write_text("log\n")
         (ah / "output").mkdir(exist_ok=True)
 
-        prepare_state(RunPaths(git_project), wt)
+        prepare_state(RunPaths(git_project), wt, prompt="Goal: rendered\n")
 
-        wt_ah = wt.working_dir / ".autohelix"
-        assert (wt_ah / "prompt.md").exists()
+        wt_ah = wt.working_dir / ".autohelix-iteration"
+        assert (wt_ah / "prompt.md").read_text() == "Goal: rendered\n"
         assert (wt_ah / "history.jsonl").exists()
         assert (wt_ah / "notes" / "iter-1.md").exists()
         assert (wt_ah / "logs" / "iter-1" / "agent.log").exists()
         assert not (wt_ah / "runtime").exists()
         assert not (wt_ah / "output").exists()
+        assert not (wt_ah / "runs").exists()  # no group
 
     def test_prepare_worktree_no_autohelix_dir(self, git_project):
         wt = _fake_copy(git_project, 1)
@@ -265,27 +267,82 @@ class TestPrepareWorktree:
         # Should not raise
         prepare_state(RunPaths(git_project), wt)
 
+    def test_group_members_are_copied_read_only_subset(self, git_project):
+        wt = _fake_copy(git_project, 1)
+        member = RunPaths(git_project, "20261111-1432-k3f9")
+        member.run_dir.mkdir(parents=True)
+        member.identity.write_text('{"id": "20261111-1432-k3f9"}\n')
+        member.history.write_text('{"iteration": 0, "accepted": true}\n')
+        (member.run_dir / "notes.1").mkdir()
+        (member.run_dir / "notes.1" / "iter-1.md").write_text("member note\n")
+        member.notes.symlink_to("notes.1")
+        (member.logs / "iter-1").mkdir(parents=True)
+
+        prepare_state(RunPaths(git_project), wt, members=[(member, {})])
+
+        copied = wt.working_dir / ".autohelix-iteration" / "runs" / member.run_id
+        assert sorted(p.name for p in copied.iterdir()) == ["history.jsonl", "notes", "run.json"]
+        assert (copied / "notes" / "iter-1.md").read_text() == "member note\n"
+        assert not (copied / "notes").is_symlink()  # a copy: the agent can't write into the member's state
+
 
 class TestSaveNotes:
     def test_saves_notes_back(self, git_project):
         wt = _fake_copy(git_project, 1)
 
         # Create notes in worktree
-        wt_notes = wt.working_dir / ".autohelix" / "notes"
+        wt_notes = wt.working_dir / ".autohelix-iteration" / "notes"
         wt_notes.mkdir(parents=True)
         (wt_notes / "iter1.md").write_text("new notes\n")
 
-        save_notes(RunPaths(git_project), wt)
+        save_notes(RunPaths(git_project), wt, 1)
 
         saved = git_project / ".autohelix" / "notes" / "iter1.md"
         assert saved.exists()
         assert saved.read_text() == "new notes\n"
+        assert (git_project / ".autohelix" / "notes").readlink() == Path("notes.1")
 
     def test_save_notes_no_worktree_notes(self, git_project):
         wt = _fake_copy(git_project, 1)
 
         # No notes in worktree — should not raise
-        save_notes(RunPaths(git_project), wt)
+        save_notes(RunPaths(git_project), wt, 1)
+        assert not os.path.lexists(git_project / ".autohelix" / "notes")
+
+    def test_versions_honour_deletions_and_keep_every_version(self, git_project):
+        paths = RunPaths(git_project, "20261111-1432-abcd")
+        paths.run_dir.mkdir(parents=True)
+        # Notes saved before versions existed: a plain folder, kept as a version.
+        paths.notes.mkdir()
+        (paths.notes / "old.md").write_text("old\n")
+        wt = _fake_copy(git_project, 1)
+        prepare_state(paths, wt)
+        seeded = wt.working_dir / ".autohelix-iteration" / "notes"
+        assert (seeded / "old.md").read_text() == "old\n"
+        (seeded / "old.md").unlink()  # the agent tidies up
+        (seeded / "iter-1.md").write_text("one\n")
+        (seeded / "sub").mkdir()
+        (seeded / "sub" / "deep.md").write_text("deep\n")
+        (seeded / "escape.md").symlink_to("/etc/hosts")
+        save_notes(paths, wt, 1)
+
+        assert paths.notes.is_symlink() and paths.notes.readlink() == Path("notes.1")
+        assert sorted(p.name for p in paths.notes.iterdir()) == ["iter-1.md", "sub"]  # deletion honoured
+        assert (paths.run_dir / "notes.old" / "old.md").read_text() == "old\n"
+
+        second = _fake_copy(git_project, 2)
+        prepare_state(paths, second)
+        notes = second.working_dir / ".autohelix-iteration" / "notes"
+        assert not (notes / "old.md").exists() and (notes / "sub" / "deep.md").exists()
+        (notes / "iter-1.md").unlink()
+        save_notes(paths, second, 2)
+        assert paths.notes.readlink() == Path("notes.2")
+        assert not (paths.notes / "iter-1.md").exists()
+        assert (paths.run_dir / "notes.1" / "iter-1.md").read_text() == "one\n"  # every version stays
+        # A second save for the same iteration (an attempt that didn't consume it) gets its own version.
+        save_notes(paths, second, 2)
+        assert paths.notes.readlink() == Path("notes.2-2")
+        assert not list(paths.run_dir.glob("*.link"))  # the swap leaves no temporary link
 
 
 # ── Sandbox: ensure_editable_files_ready ─────────────────────────────────

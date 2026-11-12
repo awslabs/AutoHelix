@@ -6,7 +6,7 @@ agent prompt, editable scope, evaluation, feedback, and budget can all be
 customized.
 
 Each example highlights one possible combination of those pieces, from local
-code optimization to research, GPU post-training, and nested agent runs. Adapt
+code optimization to research and GPU post-training. Adapt
 or combine them to build a loop for your own project. See
 [Designing Your Own Loop](../docs/concepts.md#designing-your-own-loop) for
 guidance.
@@ -24,7 +24,6 @@ guidance.
 | [**task-queue**](task-queue/) | Implementation tasks | Task state and deliverables |
 | [**research**](research/) | Research evidence | Experiment, results, and report |
 | [**workflow-optimization**](workflow-optimization/) | AI workflow | Workflow code, prompt, and skill |
-| [**nested-autohelix**](nested-autohelix/) | Inner AutoHelix loop | AutoHelix setup and instructions |
 
 The checks and evaluators remain outside the agent's editable surface. See each
 example's configuration or README for its exact constraints, metrics, and
@@ -54,7 +53,7 @@ cd /tmp/autohelix-sorting
 autohelix run
 ```
 
-AlgoTune, KernelBench, and nested AutoHelix use their own setup commands:
+AlgoTune and KernelBench use their own setup commands:
 
 ```bash
 python examples/algotune/setup.py --list
@@ -65,9 +64,6 @@ python examples/kernelbench/setup.py --download
 python examples/kernelbench/setup.py --list
 python examples/kernelbench/setup.py L1_1_Square_matrix_multiplication \
   --dir /tmp/autohelix-kernelbench
-
-python examples/nested-autohelix/setup.py \
-  --dir /tmp/autohelix-nested
 ```
 
 ## KernelBench Tasks (GPU kernel optimization)

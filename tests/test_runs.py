@@ -308,7 +308,7 @@ def test_normalize_after_failed_agent_and_review_edits_are_rejected(project, mon
 
     def review(**kwargs):
         (kwargs["worktree_path"] / "code.py").write_text("judge edit")
-        (kwargs["worktree_path"] / ".autohelix" / "review.md").write_text("Feedback")
+        (kwargs["worktree_path"] / ".autohelix-iteration" / "review.md").write_text("Feedback")
         git(kwargs["worktree_path"], "add", "code.py")
         git(kwargs["worktree_path"], "commit", "-qm", "judge commit")
         return AgentRunResult(success=False, usage={"cost_usd": 0.3})
@@ -676,19 +676,6 @@ def test_selection_rereads_the_run_under_its_lock(project, monkeypatch):
         Harness(project, run_id=paths.run_id)
     with original(paths.lock):
         pass  # failed selection explicitly closed the acquired lease
-
-
-def test_real_worker_failure_includes_subprocess_stderr(project):
-    from autohelix.parallel.core import Worker, _run_segment
-
-    configure(project, agent={"type": "mock", "settings": {"should_fail": True}})
-    created = Harness(project, new=True)
-    created.close()
-    worker = Worker(index=1, name="worker-1", config_file=project / "autohelix.yaml", worktree=project,
-                    branch="unused", shared_dir=project / ".autohelix" / "peers", budget=1,
-                    run_id=created.paths.run_id)
-    with pytest.raises(RuntimeError, match="Worker exited 1.*Mock failure"):
-        _run_segment(worker, 1, False)
 
 
 def test_mutating_baseline_check_is_a_setup_error_before_agent_spend(project, monkeypatch):

@@ -36,21 +36,20 @@ uv pip install -e ".[dev]"
 - `src/autohelix/viewer.py` + `viewer_resources/` - `autohelix view --web` / `dashboard --web` app (`/` run list, `/run/<id>/` one run)
 - `src/autohelix/run_table.py` - `view` / `dashboard` terminal text (the `--json` payloads, `ProjectRuns.runs()` / `.run()`)
 - `src/autohelix/replay.py` - parse saved agent logs into events (live view, web view)
-- `src/autohelix/prompt_template.py` - agent prompt rendering
+- `src/autohelix/prompt_template.py` - agent prompt rendering (built-in template, or the config's `prompt_template:` file; `.autohelix/prompt.md` is no longer read)
 - `tests/` - test suite (pytest)
 - `examples/` - example projects (sorting, ml-recipe, writing,
   task-queue, research, workflow-optimization, algotune, posttrain,
-  kernelbench, nested-autohelix)
-- `scripts/run_dev_test.sh` - quick real-agent test against a bundled example (supports `--parallel N`)
+  kernelbench)
+- `scripts/run_dev_test.sh` - quick real-agent test against a bundled example (extra flags go to `autohelix run`)
 - `docs/` - user-facing documentation (plain markdown)
 
 ## CLI Commands
 
 ```
 autohelix init         # Initialize project (creates .autohelix/ and config template)
-autohelix run          # Start a new run of the optimization loop
-autohelix resume       # Continue a run (-n N more, --until N total)
-autohelix parallel     # Run multiple workers in parallel on the same goal
+autohelix run          # Start a new run of the optimization loop (--group NAME: share notes/code with its group)
+autohelix resume       # Continue a run (-n N more, --until N total; --group / --land change the stored ones)
 autohelix land         # Fast-forward the run tip onto its starting branch
 autohelix archive      # Hide a run from the dashboard and a bare resume; keeps everything
 autohelix delete       # Remove a run's state and ref (--force with unlanded commits)
@@ -66,7 +65,6 @@ autohelix report       # Agent-written analysis of the run
 pytest -n auto            # run all fast tests in parallel (~3 min; plain `pytest` is ~11 min)
 pytest -m slow            # run slow tests (requires real agent)
 bash scripts/run_dev_test.sh              # manual test with real agent (sorting, 1 iteration)
-bash scripts/run_dev_test.sh sorting --parallel 2  # exercise `autohelix parallel` with identical workers
 ```
 
 ## Docs
@@ -82,13 +80,14 @@ User-facing docs are plain markdown in `docs/` (see `docs/README.md` for the ind
 - Entry points: `autohelix init` scaffolds `.autohelix/` and writes a config template. `autohelix run` loads config and starts the harness loop.
 - Iteration isolation: `iteration.py` runs every phase in its own fresh `workspace.Copy` (agent, checks, reviewer, stop; baseline and report too): a private folder holding one tree, with its own `.git` borrowing the user's objects via alternates. The harness reads copies only from outside through `Repo` and a harness index kept in a private per-process folder; it never runs git inside a copy after a call used it. The agent copy is frozen to a tree T (pinned at `refs/autohelix-tmp/<id>`); checks run on a fresh copy of T with HEAD at A and T's files verified after every command; accept commits exactly T on A (`commit-tree`, no hooks), CAS-updates `refs/autohelix/<id>`, and records history in a deferred-SIGINT section. A no-op is accepted without a commit. Run segments land separately on the target branch.
 - Copy location: copies live outside the project, at `<base>/<dirname>-<hash8>/<run-id>/iter-N-<role>`, where base is `$AUTOHELIX_COPIES_ROOT` or `${XDG_CACHE_HOME:-~/.cache}/autohelix/copies` (`runs.copies_base()`). `runs.claim_copies()` fixes the folder for a process under the run lock (created on first use by `ensure_copies`: private 0700, owned, no symlinks below the base; a shared base must be sticky), base recorded in `runs/<id>/copies` for observers (`RunPaths.copies`), `GIT_CEILING_DIRECTORIES` set there. Segment end, standalone report and delete remove it; the project's folder stays with a `project.json` record (path, host) so `runs.sweep_copies()`, at the start of every `run`/`resume`, can remove leftovers of killed processes (runs whose lock is free) and other projects' folders whose checkout is gone (same host, over a day old). The root `conftest.py` points the base at a temporary folder for every test, examples included.
-- Scope enforcement: `Copy.snapshot()` resets out-of-scope paths to A's entries in the harness index only (nothing is written into the copy), with `--attr-source=A` when git supports it. Submodule changes reject the iteration.
-- Notes persist across rejections: freezing (or closing) the agent copy saves `notes/` to `.autohelix/runs/<id>/notes/` before deleting the copy. `notes/` is the sole agent-owned region and the only thing that round-trips; `iteration.prepare_state()` seeds agent and reviewer copies with `notes/` plus read-only reference (observations, hints, latest review as `review.md`).
+- Copy layout: nothing in a copy looks like project state. Agent and reviewer copies get the harness's material in `<copy>/.autohelix-iteration/` (`workspace.ITERATION_DIR`): `prompt.md` (the rendered prompt), `notes/`, `history.jsonl`, `hints.md`, `observations/`, `logs/`, `runtime/state/`, `review.md` (latest review; the reviewer writes its own there, plus `candidate.diff`), `commit_summary.txt` (written by the agent), and `runs/<id>/` for other runs of the group (`run.json`, `history.jsonl`, `notes/`). Checks copies get only `candidate.diff` (the complete change, new files included); stop copies get none of it. A copy's `.git` lists branches, tags, remotes and only this run's ref plus its group's (`Copy.create(refs=...)`); other runs' commits are reachable by hash, not discoverable.
+- Scope enforcement: `Copy.snapshot()` resets out-of-scope paths to A's entries in the harness index only (nothing is written into the copy), with `--attr-source=A` when git supports it. `.autohelix/` and `.autohelix-iteration/` are excluded from `add -A` by pathspec (unless already ignored: git refuses an exclude naming an ignored folder), so their contents are never hashed into the user's object store. Submodule changes reject the iteration.
+- Notes persist across rejections: freezing (or closing) the agent copy saves `notes/` as a new version, `.autohelix/runs/<id>/notes.<iteration>/`, then swaps the `runs/<id>/notes` symlink to it (`iteration.save_notes()`; deletions honoured, all versions kept; a pre-version real `notes/` folder becomes `notes.old`). `notes/` is the sole agent-owned region and the only thing that round-trips; `iteration.prepare_state()` seeds agent and reviewer copies with `notes/` plus read-only reference.
 - Run identity: `RunPaths` is the authority for state layout. Ids are `YYYYMMDD-HHMM-[name-]xxxx`; the suffix is unique across the repo's run refs and every command accepts it (`runs.resolve_run`). Runs have no lifecycle state, only an `archived` flag (old `lifecycle: abandoned` reads as archived). `run` always creates (`select_run(new=True)`, warnings only); `resume` takes an id or the config's most recently active non-archived run, preferring runs with a baseline. All writing operations hold the per-run process lock. Status PID is advisory. Legacy top-level histories are refused for writes; no migration is attempted.
 - Read-only evaluation: checks, reviewer and `ask` must not change candidate files. Check changes reject; a reviewer change rejects; each `ask` call fingerprints its directory and marks its usage record `integrity_violation` (sticky) on a change, which rejects the iteration. Ordinary reviewer failures remain advisory; scripts own `ask` exit codes.
 - Recovery/accounting: under ownership, repair only a torn unterminated final history record and recover published commits from run/iteration trailers. Each attempted main-agent failure records a rejected iteration and consumes its number; failures before the call do not. Baseline retries remain iteration 0 and retain earlier call charges. Calls with unavailable usage remain unknown.
 - Resume/landing: only initial baseline capture requires a clean checkout. After baseline, metrics/stop/report use run candidate checkouts. Auto landing runs before report, with a finally fallback preserving original errors. The pin is deleted at every segment end. Archive retains evidence and unlanded refs; delete removes state/ref while persistent lock files remain outside the deleted directory.
-- Parallel runs: `autohelix parallel` (see `src/autohelix/parallel/`) runs multiple workers on the same goal, each on a real worker branch with its own stable run id, driven by `autohelix resume <id> --until N`; workers share notes via `.autohelix/peer_notes/`.
+- Groups: `run --group NAME` (stored in `run.json`; `resume --group NAME|''` changes it) makes runs of the same project share notes and code. Members are the other non-archived runs with that group (`runs.group_members()`), taken once per iteration (`IterationWorkspace.members`): copied into the copy (not linked) and listed in the prompt (`prompt_template.describe_member()`); their refs go into the copy's `.git`. No group commands: budgets, resume, land, archive stay per run. Landing mode is per run, recorded in `run.json` at creation (`--land`; else `manual` with `--group`; else config `land:` (None when unset); else `auto`), kept on resume, changed by `resume --land`. The "also running for this config" warning is quiet for group runs. Harness git calls on the user's repo (`Repo.git`, `runs.git`) retry briefly on lock contention (`workspace.run_git`).
 - Time limits: `agent.timeout_seconds` is a hard kill timeout (no warning to the agent — can cut it off mid-step). `budget.iteration_time` (claude only) is a strict improvement over `timeout_seconds`: it enforces the same hard deadline (`min(timeout_seconds, iteration_time)`) but *also* installs Claude Code hooks (`PostToolUse`/`UserPromptSubmit`) that inject remaining time into the agent's context via `$AUTOHELIX_TIME_LEFT_SCRIPT` (which points to `<project>/.autohelix/runtime/bin/time_left.sh`, copied from `src/autohelix/bin/` at run start), so the agent can wrap up and write notes before being killed. `budget.time` caps total run wall-clock, checked before and after each iteration (doesn't interrupt one in progress). See `harness.py:_install_time_left()`.
 
 ## Gotchas

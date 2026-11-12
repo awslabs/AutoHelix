@@ -39,6 +39,30 @@
   in a release yet; it is on `main`).
 - `.autohelix/` is excluded through `.git/info/exclude` instead of a
   committed `.gitignore` change.
+- **`autohelix parallel` is removed**, replaced by groups (below). Its
+  leftover worktrees and branches are left alone; remove them by hand when
+  done: `git worktree remove ../<repo>-parallel/worker-N` and
+  `git branch -D parallel/worker-N`. The `AUTOHELIX_PEER_RUNS` variable,
+  `.autohelix/peer_notes/` and the `peers`/`peer_runs` prompt variables are
+  gone (use `group` and `group_runs`).
+- **The agent's copy keeps the harness's material in `.autohelix-iteration/`**
+  (was `.autohelix/`): `notes/`, `history.jsonl`, `hints.md`, `review.md`,
+  `commit_summary.txt`, `observations/`, `logs/`, and `prompt.md`, now this
+  iteration's rendered prompt. Checks copies get only
+  `.autohelix-iteration/candidate.diff`. A copy's git lists only this run's
+  ref (and its group's), not every `refs/autohelix/*`.
+- **The agent prompt is built in; `.autohelix/prompt.md` is no longer read**
+  and `init` no longer writes it (every project had a copy of the old default,
+  which would have sent notes to the old place). To keep a custom prompt, move
+  it next to your config, set `prompt_template: <file>` (relative to the
+  config file), and change its `.autohelix/` paths to `.autohelix-iteration/`;
+  a run warns while `.autohelix/prompt.md` exists.
+- The landing mode is recorded per run when it starts (`--land`; else
+  `manual` with `--group`; else the config's `land:`; else `auto`) and kept on resume;
+  `resume --land` changes it. `land:` in the config is the default for new
+  runs only.
+- `examples/nested-autohelix/` is removed (AutoHelix running AutoHelix is
+  deferred; an agent driving runs through the CLI is the supported way).
 
 ### Added
 
@@ -48,6 +72,19 @@
   one-time snapshot for scripts (versioned with a `schema` field; fields are
   only ever added) or for the terminal.
 - `autohelix land`.
+- **Groups:** `autohelix run --group NAME` makes runs in one project share
+  notes and code. Each iteration's copy gets the other non-archived runs of the
+  group (`run.json`, `history.jsonl`, `notes/` under
+  `.autohelix-iteration/runs/<id>/`) and their refs (`git diff autohelix/<id>`),
+  and the prompt lists them with their latest accepted metrics. `resume
+  --group NAME` sets or changes a run's group, `--group ''` clears it, and
+  `archive` takes a run out. The dashboard shows the group after the id;
+  `dashboard --json` adds `group` and `land`.
+- Notes are saved as versions (`runs/<id>/notes.<n>/`, with `runs/<id>/notes`
+  a link to the latest): a note the agent deletes stays deleted (before, it
+  came back next iteration), and every version is kept.
+- Harness git calls retry briefly when another git process holds a lock
+  (concurrent runs in one project).
 - From #16: the live run viewer (`autohelix view`), run summaries and
   `report.html`, stop commands and `autohelix ask`, and cost accounting
   across agents, reviewers and resumed runs.
