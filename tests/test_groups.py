@@ -52,8 +52,8 @@ def watch_agent(harness, monkeypatch, seen):
 
 
 def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, monkeypatch):  # noqa: F811
-    configure(project, metrics=[{"command": "echo score: 3.5", "values": {"score": "higher"}}],
-              agent={"type": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
+    configure(project, observe=[{"name": "bench", "command": "echo score: 3.5", "metrics": {"score": "higher"}}],
+              agent={"backend": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
                                                   "notes_content": "tried {iteration}"}})
     first = Harness(project, new=True, group="g")
     first.run(max_iterations=1, report=False)
@@ -160,7 +160,7 @@ def test_dashboard_shows_the_group_after_the_id(project):  # noqa: F811
 
 
 def test_notes_are_saved_as_versions_and_delete_removes_them(project):  # noqa: F811
-    configure(project, agent={"type": "mock", "settings": {"change_file": "code.py",
+    configure(project, agent={"backend": "mock", "settings": {"change_file": "code.py",
                                                            "change_content": "# {iteration}",
                                                            "notes_content": "note {iteration}"}})
     paths, _ = started(project, "--group", "g")
@@ -260,7 +260,7 @@ def test_a_new_member_doesnt_warn_about_unlanded_members(project):  # noqa: F811
 
 def test_a_checks_copy_gets_the_complete_change_and_nothing_else(project):  # noqa: F811
     seen = project / "seen"
-    configure(project, constraints=[
+    configure(project, gates=[
         f"ls -A .autohelix-iteration > {seen}; grep -c '^+' .autohelix-iteration/candidate.diff >> {seen}"])
     started(project)
     listing = seen.read_text().split()

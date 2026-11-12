@@ -1,12 +1,12 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iteration-time budget helpers.
+"""Duration helpers.
 
-Also the canonical home for duration parsing. `parse_duration_string` holds
-the one grammar shared by `budget.time` (via config.parse_duration) and
-`budget.iteration_time` (via this module's parse_duration); the two public
-wrappers differ only in their zero/None policy.
+`parse_duration_string` holds the one duration grammar, used by every config
+duration (`agent.timeout`, entry `timeout:`, `budget.time`) through
+config.parse_duration; this module's parse_duration is the optional variant
+(None/empty/zero mean unset).
 """
 
 from __future__ import annotations

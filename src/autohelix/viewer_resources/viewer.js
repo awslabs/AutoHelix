@@ -444,15 +444,20 @@ function renderCards() {
 // Harness rejection reasons, shortened for a card title (full text is in "Why rejected").
 function shortReason(reason) {
   if (!reason) return '';
-  const check = reason.match(/^constraint failed: (.*)$/s);
+  const check = reason.match(/^(?:constraint|gate) failed: (.*)$/s);
   if (check) {
     // Name the check by its tool: "python -m pytest …" -> "pytest failed".
     const cmd = check[1].trim();
+    if (cmd.startsWith('ask: ')) return 'ask: no';
     const name = cmd.match(/^python3? -m (\S+)/)?.[1] || (/^python3? -c /.test(cmd) ? 'inline check' : cmd.split(/\s/)[0].split('/').pop());
     return `${name} failed`;
   }
-  const gate = reason.match(/^metric gate: (\S+) (regressed [\d.]+%|not produced by benchmark)/);
-  if (gate) return gate[2].startsWith('regressed') ? `${gate[1]} ${gate[2]}` : `${gate[1]} not measured`;
+  const gate = reason.match(/^metric gate: (\S+) (.*)$/s);
+  if (gate) {
+    const worse = gate[2].match(/is ([\d.]+%) worse/);
+    if (worse) return `${gate[1]} ${worse[1]} worse`;
+    return gate[2].startsWith('was not measured') ? `${gate[1]} not measured` : `${gate[1]} not improved enough`;
+  }
   return reason.length > 40 ? reason.slice(0, 40) + '…' : reason;
 }
 

@@ -4,8 +4,8 @@
 """One iteration's copies: agent copy, frozen tree, evaluation copies, accept.
 
 Every phase runs in its own fresh copy (see `autohelix.workspace`). The agent's
-copy is snapshotted to a tree T through the user's repository; checks, the
-reviewer and stop commands each get a new copy; accepting publishes exactly T.
+copy is snapshotted to a tree T through the user's repository; checks and stop
+commands each get a new copy; accepting publishes exactly T.
 """
 
 import filecmp
@@ -15,19 +15,6 @@ from pathlib import Path
 
 from autohelix.runs import RunPaths, RunState, critical_section, ensure_copies, group_members
 from autohelix.workspace import ITERATION_DIR, Copy, Repo, Scope
-
-
-def latest_review(paths: RunPaths) -> Path | None:
-    """The highest-numbered reviews/iter-N.md, or None."""
-    best: tuple[int, Path] | None = None
-    for path in paths.reviews.glob("iter-*.md") if paths.reviews.exists() else ():
-        try:
-            n = int(path.stem.split("-", 1)[1])
-        except (IndexError, ValueError):
-            continue
-        if best is None or n > best[0]:
-            best = (n, path)
-    return best[1] if best else None
 
 
 def _copy_notes(notes: Path, target: Path) -> None:
@@ -41,13 +28,12 @@ def _copy_notes(notes: Path, target: Path) -> None:
         shutil.copytree(version, target, dirs_exist_ok=True)
 
 
-def prepare_state(paths: RunPaths, copy, *, review: bool = True, members=(), prompt: str | None = None) -> None:
+def prepare_state(paths: RunPaths, copy, *, members=(), prompt: str | None = None) -> None:
     """Seed a copy's `.autohelix-iteration/` with agent-facing material.
 
     `notes/` round-trips (see `save_notes`); the rest is read-only reference:
     `prompt.md` (this iteration's prompt), `history.jsonl`, `hints.md`,
-    `observations/`, `logs/`, with `review` the latest review as `review.md`, and
-    for each other run of the group (`members`, as `group_members` returns them)
+    `observations/`, `logs/`, and for each other run of the group (`members`, as `group_members` returns them)
     its `run.json`, `history.jsonl` and `notes/` under `runs/<id>/`. Copies are
     anything with a `working_dir`. Project state remains reachable by absolute
     path; this is not access isolation."""
@@ -76,8 +62,6 @@ def prepare_state(paths: RunPaths, copy, *, review: bool = True, members=(), pro
             _copy_notes(member.notes, target / "notes")
         except (OSError, shutil.Error):  # e.g. deleted meanwhile
             shutil.rmtree(target, ignore_errors=True)
-    if review and (latest := latest_review(paths)):
-        shutil.copy2(latest, state / "review.md")
 
 
 def _unused(directory: Path, name: str) -> Path:
@@ -167,7 +151,7 @@ class IterationWorkspace:
         return self.agent
 
     def write_prompt(self, prompt: str) -> None:
-        """Keep this iteration's prompt as `.autohelix-iteration/prompt.md` (agent and reviewer copies)."""
+        """Keep this iteration's prompt as `.autohelix-iteration/prompt.md` in the agent's copy."""
         self.prompt = prompt
         (self.agent.working_dir / ITERATION_DIR / "prompt.md").write_text(prompt)
 
@@ -196,11 +180,8 @@ class IterationWorkspace:
     def eval_copy(self, role: str) -> Copy:
         """A fresh copy of T with HEAD at A, plus the complete change (new files
         included, which plain `git diff` there misses) as
-        `.autohelix-iteration/candidate.diff`. A reviewer's also gets the agent's
-        material; a checks copy gets only the diff."""
+        `.autohelix-iteration/candidate.diff`, and nothing else of the harness's."""
         copy = self._copy(role, self.tree, self.base)
-        if role != "checks":
-            prepare_state(self._run.paths, copy, review=False, members=self.members, prompt=self.prompt)
         state = copy.working_dir / ITERATION_DIR
         state.mkdir(parents=True, exist_ok=True)
         diff = self.repo.git("diff", "--no-ext-diff", "--no-textconv", self.base, self.tree)

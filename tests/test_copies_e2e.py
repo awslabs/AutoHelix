@@ -26,7 +26,7 @@ def _write(project, data):
 def test_mutate_validate_restore_across_commands_is_caught(project):  # noqa: F811
     # One command changes a value, a second validates it and restores the file;
     # the final files equal T, but the second command saw different content.
-    configure(project, constraints=[
+    configure(project, gates=[
         '[ "$AUTOHELIX_ITERATION" = 0 ] || { cp code.py /tmp/ah-e2e.$PPID; echo "x = 1" > code.py; }',
         '[ "$AUTOHELIX_ITERATION" = 0 ] || { grep -q "x = 1" code.py && cp /tmp/ah-e2e.$PPID code.py; }',
     ])
@@ -41,7 +41,7 @@ def test_mutate_validate_restore_across_commands_is_caught(project):  # noqa: F8
 
 def test_swallowed_failed_ask_passes_and_keeps_its_usage(project):  # noqa: F811
     data = _judge_config(project, judge_fail=True)
-    data["constraints"] = ['autohelix ask "Done?" || true']
+    data["gates"] = ['autohelix ask "Done?" || true']
     _write(project, data)
     harness = Harness(project, land_mode="manual")
     harness.run(max_iterations=1, report=False)
@@ -57,7 +57,7 @@ def test_swallowed_failed_ask_passes_and_keeps_its_usage(project):  # noqa: F811
 def test_interrupted_ask_records_unknown_cost(project, monkeypatch):  # noqa: F811
     from autohelix.usage_log import append_usage, new_call_id
 
-    configure(project, constraints=["true"])
+    configure(project, gates=["true"])
     harness = Harness(project, land_mode="manual")
 
     def interrupted(*_args, **kwargs):
@@ -65,7 +65,7 @@ def test_interrupted_ask_records_unknown_cost(project, monkeypatch):  # noqa: F8
                      Path(kwargs["extra_env"]["AUTOHELIX_USAGE_FILE"]))
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("autohelix.harness.run_constraints", interrupted)
+    monkeypatch.setattr("autohelix.harness.run_gate_commands", interrupted)
     with pytest.raises(KeyboardInterrupt):
         harness.run_iteration(1)
     record = harness.history.load()[-1]

@@ -1,18 +1,23 @@
-goal: Improve classification accuracy by tuning train_config.yaml (preprocessing, model choice, hyperparameters).
+goal: |
+  Improve classification accuracy by tuning train_config.yaml.
+  Tune preprocessing, model choice and hyperparameters.
 
-constraints:
+gates:
   - pytest test_train.py -v
 
-metrics:
-  - command: bash run_pipeline.sh
+observe:
+  - name: pipeline
+    command: bash run_pipeline.sh
     capture:
       - output/eval_results.json
-    values:
+    metrics:
       accuracy: higher
 
 scope:
   editable: [train_config.yaml]
 
+agent:
+  timeout: 2m
+
 budget:
   iterations: 5
-  iteration_time: 2m

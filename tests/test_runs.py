@@ -31,7 +31,7 @@ def project(tmp_path):
     (project / "code.py").write_text("print('baseline')\n")
     (project / "autohelix.yaml").write_text(yaml.safe_dump({
         "goal": "Make a checked change", "report": False,
-        "agent": {"type": "mock", "settings": {
+        "agent": {"backend": "mock", "settings": {
             "change_file": "code.py", "change_content": "# iteration {iteration}", "cost_usd": 0.1,
         }},
     }))
@@ -253,7 +253,7 @@ def test_sigint_during_publication_defers_until_ref_and_history_agree(project, m
 @pytest.mark.parametrize("operation", ["commit", "rewind", "conflict", "merge", "delete-ref", "symbolic-ref"])
 @pytest.mark.parametrize("accepted", [True, False])
 def test_normalize_git_state_before_validation(project, monkeypatch, operation, accepted):
-    configure(project, constraints=["true" if accepted else "false"], scope={"editable": ["code.py"]})
+    configure(project, gates=["true" if accepted else "false"], scope={"editable": ["code.py"]})
     harness = Harness(project, land_mode="manual")
     base = harness.run_state.expected_tip
     target = f"refs/heads/{harness.run_info['target_branch']}"
@@ -300,37 +300,15 @@ def test_normalize_git_state_before_validation(project, monkeypatch, operation, 
     harness.close()
 
 
-def test_normalize_after_failed_agent_and_review_edits_are_rejected(project, monkeypatch):
-    harness = Harness(project, land_mode="manual")
-    harness.config.reviewer = SimpleNamespace(
-        model=None, timeout_seconds=None, auto_memory=False, prompt="Review",
-    )
-
-    def review(**kwargs):
-        (kwargs["worktree_path"] / "code.py").write_text("judge edit")
-        (kwargs["worktree_path"] / ".autohelix-iteration" / "review.md").write_text("Feedback")
-        git(kwargs["worktree_path"], "add", "code.py")
-        git(kwargs["worktree_path"], "commit", "-qm", "judge commit")
-        return AgentRunResult(success=False, usage={"cost_usd": 0.3})
-
-    monkeypatch.setattr("autohelix.harness.create_agent", lambda *_args, **_kwargs: SimpleNamespace(run=review))
-    record = harness.run_iteration(1)
-    assert not record.accepted and "Reviewer changed" in record.reason
-    assert record.cost.cost_usd == pytest.approx(0.4)
-    assert [call["role"] for call in record.calls] == ["agent", "reviewer"]
-    assert git(project, "rev-parse", harness.paths.ref).stdout.strip() == harness.run_info["base_commit"]
-    harness.close()
-
-
-@pytest.mark.parametrize("slot", ["constraints", "observables", "stop"])
+@pytest.mark.parametrize("slot", ["gates", "observe", "stop"])
 def test_nested_ask_mutation_cannot_be_swallowed(project, slot):
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
     data["agent"]["settings"]["judge_change_file"] = "code.py"
     ask = 'autohelix ask "Done?" || true'
-    if slot == "constraints":
-        data["constraints"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] || ' + ask]
-    elif slot == "observables":
-        data["observables"] = [{"command": '[ "$AUTOHELIX_ITERATION" = 0 ] || ' + ask}]
+    if slot == "gates":
+        data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] || ' + ask]
+    elif slot == "observe":
+        data["observe"] = [{"name": "judge", "command": '[ "$AUTOHELIX_ITERATION" = 0 ] || ' + ask}]
     else:
         data["stop"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 1; ' + ask]
     (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
@@ -350,7 +328,7 @@ def test_nested_ask_mutation_cannot_be_swallowed(project, slot):
 def test_baseline_judge_mutation_fails_and_cost_survives(project):
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
     data["agent"]["settings"]["judge_change_file"] = "code.py"
-    data["observables"] = [{"command": 'autohelix ask "Done?" || true'}]
+    data["observe"] = [{"name": "judge", "command": 'autohelix ask "Done?" || true'}]
     (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
     git(project, "add", ".")
     git(project, "commit", "-qm", "baseline judge")
@@ -428,7 +406,7 @@ def test_guard_detects_submodule_edit_and_commit(project, tmp_path):
 def test_judge_violation_stays_recorded_after_wrapper_restores_files(project):
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
     data["agent"]["settings"]["judge_change_file"] = "code.py"
-    data["constraints"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; cp code.py /tmp/ah-saved.$$; '
+    data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; cp code.py /tmp/ah-saved.$$; '
                            'autohelix ask "Done?"; cp /tmp/ah-saved.$$ code.py; exit 0']
     (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
     git(project, "add", ".")
@@ -531,47 +509,6 @@ def test_delete_symbolic_ref_does_not_delete_user_branch(project):
     delete(paths)
     assert git(project, "rev-parse", target).stdout.strip() == old
     assert git(project, "rev-parse", "--verify", paths.ref, check=False).returncode != 0
-
-
-def test_interrupted_reviewer_keeps_unknown_attempt_cost_and_log(project, monkeypatch):
-    configure(project, reviewer={"prompt": "Inspect without editing"})
-    harness = Harness(project)
-    # Capture baseline without a reviewer attempt, then interrupt iteration1.
-    reviewer = harness.config.reviewer
-    harness.config.reviewer = None
-    harness._capture_baseline()
-    harness.config.reviewer = reviewer
-    monkeypatch.setattr(harness, "run_reviewer", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
-    with pytest.raises(KeyboardInterrupt):
-        harness.run_iteration(1)
-    record = harness.history.load()[-1]
-    assert not record.accepted
-    assert [call["role"] for call in record.calls] == ["agent", "reviewer"]
-    assert record.calls[-1]["usage"] == {}
-    assert "call-002-reviewer" in record.calls[-1]["log"]
-    assert record.cost.cost_usd == 0.1 and record.cost.incomplete
-    harness.close()
-
-
-def test_baseline_review_retry_has_distinct_transcripts(project, monkeypatch):
-    configure(project, reviewer={"prompt": "Review baseline"})
-    harness = Harness(project)
-    reviewer = harness.config.reviewer
-    harness.config.reviewer = None
-    harness._capture_baseline()
-    harness.config.reviewer = reviewer
-    real = harness.run_reviewer
-    monkeypatch.setattr(harness, "run_reviewer", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
-    with pytest.raises(KeyboardInterrupt):
-        harness._run_baseline_review()
-    first = harness.history.load()[0].calls[-1]["log"]
-    monkeypatch.setattr(harness, "run_reviewer", real)
-    harness._run_baseline_review()
-    calls = harness.history.load()[0].calls
-    assert len(calls) == 2
-    assert first != calls[-1]["log"]
-    assert (harness.paths.run_dir / calls[-1]["log"]).is_file()
-    harness.close()
 
 
 def test_same_harness_failed_restart_does_not_land_old_tip(project):
@@ -679,7 +616,7 @@ def test_selection_rereads_the_run_under_its_lock(project, monkeypatch):
 
 
 def test_mutating_baseline_check_is_a_setup_error_before_agent_spend(project, monkeypatch):
-    configure(project, constraints=["true", "echo formatted >> code.py"])
+    configure(project, gates=["true", "echo formatted >> code.py"])
     harness = Harness(project, land_mode="manual")
     monkeypatch.setattr(harness, "run_agent", lambda *_: pytest.fail("agent must not run"))
     try:
@@ -694,7 +631,7 @@ def test_mutating_baseline_check_is_a_setup_error_before_agent_spend(project, mo
 
 
 def test_failing_baseline_constraint_does_not_block_the_run(project):
-    configure(project, constraints=['[ "$AUTOHELIX_ITERATION" != 0 ]'])
+    configure(project, gates=['[ "$AUTOHELIX_ITERATION" != 0 ]'])
     harness = Harness(project, land_mode="manual")
     harness.run(max_iterations=1, report=False)
     assert [(r.iteration, r.accepted) for r in harness.history.load()] == [(0, True), (1, True)]
@@ -806,7 +743,7 @@ def test_refused_first_start_creates_no_identity(project, problem):
     if problem == "editable":
         configure(project, scope={"editable": ["missing_dir/*.py"]})
     else:
-        configure(project, agent={"type": "claude", "command": "/nonexistent/agent"})
+        configure(project, agent={"backend": "claude", "command": "/nonexistent/agent"})
     with pytest.raises(RuntimeError, match="No files found|Preflight checks failed"):
         Harness(project)
     root = RunPaths(project).root
@@ -846,7 +783,7 @@ def test_ask_from_an_agent_without_log_dir_records_absolute_log(tmp_path, monkey
     monkeypatch.delenv("AUTOHELIX_LOG_DIR", raising=False)
     work = tmp_path / "work"
     work.mkdir()
-    answer = ask("Done?", work, AgentConfig(type="mock", read_only=True))
+    answer = ask("Done?", work, AgentConfig(backend="mock", read_only=True))
     assert answer.yes
     [call] = read_usage(usage)
     assert Path(call["log"]).is_absolute() and Path(call["log"]).exists()

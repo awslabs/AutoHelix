@@ -32,3 +32,26 @@ def test_no_report_after_interrupt(integration_project, monkeypatch):  # noqa: F
     monkeypatch.setattr(harness, "run_iteration", lambda n: (_ for _ in ()).throw(KeyboardInterrupt))
     harness.run(max_iterations=1)
     assert not (RunPaths(integration_project).output / "report.md").exists()
+
+
+def test_report_generation_cost_remains_separate(tmp_path, run_paths):
+    import json
+
+    import pytest
+
+    from autohelix.history import History, IterationResult
+    from autohelix.viewer import RunData
+
+    history = History(tmp_path)
+    history.append(IterationResult(iteration=0, accepted=True, metrics={},
+                                   calls=[{"role": "command", "usage": {"cost_usd": 0.04}}]))
+    history.append(IterationResult(iteration=1, accepted=True, metrics={},
+                                   calls=[{"role": "agent", "usage": {"cost_usd": 0.1}},
+                                          {"role": "command", "usage": {"cost_usd": 0.04}}]))
+    output = run_paths.output
+    output.mkdir()
+    (output / "report.md").write_text("Summary")
+    (output / "report.json").write_text(json.dumps({"cost_usd": 0.99}))
+    state = RunData(tmp_path).state()
+    assert state["cost"]["cost_usd"] == pytest.approx(0.18)
+    assert state["report"]["cost_usd"] == 0.99

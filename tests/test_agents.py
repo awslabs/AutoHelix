@@ -402,7 +402,7 @@ class TestClaudeCodeSummarizeToolResult:
 
 class TestCodexHandleLine:
     def _agent(self):
-        return CodexAgent(config=AgentConfig(type="codex"))
+        return CodexAgent(config=AgentConfig(backend="codex"))
 
     def test_build_command_without_time_hook(self, monkeypatch):
         monkeypatch.delenv("AUTOHELIX_CODEX_TIME_LEFT_HOOK", raising=False)
@@ -532,7 +532,7 @@ class TestCodexRunResult:
     ):
         from autohelix.agents.runner import ProcessRunResult
 
-        agent = CodexAgent(config=AgentConfig(type="codex"))
+        agent = CodexAgent(config=AgentConfig(backend="codex"))
 
         def fake_run_process(**kwargs):
             kwargs["line_callback"](json.dumps({
@@ -560,7 +560,7 @@ class TestCodexRunResult:
 
 class TestOpenCodeHandleLine:
     def _agent(self):
-        return OpenCodeAgent(config=AgentConfig(type="opencode"))
+        return OpenCodeAgent(config=AgentConfig(backend="opencode"))
 
     def test_invalid_json_emits_raw(self):
         events = _collect_events(self._agent(), "not json")

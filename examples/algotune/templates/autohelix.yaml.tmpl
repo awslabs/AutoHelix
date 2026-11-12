@@ -17,12 +17,13 @@ goal: |
       GPU (matching AlgoTune's convention), so parallelism or GPU offload won't help — the
       speedup must come from a better algorithm.
 
-constraints:
+gates:
   - python check.py
 
-metrics:
-  - command: python benchmark.py
-    values:
+observe:
+  - name: bench
+    command: python benchmark.py
+    metrics:
       speedup: higher
 
 scope:

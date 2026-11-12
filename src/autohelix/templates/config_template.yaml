@@ -1,46 +1,47 @@
 # All paths below are relative to the project root — they resolve inside the
 # per-iteration copy, so use relative paths (src/, tests/), not absolute.
 
+# The first line is the run's title (keep it short, like a commit subject);
+# the whole text goes into the agent's prompt.
 goal: |
   Describe what you want the agent to optimize.
+  Add details, rules and context on the following lines.
 
-# Must pass (exit 0) or the iteration is rejected
-# constraints:
-#   - pytest tests/
+# What may the agent modify? Changes elsewhere are discarded. Keep the tests and
+# benchmarks that judge the agent out of it (or list them under frozen:).
+scope:
+  editable: [src/]
+  # frozen: [src/fixtures/]
 
-# Commands run after each iteration — output is captured for the agent.
-# Add `values:` to extract numbers that gate and rank the run.
-# metrics:
-#   - command: python benchmark.py
-#     values:
-#       throughput: higher
-#       latency: lower
-#     # capture:
-#     #   - results/log.json
-#   # A command with no `values:` just captures output for context — you can
-#   # also spell these `observables:` (same thing).
+# Anything that can reject an iteration, checked in this order.
+# gates:
+#   - pytest -q                                 # must exit 0
+#   - command: pytest tests/slow
+#     timeout: 30m                              # a number is seconds; or 90s, 30m, 2h
+#   - ask: Does the change keep the public API?  # = autohelix ask "..."
+#   - metric: throughput
+#     regress: 5%                               # at most 5% worse than the last accepted iteration
+#   # - metric: throughput
+#   #   improve: 0%                             # must beat the last accepted iteration
 
-# Optional: reject iterations that regress a metric too far
-# acceptance:
-#   metric_gates:
-#     - metric: throughput
-#       max_regression_pct: 10
+# Feedback for the next agent, and numbers for the harness. Every entry needs a name.
+# observe:
+#   - name: bench
+#     command: python benchmark.py              # print ##autohelix[throughput=1234]
+#     metrics: {throughput: higher, latency: lower}
+#     # capture: [results/log.json]             # files saved for the next agent
 
 # Optional: end the run early once one of these exits 0 (1 = keep going).
 # $AUTOHELIX_METRICS is a JSON file with the metrics just measured.
 # stop:
 #   - jq -e '.throughput >= 5000' "$AUTOHELIX_METRICS"
 
-# What may the agent modify? (everything else is reverted)
-# scope:
-#   editable: [src/]
-
 # agent:
-#   type: claude          # claude, codex, opencode
+#   backend: claude       # claude, codex, opencode
 #   # model: claude-opus-4-8
-#   # timeout_seconds: 1800
+#   # timeout: 30m        # per iteration: the agent sees the time left, then is stopped
 
-# budget:
-#   iterations: 5
-#   # time: 2h            # total wall-clock
-#   # iteration_time: 15m # per-iteration deadline (agent sees countdown)
+budget:
+  iterations: 5
+  # cost: 10              # dollars
+  # time: 2h              # total wall-clock

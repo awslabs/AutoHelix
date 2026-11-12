@@ -38,7 +38,7 @@ def _configure(project, extra: str) -> None:
 goal: Test stop conditions
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {{iteration}}"
@@ -67,10 +67,10 @@ def test_parses_strings_mappings_and_single_entries():
 
 
 def test_stop_is_a_known_key_and_empty_commands_are_errors():
-    raw = {"goal": "real goal", "constraints": ["true"], "stop": [{"command": " "}]}
+    raw = {"goal": "real goal", "gates": ["true"], "stop": [{"command": " "}]}
     issues = Config.from_dict(raw).validate(raw)
     messages = [i.message for i in issues]
-    assert "Stop command is empty" in messages
+    assert "stop entry 1: `command:` must be a non-empty string" in messages
     assert not any("Unknown config key" in m for m in messages)
 
 
@@ -98,7 +98,7 @@ def test_reason_defaults_to_command_and_env_is_passed(tmp_path):
 
 
 def test_timeout_is_an_error(tmp_path):
-    config = Config.from_dict({"goal": "g", "stop": [{"command": "sleep 5", "timeout": 0}]})
+    config = Config.from_dict({"goal": "g", "stop": [{"command": "sleep 5", "timeout": 1}]})
     [r] = run_stop_checks(config, tmp_path)
     assert r.error and not r.stop
 
@@ -137,9 +137,10 @@ stop:
 
 def test_metrics_reach_the_command_and_a_met_baseline_runs_nothing(project):
     _configure(project, """
-metrics:
-  - command: "echo '##autohelix[score=7]'"
-    values:
+observe:
+  - name: bench
+    command: "echo '##autohelix[score=7]'"
+    metrics:
       score: higher
 
 stop:
@@ -174,7 +175,7 @@ stop:
 def test_rejected_iterations_are_not_checked(project):
     # Would stop on any iteration after the baseline, but every iteration is rejected.
     _configure(project, """
-constraints:
+gates:
   - '! grep -q iteration hello.py'
 
 stop:
@@ -234,26 +235,27 @@ def test_history_without_stop_field_loads(project):
 
 
 def test_bad_command_shapes_are_config_errors():
-    for raw in ({"goal": "g", "stop": 5}, {"goal": "g", "stop": [["x"]]}, {"goal": "g", "constraints": 5}):
+    for raw in ({"goal": "g", "stop": 5}, {"goal": "g", "stop": [["x"]]}, {"goal": "g", "gates": 5}):
         messages = [i.message for i in Config.from_dict(raw).validate()]
-        assert any("expected a command" in m or "each entry must be" in m for m in messages), raw
+        assert any("expected a list of entries" in m or "expected a command or a mapping" in m
+                   for m in messages), raw
 
 
-@pytest.mark.parametrize("key", ["constraints", "stop"])
+@pytest.mark.parametrize("key", ["gates", "stop"])
 @pytest.mark.parametrize("entry,message", [
-    ({"command": 1}, "command must be a string"),
-    ({"command": None}, "command must be a string"),
-    ({"command": "true", "timeout": None}, "timeout must be an integer"),
-    ({"command": "true", "timeout": "invalid"}, "timeout must be an integer"),
+    ({"command": 1}, "`command:` must be a non-empty string"),
+    ({"command": None}, "`command:` must be a non-empty string"),
+    ({"command": "true", "timeout": "invalid"}, "is not a valid duration"),
+    ({"command": "true", "timeout": 0}, "is not a valid duration"),
 ])
 def test_bad_command_fields_are_config_errors(key, entry, message):
     config = Config.from_dict({"goal": "g", key: [entry]})
     assert any(issue.level == "error" and message in issue.message for issue in config.validate())
 
 
-def test_constraint_mapping_parses_as_one_command():
-    config = Config.from_dict({"goal": "g", "constraint": {"command": "pytest", "timeout": 5}})
-    assert [(c.command, c.timeout) for c in config.constraints] == [("pytest", 5)]
+def test_gate_mapping_parses_as_one_command():
+    config = Config.from_dict({"goal": "g", "gates": {"command": "pytest", "timeout": 5}})
+    assert [(c.command, c.timeout) for c in config.gates] == [("pytest", 5)]
 
 
 def test_stop_check_failure_after_merge_keeps_the_iteration(project, monkeypatch):

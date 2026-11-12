@@ -3,23 +3,21 @@ goal: |
   Use captured results/report.json execution traces to guide improvements.
   Keep changes general; do not hardcode benchmark cases or expected answers.
 
-constraints:
+gates:
   - pytest -q
   - python benchmark.py --mock
+  - metric: task_success_rate
+    regress: 20%
 
-metrics:
-  - command: python benchmark.py
-    timeout: 900
+observe:
+  - name: bench
+    command: python benchmark.py
+    timeout: 15m
     capture:
       - results/report.json
-    values:
+    metrics:
       task_success_rate: higher
       avg_tokens: lower
-
-acceptance:
-  metric_gates:
-    - metric: task_success_rate
-      max_regression_pct: 20
 
 scope:
   editable:
@@ -27,6 +25,8 @@ scope:
     - prompt.md
     - SKILL.md
 
+agent:
+  timeout: 10m
+
 budget:
   iterations: 2
-  iteration_time: 10m

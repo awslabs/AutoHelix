@@ -276,14 +276,6 @@ class TestUsageField:
         reviews.mkdir()
         (reviews / "iter-1.md").write_text("Legacy review")
         result = history.load()[0]
-        assert result.reviewer_usage == [{}]
+        assert result.cost_usages == [{"cost_usd": 0.10}, {}]
         assert result.cost.cost_usd == 0.10
         assert result.cost.incomplete
-
-
-def test_adding_review_call_preserves_main_charge(history):
-    history.append(IterationResult(iteration=1, accepted=True, calls=[{'role': 'agent', 'usage': {'cost_usd': 0.1}}]))
-    history.record_reviewer_usage(1, {"cost_usd": 0.2}, log="review.log")
-    [record] = history.load()
-    assert record.cost.cost_usd == pytest.approx(0.3)
-    assert [call["role"] for call in record.calls] == ["agent", "reviewer"]

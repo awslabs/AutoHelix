@@ -41,10 +41,6 @@ class IterationResult:
         return next((call.get("usage") or {} for call in self.calls if call["role"] == "agent"), {})
 
     @property
-    def reviewer_usage(self):
-        return [call.get("usage") or {} for call in self.calls if call["role"] == "reviewer"]
-
-    @property
     def command_usage(self):
         return [call.get("usage") or {} for call in self.calls if call["role"] == "command"]
 
@@ -80,7 +76,7 @@ class History:
         Args:
             iteration: The iteration number.
             output: The stdout+stderr text.
-            index: If multiple observable commands, the command index (0-based).
+            index: If several observe entries, the entry's index (0-based).
                    None means single command (saves as stdout.txt).
         """
         d = self.iter_dir(iteration)
@@ -132,26 +128,8 @@ class History:
 
     @property
     def cost_usages(self) -> list[dict[str, Any]]:
-        """All recorded run calls, including baseline reviews."""
+        """All recorded run calls."""
         return [usage for result in self.load() for usage in result.cost_usages]
-
-    def record_reviewer_usage(
-        self, iteration: int, usage: dict[str, Any], attempt: int | None = None,
-        *, log: str | None = None,
-    ) -> int:
-        """Append a review attempt, or update the usage of a pending attempt."""
-        results = self.load()
-        result = next((r for r in results if r.iteration == iteration), None)
-        if result is None:
-            raise ValueError(f"No history record for iteration {iteration} to attach reviewer usage to.")
-        reviews = [call for call in result.calls if call["role"] == "reviewer"]
-        if attempt is None:
-            attempt = len(reviews)
-            result.calls.append({"role": "reviewer", "usage": usage, "log": log})
-        else:
-            reviews[attempt]["usage"] = usage
-        self._rewrite(results)
-        return attempt
 
     def load(self) -> list[IterationResult]:
         """Load all iteration results from history (cached by file mtime)."""

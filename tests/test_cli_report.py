@@ -25,11 +25,12 @@ def project(tmp_path, run_paths):
     """Project with config and some history."""
     config = textwrap.dedent("""\
         goal: Make it faster
-        constraints:
+        gates:
           - pytest tests/
-        observables:
-          - command: python bench.py
-            values:
+        observe:
+          - name: bench
+            command: python bench.py
+            metrics:
               speed: higher
     """)
     (tmp_path / "autohelix.yaml").write_text(config)
@@ -103,10 +104,10 @@ class TestReportCommand:
 
     def test_timeout_is_capped(self, runner, project):
         config = project / "autohelix.yaml"
-        config.write_text(config.read_text() + "agent:\n  timeout_seconds: 36000\n")
+        config.write_text(config.read_text() + "agent:\n  timeout: 10h\n")
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok")) as create:
             runner.invoke(main, ["report", "-p", str(project)])
-        assert create.call_args[0][0].timeout_seconds == 15 * 60
+        assert create.call_args[0][0].timeout == 15 * 60
 
     def test_keeps_old_report_when_agent_writes_nothing(self, runner, project):
         out = RunPaths(project).output

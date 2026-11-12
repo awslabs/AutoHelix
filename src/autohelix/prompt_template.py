@@ -104,36 +104,35 @@ def build_prompt_variables(
     else:
         variables["history_summary"] = history_summary
 
-    # Time limit (only iteration_time is communicated to the agent). Render as a
-    # compact forward-looking duration ("15m"), not the timeout *message*.
-    if config.iteration_time_seconds is not None:
-        variables["iteration_time"] = format_duration(config.iteration_time_seconds)
+    # The agent's deadline (agent.timeout), as a compact forward-looking duration ("15m").
+    if config.agent.timeout is not None:
+        variables["iteration_time"] = format_duration(config.agent.timeout)
     else:
         variables["iteration_time"] = ""
 
-    # Constraints
-    variables["constraints"] = [c.command for c in config.constraints]
+    # Gates, in list order: commands (ask entries as `ask: <question>`) and metric comparisons.
+    variables["constraints"] = [_describe_gate(gate) for gate in config.gates]
     variables["stop"] = [c.command for c in config.stop]
 
-    # Observables — pass structured data for the template to iterate
+    # Observe entries — pass structured data for the template to iterate
     def _format_metric(name: str, direction: str) -> str:
         arrow = "↑" if direction == "higher" else "↓"
         return f"{name} ({arrow})"
 
     variables["observables"] = [
         {
-            "command": obs.command,
-            "metric_labels": [_format_metric(n, d) for n, d in obs.values.items()],
+            "name": obs.name,
+            # A review entry shows as the command it is shorthand for, its prompt on one line.
+            "command": (f'autohelix review "{" ".join(obs.review.split())}"' if obs.review is not None
+                        else obs.command),
+            "metric_labels": [_format_metric(n, d) for n, d in obs.metrics.items()],
         }
-        for obs in config.observables
+        for obs in config.observe
     ]
 
     # Scope
     variables["editable"] = config.editable
     variables["frozen"] = config.frozen
-
-    # Review
-    variables["has_reviewer"] = config.reviewer is not None
 
     # Other runs of the group: their state is copied into .autohelix-iteration/runs/<id>/.
     variables["group"] = group or ""
@@ -144,6 +143,19 @@ def build_prompt_variables(
     variables["has_hints"] = hints_path.exists() and hints_path.stat().st_size > 0
 
     return variables
+
+
+def _describe_gate(gate) -> str:
+    """One gate as the prompt lists it."""
+    from autohelix.config import MetricGate
+
+    if not isinstance(gate, MetricGate):
+        return gate.text
+    if gate.mode == "regress":
+        bound = "no worse" if gate.threshold_pct == 0 else f"at most {gate.threshold_pct:g}% worse"
+        return f"{gate.metric}: {bound} than the last accepted iteration"
+    bound = "better" if gate.threshold_pct == 0 else f"at least {gate.threshold_pct:g}% better"
+    return f"{gate.metric}: {bound} than the last accepted iteration"
 
 
 def render_template(template: str, variables: dict[str, Any]) -> str:

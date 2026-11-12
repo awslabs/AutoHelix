@@ -76,22 +76,24 @@ class Answer:
 
 
 def judge_config(base: AgentConfig, *, agent: str | None = None, model: str | None = None,
-                 effort: str | None = None, timeout: int | None = None) -> AgentConfig:
+                 effort: str | None = None, timeout: int | None = None,
+                 command: str | None = None) -> AgentConfig:
     """The judge's agent settings: backend, command, model and effort from the run's
-    config (as the reviewer inherits them), never its settings or extra args."""
-    overrides_backend = agent is not None and agent != base.type
-    backend = agent or base.type
+    config, never its settings or extra args. Another backend (`agent`) drops the
+    config's command, model and effort unless they are given too."""
+    overrides_backend = agent is not None and agent != base.backend
+    backend = agent or base.backend
     if backend == "opencode":
         # OpenCode has no read-only mode, and project files (plugins, config) the
         # judged agent may have written would configure the judge.
         raise JudgeError("OpenCode can't be used as a judge yet; use --agent claude or codex")
     return AgentConfig(
-        type=agent or base.type,
-        command=None if overrides_backend else base.command,
+        backend=backend,
+        command=command or (None if overrides_backend else base.command),
         model=model or (None if overrides_backend else base.model),
         reasoning_effort=effort or (None if overrides_backend else base.reasoning_effort),
-        timeout_seconds=timeout or DEFAULT_TIMEOUT,
-        settings=base.settings if (base.type == "mock" and not overrides_backend) else {},
+        timeout=timeout or DEFAULT_TIMEOUT,
+        settings=base.settings if (base.backend == "mock" and not overrides_backend) else {},
         read_only=True,
         output_schema=ANSWER_SCHEMA,
     )
@@ -115,7 +117,10 @@ def load_base_config(cwd: Path) -> AgentConfig:
     agent = data.get("agent") if isinstance(data, dict) else None
     if agent is not None and not isinstance(agent, dict):
         raise JudgeError(f"`agent:` in {path} must be a mapping")
-    return AgentConfig.from_dict(agent)
+    try:
+        return AgentConfig.from_dict(agent)
+    except ValueError as e:
+        raise JudgeError(f"`agent:` in {path}: {e}") from e
 
 
 def build_system_prompt(question: str, yes: str | None = None, no: str | None = None,
@@ -184,19 +189,19 @@ def ask(question: str, cwd: Path, config: AgentConfig, *, yes: str | None = None
     config = replace(config, system_prompt=system)
     total_cost: float | None = 0.0
     last_error = "no time left before the command's timeout"
-    ends = time.monotonic() + _deadline_timeout(config.timeout_seconds or DEFAULT_TIMEOUT)
+    ends = time.monotonic() + _deadline_timeout(config.timeout or DEFAULT_TIMEOUT)
     for attempt in range(attempts):
         left = int(ends - time.monotonic())
         if left < 1:
             break
-        config = replace(config, timeout_seconds=left)
+        config = replace(config, timeout=left)
         prompt = USER_PROMPT if attempt == 0 else (
             f"{USER_PROMPT}\n\nYour previous reply was invalid ({last_error}). "
             "Reply with only the JSON object.")
         call_id = new_call_id()
         log_path = _log_path("ask")
         # Readers make it relative to the run (and drop it if it's outside the run's logs).
-        record = {"id": call_id, "source": "ask", "question": question[:200], "agent": config.type,
+        record = {"id": call_id, "source": "ask", "question": question[:200], "agent": config.backend,
                   "model": config.model, "log": str(log_path.resolve())}
         append_usage({**record, "status": "started", "cost_usd": None})
         started = time.monotonic()

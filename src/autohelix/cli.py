@@ -296,16 +296,20 @@ def delete(run_ids: tuple[str, ...], path: str, force: bool):
 @click.option("--no", "no_means", help='What a "no" answer means.')
 @click.option("--rubric", type=click.Path(exists=True, dir_okay=False), help="File with criteria for the answer.")
 @click.option("--agent", "agent_type", type=click.Choice(["claude", "codex", "opencode", "mock"]),
-              help="Agent backend (default: agent.type from the config, else claude).")
+              help="Agent backend (default: agent.backend from the config, else claude).")
 @click.option("--model", help="Model (default: agent.model from the config).")
 @click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
 @click.option("--timeout", type=click.IntRange(min=1), help="Seconds before giving up (default 600).")
+@click.option("--command", "agent_command",
+              help="The backend's executable (default: agent.command from the config, unless --agent "
+                   "names another backend).")
 def ask(question: str, yes_means: str | None, no_means: str | None, rubric: str | None,
-        agent_type: str | None, model: str | None, effort: str | None, timeout: int | None):
+        agent_type: str | None, model: str | None, effort: str | None, timeout: int | None,
+        agent_command: str | None):
     """Ask an agent a yes/no question about the current directory.
 
     Exits 0 for yes, 1 for no, 2 if no valid answer was produced; prints the
-    reason. Use it in stop: or constraints:, or in any script. The agent gets
+    reason. Use it in gates: (or as an `ask:` entry there), stop:, or any script. The agent gets
     read-only tools and no project settings; agent settings come from
     $AUTOHELIX_CONFIG or ./autohelix.yaml.
     """
@@ -322,7 +326,7 @@ def ask(question: str, yes_means: str | None, no_means: str | None, rubric: str 
     cwd = Path.cwd()
     try:
         config = judge_config(load_base_config(cwd), agent=agent_type, model=model, effort=effort,
-                              timeout=timeout)
+                              timeout=timeout, command=agent_command)
         answer = run_ask(question, cwd, config, yes=yes_means, no=no_means,
                          rubric=Path(rubric).read_text() if rubric else None)
     except JudgeError as e:
@@ -455,7 +459,7 @@ def _view_live(project_path: Path, run_id: str | None, config_file: Path | None)
         raise SystemExit(1)
     try:
         config, _ = load_config(project_path, config_file=config_file or read_stored_config_path(project_path, run_id))
-        backend = config.agent.type
+        backend = config.agent.backend
     except Exception:  # noqa: BLE001 - the log parser can tell backends apart on its own
         backend = None
     try:

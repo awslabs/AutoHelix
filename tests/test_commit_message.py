@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from autohelix.config import Config, ConstraintCommand, ObservableCommand
+from autohelix.config import CommandSpec, Config, ObserveEntry
 from autohelix.harness import Harness
 from autohelix.history import History
 
@@ -12,8 +12,8 @@ def _make_harness(tmp_path, observables=None):
     """Create a Harness with minimal config for testing _build_commit_message."""
     config = Config(
         goal="test goal",
-        constraints=[ConstraintCommand(command="true")],
-        observables=observables or [],
+        gates=[CommandSpec(command="true")],
+        observe=observables or [],
     )
     harness = object.__new__(Harness)
     harness.config = config
@@ -29,7 +29,7 @@ class TestBuildCommitMessage:
 
     def test_single_metric_no_history(self, tmp_path):
         harness = _make_harness(tmp_path, observables=[
-            ObservableCommand(command="bench.sh", values={"speed": "higher"}),
+            ObserveEntry(name="bench", command="bench.sh", metrics={"speed": "higher"}),
         ])
         msg = harness._build_commit_message(1, {"speed": 1500})
         assert "AutoHelix iteration 1" in msg
@@ -37,7 +37,7 @@ class TestBuildCommitMessage:
 
     def test_metric_with_improvement(self, tmp_path):
         harness = _make_harness(tmp_path, observables=[
-            ObservableCommand(command="bench.sh", values={"speed": "higher"}),
+            ObserveEntry(name="bench", command="bench.sh", metrics={"speed": "higher"}),
         ])
         from autohelix.history import IterationResult
         harness.history.append(IterationResult(
@@ -49,7 +49,7 @@ class TestBuildCommitMessage:
 
     def test_metric_with_regression(self, tmp_path):
         harness = _make_harness(tmp_path, observables=[
-            ObservableCommand(command="bench.sh", values={"speed": "higher"}),
+            ObserveEntry(name="bench", command="bench.sh", metrics={"speed": "higher"}),
         ])
         from autohelix.history import IterationResult
         harness.history.append(IterationResult(
@@ -61,7 +61,7 @@ class TestBuildCommitMessage:
 
     def test_lower_is_better_metric(self, tmp_path):
         harness = _make_harness(tmp_path, observables=[
-            ObservableCommand(command="bench.sh", values={"latency": "lower"}),
+            ObserveEntry(name="bench", command="bench.sh", metrics={"latency": "lower"}),
         ])
         from autohelix.history import IterationResult
         harness.history.append(IterationResult(
@@ -73,7 +73,7 @@ class TestBuildCommitMessage:
 
     def test_multiple_metrics(self, tmp_path):
         harness = _make_harness(tmp_path, observables=[
-            ObservableCommand(command="bench.sh", values={"speed": "higher", "memory": "lower"}),
+            ObserveEntry(name="bench", command="bench.sh", metrics={"speed": "higher", "memory": "lower"}),
         ])
         from autohelix.history import IterationResult
         harness.history.append(IterationResult(
@@ -86,7 +86,7 @@ class TestBuildCommitMessage:
 
     def test_zero_baseline_skips_delta(self, tmp_path):
         harness = _make_harness(tmp_path, observables=[
-            ObservableCommand(command="bench.sh", values={"speed": "higher"}),
+            ObserveEntry(name="bench", command="bench.sh", metrics={"speed": "higher"}),
         ])
         from autohelix.history import IterationResult
         harness.history.append(IterationResult(
@@ -99,7 +99,7 @@ class TestBuildCommitMessage:
 
     def test_agent_commit_summary(self, tmp_path):
         harness = _make_harness(tmp_path, observables=[
-            ObservableCommand(command="bench.sh", values={"speed": "higher"}),
+            ObserveEntry(name="bench", command="bench.sh", metrics={"speed": "higher"}),
         ])
         ah_dir = tmp_path / ".autohelix"
         ah_dir.mkdir(exist_ok=True)

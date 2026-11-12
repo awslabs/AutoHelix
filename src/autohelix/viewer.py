@@ -131,10 +131,10 @@ class RunData:
         summary = {"file": path.name, "text": _read_text(path)}
         if config:
             summary.update(
-                agent=" · ".join(filter(None, [config.agent.type, config.agent.model])),
-                checks=[c.command for c in config.constraints],
+                agent=" · ".join(filter(None, [config.agent.backend, config.agent.model])),
+                checks=[gate.text for gate in config.gates],
                 scope=config.editable,
-                reviewer=config.reviewer is not None,
+                reviewer=any(entry.review is not None for entry in config.observe),
                 max_iterations=config.max_iterations,
                 max_cost_usd=config.max_cost_usd,
                 max_time_seconds=config.max_time_seconds,

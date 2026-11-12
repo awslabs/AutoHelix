@@ -138,7 +138,7 @@ class OpenCodeAgent:
                 log_path=log_path,
                 line_callback=lambda line: self._handle_line(line, event_callback),
                 heartbeat_seconds=self.heartbeat_seconds,
-                timeout_seconds=self.config.timeout_seconds,
+                timeout_seconds=self.config.timeout,
                 env=env,
             )
         except FileNotFoundError:
@@ -150,6 +150,6 @@ class OpenCodeAgent:
             )
 
         if result.timed_out:
-            event_callback(AgentEvent(kind=AgentEventKind.WARNING, text=f"Agent {format_timeout_seconds(self.config.timeout_seconds)}"))
+            event_callback(AgentEvent(kind=AgentEventKind.WARNING, text=f"Agent {format_timeout_seconds(self.config.timeout)}"))
         return AgentRunResult(success=result.exit_code == 0, exit_code=result.exit_code, usage=self._usage,
                               final_text=self._final_text)

@@ -18,7 +18,7 @@ def mode(path):
 
 def test_copies_live_outside_the_project_and_go_at_segment_end(project, copies_dir, tmp_path):  # noqa: F811
     seen = tmp_path / "seen"
-    configure(project, constraints=[f'pwd -P >> {seen}; echo "$GIT_CEILING_DIRECTORIES" >> {seen}'])
+    configure(project, gates=[f'pwd -P >> {seen}; echo "$GIT_CEILING_DIRECTORIES" >> {seen}'])
     harness = Harness(project, land_mode="manual")
     root = harness.paths.copies
     assert root == copies_dir / project_key(project.resolve()) / harness.paths.run_id
@@ -36,7 +36,7 @@ def test_a_copy_without_git_finds_no_enclosing_repository(project, monkeypatch, 
     home = tmp_path / "home"  # a home directory can itself be a git repository
     git(home.parent, "init", "-q", str(home))
     monkeypatch.setenv(COPIES_ENV, str(home / ".cache" / "autohelix" / "copies"))
-    configure(project, constraints=["rm -rf .git && ! git rev-parse --git-dir"])
+    configure(project, gates=["rm -rf .git && ! git rev-parse --git-dir"])
     harness = Harness(project, land_mode="manual")
     harness.run(max_iterations=1, report=False)
     assert harness.history.load()[-1].accepted

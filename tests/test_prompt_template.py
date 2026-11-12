@@ -88,13 +88,10 @@ class TestLoadTemplate:
 
 
 class TestBuildPromptVariables:
-    def _make_config(self, constraints=None, observables=None, iteration_time_seconds=None):
-        return Config(
-            goal="test",
-            constraints=constraints or [],
-            observables=observables or [],
-            iteration_time_seconds=iteration_time_seconds,
-        )
+    def _make_config(self, iteration_time_seconds=None):
+        config = Config(goal="test")
+        config.agent.timeout = iteration_time_seconds
+        return config
 
     def test_has_hints_false_when_no_file(self, tmp_path):
         (tmp_path / ".autohelix").mkdir()
@@ -137,3 +134,35 @@ class TestBuildPromptVariables:
         rendered = render_template(load_template(config), variables)
         assert "Time budget: 15m." in rendered
         assert "timed out" not in rendered
+
+    def test_gates_observe_and_scope_render(self, tmp_path):
+        (tmp_path / ".autohelix").mkdir()
+        config = Config.from_dict({
+            "goal": "Make it fast.",
+            "gates": ["pytest -q", {"ask": "Keeps the API?"}, {"metric": "speed", "regress": "5%"},
+                      {"metric": "speed", "improve": 0}],
+            "observe": [{"name": "bench", "command": "python bench.py", "metrics": {"speed": "higher"}},
+                        {"name": "review", "review": "Review the diff."}],
+            "scope": {"editable": ["src/"], "frozen": ["src/fixtures/"]},
+        })
+        variables = build_prompt_variables(config, History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        assert variables["constraints"] == [
+            "pytest -q", "ask: Keeps the API?",
+            "speed: at most 5% worse than the last accepted iteration",
+            "speed: better than the last accepted iteration",
+        ]
+        rendered = render_template(load_template(config), variables)
+        assert "Gates (must pass" in rendered
+        assert "bench: python bench.py → speed (↑)" in rendered
+        assert 'review: autohelix review "Review the diff."' in rendered
+        assert "Editable (only changes to these files will be kept): src/" in rendered
+        assert "Frozen (changes to these files will be reverted, even inside the editable ones): src/fixtures/" in rendered
+        assert "review.md" not in rendered
+
+    def test_frozen_alone_renders(self, tmp_path):
+        (tmp_path / ".autohelix").mkdir()
+        config = Config.from_dict({"goal": "g", "scope": {"frozen": ["tests/"]}})
+        variables = build_prompt_variables(config, History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        rendered = render_template(load_template(config), variables)
+        assert "Frozen (changes to these files will be reverted): tests/" in rendered
+        assert "Editable" not in rendered

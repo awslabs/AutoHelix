@@ -11,16 +11,16 @@ Recent history:
 {% endif %}
 
 {% if constraints %}
-Constraints (must pass — failure means your changes are discarded):
+Gates (must pass — failure means your changes are discarded):
 {% for c in constraints %}
   {{ c }}
 {% endfor %}
 {% endif %}
 
 {% if observables %}
-Metrics (measured after you finish):
+Observed after you finish:
 {% for obs in observables %}
-  {{ obs.command }}{% if obs.metric_labels %} → {{ obs.metric_labels | join(', ') }}{% endif +%}
+  {{ obs.name }}: {{ obs.command }}{% if obs.metric_labels %} → {{ obs.metric_labels | join(', ') }}{% endif +%}
 {% endfor %}
 {% endif %}
 
@@ -33,17 +33,15 @@ Stop conditions (the run ends once one of these exits 0 after an accepted iterat
 
 {% if editable %}
 Editable (only changes to these files will be kept): {{ editable | join(', ') }}
-{% elif frozen %}
-Frozen (changes to these files will be reverted): {{ frozen | join(', ') }}
+{% endif %}
+{% if frozen %}
+Frozen (changes to these files will be reverted{% if editable %}, even inside the editable ones{% endif %}): {{ frozen | join(', ') }}
 {% endif %}
 
 Read before starting:
-{% if has_reviewer %}
-- .autohelix-iteration/review.md
-{% endif %}
 - .autohelix-iteration/notes/iter-*.md — your own notes from past iterations
 {% if observables %}
-- .autohelix-iteration/observations/iter-*/ — captured metric outputs, one dir per iteration
+- .autohelix-iteration/observations/iter-*/ — captured observe outputs, one dir per iteration
 {% endif %}
 {% if has_hints %}
 - .autohelix-iteration/hints.md

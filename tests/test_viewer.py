@@ -254,7 +254,7 @@ def test_tampered_commit_is_never_passed_to_git(viewer, integration_project):  #
 
 def test_preflight_failure_is_not_recorded_as_a_run(integration_project):  # noqa: F811
     (integration_project / "autohelix.yaml").write_text(
-        (integration_project / "autohelix.yaml").read_text().replace("type: mock", "type: claude\n  command: /nonexistent/agent"))
+        (integration_project / "autohelix.yaml").read_text().replace("backend: mock", "backend: claude\n  command: /nonexistent/agent"))
     subprocess.run(["git", "commit", "-qam", "Use a missing agent"], cwd=integration_project, check=True)
     with pytest.raises(RuntimeError, match="Preflight checks failed"):
         Harness(integration_project)
@@ -395,9 +395,10 @@ def measured_project(integration_project):  # noqa: F811
     """Three runs with a metric: one finished and landed, one manual and unlanded, one archived."""
     config = integration_project / "autohelix.yaml"
     config.write_text(config.read_text() + """
-metrics:
-  - command: python -c "import pathlib; print('##autohelix[speed=%d]' % (100 + 10 * pathlib.Path('hello.py').read_text().count('iteration')))"
-    values:
+observe:
+  - name: bench
+    command: python -c "import pathlib; print('##autohelix[speed=%d]' % (100 + 10 * pathlib.Path('hello.py').read_text().count('iteration')))"
+    metrics:
       speed: higher
 """)
     subprocess.run(["git", "commit", "-qam", "metric"], cwd=integration_project, check=True)

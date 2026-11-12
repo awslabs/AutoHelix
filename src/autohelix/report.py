@@ -25,7 +25,7 @@ Keep it proportional to the run: a few paragraphs for a short run. The page arou
 already shows the iteration table, metric chart and run cost; don't reproduce them. No title; \
 start with the result."""
 
-TIMEOUT_SECONDS = 15 * 60  # cap: agent.timeout_seconds can be hours for ML runs
+TIMEOUT_SECONDS = 15 * 60  # cap: agent.timeout can be hours for ML runs
 
 WRITE_TO = "Write the summary in Markdown to "
 
@@ -109,10 +109,10 @@ def write_report(config: Config, project: Path, console, config_path: Path | Non
     last = History(project, paths.run_id).get_last_iteration()
 
     agent = create_agent(AgentConfig(
-        type=config.agent.type,
+        backend=config.agent.backend,
         command=config.agent.command,
         model=config.agent.model,
-        timeout_seconds=min(config.agent.timeout_seconds or TIMEOUT_SECONDS, TIMEOUT_SECONDS),
+        timeout=min(config.agent.timeout or TIMEOUT_SECONDS, TIMEOUT_SECONDS),
     ), heartbeat_seconds=30)
     log_path = paths.logs / "report.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)

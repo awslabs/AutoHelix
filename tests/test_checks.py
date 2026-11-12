@@ -8,10 +8,10 @@ from autohelix.checks import (
     CHECK_KILL_GRACE,
     parse_metric_output,
     parse_structured_metrics,
-    run_constraint,
-    run_observable,
+    run_command,
+    run_observe_entry,
 )
-from autohelix.config import ObservableCommand
+from autohelix.config import ObserveEntry
 
 
 class TestParseMetricOutput:
@@ -94,7 +94,7 @@ class TestParseMetricOutputStructured:
 
 
 class TestRunObservableErrorMessage:
-    """Tests that run_observable gives actionable error messages."""
+    """Tests that run_observe_entry gives actionable error messages."""
 
     @patch("autohelix.checks.subprocess.Popen")
     def test_unparseable_output_includes_format_hint(self, mock_popen):
@@ -102,14 +102,14 @@ class TestRunObservableErrorMessage:
         proc.communicate.return_value = ("Python 3.10.12\nAll tests passed\n", "")
         proc.returncode = 0
         mock_popen.return_value = proc
-        obs = ObservableCommand(command="python bench.py", values={"throughput": "higher"})
-        result = run_observable(obs, cwd=MagicMock())
+        obs = ObserveEntry(name="bench", command="python bench.py", metrics={"throughput": "higher"})
+        result = run_observe_entry(obs, cwd=MagicMock())
         assert "throughput" not in result.values
         assert "##autohelix[throughput=" in result.errors["throughput"]
 
 
 class TestRunObservable:
-    """Tests for run_observable output parsing and error reporting."""
+    """Tests for run_observe_entry output parsing and error reporting."""
 
     @patch("autohelix.checks.subprocess.Popen")
     def test_multiple_values_from_single_command(self, mock_popen):
@@ -119,10 +119,10 @@ class TestRunObservable:
         )
         proc.returncode = 0
         mock_popen.return_value = proc
-        obs = ObservableCommand(
-            command="bench.py", values={"throughput": "higher", "latency": "lower"},
+        obs = ObserveEntry(
+            name="bench", command="bench.py", metrics={"throughput": "higher", "latency": "lower"},
         )
-        result = run_observable(obs, cwd=MagicMock())
+        result = run_observe_entry(obs, cwd=MagicMock())
         assert result.values == {"throughput": 1500.0, "latency": 0.5}
         assert result.errors == {}
 
@@ -134,10 +134,10 @@ class TestRunObservable:
         proc.communicate.return_value = ("##autohelix[throughput=1500]", "")
         proc.returncode = 0
         mock_popen.return_value = proc
-        obs = ObservableCommand(
-            command="bench.py", values={"throughput": "higher", "latency": "lower"},
+        obs = ObserveEntry(
+            name="bench", command="bench.py", metrics={"throughput": "higher", "latency": "lower"},
         )
-        result = run_observable(obs, cwd=MagicMock())
+        result = run_observe_entry(obs, cwd=MagicMock())
         assert result.values == {"throughput": 1500.0}
         assert "latency" in result.errors
 
@@ -153,7 +153,7 @@ class TestInterruptCleanup:
         mock_popen.return_value = proc
 
         with pytest.raises(KeyboardInterrupt):
-            run_constraint("sleep 60", cwd=MagicMock())
+            run_command("sleep 60", cwd=MagicMock())
 
         mock_kill.assert_called_once_with(proc, grace=CHECK_KILL_GRACE)
 
@@ -165,12 +165,13 @@ class TestInterruptCleanup:
         proc = MagicMock()
         proc.communicate.side_effect = KeyboardInterrupt
         mock_popen.return_value = proc
-        observable = ObservableCommand(
+        observable = ObserveEntry(
+            name="bench",
             command="sleep 60",
-            values={"score": "higher"},
+            metrics={"score": "higher"},
         )
 
         with pytest.raises(KeyboardInterrupt):
-            run_observable(observable, cwd=MagicMock())
+            run_observe_entry(observable, cwd=MagicMock())
 
         mock_kill.assert_called_once_with(proc, grace=CHECK_KILL_GRACE)
