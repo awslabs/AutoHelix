@@ -21,26 +21,6 @@ from autohelix.runs import RunLock, RunPaths, archive, delete, git, land, repair
 from click.testing import CliRunner
 
 
-@pytest.fixture
-def project(tmp_path):
-    project = tmp_path / "project"
-    project.mkdir()
-    git(project, "init", "-q")
-    git(project, "config", "user.email", "test@example.com")
-    git(project, "config", "user.name", "Test")
-    (project / "code.py").write_text("print('baseline')\n")
-    (project / "autohelix.yaml").write_text(yaml.safe_dump({
-        "goal": "Make a checked change", "report": False,
-        "agent": {"backend": "mock", "settings": {
-            "change_file": "code.py", "change_content": "# iteration {iteration}", "cost_usd": 0.1,
-        }},
-    }))
-    git(project, "add", ".")
-    git(project, "commit", "-qm", "baseline")
-    (project / ".autohelix").mkdir()
-    return project
-
-
 def configure(project, **values):
     path = project / "autohelix.yaml"
     data = yaml.safe_load(path.read_text())

@@ -8,7 +8,7 @@ import yaml
 
 from autohelix.harness import Harness
 from autohelix.runs import RunPaths, git, land
-from tests.test_runs import configure, project  # noqa: F401 - fixture
+from tests.test_runs import configure
 
 
 def _judge_config(project, **settings):
@@ -23,7 +23,7 @@ def _write(project, data):
     git(project, "commit", "-qm", "config")
 
 
-def test_mutate_validate_restore_across_commands_is_caught(project):  # noqa: F811
+def test_mutate_validate_restore_across_commands_is_caught(project):
     # One command changes a value, a second validates it and restores the file;
     # the final files equal T, but the second command saw different content.
     configure(project, gates=[
@@ -39,7 +39,7 @@ def test_mutate_validate_restore_across_commands_is_caught(project):  # noqa: F8
     harness.close()
 
 
-def test_swallowed_failed_ask_passes_and_keeps_its_usage(project):  # noqa: F811
+def test_swallowed_failed_ask_passes_and_keeps_its_usage(project):
     data = _judge_config(project, judge_fail=True)
     data["gates"] = ['autohelix ask "Done?" || true']
     _write(project, data)
@@ -54,7 +54,7 @@ def test_swallowed_failed_ask_passes_and_keeps_its_usage(project):  # noqa: F811
     harness.close()
 
 
-def test_interrupted_ask_records_unknown_cost(project, monkeypatch):  # noqa: F811
+def test_interrupted_ask_records_unknown_cost(project, monkeypatch):
     from autohelix.usage_log import append_usage, new_call_id
 
     configure(project, gates=["true"])
@@ -74,7 +74,7 @@ def test_interrupted_ask_records_unknown_cost(project, monkeypatch):  # noqa: F8
     harness.close()
 
 
-def test_noop_stop_sees_the_unchanged_tip(project, monkeypatch):  # noqa: F811
+def test_noop_stop_sees_the_unchanged_tip(project, monkeypatch):
     from autohelix.agents import AgentRunResult
 
     configure(project, stop=['[ "$AUTOHELIX_ITERATION" != 0 ] && '
@@ -91,7 +91,7 @@ def test_noop_stop_sees_the_unchanged_tip(project, monkeypatch):  # noqa: F811
     harness.close()
 
 
-def test_stop_modifying_files_is_an_error_but_acceptance_stays(project):  # noqa: F811
+def test_stop_modifying_files_is_an_error_but_acceptance_stays(project):
     configure(project, stop=['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 1; echo stop-edit >> code.py; exit 0'])
     harness = Harness(project, land_mode="manual")
     harness.run(max_iterations=1, report=False)
@@ -101,7 +101,7 @@ def test_stop_modifying_files_is_an_error_but_acceptance_stays(project):  # noqa
     harness.close()
 
 
-def test_land_refuses_target_checked_out_in_another_worktree(project, tmp_path):  # noqa: F811
+def test_land_refuses_target_checked_out_in_another_worktree(project, tmp_path):
     harness = Harness(project, land_mode="manual")
     harness.run(max_iterations=1, report=False)
     target = harness.run_info["target_branch"]
@@ -115,14 +115,14 @@ def test_land_refuses_target_checked_out_in_another_worktree(project, tmp_path):
     harness.close()
 
 
-def test_copies_and_the_pin_are_gone_after_a_segment(project):  # noqa: F811
+def test_copies_and_the_pin_are_gone_after_a_segment(project):
     harness = Harness(project, land_mode="manual")
     harness.run(max_iterations=2, report=False)
     assert not harness.paths.copies.exists()
     assert git(project, "rev-parse", "--verify", harness.paths.pin, check=False).returncode != 0
 
 
-def test_stale_copies_are_removed_at_segment_start(project):  # noqa: F811
+def test_stale_copies_are_removed_at_segment_start(project):
     harness = Harness(project, land_mode="manual")
     stale = harness.paths.copies / "iter-7-agent"
     (stale / "pkg").mkdir(parents=True)
@@ -145,7 +145,7 @@ def test_posttrain_in_repo_artifacts_fallback_is_an_error(tmp_path):
     assert "inside the project" in result.stdout
 
 
-def test_commit_summary_first_line_from_the_agent_copy(project, monkeypatch):  # noqa: F811
+def test_commit_summary_first_line_from_the_agent_copy(project, monkeypatch):
     harness = Harness(project, land_mode="manual")
     real = harness.run_agent
 

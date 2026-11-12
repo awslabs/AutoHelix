@@ -144,6 +144,8 @@ def test_conflicting_ignore_refuses_and_preserves_user_work(
     unstaged_before = git(project, "diff", "--binary")
     worktrees_before = git(project, "worktree", "list", "--porcelain")
     config_before = (project / "autohelix.yaml").read_bytes()
+    exclude = common_repo / ".git" / "info" / "exclude"
+    exclude_before = exclude.read_bytes() if exclude.exists() else None
     runtime = project / ".autohelix"
     if existing_runtime:
         runtime.mkdir()
@@ -177,8 +179,8 @@ def test_conflicting_ignore_refuses_and_preserves_user_work(
     assert ignore.read_bytes() == ignore_before
     assert (project / "scratch.py").read_text() == 'print("untracked user work")\n'
     assert (project / "autohelix.yaml").read_bytes() == config_before
-    exclude = common_repo / ".git" / "info" / "exclude"
-    assert exclude.read_text().splitlines().count(".autohelix/") == 1
+    # The refusal takes back the exclude line it added.
+    assert (exclude.read_bytes() if exclude.exists() else None) == exclude_before
 
 
 @pytest.mark.parametrize("project_layout", ["fresh-clone"], indirect=True)

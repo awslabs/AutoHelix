@@ -232,6 +232,7 @@ class TestTitle:
 class TestOldKeys:
     @pytest.mark.parametrize("data, message", [
         ({"constraints": ["pytest"]}, "`constraints:` is now `gates:`"),
+        ({"name": "perf"}, "`name:` is gone: runs are named after the config file; use autohelix/<name>.yaml"),
         ({"constraint": "pytest"}, "`constraint:` is now `gates:`"),
         ({"metrics": []}, "`metrics:` is now `observe:`"),
         ({"observables": []}, "`observables:` is now `observe:`"),
@@ -463,7 +464,7 @@ class TestConfigValidate:
 
     def test_known_top_level_keys(self):
         assert KNOWN_TOP_LEVEL_KEYS == {"goal", "agent", "prompt_template", "scope", "gates", "observe", "stop",
-                                        "budget", "land", "report", "name"}
+                                        "budget", "land", "report"}
 
     def test_empty_goal(self):
         config = Config.from_dict({"goal": ""})

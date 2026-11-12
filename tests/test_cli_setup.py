@@ -57,6 +57,11 @@ def setup(*args, input=None):
     return CliRunner().invoke(main, ["setup", *args], input=input)
 
 
+def flat(text):
+    """Output without the line wraps of a narrow terminal."""
+    return " ".join(text.split())
+
+
 def files(project):
     return sorted(str(p.relative_to(project)) for p in project.rglob("*") if ".git" not in p.parts)
 
@@ -72,7 +77,8 @@ def test_bare_setup_writes_the_template_and_nothing_else(project):
     exclude = project / ".git" / "info" / "exclude"
     assert ".autohelix/" not in (exclude.read_text() if exclude.exists() else "")
     assert "Wrote autohelix.yaml." in result.output
-    assert "Commit it." in result.output and "  3. autohelix run\n" in result.output
+    assert "  2. Commit it, and any scripts its commands use (runs start from a commit).\n" in result.output
+    assert "  3. autohelix run\n" in result.output
     assert "initialized" not in result.output.lower()
     assert "No coding agent found" in result.output
 
@@ -112,27 +118,34 @@ def test_relative_and_quoted_paths(project):
 def test_a_bad_name_is_a_usage_error(project, name):
     result = setup(name)
     assert result.exit_code == 2
-    assert ("must start with a lowercase letter or digit and use only lowercase letters, digits or hyphens, "
-            "at most 32 characters") in " ".join(result.output.split())
-    assert "is a folder" not in result.output
+    assert (f"Error: Invalid value for NAME: {name!r} must start with a lowercase letter or digit and use only "
+            "lowercase letters, digits or hyphens, at most 32 characters (runs of this config are named "
+            "after it).") in flat(result.output)
     assert files(project) == ["main.py"]
 
 
 @pytest.mark.parametrize("command", ["init", "setup"])
 def test_a_folder_as_name_points_at_path(project, command):
     (project / "My App").mkdir()
-    for name, quoted in ((".", "."), ("My App", "'My App'")):
+    (project / "other").mkdir()  # a valid name, but `init PATH` by habit
+    for name, quoted in ((".", "."), ("My App", "'My App'"), ("other", "other")):
         result = CliRunner().invoke(main, [command, name])
         assert result.exit_code == 2
-        assert f"({name} is a folder: use -p {quoted}.)" in " ".join(result.output.split())
-    assert files(project) == ["My App", "main.py"]
+        assert (f"Error: Invalid value for NAME: {name!r} is a folder; to set up there, use `-p {quoted}`."
+                in flat(result.output))
+    assert files(project) == ["My App", "main.py", "other"]
+    # With -p, NAME is a name whatever the current directory holds.
+    assert CliRunner().invoke(main, [command, "other", "-p", "."]).exit_code == 0
+    assert (project / "autohelix" / "other.yaml").is_file()
 
 
 def test_the_name_autohelix_is_refused(project):
+    (project / "autohelix").mkdir()  # the config folder: reserved, not "a folder"
     result = setup("autohelix")
     assert result.exit_code == 2
-    assert "autohelix/autohelix.yaml would give runs without a name" in " ".join(result.output.split())
-    assert files(project) == ["main.py"]
+    assert ("Error: Invalid value for NAME: 'autohelix' is reserved: runs of autohelix/autohelix.yaml would get "
+            "no name; choose another.") in flat(result.output)
+    assert files(project) == ["autohelix", "main.py"]
 
 
 @pytest.mark.parametrize("args, relative", [((), "autohelix.yaml"), (("perf",), "autohelix/perf.yaml")])
@@ -188,9 +201,18 @@ def test_bare_setup_beside_folder_configs_is_refused(project):
     result = setup()
     assert result.exit_code == 1
     assert "autohelix/ already has perf.yaml" in result.output
-    assert "Name this one: `autohelix setup <name>`." in " ".join(result.output.split())
+    assert "Name this one: `autohelix setup <name>`." in flat(result.output)
     assert not (project / "autohelix.yaml").exists()
     assert setup("fast").exit_code == 0
+
+
+def test_the_shadowing_hint_keeps_the_path(project, tmp_path):
+    other = tmp_path / "my other"
+    (other / "autohelix").mkdir(parents=True)
+    (other / "autohelix" / "perf.yaml").write_text("goal: x\n")
+    result = setup("-p", str(other))
+    assert result.exit_code == 1
+    assert f"Name this one: `autohelix setup <name> -p '{other}'`." in flat(result.output)
 
 
 def test_outside_git_writes_and_warns(tmp_path, monkeypatch):
@@ -199,8 +221,8 @@ def test_outside_git_writes_and_warns(tmp_path, monkeypatch):
     result = setup()
     assert result.exit_code == 0, result.output
     assert (tmp_path / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
-    assert "not in a git repository" in result.output
-    assert "git init && git add -A && git commit -m 'init'" in result.output
+    assert ("Warning: Not a git repository. AutoHelix requires git.\n"
+            "Run: git init && git add -A && git commit -m 'init'") in result.output
 
 
 def test_a_repository_without_commits_warns(tmp_path, monkeypatch):
@@ -210,7 +232,22 @@ def test_a_repository_without_commits_warns(tmp_path, monkeypatch):
     result = setup()
     assert result.exit_code == 0, result.output
     assert (tmp_path / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
-    assert "Warning: no commit yet; `autohelix run` starts from a commit" in result.output
+    assert ("Warning: No commits yet; a run starts from a commit.\n"
+            "Run: git add -A && git commit -m 'init'") in result.output
+
+
+@pytest.mark.parametrize("where", ["bare", "git-dir"])
+def test_a_folder_run_refuses_is_named_as_run_names_it(tmp_path, monkeypatch, where):
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q", *(["--bare"] if where == "bare" else []))
+    folder = repo if where == "bare" else repo / ".git"
+    result = setup("-p", str(folder))
+    assert result.exit_code == 0, result.output
+    assert f"Warning: {folder.resolve()} is not in a git working tree" in flat(result.output)
+    result = CliRunner().invoke(main, ["run", "-p", str(folder)])
+    assert result.exit_code == 1 and f"{folder.resolve()} is not in a git working tree" in flat(result.output)
 
 
 def test_a_repository_with_a_commit_has_no_warning(project):
@@ -301,7 +338,7 @@ def test_agent_claude_execs_with_the_skill_and_writes_nothing(project, monkeypat
     assert "Write the config to `autohelix/perf.yaml`" in prompt
     assert "`agent.backend: claude`" in prompt
     assert "Write the file directly (don't run `autohelix setup`)." in prompt
-    assert f"AutoHelix's own Python is `{sys.executable}`" in prompt
+    assert f"To check it, use AutoHelix's own Python, `{sys.executable}`" in prompt
     assert prompt.endswith("Start by asking what I want to achieve.")
 
 
@@ -312,7 +349,7 @@ def test_the_prompt_names_the_launcher_it_was_started_as(project, monkeypatch, e
     launcher.write_text("#!/usr/bin/env python\n")
     monkeypatch.setattr(sys, "argv", [str(launcher), "setup"])
     assert setup("--agent", "claude").exit_code == 0
-    assert f"and its CLI `{launcher.resolve()}`" in execs[0][1][4]
+    assert f"`{sys.executable}` (its CLI is `{launcher.resolve()}`)." in execs[0][1][4]
 
 
 @pytest.mark.parametrize("agent", ["codex", "opencode"])

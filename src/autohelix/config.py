@@ -69,7 +69,7 @@ class ConfigIssue:
 DEFAULT_CHECK_TIMEOUT = 1800
 
 KNOWN_TOP_LEVEL_KEYS = {
-    "goal", "agent", "prompt_template", "scope", "gates", "observe", "stop", "budget", "land", "report", "name",
+    "goal", "agent", "prompt_template", "scope", "gates", "observe", "stop", "budget", "land", "report",
 }
 
 # Keys of the first config format: each is an error naming its replacement.
@@ -81,6 +81,7 @@ RENAMED_TOP_LEVEL_KEYS = {
     "acceptance": ("`acceptance:` is now a `gates:` entry: `- metric: NAME` with `regress: N%` "
                    "(was max_regression_pct) or `improve: N%`"),
     "reviewer": "`reviewer:` is now an `observe:` entry with `name:` and `review: <prompt>`",
+    "name": "`name:` is gone: runs are named after the config file; use autohelix/<name>.yaml",
 }
 
 ENTRY_AGENT_KEYS = ("backend", "model", "reasoning_effort", "timeout", "command")
@@ -158,7 +159,6 @@ class Config:
     max_cost_usd: float | None = None
     max_time_seconds: int | None = None
     report: bool = True  # write a summary (output/report.md) when a run finishes
-    name: str | None = None
     land: str | None = None  # the landing mode of new runs; unset: auto (manual with --group)
     # A Jinja file replacing the built-in agent prompt, resolved against the config file's folder.
     prompt_template: Path | None = None
@@ -208,9 +208,6 @@ class Config:
         for message in self._parse_errors:
             error(message)
 
-        if self.name is not None and (not isinstance(self.name, str)
-                or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", self.name)):
-            error("name must use lowercase letters, digits or hyphens, with at most 32 characters")
         if self.land is not None and self.land not in ("auto", "manual"):
             error("land must be auto or manual")
 
@@ -344,7 +341,6 @@ class Config:
             max_cost_usd=max_cost_usd,
             max_time_seconds=max_time_seconds,
             report=data.get("report") is not False,
-            name=data.get("name"),
             land=data.get("land"),
             _parse_errors=errors,
         )
@@ -649,6 +645,10 @@ CONFIG_FILE = "autohelix.yaml"
 CONFIG_DIR = "autohelix"
 
 
+class ConfigError(ValueError):
+    """A config file that can't be read as a config (not YAML, not a mapping)."""
+
+
 class ConfigNotFound(FileNotFoundError):
     """No config by that name, or no single config for a bare command. The message
     states what was found; `configs` lists the project's configs (project-relative)
@@ -722,10 +722,17 @@ def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Co
     if not config_path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
 
+    try:
+        shown = config_path.resolve().relative_to(Path(project_path).resolve())
+    except ValueError:
+        shown = config_path
     with open(config_path) as f:
-        data = yaml.safe_load(f) or {}
+        try:
+            data = yaml.safe_load(f) or {}
+        except yaml.YAMLError as e:
+            raise ConfigError(f"Cannot parse {shown}: {e}") from None
     if not isinstance(data, dict):
-        raise ValueError(f"{config_path} must be a YAML mapping")
+        raise ConfigError(f"{shown} must be a YAML mapping")
 
     config = Config.from_dict(data)
     template = data.get("prompt_template")

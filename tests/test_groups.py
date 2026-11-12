@@ -13,7 +13,7 @@ from autohelix.cli import main
 from autohelix.config import Config
 from autohelix.harness import Harness
 from autohelix.runs import RunLock, RunPaths, archive, git, short_id
-from tests.test_runs import configure, project  # noqa: F401 - fixture
+from tests.test_runs import configure
 
 
 def cli(project, *args):
@@ -51,7 +51,7 @@ def watch_agent(harness, monkeypatch, seen):
     monkeypatch.setattr(harness, "run_agent", agent)
 
 
-def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, monkeypatch):  # noqa: F811
+def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, monkeypatch):
     configure(project, observe=[{"name": "bench", "command": "echo score: 3.5", "metrics": {"score": "higher"}}],
               agent={"backend": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
                                                   "notes_content": "tried {iteration}"}})
@@ -89,7 +89,7 @@ def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, mon
     assert "Other runs in group" not in seen["prompt"]
 
 
-def test_group_and_landing_mode_are_stored_kept_and_changed(project):  # noqa: F811
+def test_group_and_landing_mode_are_stored_kept_and_changed(project):
     plain, _ = started(project)
     assert identity(plain).get("land") == "auto" and "group" not in identity(plain)
     grouped, _ = started(project, "--group", "perf")
@@ -124,7 +124,7 @@ def test_config_land_keeps_unset_apart_from_auto():
     assert any("land must be" in issue.message for issue in Config.from_dict({"goal": "g", "land": "x"}).validate())
 
 
-def test_legacy_runs_without_a_recorded_mode_follow_the_config(project):  # noqa: F811
+def test_legacy_runs_without_a_recorded_mode_follow_the_config(project):
     paths, _ = started(project, "--land", "manual")
     data = identity(paths)
     del data["land"]
@@ -135,7 +135,7 @@ def test_legacy_runs_without_a_recorded_mode_follow_the_config(project):  # noqa
     harness.close()
 
 
-def test_group_runs_dont_warn_about_each_other_while_live(project):  # noqa: F811
+def test_group_runs_dont_warn_about_each_other_while_live(project):
     first, _ = started(project, "--group", "g")
     with RunLock(first.lock):
         _, result = started(project, "--group", "g")
@@ -145,7 +145,7 @@ def test_group_runs_dont_warn_about_each_other_while_live(project):  # noqa: F81
     assert f"{short_id(first.run_id)} is also running for this config" in result.output
 
 
-def test_dashboard_shows_the_group_after_the_id(project):  # noqa: F811
+def test_dashboard_shows_the_group_after_the_id(project):
     grouped, _ = started(project, "--group", "perf")
     plain, _ = started(project, "--land", "manual")
     result = cli(project, "dashboard", "--once")
@@ -159,7 +159,7 @@ def test_dashboard_shows_the_group_after_the_id(project):  # noqa: F811
     assert view.output.startswith(f"{grouped.run_id} (perf)")
 
 
-def test_notes_are_saved_as_versions_and_delete_removes_them(project):  # noqa: F811
+def test_notes_are_saved_as_versions_and_delete_removes_them(project):
     configure(project, agent={"backend": "mock", "settings": {"change_file": "code.py",
                                                            "change_content": "# {iteration}",
                                                            "notes_content": "note {iteration}"}})
@@ -182,7 +182,7 @@ def test_notes_are_saved_as_versions_and_delete_removes_them(project):  # noqa: 
     assert (other.notes / "notes.md").read_text() == "note 1"  # the group's other run is untouched
 
 
-def test_freeze_never_hashes_harness_material_into_the_users_objects(project, monkeypatch):  # noqa: F811
+def test_freeze_never_hashes_harness_material_into_the_users_objects(project, monkeypatch):
     """Seeded material (here a hint) and files the agent leaves in `.autohelix-iteration/`
     never become objects in the user's repository."""
     unique = {"hint": f"hint {os.urandom(8).hex()}", "scratch": f"scratch {os.urandom(8).hex()}\n"}
@@ -205,7 +205,7 @@ def test_freeze_never_hashes_harness_material_into_the_users_objects(project, mo
         assert oid not in objects
 
 
-def test_git_lock_errors_are_retried_briefly(project, monkeypatch):  # noqa: F811
+def test_git_lock_errors_are_retried_briefly(project, monkeypatch):
     real = subprocess.run
     calls = []
 
@@ -234,7 +234,7 @@ def test_git_lock_errors_are_retried_briefly(project, monkeypatch):  # noqa: F81
     assert len(calls) == 1  # a CAS mismatch is not contention
 
 
-def test_resuming_an_archived_member_says_it_rejoins_its_group(project):  # noqa: F811
+def test_resuming_an_archived_member_says_it_rejoins_its_group(project):
     paths, _ = started(project, "--group", "g")
     assert cli(project, "archive", short_id(paths.run_id)).exit_code == 0
     result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report")
@@ -250,7 +250,7 @@ def test_a_template_naming_the_old_copy_layout_is_flagged():
     assert uses_old_layout("write to {{ worktree }}/.autohelix/notes/iter-{{ iteration }}.md")
 
 
-def test_a_new_member_doesnt_warn_about_unlanded_members(project):  # noqa: F811
+def test_a_new_member_doesnt_warn_about_unlanded_members(project):
     first, _ = started(project, "--group", "g")  # manual landing: its commit stays unlanded
     _, result = started(project, "--group", "g")
     assert "unlanded commit" not in result.output.split("  AutoHelix ·")[0] and "Previous run" not in result.output
@@ -258,7 +258,7 @@ def test_a_new_member_doesnt_warn_about_unlanded_members(project):  # noqa: F811
     assert "unlanded commit" in result.output.split("  AutoHelix ·")[0]  # the warning, before the header
 
 
-def test_a_checks_copy_gets_the_complete_change_and_nothing_else(project):  # noqa: F811
+def test_a_checks_copy_gets_the_complete_change_and_nothing_else(project):
     seen = project / "seen"
     configure(project, gates=[
         f"ls -A .autohelix-iteration > {seen}; grep -c '^+' .autohelix-iteration/candidate.diff >> {seen}"])
@@ -267,7 +267,7 @@ def test_a_checks_copy_gets_the_complete_change_and_nothing_else(project):  # no
     assert listing[0] == "candidate.diff" and listing[1] != "0"  # iteration 1's change, not the baseline's
 
 
-def test_a_broken_member_doesnt_stop_another_run(project):  # noqa: F811
+def test_a_broken_member_doesnt_stop_another_run(project):
     first, _ = started(project, "--group", "g")
     first.history.write_text("not json\n" + first.history.read_text())  # corrupt, not a torn last line
     second, result = started(project, "--group", "g")
@@ -279,7 +279,7 @@ def test_a_broken_member_doesnt_stop_another_run(project):  # noqa: F811
     assert result.exit_code == 0, result.output
 
 
-def test_a_group_lands_manually_even_with_land_auto_in_the_config(project):  # noqa: F811
+def test_a_group_lands_manually_even_with_land_auto_in_the_config(project):
     configure(project, land="auto")
     paths, _ = started(project, "--group", "g")
     assert identity(paths)["land"] == "manual"
@@ -287,7 +287,7 @@ def test_a_group_lands_manually_even_with_land_auto_in_the_config(project):  # n
     assert identity(paths)["land"] == "auto"
 
 
-def test_unchanged_notes_are_hard_links_and_a_removed_notes_folder_stays_removed(project, monkeypatch):  # noqa: F811
+def test_unchanged_notes_are_hard_links_and_a_removed_notes_folder_stays_removed(project, monkeypatch):
     from autohelix import iteration
 
     paths, _ = started(project)
@@ -307,7 +307,7 @@ def test_unchanged_notes_are_hard_links_and_a_removed_notes_folder_stays_removed
     assert list(paths.notes.iterdir()) == []
 
 
-def test_the_report_copy_lists_the_runs_own_ref(project, monkeypatch):  # noqa: F811
+def test_the_report_copy_lists_the_runs_own_ref(project, monkeypatch):
     from autohelix import workspace
 
     seen = {}
@@ -325,7 +325,7 @@ def test_the_report_copy_lists_the_runs_own_ref(project, monkeypatch):  # noqa: 
     assert seen["refs"] == (paths.ref,)
 
 
-def test_an_old_prompt_file_is_reported_as_no_longer_read(project):  # noqa: F811
+def test_an_old_prompt_file_is_reported_as_no_longer_read(project):
     (project / ".autohelix" / "prompt.md").write_text("Old: {{ goal }}\n")
     _, result = started(project)
     assert ".autohelix/prompt.md is no longer read" in " ".join(result.output.split())  # wrapped under WARN

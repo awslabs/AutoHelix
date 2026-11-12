@@ -259,15 +259,15 @@ def _line(width: int, *parts: tuple[str, str]) -> Text:
     return line
 
 
-def header_lines(config, run_id: str, project: str, max_iterations: int, width: int = 100) -> list[Text]:
-    """`AutoHelix · run <short> · <name>`, then Goal, Agent, Gates, Observe, Scope and
+def header_lines(config, run_id: str, label: str, max_iterations: int, width: int = 100) -> list[Text]:
+    """`AutoHelix · run <short> · <label>` (the run's name, else the project's), then Goal, Agent, Gates, Observe, Scope and
     Budget lines (each only if it has something to say), each cut to `width`."""
     from autohelix.iteration_time import format_duration
     from autohelix.runs import short_id
 
     title = Text("  ")
     title.append("AutoHelix", style="bold")
-    title.append(f" · run {short_id(run_id)} · {clean(config.name or project)}")
+    title.append(f" · run {short_id(run_id)} · {clean(label)}")
     agent = config.agent.backend + (f" ({config.agent.model})" if config.agent.model else "")
     if config.agent.timeout is not None:
         agent += f" · {format_duration(config.agent.timeout)} per iteration"

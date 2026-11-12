@@ -13,13 +13,15 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 
 import click
+from click.core import ParameterSource
 
-from autohelix.config import CONFIG_DIR, CONFIG_FILE, ConfigNotFound, find_config, load_config, project_configs
+from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFound, find_config, load_config,
+                              project_configs, run_command)
 from autohelix.harness import Harness
 from autohelix.history import History
 from autohelix.runs import (NoRunToResume, RunPaths, RunLock, archive as archive_run, check_group,
-                            config_gone, config_relative, delete as delete_run, is_archived, land as land_run,
-                            no_run_to_resume, project_runs, resolve_run, run_tip, short_id, valid_name)
+                            config_gone, delete as delete_run, land as land_run, project_runs, resolve_run,
+                            run_tip, short_id, valid_name)
 from autohelix import run_table
 from autohelix.skill import SKILL_NAME, skill
 from autohelix.state import read_stored_config_path
@@ -93,7 +95,7 @@ def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[st
     where = (f"The config is `{target}`, already there (perhaps still the commented template): complete it there"
              if exists else f"Write the config to `{target}`")
     launcher = _launcher()
-    tools = f"AutoHelix's own Python is `{sys.executable}`" + (f" and its CLI `{launcher}`" if launcher else "")
+    tools = f"use AutoHelix's own Python, `{sys.executable}`" + (f" (its CLI is `{launcher}`)" if launcher else "")
     prompt = (f"Read `{skill_dir / 'SKILL.md'}` and follow it to help me set up an AutoHelix loop for this "
               f"project. {where}, with `agent.backend: {agent}` unless we decide otherwise. Write the file "
               f"directly (don't run `autohelix setup`). To check it, {tools}. "
@@ -105,20 +107,29 @@ def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[st
     return ["opencode", str(project), "--prompt", prompt]
 
 
-def _git_warning(project: Path) -> str | None:
-    """Why `run` would refuse this project, for `setup` to warn about (it needs no git itself)."""
+def _git_problem(project: Path) -> str | None:
+    """Why `run` refuses this folder (not a git checkout with a commit to start from), or
+    None: `run` raises it, `setup` (which needs no git) warns with it. (`main` has dropped
+    inherited GIT_* variables, so this is the checkout's own repository.)"""
     def git(*args: str):
         return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True)
 
     try:
         inside = git("rev-parse", "--is-inside-work-tree")
-    except OSError:
-        return "git not found; `autohelix run` needs git."
-    if inside.returncode or inside.stdout.strip() != "true":
-        return ("not in a git repository; `autohelix run` needs one with a commit: "
-                "git init && git add -A && git commit -m 'init'")
+    except OSError as e:
+        return f"git not found ({e}); AutoHelix requires git."
+    if inside.returncode:
+        if "not a git repository" not in inside.stderr.lower():  # e.g. dubious ownership (safe.directory)
+            return f"git failed in {project}:\n{inside.stderr.strip()}"
+        return "Not a git repository. AutoHelix requires git.\nRun: git init && git add -A && git commit -m 'init'"
+    if inside.stdout.strip() != "true":
+        return (f"{project} is not in a git working tree (a bare repository, or inside .git/); "
+                "run AutoHelix in a checkout.")
     if git("rev-parse", "--verify", "-q", "HEAD").returncode:
-        return "no commit yet; `autohelix run` starts from a commit: git add -A && git commit -m 'init'"
+        if git("for-each-ref", "--count=1", "refs/heads/").stdout.strip():
+            return ("HEAD has no commit yet (a new or orphan branch); a run starts from a commit. "
+                    "Commit on it, or switch to a branch that has one.")
+        return "No commits yet; a run starts from a commit.\nRun: git add -A && git commit -m 'init'"
     return None
 
 
@@ -144,15 +155,19 @@ def setup(name: str | None, path: str, agent: str | None):
     setup itself never overwrites a file: with --agent on an existing config, the agent
     edits it with you.
     """
-    if name is not None and (not valid_name(name) or name == CONFIG_DIR):
+    if name is not None:
         if name == CONFIG_DIR:
-            why = f"{CONFIG_DIR}/{CONFIG_DIR}.yaml would give runs without a name; choose another."
-        else:
+            why = f"is reserved: runs of {CONFIG_DIR}/{CONFIG_DIR}.yaml would get no name; choose another."
+        elif (name and Path(name).is_dir()  # `init PATH`, by habit; with -p, NAME is a name
+              and click.get_current_context().get_parameter_source("path") == ParameterSource.DEFAULT):
+            why = f"is a folder; to set up there, use `-p {shlex.quote(name)}`."
+        elif not valid_name(name):
             why = ("must start with a lowercase letter or digit and use only lowercase letters, digits or "
                    "hyphens, at most 32 characters (runs of this config are named after it).")
-            if name and Path(name).is_dir():
-                why += f" ({name} is a folder: use -p {shlex.quote(name)}.)"
-        raise click.BadParameter(f"{name!r} {why}", param_hint="NAME")
+        else:
+            why = None
+        if why:
+            raise click.BadParameter(f"{name!r} {why}", param_hint="NAME")
     project = Path(path).resolve()
     cwd = Path.cwd().resolve()
     relative = f"{CONFIG_DIR}/{name}.yaml" if name else CONFIG_FILE
@@ -173,8 +188,8 @@ def setup(name: str | None, path: str, agent: str | None):
     if name is None and not exists and (others := project_configs(project)):
         raise click.ClickException(f"{CONFIG_DIR}/ already has {', '.join(Path(c).name for c in others)}, which "
                                    f"{CONFIG_FILE} would shadow for a bare `autohelix run`. "
-                                   "Name this one: `autohelix setup <name>`.")
-    git_warning = _git_warning(project)
+                                   f"Name this one: `autohelix setup <name>{elsewhere}`.")
+    git_warning = _git_problem(project)
 
     def warn_git():
         if git_warning:
@@ -215,7 +230,7 @@ def setup(name: str | None, path: str, agent: str | None):
     warn_git()
     click.echo("Next:\n"
                "  1. Edit it: the goal (its first line is the run's title), scope, gates, observe.\n"
-               "  2. Commit it.\n"
+               "  2. Commit it, and any scripts its commands use (runs start from a commit).\n"
                f"  3. autohelix run{named}{elsewhere}")
     if found:
         click.echo(f"An agent can draft the gates and observe entries with you: "
@@ -268,32 +283,10 @@ def _group(value: str | None) -> str | None:
 
 def _git_project(path: str) -> Path:
     """The project directory, refused before anything (.autohelix/ included) is
-    created there unless it is in a git checkout with a commit to start from.
-    (`main` has dropped inherited GIT_* variables, so this is the checkout's own
-    repository.)"""
+    created there unless it is in a git checkout with a commit to start from."""
     project = Path(path).resolve()
-
-    def git(*args: str):
-        return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True)
-
-    try:
-        inside = git("rev-parse", "--is-inside-work-tree")
-    except OSError as e:
-        raise click.ClickException(f"git not found ({e}); AutoHelix requires git.") from e
-    if inside.returncode:
-        if "not a git repository" not in inside.stderr.lower():  # e.g. dubious ownership (safe.directory)
-            raise click.ClickException(f"git failed in {project}:\n{inside.stderr.strip()}")
-        raise click.ClickException("Not a git repository. AutoHelix requires git.\n"
-                                   "Run: git init && git add -A && git commit -m 'init'")
-    if inside.stdout.strip() != "true":
-        raise click.ClickException(f"{project} is not in a git working tree (a bare repository, or inside "
-                                   ".git/); run AutoHelix in a checkout.")
-    if git("rev-parse", "--verify", "-q", "HEAD").returncode:
-        if git("for-each-ref", "--count=1", "refs/heads/").stdout.strip():
-            raise click.ClickException("HEAD has no commit yet (a new or orphan branch); a run starts from a "
-                                       "commit. Commit on it, or switch to a branch that has one.")
-        raise click.ClickException("No commits yet; a run starts from a commit.\n"
-                                   "Run: git add -A && git commit -m 'init'")
+    if problem := _git_problem(project):
+        raise click.ClickException(problem)
     return project
 
 
@@ -347,7 +340,7 @@ def _start(project: Path, config: Path | None, **selection) -> Harness:
     except NoRunToResume as e:
         click.echo(f"Error: {e}", err=True)
         raise SystemExit(3)
-    except (RuntimeError, FileNotFoundError) as e:  # FileNotFoundError: a run's stored config is gone
+    except (RuntimeError, FileNotFoundError, ConfigError) as e:  # FileNotFoundError: a run's stored config is gone
         raise click.ClickException(str(e)) from e
 
 
@@ -364,11 +357,10 @@ def _segment(harness: Harness, iterations: int | None, report: bool) -> None:
 @click.argument("config_name", metavar="[CONFIG]", required=False)
 @_segment_options
 @click.option("--iterations", "-n", type=click.IntRange(min=1), help="Iterations to run (default: budget.iterations)")
-@click.option("--name", help="Readable part of the new run's id (default: the config's name:, else its file name).")
 @click.option("--group", help="Share notes and code with the project's other runs of this group "
                               "(landing defaults to manual).")
 def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None,
-        iterations: int | None, name: str | None, group: str | None):
+        iterations: int | None, group: str | None):
     """Start a new run of the optimization loop.
 
     Always a new run, with its own budget, notes and history; to continue one,
@@ -377,14 +369,14 @@ def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land
     only config in autohelix/.
 
     With --group NAME, each iteration's agent also sees the other non-archived
-    runs of that group: their notes and history, and their code on
-    autohelix/<id>. Start several, compare them on the dashboard, land the
+    runs of that group: their notes and history, and their code (each run's
+    ref, refs/autohelix/<id>). Start several, compare them on the dashboard, land the
     winner and archive the rest.
     """
     group = _group(group)
     project = _git_project(path)
     config = _segment_config(project, config_name, "run")
-    harness = _start(project, config, verbose=verbose, new=True, name=name, land_mode=land_mode,
+    harness = _start(project, config, verbose=verbose, new=True, land_mode=land_mode,
                      group=group or None)
     _segment(harness, iterations, not no_report)
 
@@ -396,7 +388,7 @@ def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land
 @click.option("--until", type=click.IntRange(min=1), help="Run up to iteration N (repeatable; for scripts).")
 @click.option("--group", help="Set or change the run's group from its next iteration; '' clears it.")
 def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None, iterations: int | None, until: int | None, group: str | None):
-    """Continue a run: RUN_ID (or its last part), else this config's latest.
+    """Continue a run: RUN_ID (or its last part), else the latest run of the config a bare `run` would use.
 
     A run uses the config it started with; without RUN_ID, the config is the
     one a bare `autohelix run` reads, and its latest is the most recently
@@ -414,10 +406,6 @@ def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_m
     config = None
     if not selected:
         config = _segment_config(project, None, "resume")
-        relative = config_relative(project, config)
-        if all(is_archived(data) for _, data in project_runs(project, relative)):  # refused before any state
-            click.echo(f"Error: {no_run_to_resume(relative)}", err=True)
-            raise SystemExit(3)
     harness = _start(project, config, verbose=verbose, run_id=selected, create=False, land_mode=land_mode,
                      group=group)
     if iterations:
@@ -713,7 +701,7 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
     runs = ProjectRuns(path)
     if not selected or not runs.exists(selected):
         raise click.ClickException(f"No run {run_id!r} in {path.resolve()}" if run_id else
-                                   "No current run; start one with `autohelix run` or name one.")
+                                   f"No current run; name one, or {_how_to_start(path.resolve())}")
     try:
         data = runs.run(selected)
     except RuntimeError as error:
@@ -721,14 +709,27 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
     click.echo(json.dumps(data, indent=2) if as_json else run_table.format_run(data), nl=as_json)
 
 
+def _how_to_start(project: Path) -> str:
+    """How to start a first run here, by the configs there are (lowercase, a sentence end)."""
+    configs = project_configs(project)
+    if not configs:
+        return "write a config with `autohelix setup`, then `autohelix run`."
+    if len(configs) == 1:
+        return f"start one with `{run_command(configs[0])}`."
+    return f"start one with `autohelix run [CONFIG]` (configs: {', '.join(configs)})."
+
+
 def _view_live(project_path: Path, run_id: str | None) -> None:
     from rich.console import Console
+    from rich.markup import escape
 
     from autohelix.live import view as live_view
 
     console = Console()
     if not (project_path / ".autohelix").is_dir():
-        console.print(f"[red]No runs in {project_path}.[/red] Start one with `autohelix run`.")
+        how = _how_to_start(project_path)
+        console.print(f"[red]No runs in {escape(str(project_path))}.[/red] {escape(how[0].upper() + how[1:])}",
+                      highlight=False)
         raise SystemExit(1)
     try:
         # The run's own config, even when its file is gone (then none); the lookup only without a run.
@@ -831,7 +832,12 @@ def report(run_id: str | None, path: str):
     try:
         config, _ = load_config(project_path, config_file=config_path)
     except FileNotFoundError:
-        console.print(f"[red]Error:[/red] {config_gone(paths.run_id, paths.read_identity()['config_path'])}")
+        data = paths.read_identity()
+        console.print(f"[red]Error:[/red] {config_gone(project_path, paths.run_id, data['config_path'], data.get('base_commit'))}",
+                      highlight=False)
+        raise SystemExit(1)
+    except ConfigError as e:
+        console.print(f"[red]Error:[/red] {e}", highlight=False)
         raise SystemExit(1)
 
     if not write_report(config, project_path, console, config_path, run_id=run_id):
@@ -839,7 +845,7 @@ def report(run_id: str | None, path: str):
     from autohelix.viewer import write_static
 
     write_static(project_path, run_id=run_id)
-    console.print(f"[dim]Run page saved to {paths.output / 'report.html'}[/dim]")
+    console.print(f"[dim]Run page: {(paths.output / 'report.html').relative_to(project_path)}[/dim]", highlight=False)
 
 
 if __name__ == "__main__":

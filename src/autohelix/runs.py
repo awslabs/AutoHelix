@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from autohelix.config import run_command
+from autohelix.config import project_configs, run_command
 
 SCHEMA = 1
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
@@ -568,10 +568,60 @@ def no_run_to_resume(config_path: str) -> str:
     return f"No run to resume for {config_path}; start one with `{run_command(config_path)}`."
 
 
-def config_gone(run_id: str, config_path: str) -> str:
+def config_gone(project: Path, run_id: str, config_path: str, base_commit: str | None = None) -> str:
     """A run keeps the config it started with: never another in its place."""
-    return (f"Run {short_id(run_id)} was started with {config_path}, which is gone; "
-            f"restore it, or start a new run with `{run_command(config_path)}`.")
+    configs = project_configs(project)
+    others = f" (configs: {', '.join(configs)})" if configs else ""
+    commit = base_commit[:12] if base_commit else "<commit>"
+    return (f"Run {short_id(run_id)} was started with {config_path}, which is gone; restore it "
+            f"(`git checkout {commit} -- {config_path}`), or start a new run of another config{others}.")
+
+
+def new_run_name(config: Path, name: str | None) -> str | None:
+    """A new run's readable name: `name`, else the config file's (none for autohelix.yaml)."""
+    if name is None:
+        stem = config.stem
+        name = None if stem == "autohelix" else re.sub(r"[^a-z0-9-]", "-", stem.lower()).strip("-")[:32] or None
+    if name is not None and not _NAME.fullmatch(name):
+        raise RuntimeError(f"Run name {name!r}: use lowercase letters, digits or hyphens, starting with a letter "
+                           "or digit, at most 32 characters.")
+    return name
+
+
+def _refuse_legacy(project: Path) -> None:
+    if (RunPaths(project).root / "history.jsonl").exists():
+        raise RuntimeError("Legacy AutoHelix state: move or delete .autohelix/, then run git worktree prune.")
+
+
+def _resumable(project: Path, config_path: str) -> list[RunPaths]:
+    """A config's runs a bare resume may take: not archived, those with a baseline first
+    (an empty run, `run` typed by mistake and interrupted, must not shadow the real one,
+    but is resumed when it is all there is), then by activity."""
+    candidates = [p for p, d in project_runs(project, config_path) if not is_archived(d)]
+    candidates.sort(key=has_baseline, reverse=True)  # stable: by activity within each
+    return candidates
+
+
+def planned_run(project: Path, config: Path, *, new: bool = False, run_id: str | None = None,
+                create: bool = True) -> RunPaths | None:
+    """Read-only, before anything is written: the run `select_run` is expected to own, or
+    None for a new one. Refuses as it would: legacy state, a named run without its ref,
+    no run to resume (`create` false). `select_run` decides again under its lock."""
+    _refuse_legacy(project)
+    if run_id:
+        paths = RunPaths(project, run_id)
+        if git(project, "rev-parse", "--verify", "-q", paths.ref, check=False).returncode:
+            raise RuntimeError(f"Run {short_id(run_id)} has no ref left to resume; "
+                               f"remove it with `autohelix delete {short_id(run_id)}`.")
+        return paths
+    if new:
+        return None
+    config_path = config_relative(project, config)
+    if candidates := _resumable(project, config_path):
+        return candidates[0]
+    if not create:
+        raise NoRunToResume(no_run_to_resume(config_path))
+    return None
 
 
 def select_run(project: Path, config: Path, *, name: str | None = None, new: bool = False,
@@ -585,11 +635,12 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
     runs with a baseline (`autohelix resume`), else one is created unless
     `create` is false. A new run records `group` (if any) and `land_mode`.
     Returns notices, `(level, text)`, for the caller to print. `ready` runs the
-    caller's readiness checks before a new run is allocated; raising refuses the
-    start without leaving an identity, ref or pointer."""
+    caller's readiness checks (a clean tree included) before a new run is allocated;
+    raising refuses the start without leaving an identity, ref or pointer. Callers
+    that check first (`planned_run`, as the Harness does before writing anything) pass
+    None when the decision was a new run."""
     root = RunPaths(project).root
-    if (root / "history.jsonl").exists():
-        raise RuntimeError("Legacy AutoHelix state: move or delete .autohelix/, then run git worktree prune.")
+    _refuse_legacy(project)
     # Serialize selection/creation for this project. The per-run lock remains
     # authoritative throughout the invocation, including final landing.
     with RunLock(root / "runtime" / "locks" / "selection.lock", blocking=True):
@@ -602,24 +653,15 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
             paths = RunPaths(project, run_id)
             return (paths, *_owned(paths))
         if not new:
-            # Runs that captured a baseline first: an empty run (`run` typed by mistake and
-            # interrupted) must not shadow the real one, but is resumed when it is all there is.
-            candidates = [p for p, d in project_runs(project, config_path) if not is_archived(d)]
-            candidates.sort(key=has_baseline, reverse=True)  # stable: by activity within each
-            if candidates:
+            if candidates := _resumable(project, config_path):
                 paths = candidates[0]
                 if is_live(paths):  # never fall back to an older run behind the user's back
                     raise RuntimeError(f"Run {short_id(paths.run_id)} is running; name another run to resume it.")
                 return (paths, *_owned(paths))
             if not create:
                 raise NoRunToResume(no_run_to_resume(config_path))
-        if name is None:
-            stem = config.stem
-            name = None if stem == "autohelix" else re.sub(r"[^a-z0-9-]", "-", stem.lower()).strip("-")[:32] or None
-        if name is not None and not _NAME.fullmatch(name):
-            raise RuntimeError("name must use lowercase letters, digits or hyphens, with at most 32 characters.")
+        name = new_run_name(config, name)
         # Refused first starts must not leave an identity, owned ref or pointer.
-        require_clean(project)
         if ready is not None:
             ready()
         base = git(project, "rev-parse", "HEAD").stdout.strip()

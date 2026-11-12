@@ -39,7 +39,7 @@ from autohelix.agents import AgentEventKind
 from autohelix.config import ConfigNotFound, MetricGate, find_config, load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History
-from autohelix.runs import RunPaths, git, is_archived, last_activity
+from autohelix.runs import RunPaths, config_relative, git, is_archived, last_activity
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
 from autohelix.run_status import read_run_status
@@ -331,7 +331,7 @@ class RunData:
         if path is None:
             return None
         cached = self._configs.get(path)
-        summary = {"file": path.name, "text": cached[2] if cached else _read_user_file(path)}
+        summary = {"file": config_relative(self.project, path), "text": cached[2] if cached else _read_user_file(path)}
         if not path.exists():
             summary["missing"] = True
         if config:
