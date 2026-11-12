@@ -696,6 +696,9 @@ class Harness:
         self.run_status.phase("agent", iteration)
         self.run_status.note(calls=[])
         self._start_command_usage(iteration)
+        # An earlier attempt with this number (killed before it was recorded) must not
+        # be shown to the agent as this iteration's observations.
+        self.history.clear_observations(iteration)
         workspace = IterationWorkspace(iteration, self.run_state, self.history, self.repo, warn=self.log.warn)
         result: IterationResult | None = None
         failure: BaseException | None = None
@@ -840,15 +843,15 @@ class Harness:
 
         At the baseline (iteration 0) nothing rejects: every gate command and entry runs
         and metric gates aren't checked. Raises CandidateRejected if a command or judge
-        changed the candidate."""
+        changed the candidate (the gate or entry that did is recorded as failed)."""
         baseline = iteration == 0
         checks = workspace.eval_copy("checks")
         command_env = {**self._command_env(iteration), **self._candidate_env(workspace),
-                       "AUTOHELIX_OBSERVATIONS": None}
+                       "AUTOHELIX_OBSERVATIONS": None, "AUTOHELIX_METRICS": None}
         self.history.clear_observations(iteration)  # a baseline retry's earlier attempt
         records = self.history.load()  # the reference for metric gates: the last accepted iteration
         where = "baseline" if baseline else f"iter {iteration}"
-        notes: list[str] = []  # printed once the live display is gone
+        notes: list[str] = []  # printed once the live display is gone, whatever happens
 
         def verify(command: str) -> None:
             # Checks are read-only: one command must not alter what a later one validates.
@@ -868,15 +871,24 @@ class Harness:
                        "PATH": command_path(folders["bin"])}
 
         positions = {id(gate): index for index, gate in enumerate(self.config.gates)}
+        current: dict = {}  # the gate item of the command that just ran
 
         def gate_result(spec, result) -> None:
             evaluation.constraints.append(result)
-            item = evaluation.gates[positions[id(spec)]]
+            item = current["item"] = evaluation.gates[positions[id(spec)]]
             item.update(passed=result.passed, return_code=result.return_code,
                         duration_s=None if result.duration_s is None else round(result.duration_s, 3))
             if not result.passed:
                 item["output"] = _tail(result.output)
             self.log.info(f"{where} gate: {spec.text} — {'passed' if result.passed else 'FAILED'}")
+
+        def verify_gate(command: str) -> None:
+            try:
+                verify(command)
+            except CandidateRejected as e:  # it passed, but by changing what it checks: not a pass
+                if item := current.get("item"):
+                    item.update(passed=False, reason=str(e))
+                raise
 
         spinner = _IterationSpinner(iteration)
         spinner.set_phase("checks")
@@ -888,34 +900,35 @@ class Harness:
                 self._status("Running gates...")
         display = (Status("Running baseline...", console=self.console, spinner="dots") if baseline
                    else Live(spinner, console=self.console, refresh_per_second=10, transient=True))
-        with display:
-            run_gate_commands(self.config.gate_commands(), checks.working_dir, project_path=self.project_path,
-                              extra_env=command_env, after_command=verify, on_progress=progress,
-                              stop_on_failure=not baseline, per_command=gate_call, on_result=gate_result)
-            failed = next((r for r in evaluation.constraints if not r.passed), None)
-            # At the baseline, gate commands only guard against mutation; failing is fine.
-            if failed is not None and not baseline:
-                evaluation.rejection = f"gate failed: {self._gate_text(failed.command)}"
-                evaluation.failure_output = _tail(failed.output)
-            elif self.config.observe:
-                spinner.set_phase("benchmark")
-                spinner.set_detail("")
-                if not baseline:
-                    self.run_status.phase("benchmark")
-                    self.log.info(f"iter {iteration} observe started")
-                self._observe(workspace, iteration, checks, evaluation, command_env, records,
-                              verify=verify, progress=progress, notes=notes)
-
-        if not baseline:
-            for r in evaluation.constraints:
-                if not r.passed:
-                    self.console.print(f"  [red]✗[/red] {self._gate_text(r.command)}", highlight=False)
-                    if self.verbose:
-                        self.console.print(Panel(r.output[:2000], title="Gate output", border_style="red"))
-                elif self.verbose:
-                    self.console.print(f"  [green]✓[/green] {self._gate_text(r.command)}", highlight=False)
-        for note in notes:
-            self.console.print(note, highlight=False)
+        try:
+            with display:
+                run_gate_commands(self.config.gate_commands(), checks.working_dir, project_path=self.project_path,
+                                  extra_env=command_env, after_command=verify_gate, on_progress=progress,
+                                  stop_on_failure=not baseline, per_command=gate_call, on_result=gate_result)
+                failed = next((r for r in evaluation.constraints if not r.passed), None)
+                # At the baseline, gate commands only guard against mutation; failing is fine.
+                if failed is not None and not baseline:
+                    evaluation.rejection = f"gate failed: {self._gate_text(failed.command)}"
+                    evaluation.failure_output = _tail(failed.output)
+                elif self.config.observe:
+                    spinner.set_phase("benchmark")
+                    spinner.set_detail("")
+                    if not baseline:
+                        self.run_status.phase("benchmark")
+                        self.log.info(f"iter {iteration} observe started")
+                    self._observe(workspace, iteration, checks, evaluation, command_env, records,
+                                  verify=verify, progress=progress, notes=notes)
+        finally:
+            if not baseline:
+                for r in evaluation.constraints:
+                    if not r.passed:
+                        self.console.print(f"  [red]✗[/red] {self._gate_text(r.command)}", highlight=False)
+                        if self.verbose:
+                            self.console.print(Panel(r.output[:2000], title="Gate output", border_style="red"))
+                    elif self.verbose:
+                        self.console.print(f"  [green]✓[/green] {self._gate_text(r.command)}", highlight=False)
+            for note in notes:
+                self.console.print(note, highlight=False)
         workspace.remove(checks)
         if evaluation.metrics and not baseline:
             self.log.info(f"iter {iteration} observe: "
@@ -926,7 +939,15 @@ class Harness:
     def _observe(self, workspace: IterationWorkspace, iteration: int, checks, evaluation: _Evaluation,
                  command_env: dict, records, *, verify, progress, notes: list[str]) -> None:
         """Observe entries in order (see `_evaluate`), each with its own call folder and,
-        as `$AUTOHELIX_PREVIOUS`, a copy of its output from the last accepted iteration."""
+        as `$AUTOHELIX_PREVIOUS`, a copy of its output from the last accepted iteration
+        in which it succeeded.
+
+        An entry's output (stdout.txt, stderr.txt, captures) is staged in its call
+        folder after the command (and its process group) ended, then replaces
+        `observations/iter-N/<name>/`, so nothing an earlier command wrote there
+        survives. This guards what the harness stores, not run state as such: candidate
+        code and the agent can still write run state by absolute path (until commands
+        run in a sandbox)."""
         baseline = iteration == 0
         where = "baseline" if baseline else f"iter {iteration}"
         gates = [(index, gate) for index, gate in enumerate(self.config.gates) if isinstance(gate, MetricGate)]
@@ -939,12 +960,17 @@ class Harness:
                        "PATH": command_path(folders["bin"])}
                 result = run_observe_entry(entry, checks.working_dir, project_path=self.project_path,
                                            on_progress=progress, extra_env=env)
-            # Stored before anything can reject: a rejected iteration keeps its output.
-            self.history.save_stdout(iteration, entry.name, result.output)
-            for capture in entry.capture:
-                if problem := self.history.save_capture(iteration, entry.name, checks.working_dir, capture):
+                record = result.record()
+                evaluation.observe.append(record)  # before captures: a capture problem can't lose it
+                # Stored before anything can reject: a rejected iteration keeps its output.
+                stage = workspace.stage_folder(folders)
+                problems = self.history.stage_output(stage, result.stdout, result.stderr, checks.working_dir,
+                                                     entry.capture)
+                self.history.install_observation(iteration, entry.name, stage)
+            if problems:
+                record["capture_errors"] = problems
+                for problem in problems:
                     self.log.warn(f"{where} observe {entry.name}: {problem}")
-            evaluation.observe.append(result.record())
             if result.ok:
                 evaluation.metrics.update(result.values)
                 for name, error in result.errors.items():

@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 from collections.abc import Callable
@@ -153,10 +154,38 @@ class _Execution:
     duration_s: float = 0.0
 
 
+def _end_group(proc) -> None:
+    """SIGKILL whatever is left of a command's process group (its own session, from
+    `start_new_session`), also after the shell itself exited: a background child must not
+    keep running, and writing files, once the harness has checked them. A child that
+    starts a session of its own escapes this (until commands run in a sandbox)."""
+    if not isinstance(getattr(proc, "pid", None), int):
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:  # nothing left
+        pass
+
+
+def _drain(proc) -> tuple[str, str]:
+    """The rest of a killed command's output, bounded: a child that escaped the group
+    and holds the pipes can't hang the harness."""
+    try:
+        stdout, stderr = proc.communicate(timeout=CHECK_KILL_GRACE)
+    except subprocess.TimeoutExpired:
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                stream.close()
+        proc.wait()
+        return "", ""
+    return stdout or "", stderr or ""
+
+
 def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str], phase: str,
              on_progress: ProgressCallback | None) -> _Execution:
-    """Run a shell command in its own process group, killed (the whole group) at the
-    timeout or on an interrupt. A timed-out command keeps the output it wrote."""
+    """Run a shell command in its own process group. The whole group is killed when the
+    command ends (whatever its background children were doing), at the timeout, and on
+    an interrupt. A timed-out command keeps the output it wrote."""
     start = time.monotonic()
     if on_progress:
         on_progress(phase, command, 0.0)
@@ -185,13 +214,15 @@ def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str], phase: 
                     # Kill the whole process group, not just the /bin/sh wrapper,
                     # so a timed-out pytest/benchmark doesn't keep running detached.
                     _kill_process_group(proc, grace=CHECK_KILL_GRACE)
-                    stdout, stderr = proc.communicate()
-                    return _Execution(-1, stdout or "", stderr or "", timed_out=True,
-                                      duration_s=time.monotonic() - start)
+                    _end_group(proc)
+                    stdout, stderr = _drain(proc)
+                    return _Execution(-1, stdout, stderr, timed_out=True, duration_s=time.monotonic() - start)
+        _end_group(proc)
         return _Execution(proc.returncode, stdout or "", stderr or "", duration_s=time.monotonic() - start)
     except KeyboardInterrupt:
         if proc is not None:
             _kill_process_group(proc, grace=CHECK_KILL_GRACE)
+            _end_group(proc)
         raise
     except Exception as e:
         return _Execution(-1, error=str(e), duration_s=time.monotonic() - start)
@@ -392,6 +423,8 @@ class ObserveResult:
     return_code: int = 0
     error: str | None = None  # why the entry failed: "exited 2", "timed out after 30m", ...
     duration_s: float | None = None
+    stdout: str = ""  # stored as stdout.txt
+    stderr: str = ""  # stored as stderr.txt (when not empty); why it couldn't start, if so
 
     def record(self) -> dict:
         """The entry as the history record lists it (`IterationResult.observe`)."""
@@ -422,6 +455,7 @@ def run_observe_entry(
             command=mc.command, values={}, output=output if run.error is None else run.error,
             errors={name: f"observe entry {mc.name or mc.command!r} failed ({error})" for name in mc.metrics},
             name=mc.name, ok=False, return_code=return_code, error=error, duration_s=run.duration_s,
+            stdout=run.stdout, stderr=run.stderr if run.error is None else run.error,
         )
 
     if run.timed_out:
@@ -455,7 +489,8 @@ def run_observe_entry(
     if mc.review is not None and errors:  # a review that leaves a declared number out fails
         return failed(f"did not report {', '.join(errors)}", run.return_code)
     return ObserveResult(command=mc.command, values=values, output=output, errors=errors,
-                         name=mc.name, return_code=run.return_code, duration_s=run.duration_s)
+                         name=mc.name, return_code=run.return_code, duration_s=run.duration_s,
+                         stdout=run.stdout, stderr=run.stderr)
 
 
 def metric_reference(records, metric: str) -> float | None:

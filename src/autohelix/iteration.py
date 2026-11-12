@@ -219,6 +219,16 @@ class IterationWorkspace:
         finally:
             self._remove_call_folder(folder)
 
+    @staticmethod
+    def stage_folder(folders: dict[str, Path]) -> Path:
+        """A fresh, empty `output/` in a call folder (as `call_folder` yields it), made
+        after the command ended: anything the command left at that path is removed."""
+        stage = folders["scratch"].parent / "output"
+        if os.path.lexists(stage):
+            remove_copy(stage)
+        stage.mkdir(mode=0o700)
+        return stage
+
     def _remove_call_folder(self, folder: Path) -> None:
         try:
             remove_copy(folder)

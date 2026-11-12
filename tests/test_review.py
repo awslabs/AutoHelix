@@ -384,8 +384,10 @@ def test_previous_review_is_given_as_a_file(candidate, monkeypatch):
     previous = candidate.tmp / "previous"
     previous.mkdir()
     # NUL bytes and a long text must not reach argv.
-    text = b"1. parser: done\n2. docs: missing\x00\n##autohelix[missing=1]\n" + b"x" * 200_000
-    (previous / "stdout.txt").write_bytes(text)
+    text = b"1. parser: done\n2. docs: missing\x00\n" + b"x" * 200_000
+    # The command's own metric lines are not review text: they are left out.
+    (previous / "stdout.txt").write_bytes(b"##autohelix[missing=1]\n" + text[:16] + b"  ##autohelix[done=1]\n"
+                                          + text[16:] + b"\n##autohelix[x=2]")
     reviewer = Recorder(inspect=_previous_file)
     monkeypatch.setattr("autohelix.judge.create_agent", reviewer)
 
@@ -402,7 +404,7 @@ def test_previous_review_is_given_as_a_file(candidate, monkeypatch):
     assert result.exit_code == 0, result.stderr
     call = reviewer.calls[-1]
     system = call["config"].system_prompt
-    assert call["previous"] == text
+    assert call["previous"] == text + b"\n"
     path = candidate.scratch.resolve() / "review" / ".autohelix-iteration" / "previous.md"
     assert f"Your own review from the last accepted iteration is in `{path}`" in system
     assert ("Treat it as a starting point only: re-verify every item against the current code; "

@@ -291,7 +291,9 @@ def candidate_target(previous: bool) -> Iterator[Target]:
             stdout = Path(os.environ[PREVIOUS_ENV]) / "stdout.txt"
             if stdout.is_file() and not stdout.is_symlink():
                 shown = state / "previous.md"
-                shown.write_bytes(stdout.read_bytes())
+                # Its `##autohelix[...]` lines are the command's own numbers, not review text.
+                shown.write_bytes(b"".join(line for line in stdout.read_bytes().splitlines(keepends=True)
+                                           if not line.lstrip().startswith(b"##autohelix[")))
         # Material the guard doesn't cover (it skips .autohelix-iteration/): must stay as written.
         written = {path: _digest(path) for path in (diff, shown) if path is not None}
         gone = {name for name, _target in removed}

@@ -4,7 +4,7 @@
 """Configuration loading and validation."""
 
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import math
 import re
 import shlex
@@ -368,6 +368,26 @@ def _paths(value: Any, where: str, errors: list[str]) -> list[str]:
     return list(value)
 
 
+# An observe entry's own output files in `observations/iter-N/<name>/`, and folders a
+# capture may never copy (repository and harness state). Compared case-insensitively:
+# macOS file systems are.
+OUTPUT_FILES = ("stdout.txt", "stderr.txt")
+RESERVED_CAPTURE_PARTS = (".git", ".autohelix", ".autohelix-iteration")
+
+
+def capture_problem(capture: str) -> str | None:
+    """Why a `capture:` path is refused (before anything runs), or None."""
+    path = PurePosixPath(capture)
+    parts = [part for part in path.parts if part not in ("", ".")]
+    if path.is_absolute() or not parts or ".." in parts:
+        return "not a path inside the copy"
+    if reserved := next((part for part in parts if part.casefold() in RESERVED_CAPTURE_PARTS), None):
+        return f"{reserved} is repository or harness state"
+    if len(parts) == 1 and parts[0].casefold() in OUTPUT_FILES:
+        return f"{parts[0]} is the entry's own output"
+    return None
+
+
 def _entries(value: Any, where: str, errors: list[str]) -> list:
     """A list of entries; a single string or mapping counts as a list of one."""
     if value is None:
@@ -590,6 +610,9 @@ def _parse_observe(value: Any, backend: str, errors: list[str]) -> list[ObserveE
         else:
             command = text or ""
             capture = _paths(entry.get("capture"), f"{where} capture", errors)
+            for path in capture:
+                if problem := capture_problem(path):
+                    errors.append(f"{where} capture {path!r}: {problem}")
         if text is None or not isinstance(name, str):
             continue
         entries.append(ObserveEntry(name=name, command=command, metrics=metrics, capture=capture,
