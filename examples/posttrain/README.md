@@ -47,9 +47,9 @@ posttrain/
 ## SETUP — required before this can run
 
 > [!IMPORTANT]
-> This directory is **not** initialized for AutoHelix yet (no `.autohelix/`, no git repo),
-> and the training scripts are agent-written (not included). Do not run `autohelix init`
-> here until the steps below are done.
+> This directory is **not** ready for AutoHelix yet (no git repo), and the training
+> scripts are agent-written (not included). Do not run `autohelix run` here until the
+> steps below are done.
 
 🚧 **TODO — to make this runnable:**
 
@@ -93,6 +93,5 @@ Then commit a clean tree and start the loop:
 
 ```bash
 git init && git add -A && git commit -m "Initial baseline"   # autohelix requires a git repo
-autohelix init
 autohelix run
 ```
