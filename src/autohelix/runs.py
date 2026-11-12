@@ -19,6 +19,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from autohelix.config import run_command
+
 SCHEMA = 1
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}\Z")
@@ -541,7 +543,7 @@ def _new_run_notices(project: Path, config_path: str, target: str | None,
     return notices
 
 
-def _owned(paths: RunPaths, config_path: str) -> tuple[dict, RunLock, list[tuple[str, str]]]:
+def _owned(paths: RunPaths) -> tuple[dict, RunLock, list[tuple[str, str]]]:
     """Take an existing run's lock for a segment."""
     lock = RunLock(paths.lock)
     try:
@@ -549,14 +551,27 @@ def _owned(paths: RunPaths, config_path: str) -> tuple[dict, RunLock, list[tuple
         if git(paths.project, "rev-parse", "--verify", paths.ref, check=False).returncode:
             raise RuntimeError(f"Run {short_id(paths.run_id)} has no ref left to resume; "
                                f"remove it with `autohelix delete {short_id(paths.run_id)}`.")
-        notices = [("info", _resuming(paths, data))]
-        if data.get("config_path") != config_path:
-            notices.append(("warn", f"Run {short_id(paths.run_id)} was started with {data.get('config_path')}; "
-                            f"this segment uses {config_path}."))
-        return data, lock, notices
+        return data, lock, [("info", _resuming(paths, data))]
     except BaseException:
         lock.close()
         raise
+
+
+def require_clean(project: Path) -> None:
+    """A run starts from a commit: refuse uncommitted changes in tracked files."""
+    dirty = git(project, "status", "--porcelain", "--untracked-files=no").stdout
+    if dirty:
+        raise RuntimeError("Uncommitted changes in tracked files. Commit them before starting a run:\n" + dirty)
+
+
+def no_run_to_resume(config_path: str) -> str:
+    return f"No run to resume for {config_path}; start one with `{run_command(config_path)}`."
+
+
+def config_gone(run_id: str, config_path: str) -> str:
+    """A run keeps the config it started with: never another in its place."""
+    return (f"Run {short_id(run_id)} was started with {config_path}, which is gone; "
+            f"restore it, or start a new run with `{run_command(config_path)}`.")
 
 
 def select_run(project: Path, config: Path, *, name: str | None = None, new: bool = False,
@@ -585,7 +600,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
         config_path = config_relative(project, config)
         if run_id:
             paths = RunPaths(project, run_id)
-            return (paths, *_owned(paths, config_path))
+            return (paths, *_owned(paths))
         if not new:
             # Runs that captured a baseline first: an empty run (`run` typed by mistake and
             # interrupted) must not shadow the real one, but is resumed when it is all there is.
@@ -595,18 +610,16 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
                 paths = candidates[0]
                 if is_live(paths):  # never fall back to an older run behind the user's back
                     raise RuntimeError(f"Run {short_id(paths.run_id)} is running; name another run to resume it.")
-                return (paths, *_owned(paths, config_path))
+                return (paths, *_owned(paths))
             if not create:
-                raise NoRunToResume(f"No run to resume for {config_path}; start one with `autohelix run`.")
+                raise NoRunToResume(no_run_to_resume(config_path))
         if name is None:
             stem = config.stem
             name = None if stem == "autohelix" else re.sub(r"[^a-z0-9-]", "-", stem.lower()).strip("-")[:32] or None
         if name is not None and not _NAME.fullmatch(name):
             raise RuntimeError("name must use lowercase letters, digits or hyphens, with at most 32 characters.")
         # Refused first starts must not leave an identity, owned ref or pointer.
-        dirty = git(project, "status", "--porcelain", "--untracked-files=no").stdout
-        if dirty:
-            raise RuntimeError("Uncommitted changes in tracked files. Commit them before starting a run:\n" + dirty)
+        require_clean(project)
         if ready is not None:
             ready()
         base = git(project, "rev-parse", "HEAD").stdout.strip()

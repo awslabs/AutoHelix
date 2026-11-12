@@ -95,6 +95,13 @@ def _label(run: dict) -> str:
     return f"{run['id']} ({run['group']})" if run.get("group") else run["id"]
 
 
+def _config_file(run: dict) -> str:
+    """The run's config file, marked when it is gone or no longer valid."""
+    file = run["config_file"] or ""
+    flag = " (missing)" if run.get("config_missing") else " (invalid)" if run.get("config_invalid") else ""
+    return file + flag if file else ""
+
+
 def _landing(run: dict) -> str:
     landing = run["landing"]  # None without a target branch or tip
     if not landing:
@@ -156,7 +163,7 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
                     + ([_metric(run, metric)] if metric else [])
                     + [_landing(run), "now" if _live(run) else _ago(run["last_activity"], now),
                        run.get("title") or ""])
-        rows.append(["  " + (run["config_file"] or ""), _spent(run, now)] + [""] * (len(head) - 2))
+        rows.append(["  " + _config_file(run), _spent(run, now)] + [""] * (len(head) - 2))
     return "\n".join(list(map(clean, lines)) + [""] + _table(rows, right={2, 3} if metric else {2})) + "\n"
 
 
@@ -166,7 +173,7 @@ def format_run(data: dict, now: float | None = None) -> str:
     run = data["run"]
     under_way = _under_way(run)
     lines = [" · ".join([_label(run), _state(run, now)] + ([f"iteration {under_way}"] if under_way else []))]
-    second = [run["config_file"], _spent(run, now), f"iterations {_iterations(run)}"]
+    second = [_config_file(run), _spent(run, now), f"iterations {_iterations(run)}"]
     landing = _landing(run)
     if landing != "—":
         second.append(f"{landing} ({run['target_branch']})")

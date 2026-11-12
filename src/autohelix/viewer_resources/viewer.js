@@ -775,6 +775,18 @@ function observeLabel(o) {
 
 function renderConfig() {
   const c = state.config;
+  if (c?.missing) { // the run's own file is gone; never another in its place
+    $('config').hidden = false;
+    const summary = $('config-summary');
+    summary.title = '';
+    summary.dataset.key = 'missing';
+    summary.replaceChildren(el('b', { textContent: 'Config' }),
+      el('span', { className: 'config-file', textContent: `${c.file} is gone` }));
+    const pre = $('config-text');
+    pre.dataset.text = '';
+    pre.replaceChildren();
+    return;
+  }
   $('config').hidden = !c?.text;
   if (!c?.text) return;
   // `run -n N` overrides the file for that run; the harness records what it used.

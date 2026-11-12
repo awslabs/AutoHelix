@@ -18,16 +18,11 @@ from autohelix.config import CONFIG_DIR, CONFIG_FILE, ConfigNotFound, find_confi
 from autohelix.harness import Harness
 from autohelix.history import History
 from autohelix.runs import (NoRunToResume, RunPaths, RunLock, archive as archive_run, check_group,
-                            delete as delete_run, land as land_run, resolve_run, run_tip, short_id,
-                            valid_name)
+                            config_gone, config_relative, delete as delete_run, is_archived, land as land_run,
+                            no_run_to_resume, project_runs, resolve_run, run_tip, short_id, valid_name)
 from autohelix import run_table
 from autohelix.skill import SKILL_NAME, export_skill, skill
-from autohelix.state import (
-    GitExcludeError,
-    ensure_git_exclude_entry,
-    ensure_runtime_ignored,
-    read_stored_config_path,
-)
+from autohelix.state import read_stored_config_path
 from autohelix.workspace import SCRUBBED_GIT_ENV
 
 
@@ -45,6 +40,10 @@ def _get_version() -> str:
 @click.version_option(version=_get_version(), prog_name="autohelix")
 def main():
     """AutoHelix - Autonomous code improvement harness."""
+    # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send every
+    # git call (ours, and those of the agents and commands we start) to another repository.
+    for key in SCRUBBED_GIT_ENV:
+        os.environ.pop(key, None)
 
 
 main.add_command(skill)
@@ -94,10 +93,9 @@ def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[st
 
 
 def _outside_git(project: Path) -> bool:
-    env = {key: value for key, value in os.environ.items() if key not in SCRUBBED_GIT_ENV}
     try:
         inside = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=project,
-                                capture_output=True, text=True, env=env)
+                                capture_output=True, text=True)
     except OSError:  # no git at all
         return True
     return inside.returncode != 0 or inside.stdout.strip() != "true"
@@ -229,27 +227,29 @@ def _group(value: str | None) -> str | None:
 def _git_project(path: str) -> Path:
     """The project directory, refused before anything (.autohelix/ included) is
     created there unless it is in a git checkout with a commit to start from.
-
-    Inherited GIT_* variables (a git hook, `rebase -x`) are dropped first, so these
-    checks and the excludes reach the checkout's own repository."""
-    for key in SCRUBBED_GIT_ENV:
-        os.environ.pop(key, None)
+    (`main` has dropped inherited GIT_* variables, so this is the checkout's own
+    repository.)"""
     project = Path(path).resolve()
 
     def git(*args: str):
-        try:
-            return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True)
-        except OSError:  # no git at all
-            return None
+        return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True)
 
-    inside = git("rev-parse", "--is-inside-work-tree")
-    if inside is None or inside.returncode:
+    try:
+        inside = git("rev-parse", "--is-inside-work-tree")
+    except OSError as e:
+        raise click.ClickException(f"git not found ({e}); AutoHelix requires git.") from e
+    if inside.returncode:
+        if "not a git repository" not in inside.stderr.lower():  # e.g. dubious ownership (safe.directory)
+            raise click.ClickException(f"git failed in {project}:\n{inside.stderr.strip()}")
         raise click.ClickException("Not a git repository. AutoHelix requires git.\n"
                                    "Run: git init && git add -A && git commit -m 'init'")
     if inside.stdout.strip() != "true":
         raise click.ClickException(f"{project} is not in a git working tree (a bare repository, or inside "
                                    ".git/); run AutoHelix in a checkout.")
     if git("rev-parse", "--verify", "-q", "HEAD").returncode:
+        if git("for-each-ref", "--count=1", "refs/heads/").stdout.strip():
+            raise click.ClickException("HEAD has no commit yet (a new or orphan branch); a run starts from a "
+                                       "commit. Commit on it, or switch to a branch that has one.")
         raise click.ClickException("No commits yet; a run starts from a commit.\n"
                                    "Run: git add -A && git commit -m 'init'")
     return project
@@ -271,8 +271,10 @@ def _ancestor_configs(project: Path) -> str:
 
 
 def _segment_config(project: Path, name: str | None, command: str) -> Path:
-    """The config a segment uses (`find_config`), its errors with this command's advice."""
-    pick = "Name a run: `autohelix resume <id>`." if command == "resume" else "Pick one: `autohelix run <name>`."
+    """The config a segment uses (`find_config`), its errors with this command's advice
+    (`resume`'s only when there are runs to name; else, as `run`'s, how to start one)."""
+    resume = command == "resume" and bool(project_runs(project))
+    pick = "Name a run: `autohelix resume <id>`." if resume else "Pick one: `autohelix run <name>`."
     try:
         config = find_config(project, name)
     except ValueError as e:
@@ -285,11 +287,11 @@ def _segment_config(project: Path, name: str | None, command: str) -> Path:
         if e.configs:
             advice = " " + pick if name is None else write
         else:
-            advice = _ancestor_configs(project) or (" " + pick if command == "resume" else write)
+            advice = _ancestor_configs(project) or (" " + pick if resume else write)
         raise click.ClickException(str(e) + advice) from e
     others = [Path(c).stem for c in project_configs(project) if c != CONFIG_FILE]
     if name is None and config == project / CONFIG_FILE and others:
-        example = "resume their runs by id" if command == "resume" else f"`autohelix run {others[0]}`"
+        example = "resume their runs by id" if resume else f"`autohelix run {others[0]}`"
         click.echo(click.style(f"Using {CONFIG_FILE}; {CONFIG_DIR}/ also has: {', '.join(others)} ({example})",
                                dim=True))
     return config
@@ -297,16 +299,7 @@ def _segment_config(project: Path, name: str | None, command: str) -> Path:
 
 def _start(project: Path, config: Path | None, **selection) -> Harness:
     """The harness for a segment. There is no setup step: the first run creates
-    .autohelix/ and the local git excludes."""
-    # Refuse before the harness creates logs, settings, or agent state.
-    try:
-        ensure_runtime_ignored(project)
-    except GitExcludeError as e:
-        raise click.ClickException(str(e)) from e
-    try:  # best effort: only runtime state must be ignored
-        ensure_git_exclude_entry(project, "__pycache__/")
-    except (OSError, subprocess.CalledProcessError):
-        pass
+    the local git excludes and .autohelix/, once nothing is left to refuse."""
     try:
         return Harness(project, config_file=config, **selection)
     except NoRunToResume as e:
@@ -376,7 +369,13 @@ def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_m
     group = _group(group)
     project = _git_project(path)
     selected = _run_id(project, run_id)
-    config = None if selected else _segment_config(project, None, "resume")
+    config = None
+    if not selected:
+        config = _segment_config(project, None, "resume")
+        relative = config_relative(project, config)
+        if all(is_archived(data) for _, data in project_runs(project, relative)):  # refused before any state
+            click.echo(f"Error: {no_run_to_resume(relative)}", err=True)
+            raise SystemExit(3)
     harness = _start(project, config, verbose=verbose, run_id=selected, create=False, land_mode=land_mode,
                      group=group)
     if iterations:
@@ -790,8 +789,7 @@ def report(run_id: str | None, path: str):
     try:
         config, _ = load_config(project_path, config_file=config_path)
     except FileNotFoundError:
-        console.print(f"[red]Error:[/red] Run {short_id(paths.run_id)} was started with "
-                      f"{paths.read_identity()['config_path']}, which is gone; restore it to write the report.")
+        console.print(f"[red]Error:[/red] {config_gone(paths.run_id, paths.read_identity()['config_path'])}")
         raise SystemExit(1)
 
     if not write_report(config, project_path, console, config_path, run_id=run_id):

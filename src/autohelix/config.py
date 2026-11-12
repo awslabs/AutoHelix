@@ -675,6 +675,14 @@ def project_configs(project: Path) -> list[str]:
     return ([CONFIG_FILE] if (project / CONFIG_FILE).is_file() else []) + _files(project, "*.yaml")
 
 
+def run_command(config_path: str) -> str:
+    """The command that starts runs of a config (project-relative, as run.json has it)."""
+    path = PurePosixPath(config_path)
+    if path.parent == PurePosixPath(CONFIG_DIR) and path.suffix == ".yaml":
+        return f"autohelix run {path.stem}"
+    return "autohelix run"
+
+
 def find_config(project: Path, name: str | None = None) -> Path:
     """The config `name` names (autohelix/<name>.yaml), else autohelix.yaml, else the
     only config in autohelix/. Raises ConfigNotFound otherwise, and ValueError for a
@@ -684,7 +692,8 @@ def find_config(project: Path, name: str | None = None) -> Path:
     if name is not None:
         if not re.fullmatch(r"[\w-][\w.-]*", name) or name.endswith((".yaml", ".yml")):
             raise ValueError(f"{name!r} is not a config name: name a config in {CONFIG_DIR}/ "
-                             f"without .yaml (`perf` for {CONFIG_DIR}/perf.yaml).")
+                             f"without .yaml (`perf` for {CONFIG_DIR}/perf.yaml); a bare `autohelix run` "
+                             f"reads {CONFIG_FILE}.")
         relative = f"{CONFIG_DIR}/{name}.yaml"
         if relative in configs:
             return project / relative

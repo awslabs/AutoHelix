@@ -160,15 +160,14 @@ def test_ids_sort_by_start_and_commands_accept_the_suffix(project, tmp_path, mon
     assert "bench is a folder: use -p bench" in result.output
 
 
-def test_resume_with_another_config_warns(project, capsys):  # noqa: F811
+def test_a_run_refuses_another_config(project):  # noqa: F811
     paths = started(project)
     other = project / "other.yaml"
     other.write_text((project / "autohelix.yaml").read_text())
     git(project, "add", ".")
     git(project, "commit", "-qm", "other config")
-    capsys.readouterr()
-    Harness(project, run_id=paths.run_id, config_file=other).close()  # the API only: the CLI has no -c
-    assert "was started with autohelix.yaml; this segment uses other.yaml" in " ".join(capsys.readouterr().out.split())
+    with pytest.raises(RuntimeError, match="was started with autohelix.yaml, not other.yaml; a run keeps its config"):
+        Harness(project, run_id=paths.run_id, config_file=other)  # the API only: the CLI has no -c
 
 
 def test_the_time_budget_is_checked_before_an_iteration(project):  # noqa: F811

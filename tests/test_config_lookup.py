@@ -123,16 +123,47 @@ def test_run_by_name(folder_project):
     result = cli(folder_project, "run", "other", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     assert RunPaths(folder_project).read_identity()["config_path"] == "autohelix/other.yaml"
-    result = cli(folder_project, "run", "autohelix/other.yaml")
+    result = cli(folder_project, "run", "autohelix.yaml")
     assert result.exit_code == 2 and "not a config name" in result.output
+    assert "a bare `autohelix run` reads autohelix.yaml" in flat(result.output)
+
+
+def test_a_yml_file_is_pointed_out(folder_project):
+    git(folder_project, "mv", "autohelix/perf.yaml", "autohelix/perf.yml")
+    commit(folder_project)
+    result = cli(folder_project, "run")
+    assert result.exit_code == 1
+    assert "(found autohelix/perf.yml; configs end in .yaml)" in result.output
 
 
 def test_bare_resume_with_several_configs_asks_for_a_run(folder_project):
     write(folder_project / "autohelix" / "other.yaml")
+    result = cli(folder_project, "resume")  # no runs yet: how to start one
+    assert result.exit_code == 1 and "Pick one: `autohelix run <name>`." in result.output
+    result = cli(folder_project, "run", "perf", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
     result = cli(folder_project, "resume")
     assert result.exit_code == 1
     assert ("Several configs: autohelix/other.yaml, autohelix/perf.yaml. "
             "Name a run: `autohelix resume <id>`.") in result.output
+
+
+def test_bare_resume_without_runs_creates_nothing(folder_project):
+    result = cli(folder_project, "resume")
+    assert result.exit_code == 3
+    assert "No run to resume for autohelix/perf.yaml; start one with `autohelix run perf`." in result.output
+    assert_untouched(folder_project)
+    (folder_project / "autohelix" / "perf.yaml").unlink()
+    result = cli(folder_project, "resume")
+    assert result.exit_code == 1 and "Write one with `autohelix setup`." in result.output
+    assert_untouched(folder_project)
+
+
+def assert_untouched(project):
+    """No run state and no local excludes: a refusal writes nothing."""
+    assert not (project / ".autohelix").exists()
+    exclude = project / ".git" / "info" / "exclude"
+    assert ".autohelix/" not in (exclude.read_text().splitlines() if exclude.exists() else [])
 
 
 def test_resume_id_keeps_its_config_beside_a_root_one(folder_project):
@@ -148,6 +179,9 @@ def test_resume_id_keeps_its_config_beside_a_root_one(folder_project):
     result = cli(folder_project, "run")
     assert "Using autohelix.yaml; autohelix/ also has: perf (`autohelix run perf`)" in result.output
     assert "Config validation failed. Edit autohelix.yaml and try again." in result.output
+    result = cli(folder_project, "resume")
+    assert "Using autohelix.yaml; autohelix/ also has: perf (resume their runs by id)" in result.output
+    assert result.exit_code == 3 and "No run to resume for autohelix.yaml" in result.output
 
 
 def test_a_run_whose_config_is_gone_is_never_given_another(folder_project):
@@ -156,15 +190,20 @@ def test_a_run_whose_config_is_gone_is_never_given_another(folder_project):
     run_id = RunPaths(folder_project).run_id
     git(folder_project, "mv", "autohelix/perf.yaml", "autohelix/fast.yaml")  # the only config, found by a lookup
     git(folder_project, "commit", "-qm", "rename")
-    gone = f"Run {short_id(run_id)} was started with autohelix/perf.yaml, which is gone; restore it"
+    gone = (f"Run {short_id(run_id)} was started with autohelix/perf.yaml, which is gone; "
+            "restore it, or start a new run with `autohelix run perf`.")
     result = cli(folder_project, "resume", short_id(run_id))
     assert result.exit_code == 1 and gone in flat(result.output), result.output
     result = cli(folder_project, "report")
     assert result.exit_code == 1 and gone in flat(result.output), result.output
-    config = RunData(folder_project).state()["config"]
+    config = RunData(folder_project).state()["config"]  # the web page's payload
     assert (config["file"], config.get("missing")) == ("perf.yaml", True)
     listed = json.loads(cli(folder_project, "view", "--json").output)["run"]
-    assert listed["config_file"] == "autohelix/perf.yaml" and listed["goal"] is None
+    assert (listed["config_file"], listed["config_missing"], listed["goal"]) == ("autohelix/perf.yaml", True, None)
+    assert "autohelix/perf.yaml (missing)" in cli(folder_project, "view", "--once").output
+    (row,) = json.loads(cli(folder_project, "dashboard", "--json").output)["runs"]
+    assert row["config_missing"] and not row["config_invalid"]
+    assert "autohelix/perf.yaml (missing)" in cli(folder_project, "dashboard", "--once").output
 
 
 def test_an_invalid_config_is_named(folder_project):
@@ -173,6 +212,7 @@ def test_an_invalid_config_is_named(folder_project):
     result = cli(folder_project, "run", "perf")
     assert result.exit_code == 1
     assert "Config validation failed. Edit autohelix/perf.yaml and try again." in result.output
+    assert_untouched(folder_project)
 
 
 def test_a_subfolder_without_a_config_points_at_the_project_above(folder_project):
@@ -251,3 +291,43 @@ def test_ask_prefers_the_harness_config_then_autohelix_yaml(tmp_path, monkeypatc
     monkeypatch.delenv(CONFIG_ENV)
     _answers(tmp_path / "autohelix.yaml", "yes")
     assert CliRunner().invoke(main, ["ask", "Done?"]).exit_code == 0
+
+
+def test_report_without_runs_creates_nothing(folder_project):
+    result = cli(folder_project, "report")
+    assert result.exit_code == 1 and "No iterations run yet" in result.output
+    assert_untouched(folder_project)
+
+
+def test_an_unborn_branch_is_named(folder_project):
+    git(folder_project, "checkout", "-q", "--orphan", "fresh")
+    result = cli(folder_project, "run")
+    assert result.exit_code == 1 and "HEAD has no commit yet (a new or orphan branch)" in flat(result.output)
+    assert_untouched(folder_project)
+
+
+def test_a_bare_repository_and_the_git_folder_are_refused(folder_project, tmp_path):
+    bare = tmp_path / "bare.git"
+    git(tmp_path, "clone", "-q", "--bare", str(folder_project), str(bare))
+    result = cli(bare, "run")
+    assert result.exit_code == 1 and "is not in a git working tree" in result.output
+    result = cli(folder_project / ".git", "run")
+    assert result.exit_code == 1 and "is not in a git working tree" in result.output
+    assert not (bare / ".autohelix").exists() and not (folder_project / ".git" / ".autohelix").exists()
+
+
+def test_inherited_git_variables_are_dropped(folder_project, tmp_path, monkeypatch):
+    other = tmp_path / "other"
+    other.mkdir()
+    git(other, "init", "-q", "-b", "elsewhere")
+    git(other, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "other")
+    branch = git(folder_project, "symbolic-ref", "--short", "HEAD").stdout.strip()
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))  # as in a git hook of another repository
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    result = cli(folder_project, "run", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert ".autohelix/" not in (other / ".git" / "info" / "exclude").read_text().splitlines()
+    assert ".autohelix/" in (folder_project / ".git" / "info" / "exclude").read_text().splitlines()
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))  # dropped by the run above: set again
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    assert json.loads(cli(folder_project, "dashboard", "--json").output)["branch"] == branch

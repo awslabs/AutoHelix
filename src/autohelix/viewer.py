@@ -922,6 +922,9 @@ class ProjectRuns:
             "created_at": data.get("created_at"),
             "last_activity": last_activity(paths, data, status or {}),
             "config_file": config.get("file"),
+            # The run's own file, gone (never replaced by another) or no longer valid.
+            "config_missing": bool(config.get("missing")),
+            "config_invalid": bool(config.get("invalid")),
             "goal": config.get("goal"),
             "title": config.get("title"),  # the goal's first line, cut (Config.title)
             "status": status and {k: status.get(k) for k in (
@@ -990,7 +993,7 @@ def make_server(project: Path, port: int = 8765, *, run_id: str | None = None) -
             return None
         with lock:
             if rid == data.paths.run_id:
-                return data  # keeps an explicit --config for the default run
+                return data  # the default run's, already reading
             if rid not in others:
                 others[rid] = RunData(project, rid)
             return others[rid]

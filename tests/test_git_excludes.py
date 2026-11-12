@@ -135,10 +135,8 @@ def test_conflicting_ignore_refuses_and_preserves_user_work(
     ignore.write_text(negation + "\n")
     git(project, "add", ".gitignore")
     git(project, "commit", "-m", "Ignore rules")
-    ignore.write_text(negation + "\n# Staged user ignore edit\n")
-    (project / "main.py").write_text('print("staged user work")\n')
-    git(project, "add", ".gitignore", "main.py")
-    (project / "main.py").write_text('print("unstaged user work")\n')
+    # Tracked changes are refused first (before any write); untracked work must survive.
+    (project / "scratch.py").write_text('print("untracked user work")\n')
     ignore_before = ignore.read_bytes()
     head_before = git(project, "rev-parse", "HEAD")
     index_before = git(project, "write-tree")
@@ -177,6 +175,7 @@ def test_conflicting_ignore_refuses_and_preserves_user_work(
     assert git(project, "diff", "--cached", "--binary") == staged_before
     assert git(project, "diff", "--binary") == unstaged_before
     assert ignore.read_bytes() == ignore_before
+    assert (project / "scratch.py").read_text() == 'print("untracked user work")\n'
     assert (project / "autohelix.yaml").read_bytes() == config_before
     exclude = common_repo / ".git" / "info" / "exclude"
     assert exclude.read_text().splitlines().count(".autohelix/") == 1

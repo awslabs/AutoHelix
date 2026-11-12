@@ -158,7 +158,8 @@ function lastActiveCell(run) {
 
 function runRow(run) {
   const href = `/run/${encodeURIComponent(run.id)}/`;
-  const file = run.config_file;
+  const file = run.config_file && run.config_file
+    + (run.config_missing ? ' (missing)' : run.config_invalid ? ' (invalid)' : '');
   const tr = el('tr', { className: run.archived ? 'archived' : '', tabIndex: 0 },
     el('td', {}, el('a', { className: 'run-id', href, textContent: run.id }),
       run.group ? el('span', { className: 'muted', title: 'Group: runs that see each other\'s notes and code' },

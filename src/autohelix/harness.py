@@ -7,6 +7,7 @@ import json
 import hashlib
 import os
 import shutil
+import subprocess
 import sys
 import time
 from contextlib import contextmanager
@@ -26,8 +27,8 @@ from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay, Transcript, clean, header_lines
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git, allocate_call,
-                            claim_copies, config_relative, critical_section, remove_copies, short_id, unlanded,
-                            write_json, write_text)
+                            claim_copies, config_gone, config_relative, critical_section, remove_copies,
+                            require_clean, short_id, unlanded, write_json, write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
@@ -43,6 +44,7 @@ from autohelix.workspace import (path_in_scope, SCRUBBED_GIT_ENV, ATTR_SOURCE_LI
                                  Repo, Scope)
 from autohelix.state import (
     GitExcludeError,
+    ensure_git_exclude_entry,
     ensure_runtime_ignored,
 )
 
@@ -161,16 +163,23 @@ class Harness:
         else auto, or manual with a `group`) and its `group`. On resume `land_mode`
         and `group` change the stored ones (`group=''` clears it) once the segment
         starts; otherwise the run keeps its own."""
+        # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send
+        # every git call (ours, and the agent's, checks' and judges') to another repository.
+        for key in SCRUBBED_GIT_ENV:
+            os.environ.pop(key, None)
         self.project_path = Path(project_path).resolve()
-        if config_file is None:  # always an explicit file: run.json and $AUTOHELIX_CONFIG name it
-            if run_id:
-                stored = RunPaths(self.project_path, run_id).read_identity()["config_path"]
+        # Always an explicit file: run.json and $AUTOHELIX_CONFIG name it. A run keeps its own.
+        if run_id:
+            stored = RunPaths(self.project_path, run_id).read_identity()["config_path"]
+            if config_file is None:
                 config_file = self.project_path / stored
                 if not config_file.exists():
-                    raise FileNotFoundError(f"Run {short_id(run_id)} was started with {stored}, which is gone; "
-                                            "restore it, or start a new run with `autohelix run <name>`.")
-            else:
-                config_file = find_config(self.project_path)
+                    raise FileNotFoundError(config_gone(run_id, stored))
+            elif config_relative(self.project_path, Path(config_file)) != stored:
+                raise RuntimeError(f"Run {short_id(run_id)} was started with {stored}, not "
+                                   f"{config_relative(self.project_path, Path(config_file))}; a run keeps its config.")
+        elif config_file is None:
+            config_file = find_config(self.project_path)
         self.config_file = config_file = Path(config_file)
         self.config, self._raw_config = load_config(self.project_path, config_file=config_file)
         self.verbose = verbose
@@ -182,16 +191,20 @@ class Harness:
                 self.console.print(f"[red]Error:[/red] {error.message}")
             raise SystemExit(f"Config validation failed. Edit {config_relative(self.project_path, config_file)} "
                              "and try again.")
-        ensure_runtime_ignored(self.project_path)
-        # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send
-        # every child's git (agent, checks, judges) to the user's repository.
-        for key in SCRUBBED_GIT_ENV:
-            os.environ.pop(key, None)
         self._preflight_done = False
+        if new:  # refused before anything (excludes, .autohelix/) is written
+            require_clean(self.project_path)
+            self._first_start_ready()
+        # The first writes: the local excludes, before .autohelix/ exists.
+        ensure_runtime_ignored(self.project_path)
+        try:  # best effort: only runtime state must be ignored
+            ensure_git_exclude_entry(self.project_path, "__pycache__/")
+        except (OSError, subprocess.CalledProcessError):
+            pass
         self.paths, self.run_info, self._ownership, notices = select_run(
             self.project_path, config_file,
             new=new, run_id=run_id, name=name if name is not None else self.config.name,
-            create=create, ready=self._first_start_ready, group=group or None,
+            create=create, ready=None if new else self._first_start_ready, group=group or None,
             # A group lands manually unless --land says otherwise: the config's `land:` is
             # the default for runs on their own (auto landing in a group diverges the rest).
             land_mode=land_mode or ("manual" if group else self.config.land or "auto"),
