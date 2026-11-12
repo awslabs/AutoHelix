@@ -1,7 +1,10 @@
 # AutoHelix configuration
 
-These fields are supported by the version shipping this skill. Check the
-installed CLI and the template `autohelix setup` writes if versions differ.
+These fields are supported by the version shipping this skill. If versions
+differ, check the installed CLI and the packaged template, read with
+AutoHelix's own Python (never by running `autohelix setup`):
+`files('autohelix.templates').joinpath('config_template.yaml').read_text()`
+(`from importlib.resources import files`).
 All paths and commands below are examples; adapt them to implemented commands
 in the target project. Schema validation does not execute those commands or
 establish their runtime/cost, imports, emitted values, or generated artifacts.
@@ -38,13 +41,20 @@ Top-level keys: `goal`, `name`, `land`, `prompt_template`, `report`, `agent`,
 `agent.type`, `agent.timeout_seconds`, `budget.iteration_time`) are errors that
 name their replacement; when editing an existing config, convert them.
 
-A config is `autohelix.yaml` at the project root or `autohelix/<name>.yaml`;
-nowhere else. `name` (lowercase letters, digits, hyphens) goes into run ids
-and defaults to the file's stem (`autohelix/perf.yaml` gives
-`20261112-1400-perf-0mws`; `autohelix.yaml` gives no name).
-`prompt_template` is a path relative to the config's folder; keep templates
-and helper scripts in subfolders (`autohelix/prompts/`), since every `.yaml`
-file directly in `autohelix/` is a config.
+## Config files
+
+- A config is `autohelix.yaml` at the project root or `autohelix/<name>.yaml`;
+  nowhere else. A bare `autohelix run` uses `autohelix.yaml`, else the only
+  config in `autohelix/`.
+- `name` goes into run ids and defaults to the file's stem
+  (`autohelix/perf.yaml` gives `20261112-1400-perf-0mws`; `autohelix.yaml`
+  gives no name).
+- `prompt_template` is a path relative to the config's folder. Keep templates
+  and helper scripts in subfolders (`autohelix/prompts/`), since every `.yaml`
+  file directly in `autohelix/` is a config, and commit them: iteration copies
+  are made from the commit.
+- Keep `autohelix/` out of `scope.editable` (or list it under `frozen:`), so
+  the agent can't edit its own gates.
 
 ## Goal, gates, and scope
 
@@ -238,9 +248,9 @@ commands that don't record usage, and the user's supervising/setup agent are
 separate. These boundaries make the budget a run-control threshold, not an
 absolute all-inclusive financial cap.
 
-Once the config is committed, start with `autohelix run [NAME] --path PROJECT
--n 3` (`NAME` for `autohelix/NAME.yaml`, none for `autohelix.yaml`): always a
-new run, of three iterations. A run keeps the config file it started with
+Commit the config and any scripts it uses, then start with `autohelix run
+[NAME] --path PROJECT -n 3` (`NAME` for `autohelix/NAME.yaml`, none for
+`autohelix.yaml`): always a new run, of three iterations. A run keeps the config file it started with
 (edit that file to change it). Continue one with `autohelix resume [RUN_ID]
 --path PROJECT`: `--until N` runs up to iteration N (a total; repeating it is
 harmless), `-n 3` runs three more. Either overrides only `budget.iterations`;

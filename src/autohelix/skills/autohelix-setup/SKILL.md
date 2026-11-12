@@ -16,11 +16,16 @@ session, with persistent notes and measurements from earlier attempts.
 
 ## Understand the experiment
 
+If the session's first prompt says to start by asking, ask first, then inspect.
+
 Inspect the project's instructions, git state, relevant code, existing
 evaluators, and any AutoHelix configs (`autohelix.yaml`, `autohelix/*.yaml`).
 Preserve existing work and configuration.
-Check `autohelix --help` and relevant subcommand help against the installed
-version. The harness and the target project may use different environments.
+Use the Python and `autohelix` CLI the session's first prompt names, else the
+`autohelix` on `PATH` (a plain `python` may lack the package: pipx, `uv tool`,
+a venv that isn't active). Check `autohelix --help` and relevant subcommand
+help against the installed version. The harness and the target project may use
+different environments.
 
 Establish the desired improvement and propose useful loop designs from the
 project's available evidence, including missing evaluators that would help.
@@ -41,21 +46,22 @@ Write the config file yourself, at the path you were given (the session's first
 prompt may name it); never run `autohelix setup` or `autohelix init`. Without a
 path, ask: `autohelix.yaml` for the project's one loop, or
 `autohelix/<name>.yaml` when it has or will have several. Configs live only
-there. `name:` defaults to the file's stem, so runs of `autohelix/perf.yaml`
-are named like `20261112-1400-perf-0mws`. A `prompt_template:` file and helper
-scripts can live in subfolders of `autohelix/` (every `.yaml` file directly in
-it is a config); `prompt_template:` is relative to the config's folder, while
-commands and scope paths stay relative to the project root. If the target holds
-the commented template `autohelix setup` writes, complete it there. Preserve
-other configs and the run state in `.autohelix/`; convert a config in the first
-format (`constraints:`, `metrics:`, `reviewer:`, ...), which no longer loads,
-with the user's agreement.
+there. Don't write `autohelix.yaml` when `autohelix/` already has configs: it
+would take over a bare `autohelix run`. A name uses lowercase letters, digits
+or hyphens, at most 32 characters, starts with a letter or digit, and isn't
+`autohelix`. If the target holds the commented template, complete it there.
+Naming, and prompt templates and helper scripts in `autohelix/` (committed with
+the config), are under Config files in the [configuration
+reference](references/config.md). Preserve other configs and the run state in
+`.autohelix/`; convert a config in the first format (`constraints:`,
+`metrics:`, `reviewer:`, ...), which no longer loads, with the user's
+agreement.
 
 Define a goal (its first line is the run's title), editable scope, gates,
 observe entries (commands, optional reviews), optional metric gates or a
 stop condition, and budget settings or a commented template. Keep tests,
-benchmark definitions, and evaluation criteria outside the editable scope unless
-changing them is part of the user's task.
+benchmark definitions, evaluation criteria, and `autohelix/` outside the
+editable scope unless changing them is part of the user's task.
 
 Before implementing a new or materially changed evaluator, check, or benchmark,
 describe a small concrete proposal: what it measures or checks, representative
@@ -78,25 +84,21 @@ gate references, scope/input paths, command and dependency setup, working
 directory/import paths, and expected output/capture locations without executing
 the configured commands. Inspect how declared metrics would be emitted; output
 files may not exist until evaluation. Validate the config file from the project
-root with AutoHelix's own Python: a plain `python` may lack the package (pipx,
-`uv tool`, a venv that isn't active). Use the one the session's first prompt
-names, else the interpreter on the first line of the `autohelix` executable
-(`autohelix --version` checks the install):
+root with AutoHelix's own Python: the one the session's first prompt names, else
+the interpreter on the first line of the `autohelix` executable
+(`head -1 "$(command -v autohelix)"`; for `#!/usr/bin/env python3`, that
+`python3`). Replace `/path/to/python` below with it:
 
 ```sh
-PY=$(head -1 "$(command -v autohelix)" | sed 's/^#! *//')  # or the Python you were given
-$PY - <<'EOF'
+/path/to/python - <<'EOF'
 from pathlib import Path
 from autohelix.config import load_config
 
-config, raw = load_config(Path("."), Path("autohelix/perf.yaml"))  # the config file
+config, raw = load_config(Path("."), Path("autohelix.yaml"))  # the file you wrote, e.g. autohelix.yaml
 for issue in config.validate(raw):
     print(f"{issue.level}: {issue.message}")
 EOF
 ```
-
-If that first line isn't a Python interpreter, use the `python` of the
-environment AutoHelix is installed in.
 
 Resolve validation errors and explain material warnings. This static review is
 separate from executing checks, measurements, or evidence-gathering commands.
@@ -140,9 +142,10 @@ remains open, then give verification and launch commands. File links and a
 durable explanation can supplement this walkthrough.
 
 Setup is preparation only: don't start a run unless the user asks for one.
-The config must be committed before a run (the first baseline needs a clean
-committed working tree); `autohelix run` creates `.autohelix/` itself. The
-launch command is `autohelix run` for `autohelix.yaml`, `autohelix run <name>`
+The project must be a git checkout with a commit, and the first baseline needs
+no uncommitted changes to tracked files. Commit the config so it's versioned,
+and any scripts its commands use: iteration copies are made from the commit.
+`autohelix run` creates `.autohelix/` itself. The launch command is `autohelix run` for `autohelix.yaml`, `autohelix run <name>`
 for `autohelix/<name>.yaml`. Include the generated configuration in the
 handoff; resolve outstanding work according to the user's instructions without
 discarding or committing unrelated changes.
