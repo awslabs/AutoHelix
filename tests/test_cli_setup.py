@@ -3,11 +3,15 @@
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
+import click
+import click.testing
 import pytest
 from click.testing import CliRunner
 
+from autohelix import cli
 from autohelix.cli import CONFIG_TEMPLATE, main
 from autohelix.config import load_config
 
@@ -19,7 +23,8 @@ def git(cwd, *args):
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    """A git checkout with a commit, the current directory, no agent installed, no TTY."""
+    """A git checkout with a commit, the current directory, no agent installed, no TTY
+    (CliRunner's streams aren't terminals)."""
     path = tmp_path / "project"
     path.mkdir()
     git(path, "init", "-q")
@@ -28,7 +33,6 @@ def project(tmp_path, monkeypatch):
     git(path, "commit", "-qm", "init")
     monkeypatch.chdir(path)  # restored afterwards, also after setup's chdir before exec
     agents([])(monkeypatch)
-    monkeypatch.setattr("autohelix.cli._interactive", lambda: False)
     return path
 
 
@@ -87,14 +91,47 @@ def test_path_option_names_the_project(project, tmp_path):
     result = setup("-p", str(other))
     assert result.exit_code == 0, result.output
     assert (other / "autohelix.yaml").is_file() and not (project / "autohelix.yaml").exists()
+    assert f"Wrote {other.resolve() / 'autohelix.yaml'}." in result.output  # openable from the cwd
     assert f"autohelix run -p {other}" in result.output
+
+
+def test_relative_and_quoted_paths(project):
+    (project / "sub").mkdir()
+    result = setup("perf", "-p", "sub")
+    assert result.exit_code == 0, result.output
+    assert "Wrote sub/autohelix/perf.yaml." in result.output
+    assert "autohelix run perf -p sub\n" in result.output
+    (project / "my dir").mkdir()
+    result = setup("-p", "my dir")
+    assert result.exit_code == 0, result.output
+    assert "Wrote my dir/autohelix.yaml." in result.output
+    assert "autohelix run -p 'my dir'\n" in result.output
 
 
 @pytest.mark.parametrize("name", ["Perf", "perf_fast", "a" * 33, "", "perf.yaml", "x/y"])
 def test_a_bad_name_is_a_usage_error(project, name):
     result = setup(name)
     assert result.exit_code == 2
-    assert "lowercase letters, digits or hyphens, at most 32 characters" in result.output
+    assert ("must start with a lowercase letter or digit and use only lowercase letters, digits or hyphens, "
+            "at most 32 characters") in " ".join(result.output.split())
+    assert "is a folder" not in result.output
+    assert files(project) == ["main.py"]
+
+
+@pytest.mark.parametrize("command", ["init", "setup"])
+def test_a_folder_as_name_points_at_path(project, command):
+    (project / "My App").mkdir()
+    for name, quoted in ((".", "."), ("My App", "'My App'")):
+        result = CliRunner().invoke(main, [command, name])
+        assert result.exit_code == 2
+        assert f"({name} is a folder: use -p {quoted}.)" in " ".join(result.output.split())
+    assert files(project) == ["My App", "main.py"]
+
+
+def test_the_name_autohelix_is_refused(project):
+    result = setup("autohelix")
+    assert result.exit_code == 2
+    assert "autohelix/autohelix.yaml would give runs without a name" in " ".join(result.output.split())
     assert files(project) == ["main.py"]
 
 
@@ -106,6 +143,43 @@ def test_never_overwrites(project, args, relative):
     assert result.exit_code == 1
     assert f"{relative} already exists" in result.output
     assert (project / relative).read_text() == "goal: mine\n"
+
+
+@pytest.mark.parametrize("agent", [None, "claude"])
+def test_a_folder_in_place_of_the_config_is_refused(project, monkeypatch, execs, agent):
+    agents(["claude"])(monkeypatch)
+    (project / "autohelix.yaml").mkdir()
+    result = setup(*(["--agent", agent] if agent else []))
+    assert result.exit_code == 1
+    assert "autohelix.yaml is a folder, not a config file; move it away first." in result.output
+    assert not execs
+
+
+@pytest.mark.parametrize("agent", [None, "claude"])
+def test_a_file_in_place_of_the_folder_is_refused(project, monkeypatch, execs, agent):
+    agents(["claude"])(monkeypatch)
+    (project / "autohelix").write_text("not a folder\n")
+    result = setup("perf", *(["--agent", agent] if agent else []))
+    assert result.exit_code == 1
+    assert "autohelix is a file, not a folder of configs; move it away first." in result.output
+    assert "Errno" not in result.output
+    assert (project / "autohelix").read_text() == "not a folder\n" and not execs
+
+
+def test_symlinked_configs(project, monkeypatch, execs):
+    agents(["claude"])(monkeypatch)
+    (project / "real.yaml").write_text("goal: mine\n")
+    (project / "autohelix.yaml").symlink_to("real.yaml")
+    result = setup()  # a link to a file is a config: not overwritten
+    assert result.exit_code == 1 and "autohelix.yaml already exists" in result.output
+    assert setup("--agent", "claude").exit_code == 0
+    assert "The config is `autohelix.yaml`, already there" in execs[0][1][4]
+    (project / "autohelix").mkdir()
+    (project / "autohelix" / "perf.yaml").symlink_to("gone.yaml")
+    result = setup("perf", "--agent", "claude")
+    assert result.exit_code == 1
+    assert "autohelix/perf.yaml is a broken link, not a config file" in result.output
+    assert len(execs) == 1 and (project / "real.yaml").read_text() == "goal: mine\n"
 
 
 def test_bare_setup_beside_folder_configs_is_refused(project):
@@ -122,7 +196,6 @@ def test_bare_setup_beside_folder_configs_is_refused(project):
 def test_outside_git_writes_and_warns(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("autohelix.cli._interactive", lambda: False)
     result = setup()
     assert result.exit_code == 0, result.output
     assert (tmp_path / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
@@ -130,9 +203,24 @@ def test_outside_git_writes_and_warns(tmp_path, monkeypatch):
     assert "git init && git add -A && git commit -m 'init'" in result.output
 
 
+def test_a_repository_without_commits_warns(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    git(tmp_path, "init", "-q")
+    result = setup()
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
+    assert "Warning: no commit yet; `autohelix run` starts from a commit" in result.output
+
+
+def test_a_repository_with_a_commit_has_no_warning(project):
+    assert "Warning" not in setup().output
+
+
 def test_init_is_a_hidden_alias(project):
-    help_text = CliRunner().invoke(main, ["--help"]).output
-    assert "setup" in help_text and " init " not in help_text
+    listed = [line.split()[0] for line in CliRunner().invoke(main, ["--help"]).output.splitlines()
+              if line.startswith("  ") and line.strip()]
+    assert "setup" in listed and "init" not in listed
     result = CliRunner().invoke(main, ["init", "perf"])
     assert result.exit_code == 0, result.output
     assert (project / "autohelix" / "perf.yaml").read_text() == CONFIG_TEMPLATE
@@ -212,18 +300,68 @@ def test_agent_claude_execs_with_the_skill_and_writes_nothing(project, monkeypat
     assert f"Read `{skill_dir / 'SKILL.md'}` and follow it" in prompt
     assert "Write the config to `autohelix/perf.yaml`" in prompt
     assert "`agent.backend: claude`" in prompt
+    assert "Write the file directly (don't run `autohelix setup`)." in prompt
+    assert f"AutoHelix's own Python is `{sys.executable}`" in prompt
     assert prompt.endswith("Start by asking what I want to achieve.")
 
 
-def test_agent_codex_and_opencode_argv(project, monkeypatch, execs):
+def test_the_prompt_names_the_launcher_it_was_started_as(project, monkeypatch, execs, tmp_path):
+    agents(["claude"])(monkeypatch)
+    launcher = tmp_path / "venv" / "bin" / "autohelix"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/usr/bin/env python\n")
+    monkeypatch.setattr(sys, "argv", [str(launcher), "setup"])
+    assert setup("--agent", "claude").exit_code == 0
+    assert f"and its CLI `{launcher.resolve()}`" in execs[0][1][4]
+
+
+@pytest.mark.parametrize("agent", ["codex", "opencode"])
+def test_agent_codex_and_opencode_argv(project, monkeypatch, execs, agent):
     agents(["codex", "opencode"])(monkeypatch)
-    assert setup("--agent", "codex").exit_code == 0
-    assert setup("--agent", "opencode").exit_code == 0
-    (_, codex, _), (_, opencode, _) = execs
-    assert codex[0] == "codex" and len(codex) == 2
-    assert "Write the config to `autohelix.yaml`, with `agent.backend: codex`" in codex[1]
-    assert opencode[:3] == ["opencode", str(project.resolve()), "--prompt"]
-    assert "`agent.backend: opencode`" in opencode[3]
+    result = setup("--agent", agent)
+    assert result.exit_code == 0, result.output
+    [(file, argv, cwd)] = execs
+    assert file == agent and Path(cwd) == project.resolve()
+    assert files(project) == ["main.py"]
+    if agent == "codex":
+        assert len(argv) == 2
+    else:
+        assert argv[:3] == ["opencode", str(project.resolve()), "--prompt"] and len(argv) == 4
+    assert f"Write the config to `autohelix.yaml`, with `agent.backend: {agent}`" in argv[-1]
+
+
+def test_agent_with_path_starts_in_the_project(project, monkeypatch, execs, tmp_path):
+    agents(["claude"])(monkeypatch)
+    other = tmp_path / "other"
+    other.mkdir()
+    result = setup("perf", "-p", str(other), "--agent", "claude")
+    assert result.exit_code == 0, result.output
+    [(_, argv, cwd)] = execs
+    assert Path(cwd) == other.resolve()
+    assert "Write the config to `autohelix/perf.yaml`" in argv[4]  # relative to the agent's cwd
+    assert files(other) == [] and files(project) == ["main.py"]
+
+
+def test_agent_that_cannot_start(project, monkeypatch):
+    agents(["claude"])(monkeypatch)
+
+    def fail(file, argv):
+        raise PermissionError(13, "Permission denied", file)
+
+    monkeypatch.setattr(os, "execvp", fail)
+    result = setup("--agent", "claude")
+    assert result.exit_code == 1
+    assert "Could not start claude: [Errno 13] Permission denied" in result.output
+    assert files(project) == ["main.py"]
+
+
+def test_a_skill_not_on_disk_is_a_clear_error(project, monkeypatch, execs):
+    agents(["claude"])(monkeypatch)
+    monkeypatch.setattr(cli, "pkg_files", lambda package: Path("/nonexistent/autohelix"))
+    result = setup("--agent", "claude")
+    assert result.exit_code == 1
+    assert "The bundled setup skill isn't a folder on disk" in result.output
+    assert not execs and files(project) == ["main.py"]
 
 
 def test_agent_on_an_existing_config_completes_it(project, monkeypatch, execs):
@@ -248,7 +386,42 @@ def test_agent_not_on_path(project, monkeypatch, execs):
 
 @pytest.fixture
 def tty(monkeypatch):
-    monkeypatch.setattr("autohelix.cli._interactive", lambda: True)
+    """CliRunner's stdin and stdout report a terminal, so the real `_interactive` says yes."""
+    monkeypatch.setattr(click.testing._NamedTextIOWrapper, "isatty", lambda self: True, raising=False)
+
+
+def test_interactive_needs_both_streams_to_be_terminals(monkeypatch):
+    class Stream:
+        def __init__(self, tty):
+            self.tty = tty
+
+        def isatty(self):
+            return self.tty
+
+    for stdin, stdout, expected in ((True, True, True), (True, False, False), (False, True, False)):
+        monkeypatch.setattr(sys, "stdin", Stream(stdin))
+        monkeypatch.setattr(sys, "stdout", Stream(stdout))
+        assert cli._interactive() is expected
+
+
+@pytest.mark.parametrize("several, at", [(False, "first"), (True, "first"), (True, "second")])
+@pytest.mark.parametrize("how", ["eof", "ctrl-c"])
+def test_leaving_a_question_writes_nothing(project, monkeypatch, execs, tty, several, at, how):
+    agents(["claude", "codex"] if several else ["claude"])(monkeypatch)
+    answers = ["agent"] if at == "second" else []
+    if how == "eof":
+        result = setup(input="".join(a + "\n" for a in answers))
+    else:
+        def prompt(*args, **kwargs):
+            if answers:
+                return answers.pop(0)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(click, "prompt", prompt)
+        result = setup()
+    assert result.exit_code == 1
+    assert "Aborted!" in result.output
+    assert not execs and files(project) == ["main.py"]
 
 
 def test_one_agent_asks_once_and_the_default_starts_it(project, monkeypatch, execs, tty):
