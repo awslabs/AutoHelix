@@ -41,8 +41,11 @@ no way yet to check or measure the goal. Don't ask about budgets, timeouts,
 models or reviews: pick defaults, say what you picked. Carry forward any
 preferences the user states.
 
-Budget: iterations only (`budget: {iterations: 10}`, or what fits the work),
-with no cost or time limit unless the user asks for one.
+Defaults: `budget: {iterations: 3}` and nothing else (no cost or time limit),
+and no timeouts (no `timeout:` on gates or observe entries, no `agent.timeout`):
+the built-in defaults apply. Set any of these only when the user asks. The
+iteration prompt already tells the agent to leave its edits uncommitted; don't
+repeat that in `goal:`.
 
 For help choosing gates, measurements, feedback, and budgets, read
 [loop design](references/loop-design.md). For concrete patterns, read the
