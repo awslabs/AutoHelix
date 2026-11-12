@@ -200,12 +200,16 @@ def setup(name: str | None, path: str, agent: str | None):
             raise click.ClickException(f"--agent {agent}: {SETUP_AGENTS[agent]} (`{agent}`) is not on PATH."
                                        + (f" Found: {', '.join(found)}." if found else ""))
     elif found and _interactive():
-        names = ", ".join(SETUP_AGENTS[a] for a in found)
-        choice = click.prompt(f"Set up the loop with an agent ({names} found), or write an empty config?",
-                              type=click.Choice(["agent", "empty"]), default="agent")
-        if choice == "agent":
-            agent = found[0] if len(found) == 1 else click.prompt(
-                "Which agent?", type=click.Choice(found), default=found[0])
+        from autohelix.menu import choose
+
+        click.echo(click.style("AutoHelix setup", bold=True) + click.style(
+            f" · {relative}" + (f" in {project}" if elsewhere else ""), dim=True) + "\n")
+        drafts = "it asks what you want to achieve, then writes the config"
+        with_agent = (f"With {SETUP_AGENTS[found[0]]}", drafts) if len(found) == 1 else ("With an agent", drafts)
+        if choose("How do you want to write it?",
+                  [with_agent, ("Empty config", "the commented template, to edit by hand")]) == 0:
+            agent = found[0] if len(found) == 1 else found[
+                choose("Which agent?", [(SETUP_AGENTS[a], "") for a in found])]
 
     if agent is not None:
         argv = _agent_argv(agent, project, relative, exists)

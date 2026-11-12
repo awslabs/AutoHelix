@@ -65,8 +65,9 @@ autohelix setup [NAME] [-p PATH] [--agent claude|codex|opencode]
 
 In a terminal, `setup` first asks whether to set up the loop with an agent or
 write an empty config. When several agents are installed (looked for in the
-order `claude`, `codex`, `opencode`), it then asks which one (Enter takes the
-first). With an agent, `setup` is replaced by that agent's usual interactive
+order `claude`, `codex`, `opencode`), it then asks which one. Choose with ↑/↓
+and Enter, or an option's number; Enter alone takes the first, Esc or Ctrl-C
+cancels. With an agent, `setup` is replaced by that agent's usual interactive
 session, started in the project with a first prompt to follow the setup skill
 bundled with AutoHelix: it asks what you want to achieve, and writes the
 config with you, with `agent.backend` set to that agent unless you decide

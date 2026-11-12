@@ -445,9 +445,9 @@ def test_interactive_needs_both_streams_to_be_terminals(monkeypatch):
 @pytest.mark.parametrize("how", ["eof", "ctrl-c"])
 def test_leaving_a_question_writes_nothing(project, monkeypatch, execs, tty, several, at, how):
     agents(["claude", "codex"] if several else ["claude"])(monkeypatch)
-    answers = ["agent"] if at == "second" else []
+    answers = [1] if at == "second" else []
     if how == "eof":
-        result = setup(input="".join(a + "\n" for a in answers))
+        result = setup(input="".join(f"{a}\n" for a in answers))
     else:
         def prompt(*args, **kwargs):
             if answers:
@@ -465,8 +465,9 @@ def test_one_agent_asks_once_and_the_default_starts_it(project, monkeypatch, exe
     agents(["codex"])(monkeypatch)
     result = setup(input="\n")
     assert result.exit_code == 0, result.output
-    assert ("Set up the loop with an agent (Codex found), or write an empty config? "
-            "(agent, empty) [agent]:") in result.output
+    assert "AutoHelix setup · autohelix.yaml" in result.output
+    assert "How do you want to write it?\n  1. With Codex  it asks what you want" in result.output
+    assert "  2. Empty config  the commented template, to edit by hand\nChoose [1]:" in result.output
     assert "Which agent?" not in result.output
     assert [argv[0] for _, argv, _ in execs] == ["codex"]
     assert files(project) == ["main.py"]
@@ -474,19 +475,19 @@ def test_one_agent_asks_once_and_the_default_starts_it(project, monkeypatch, exe
 
 def test_several_agents_ask_which_defaulting_to_the_first_found(project, monkeypatch, execs, tty):
     agents(["codex", "opencode"])(monkeypatch)
-    result = setup(input="agent\n\n")
+    result = setup(input="1\n\n")
     assert result.exit_code == 0, result.output
-    assert "(Codex, OpenCode found)" in result.output
-    assert "Which agent? (codex, opencode) [codex]:" in result.output
+    assert "  1. With an agent" in result.output
+    assert "Which agent?\n  1. Codex\n  2. OpenCode\nChoose [1]:" in result.output
     assert execs[0][1][0] == "codex"
-    result = setup(input="\nopencode\n")
+    result = setup(input="\n2\n")
     assert result.exit_code == 0, result.output
     assert execs[1][1][0] == "opencode"
 
 
 def test_choosing_empty_writes_the_template(project, monkeypatch, execs, tty):
     agents(["claude", "codex"])(monkeypatch)
-    result = setup("perf", input="empty\n")
+    result = setup("perf", input="2\n")
     assert result.exit_code == 0, result.output
     assert "Which agent?" not in result.output
     assert not execs
@@ -497,7 +498,7 @@ def test_choosing_empty_writes_the_template(project, monkeypatch, execs, tty):
 def test_no_agent_writes_the_template_without_asking(project, execs, tty):
     result = setup(input="")
     assert result.exit_code == 0, result.output
-    assert "Set up the loop" not in result.output
+    assert "How do you want" not in result.output
     assert (project / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
     assert "No coding agent found" in result.output
     assert not execs
@@ -507,5 +508,5 @@ def test_agent_flag_skips_the_questions(project, monkeypatch, execs, tty):
     agents(["claude", "codex"])(monkeypatch)
     result = setup("--agent", "codex", input="")
     assert result.exit_code == 0, result.output
-    assert "Set up the loop" not in result.output
+    assert "How do you want" not in result.output
     assert execs[0][1][0] == "codex"
