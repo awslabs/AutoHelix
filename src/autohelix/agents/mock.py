@@ -21,7 +21,7 @@ class MockAgent:
     """Mock agent that makes predictable changes for testing.
 
     Useful for integration tests that need to exercise the full harness loop
-    (worktree creation, constraint checking, merging) without invoking a real LLM.
+    (copies, gate checking, accepting) without invoking a real LLM.
 
     Config settings:
         change_file: File to modify (default: "mock_change.txt")

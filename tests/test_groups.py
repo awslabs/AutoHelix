@@ -328,4 +328,4 @@ def test_the_report_copy_lists_the_runs_own_ref(project, monkeypatch):  # noqa: 
 def test_an_old_prompt_file_is_reported_as_no_longer_read(project):  # noqa: F811
     (project / ".autohelix" / "prompt.md").write_text("Old: {{ goal }}\n")
     _, result = started(project)
-    assert ".autohelix/prompt.md is no longer read" in result.output
+    assert ".autohelix/prompt.md is no longer read" in " ".join(result.output.split())  # wrapped under WARN

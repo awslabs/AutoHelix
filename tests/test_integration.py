@@ -157,7 +157,7 @@ observe:
         harness = Harness(integration_project, verbose=False)
         with pytest.raises(
             RuntimeError,
-            match="Baseline benchmark did not produce required metric.*score",
+            match="Baseline setup error: observe entry `bench` exited 0 but reported no `score`",
         ):
             harness.run(max_iterations=1)
 
@@ -234,7 +234,7 @@ agent:
 """)
         harness = Harness(integration_project, verbose=False)
         if gated:
-            with pytest.raises(RuntimeError, match="did not produce required metric.*missing"):
+            with pytest.raises(RuntimeError, match="reported no `missing`"):
                 harness.run(max_iterations=1, report=False)
         else:
             harness.run(max_iterations=1, report=False)
@@ -1180,32 +1180,3 @@ class TestFormatTime:
     def test_zero(self):
         from autohelix.harness import _format_time
         assert _format_time(0) == "0s"
-
-
-class TestFormatUsage:
-    def test_format_tokens(self):
-        from autohelix.harness import _format_tokens
-        assert "1.2k" in _format_tokens(1234)
-        assert "1.5M" in _format_tokens(1_500_000)
-        assert "42 " == _format_tokens(42)
-
-    def test_format_usage_full(self):
-        usage = {"input_tokens": 10000, "output_tokens": 2000, "cost_usd": 0.1234, "duration_ms": 65000}
-        text = Harness._format_usage(usage)
-        assert "10.0k" in text
-        assert "2.0k" in text
-        assert "$0.1234" in text
-        assert "1m 5s" in text
-
-    def test_format_usage_tokens_only(self):
-        usage = {"input_tokens": 500, "output_tokens": 100}
-        text = Harness._format_usage(usage)
-        assert "500" in text
-        assert "100" in text
-        assert "$" not in text
-
-    def test_format_usage_empty(self):
-        assert Harness._format_usage({}) == ""
-
-    def test_format_usage_uses_saved_wall_clock_when_agent_duration_absent(self):
-        assert "2m 3s" in Harness._format_usage({"wall_clock_ms": 123000})

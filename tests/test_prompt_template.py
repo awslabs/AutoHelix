@@ -99,7 +99,7 @@ class TestBuildPromptVariables:
                                            worktree_dir=tmp_path)
         assert set(variables) == {
             "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable",
-            "frozen", "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "last", "time_limit", "group",
+            "frozen", "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "time_limit", "group",
             "group_runs"}
         assert variables["title"] == "Title line."
         assert variables["notes_path"] == str(tmp_path / ".autohelix-iteration" / "notes" / "iter-1.md")

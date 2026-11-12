@@ -25,8 +25,8 @@ Breaking:
     hard kill that also gives time-left hints where the backend supports them
     (a Codex without hook support warns and runs without them).
 - Metric gate thresholds are percent strings (`regress: 5%`); a bare number
-  is an error. Durations everywhere: a bare number is seconds, strings like
-  `90s`, `30m`, `2h30m`.
+  is an error. Durations everywhere: a bare number (or a string of digits) is
+  seconds, strings like `90s`, `30m`, `2h30m`.
 - `.autohelix/prompt.md` is not read (a run warns while it exists); use
   `prompt_template:`, a path relative to the config file.
 - Observe output is stored by entry name,
@@ -38,7 +38,7 @@ Breaking:
 Added:
 
 - **`gates:`**: commands, `ask:` entries (shorthand for `autohelix ask`, with
-  `"yes":`/`"no":` and an `agent:` of their own) and `metric:` entries with
+  `yes:`/`no:` (quoted or not) and an `agent:` of their own) and `metric:` entries with
   `regress: N%` or `improve: N%` against the last accepted iteration. Gate
   commands run first, in order; the first failure rejects.
 - **`observe:`**: named command entries (`metrics:`, `capture:` files or
@@ -64,22 +64,33 @@ Added:
   if a gate uses it, otherwise it is a warning.
 - **Rejected work is kept**: each rejected attempt's tree as
   `refs/autohelix-rejected/<id>/<n>` (also failed or timed-out agent calls;
-  removed by `delete`), and the next agent gets the latest rejection's change
-  as `.autohelix-iteration/rejected.patch`.
+  removed by `delete`; none when all its changes were discarded), and the next
+  agent gets the latest rejection's change as
+  `.autohelix-iteration/rejected.patch` (over 2 MiB, the `git diff` command
+  that shows it instead, `rejected_diff` in the prompt).
 - **Discarded paths are reported**: changes outside the scope are recorded
-  with the iteration (`discarded`), named in the next prompt, and shown in the
-  viewer. `scope.editable` and `scope.frozen` can be combined (editable minus
+  with the iteration (`discarded`, and `discarded_frozen` for the frozen
+  ones), named in the next prompt (frozen ones said apart), and shown in the
+  console, `view` and the viewer. `scope.editable` and `scope.frozen` can be combined (editable minus
   frozen). A run with gate or observe commands but no scope warns.
 - **The prompt is a documented contract**: `goal`, `title`, `iteration`,
   `worktree`, `history`, `gates`, `observe`, `stop`, `editable`, `frozen`,
-  `notes_path`, `hints`, `rejected_patch`, `discarded`, `last` (the latest
-  iteration's outcome, gate results and observations), `time_limit`, `group`,
-  `group_runs`. The history lines include each iteration's one-line summary.
+  `notes_path`, `hints`, `rejected_patch`, `rejected_diff`, `discarded`,
+  `discarded_frozen`, `last` (the latest iteration's outcome, gate results and
+  observations), `time_limit`, `group`, `group_runs`. A custom template using
+  other names gets a warning at run start. The history lines include each iteration's one-line summary.
   The goal's first line is the run's title (validation warns when it is long).
 - History records `gates` (in list order, not reached ones as `null`),
-  `observe` (per entry: `ok`, `error`, `metrics`), `summary`, `discarded` and
-  `rejected_ref`; `view --json` adds `gates`, `observe`, `summary` and
-  `discarded`.
+  `observe` (per entry: `ok`, `error`, `metrics`, and `metric_errors` with
+  how to report a declared metric an entry ran without), `summary`, `base`,
+  `tree`, `discarded`, `discarded_frozen` and `rejected_ref`; the old
+  `constraints` field is gone. `view --json` adds `gates`, `observe`,
+  `summary`, `discarded` and `discarded_frozen`. Gate failures at the baseline
+  are shown (console, `view`, viewer).
+- `##autohelix[name= 5 ]`: whitespace around the value is accepted (`wc -l`
+  pads). A stop command whose last line is just `true`/`false`/`null` (`jq -e`)
+  gives the command as the stop reason.
+- `review` and `ask` don't offer `--agent opencode` (it has no read-only mode).
 - Viewer: one section per observe entry (status, metrics, stdout, stderr,
   captured files; a review as Markdown), gates in list order with pending
   ones, the agent's summary per iteration, each iteration's own diff

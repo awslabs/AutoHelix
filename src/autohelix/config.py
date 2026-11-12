@@ -22,7 +22,7 @@ MAX_DURATION = 30 * 24 * 3600  # 30 days
 def parse_duration(value: str | int | float) -> int:
     """Parse a duration string like '1h', '30m', '2h30m' into total seconds.
 
-    Also accepts an integer (treated as seconds). Unlike the optional variant
+    Also accepts an integer or a string of digits ("90"), as seconds. Unlike the optional variant
     in iteration_time, this requires a positive result of at most 30 days and
     raises on invalid or empty/zero input.
     """
@@ -44,6 +44,8 @@ def parse_duration(value: str | int | float) -> int:
     s = str(value).strip()
     if not s:
         raise ValueError("Empty duration string")
+    if re.fullmatch(r"\d+", s):  # "90", as a bare number: seconds
+        return parse_duration(int(s))
 
     total = parse_duration_string(s)
     if total <= 0:

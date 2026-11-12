@@ -109,11 +109,12 @@ def build_prompt_variables(
       latest iteration was rejected and its tree was kept), else "".
     - `rejected_diff`: when that change is too large for the patch file, the `git diff`
       command that shows it, else "".
-    - `discarded`: the out-of-scope paths the latest iteration's changes to were dropped.
+    - `discarded`: the paths whose changes the latest iteration lost to the scope;
+      `discarded_frozen`: those of them that are frozen (the others aren't editable).
     - `last`: the latest iteration (the baseline before iteration 1), or None:
       `{"iteration", "accepted", "reason", "summary", "failure_output", "gates": [{"text",
       "kind", "status": "passed"|"failed"|"pending"}], "observe": [{"name", "ok",
-      "error", "path"}]}`; `path` is its folder in the copy
+      "error", "missing" (declared metrics it ran without reporting), "path"}]}`; `path` is its folder in the copy
       (`.autohelix-iteration/observations/iter-K/<name>/`).
     - `time_limit`: `agent.timeout` as a compact duration ("15m"), or "".
     - `group`: the run's group, or ""; `group_runs`: one line per other run of the
@@ -145,6 +146,7 @@ def build_prompt_variables(
         "rejected_patch": f"{ITERATION_DIR}/rejected.patch" if (state / "rejected.patch").is_file() else "",
         "rejected_diff": rejected_diff,
         "discarded": [clean(path) for path in latest.discarded] if latest else [],
+        "discarded_frozen": [clean(path) for path in latest.discarded_frozen] if latest else [],
         "last": _describe_last(latest) if latest else None,
         "time_limit": format_duration(config.agent.timeout) if config.agent.timeout is not None else "",
         "group": group or "",
@@ -179,6 +181,7 @@ def _describe_last(record) -> dict[str, Any]:
         "gates": [{"text": clean(gate.get("text")), "kind": gate.get("kind", "command"),
                    "status": status.get(gate.get("passed"), "pending")} for gate in record.gates],
         "observe": [{"name": clean(item.get("name")), "ok": bool(item.get("ok")), "error": clean(item.get("error")),
+                     "missing": [clean(name) for name in item.get("metric_errors") or {}],
                      "path": f"{ITERATION_DIR}/observations/iter-{record.iteration}/{clean(item.get('name'))}/"}
                     for item in record.observe],
     }
@@ -188,7 +191,7 @@ def _describe_last(record) -> dict[str, Any]:
 # gets a warning at run start (`unknown_variables`).
 VARIABLES = frozenset({
     "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable", "frozen",
-    "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "last", "time_limit", "group",
+    "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "time_limit", "group",
     "group_runs",
 })
 

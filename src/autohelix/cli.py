@@ -45,21 +45,6 @@ def main():
 main.add_command(skill)
 
 
-def _run_git(args: list[str], cwd: Path, error_msg: str) -> subprocess.CompletedProcess:
-    """Run a git command, raising ClickException on failure."""
-    result = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        stderr = result.stderr.strip()
-        hint = f"\n  git {' '.join(args)} failed: {stderr}" if stderr else ""
-        raise click.ClickException(f"{error_msg}{hint}")
-    return result
-
-
 CONFIG_TEMPLATE = (
     pkg_files("autohelix.templates").joinpath("config_template.yaml").read_text()
 )
@@ -277,7 +262,7 @@ def archive(run_ids: tuple[str, ...], path: str, undo: bool):
 @click.option("--path", "-p", type=click.Path(exists=True), default=".")
 @click.option("--force", is_flag=True, help="Also delete runs with unlanded commits (they are lost).")
 def delete(run_ids: tuple[str, ...], path: str, force: bool):
-    """Delete runs: their history, notes, logs, ref and leftover copies.
+    """Delete runs: their history, notes, logs, ref, kept rejected trees and leftover copies.
 
     Refuses while a run is running, and for runs with commits not on their
     target branch unless --force. To keep a run but hide it, use archive.
@@ -297,7 +282,7 @@ def delete(run_ids: tuple[str, ...], path: str, force: bool):
 @click.option("--yes", "yes_means", help='What a "yes" answer means.')
 @click.option("--no", "no_means", help='What a "no" answer means.')
 @click.option("--rubric", type=click.Path(exists=True, dir_okay=False), help="File with criteria for the answer.")
-@click.option("--agent", "agent_type", type=click.Choice(["claude", "codex", "opencode", "mock"]),
+@click.option("--agent", "agent_type", type=click.Choice(["claude", "codex", "mock"]),
               help="Agent backend (default: agent.backend from the config, else claude).")
 @click.option("--model", help="Model (default: agent.model from the config).")
 @click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
@@ -365,7 +350,7 @@ def _review_metrics(ctx, param, values: tuple[str, ...]) -> list[str]:
               help="Include this entry's review from the last accepted iteration (in a run).")
 @click.option("--metric", "metrics", multiple=True, metavar="NAME:higher|lower", callback=_review_metrics,
               help="A number the review must report, printed as ##autohelix[NAME=value]. Repeatable.")
-@click.option("--agent", "agent_type", type=click.Choice(["claude", "codex", "opencode", "mock"]),
+@click.option("--agent", "agent_type", type=click.Choice(["claude", "codex", "mock"]),
               help="Agent backend (default: agent.backend from the config, else claude).")
 @click.option("--model", help="Model (default: agent.model from the config).")
 @click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
@@ -496,8 +481,8 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
     """One run, live in the terminal: RUN_ID (or its last part), else the current run.
 
     On top, the run's status, budgets, latest accepted metrics, landing state
-    and one row per iteration; below, the live output of the agent, reviewer
-    or summary agent. Keeps waiting when the run stops; Ctrl-C stops watching
+    and one row per iteration; below, the live output of the agent, a review
+    or the summary agent. Keeps waiting when the run stops; Ctrl-C stops watching
     (not the run). Safe to run alongside `autohelix run`; it only reads
     .autohelix/.
 

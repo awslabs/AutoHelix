@@ -44,8 +44,8 @@ def _configure(project, settings=None, **sections) -> None:
 class Spy:
     """Wraps Harness.run_agent: writes a summary, and records what each agent copy holds."""
 
-    def __init__(self, harness):
-        self.harness, self.original, self.seen = harness, harness.run_agent, {}
+    def __init__(self, harness, edit=None):
+        self.harness, self.original, self.seen, self.edit = harness, harness.run_agent, {}, edit
         harness.run_agent = self
 
     def __call__(self, worktree, prompt, iteration):
@@ -63,6 +63,8 @@ class Spy:
             self.seen[iteration]["applied"] = (probe / "hello.py").read_text()
             subprocess.run(["rm", "-rf", str(probe)], check=True)
         (state / "commit_summary.txt").write_text(f"attempt {iteration}\nmore detail\n")
+        if self.edit:  # a change of the agent's own, before the mock runs (or fails)
+            self.edit(worktree)
         return self.original(worktree, prompt, iteration)
 
 
@@ -110,7 +112,7 @@ def test_rejected_trees_are_kept_and_shown_to_the_next_agent(project):
 def test_failed_agent_attempt_keeps_its_tree_and_stays_rejected(project):
     _configure(project, settings={"should_fail": True})
     harness = Harness(project, verbose=False, land_mode="manual")
-    Spy(harness)
+    Spy(harness, edit=lambda worktree: (worktree / "hello.py").write_text("half done\n"))
     with pytest.raises(AutoHelixRunError, match="agent failed"):
         harness.run(max_iterations=1, report=False)
     record = History(project).load()[-1]

@@ -203,7 +203,9 @@ def _summary(r: dict) -> tuple[str, list[str]]:
     """An iteration's SUMMARY cell and the lines under it.
 
     Rejected: the failing gate (else the harness's reason), then the agent's summary.
-    Accepted: the agent's summary. Then failed observe entries and discarded paths."""
+    Accepted: the agent's summary. Then gates that failed at the baseline (they don't
+    reject there), failed observe entries, metrics an entry didn't report, and
+    discarded paths."""
     def first_line(text) -> str:
         text = (text or "").strip()
         return text.splitlines()[0] if text else ""
@@ -218,11 +220,21 @@ def _summary(r: dict) -> tuple[str, list[str]]:
         more = [summary] if summary and summary != cell and summary != first_line(reason) else []
     else:
         cell, more = summary, []
+    if r["iteration"] == 0:
+        for gate in r.get("gates") or []:
+            if isinstance(gate, dict) and gate.get("kind") == "command" and gate.get("passed") is False:
+                more.append(f"! gate failed at the baseline: {gate.get('text')}")
     for entry in r.get("observe") or []:
-        if isinstance(entry, dict) and entry.get("ok") is False:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("ok") is False:
             more.append(f"! observe {entry.get('name')} failed" + (f": {entry['error']}" if entry.get("error") else ""))
+        elif isinstance(entry.get("metric_errors"), dict) and entry["metric_errors"]:
+            more.append(f"! observe {entry.get('name')} reported no {', '.join(entry['metric_errors'])}")
     discarded = r.get("discarded") or []
     if discarded:
-        shown = ", ".join(discarded[:5]) + (f", … ({len(discarded)} paths)" if len(discarded) > 5 else "")
-        more.append(f"! discarded, outside the editable scope: {shown}")
+        frozen = set(r.get("discarded_frozen") or [])
+        shown = ", ".join(p + (" (frozen)" if p in frozen else "") for p in discarded[:5])
+        shown += f", … ({len(discarded)} paths)" if len(discarded) > 5 else ""
+        more.append(f"! discarded, outside the scope: {shown}")
     return cell, more

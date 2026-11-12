@@ -18,7 +18,7 @@ scope:
 #   - pytest -q                                 # must exit 0
 #   - command: pytest tests/slow
 #     timeout: 30m                              # a number is seconds; or 90s, 30m, 2h
-#   - ask: Does the change keep the public API?  # = autohelix ask "..."
+#   - ask: Does the change keep the public API?  # = autohelix ask -- "..."
 #   - metric: throughput
 #     regress: 5%                               # at most 5% worse than the last accepted iteration
 #   # - metric: throughput

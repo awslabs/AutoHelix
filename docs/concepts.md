@@ -41,10 +41,11 @@ A useful loop answers five questions:
 ### Tips
 
 - Keep gates, benchmarks and evaluation criteria outside the editable scope.
-- To see exactly what the agent receives, read `.autohelix-iteration/prompt.md`
-  in an agent copy (also saved with each iteration's logs as `prompt.txt`), or
-  the built-in template (`src/autohelix/templates/default_prompt.md`). See
-  [Prompt](#prompt).
+- To see exactly what the agent received, read the prompt kept with each
+  iteration's logs, `.autohelix/runs/<id>/logs/iter-N/call-001-agent/prompt.txt`
+  (the agent copy, which holds it as `.autohelix-iteration/prompt.md`, is gone
+  once the iteration ends), or the built-in template
+  (`src/autohelix/templates/default_prompt.md`). See [Prompt](#prompt).
 - AutoHelix already retains iteration evidence and agent memory. When findings
   should also be user-facing and revisable, keep them in an editable,
   version-controlled file. The [research example](../examples/research/) uses
@@ -201,12 +202,15 @@ latest iteration:
 
 - **After an accepted iteration:** its gate results and where its observations
   are (`.autohelix-iteration/observations/iter-K/<name>/`, failed entries
-  marked). The copy holds its code.
+  marked, and an entry that ran but didn't report a declared metric named with
+  how to report it). The copy holds its code.
 - **After a rejection:** the rejected attempt's gate results (passed, failed,
   or not reached), the failure output, the observations it produced before
-  being rejected, and `.autohelix-iteration/rejected.patch`. The copy is still
-  the last accepted code.
-- **After discarded changes:** the paths that were outside the scope.
+  being rejected, and `.autohelix-iteration/rejected.patch` (for a change over
+  2 MiB, the `git diff` command that shows it instead). The copy is still the
+  last accepted code.
+- **After discarded changes:** the paths that were outside the scope, frozen
+  ones said apart from the ones that aren't editable.
 
 Observe commands are different: `$AUTOHELIX_PREVIOUS` (and so
 `review --previous`) always comes from the last *accepted* iteration in which
@@ -220,13 +224,20 @@ or timed out (only if freezing the copy itself fails is there nothing to keep).
 A timed-out attempt is still rejected without checks: it is kept for the record
 and the next agent, never accepted unchecked.
 
+An attempt whose changes were all discarded (its tree equals the commit it
+started from) keeps no ref: there is nothing to keep or re-apply.
+
 The next agent's copy gets the latest rejection's change against the tip as
 `.autohelix-iteration/rejected.patch`, and the prompt says: "The previous
 attempt was rejected (failure output above). Its changes are in
 `.autohelix-iteration/rejected.patch`; `git apply` it if it was close, or start
-over."
+over." ("(failure output above)" only when there is some.) A change larger than
+2 MiB is not written as a file: the prompt gives the command that shows it
+instead, `git diff <tip> <tree>` (the copy reaches the tree through its
+borrowed objects), and the template gets it as `rejected_diff`.
 
-- It always applies cleanly: a rejection doesn't move the run's ref.
+- It always applies cleanly: a rejection doesn't move the run's ref (if the tip
+  moved anyway, there is no patch).
 - Whatever is re-applied is proposed and checked again, like any change.
 - The patch is derived: overwritten on each rejection, absent after an accept.
 - The viewer shows any rejected iteration's diff from its ref.
@@ -334,22 +345,28 @@ The variables a template gets are a stable, documented contract:
 | `iteration` | This iteration's number (the baseline is 0) |
 | `worktree` | The agent's working directory (its copy) |
 | `history` | The last iterations, one line each; empty if none |
-| `gates` | Every gate in list order: `{text, kind}`, `kind` being `command` or `metric`; a metric gate's text says what it compares ("speed: at most 5% worse than the last accepted iteration") |
+| `gates` | Every gate in list order: `{text, kind}`, `kind` being `command` or `metric`; a metric gate's text says what it compares ("speed: at most 5% worse than the last accepted iteration"). Elsewhere (console header, `view --json`, the `gates` of history records) a metric gate goes by its short text, `speed regress 5%` or `speed improve 0%` |
 | `observe` | Every observe entry: `{name, kind, metric_labels}`, `kind` being `command` (with `command`) or `review` (with `prompt`, on one line); `metric_labels` like `speed (↑)` |
 | `stop` | The stop commands |
 | `editable`, `frozen` | The scope patterns |
 | `notes_path` | Where this iteration's notes go (in the copy) |
 | `hints` | `.autohelix-iteration/hints.md` if there are hints, else empty |
 | `rejected_patch` | `.autohelix-iteration/rejected.patch` if the copy has one, else empty |
+| `rejected_diff` | When the latest rejected change is over 2 MiB (no patch file), the `git diff <tip> <tree>` command that shows it, else empty |
 | `discarded` | The paths whose changes the latest iteration lost to the scope |
-| `last` | The latest iteration (the baseline before iteration 1), or none: `{iteration, accepted, reason, summary, failure_output, gates: [{text, kind, status}], observe: [{name, ok, error, path}]}`; `status` is `passed`, `failed` or `pending`, and `path` is the entry's folder in the copy |
+| `discarded_frozen` | Those of them that are frozen (the others aren't editable) |
+| `last` | The latest iteration (the baseline before iteration 1), or none: `{iteration, accepted, reason, summary, failure_output, gates: [{text, kind, status}], observe: [{name, ok, error, missing, path}]}`; `status` is `passed`, `failed` or `pending`, `missing` the declared metrics an entry ran without reporting, and `path` the entry's folder in the copy |
 | `time_limit` | `agent.timeout` as a compact duration (`15m`), or empty |
 | `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group |
 
 A custom template is a copy: it won't pick up future changes to the built-in
 one. Remove `prompt_template:` to return to it. A run warns when a custom
-template still names `.autohelix/` paths in the agent's copy (they are now
-`.autohelix-iteration/`).
+template uses variables not in this table (such as the old `constraints` or
+`history_summary`; they render empty), and when it still names `.autohelix/`
+paths in the agent's copy (they are now `.autohelix-iteration/`).
+Agent-written text in the variables (summaries, discarded paths, errors,
+failure output) has its control characters removed; summaries are cut to 200
+characters.
 
 ### Use case: a soft hold-out eval
 

@@ -41,7 +41,7 @@ def _config(agent):
         {
             "goal": "x",
             "agent": agent,
-            "observables": [{"command": "echo hi", "values": {"s": "higher"}}],
+            "observe": [{"name": "bench", "command": "echo hi", "metrics": {"s": "higher"}}],
         }
     )
 
@@ -54,6 +54,7 @@ def test_require_notes_rejected_for_codex():
 def test_require_notes_allowed_for_claude():
     issues = _config({"backend": "claude", "require_notes": True}).validate()
     assert not any("require_notes" in i.message for i in issues)
+    assert not [i.message for i in issues if i.level == "error"]  # the fixture itself is a valid config
 
 
 def test_require_notes_bad_max_retries():

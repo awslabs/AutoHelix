@@ -1,5 +1,5 @@
 #!/bin/bash
-# Constraint: did the agent produce a model at the fixed artifacts location?
+# Gate: did the agent produce a model at the fixed artifacts location?
 # (Minimal: just existence + a loadable config.)
 set -euo pipefail
 TASK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -36,7 +36,6 @@ class IterationResult:
     started_at: float | None = None
     ended_at: float | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
-    constraints: list[dict[str, Any]] = field(default_factory=list)
     # One item per gate, in list order: {"text", "kind": "command"|"metric", "passed":
     # true|false|null (not reached)}; commands that ran add "return_code" and
     # "duration_s", a failed one its "output" tail; checked metric gates add "value",
@@ -53,6 +52,7 @@ class IterationResult:
     base: str | None = None
     tree: str | None = None
     discarded: list[str] = field(default_factory=list)
+    discarded_frozen: list[str] = field(default_factory=list)  # those of `discarded` that are frozen
     rejected_ref: str | None = None
 
     @property

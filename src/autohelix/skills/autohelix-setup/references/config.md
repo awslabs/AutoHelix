@@ -46,7 +46,7 @@ name their replacement; when editing an existing config, convert them.
 - `gates` lists everything that can reject an iteration, checked in order:
   - A command (a string, or a mapping with `command` and `timeout`) must exit 0.
   - `ask: <question>` is shorthand for `autohelix ask -- "<question>"`, a yes/no
-    judgment by a read-only agent; quoted `"yes":` / `"no":` keys say what each
+    judgment by a read-only agent; `yes:` / `no:` keys (quoted or not) say what each
     answer means.
   - `metric: NAME` with `regress: N%` or `improve: N%` compares a number from an
     `observe` entry with the last accepted iteration (see below).

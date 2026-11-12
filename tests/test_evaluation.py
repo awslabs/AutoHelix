@@ -88,8 +88,7 @@ def test_failing_gate_skips_later_gates_and_observe(project, log):
     assert record.gates[3]["text"] == "speed regress 5%"
     assert record.observe == [] and record.metrics == {}
     assert not (_observations(project) / "iter-1").exists()
-    # The old field stays populated for now.
-    assert [c["passed"] for c in record.constraints] == [True, False]
+    assert not hasattr(record, "constraints")  # the old field is gone
     # At the baseline the gates ran but didn't reject; metric gates aren't checked there.
     assert baseline.accepted
     assert [g["passed"] for g in baseline.gates] == [True, True, True, None]
@@ -407,7 +406,7 @@ def test_previous_does_not_leak_from_the_harness_environment(project, log, monke
 def test_failed_command_entry_at_the_baseline_is_a_setup_error(project):
     _configure(project, observe=[{"name": "bench", "command": "echo '##autohelix[speed=3]'; exit 1",
                                   "metrics": {"speed": "higher"}}])
-    with pytest.raises(RuntimeError, match=r"did not produce required metric\(s\): speed \(bench exited 1\)"):
+    with pytest.raises(RuntimeError, match=r"observe entry `bench` failed \(exited 1\) and reported no `speed`"):
         Harness(project, verbose=False).run(max_iterations=1, report=False)
     [record] = History(project).load()
     assert not record.accepted and record.observe[0]["error"] == "exited 1"
@@ -436,7 +435,7 @@ def test_failed_review_entry_at_the_baseline(project, gated):
     harness.config.observe[0].command = "echo 'missing: 0'; exit 3"  # without `autohelix review`
     try:
         if gated:
-            with pytest.raises(RuntimeError, match=r"required metric\(s\): missing \(progress exited 3\)"):
+            with pytest.raises(RuntimeError, match=r"observe entry `progress` failed \(exited 3\) and reported no `missing`"):
                 harness._capture_baseline()
         else:
             harness._capture_baseline()
@@ -498,7 +497,7 @@ def test_baseline_retry_clears_observations_and_has_no_previous(project, tmp_pat
                          "command": (f'echo "prev=${{AUTOHELIX_PREVIOUS-unset}}" >> {log}; '
                                      f'[ -e {marker} ] && echo "##autohelix[speed=1]"; true'),
                          "metrics": {"speed": "higher"}}])
-    with pytest.raises(RuntimeError, match="did not produce required metric"):
+    with pytest.raises(RuntimeError, match="Baseline setup error: observe entry `bench`"):
         Harness(project, verbose=False).run(max_iterations=1, report=False)
     observations = _observations(project) / "iter-0"
     assert sorted(p.name for p in observations.iterdir()) == ["bench", "ghost"]

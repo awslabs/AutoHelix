@@ -1,4 +1,4 @@
-"""Constraints: config must be valid and model must train successfully."""
+"""Gates: config must be valid and model must train successfully."""
 
 import subprocess
 import sys

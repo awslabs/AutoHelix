@@ -527,6 +527,12 @@ class TestParseDuration:
     def test_bare_float(self):
         assert parse_duration(90.5) == 90
 
+    def test_digit_string_is_seconds(self):
+        assert parse_duration("90") == 90 and parse_duration(" 90 ") == 90
+        for value in ("0", "9999999999"):
+            with pytest.raises(ValueError):
+                parse_duration(value)
+
     def test_invalid_string(self):
         with pytest.raises(ValueError, match="Invalid duration"):
             parse_duration("abc")
@@ -669,7 +675,7 @@ class TestBudgetConfig:
     def test_negative_cost_error(self):
         config = Config.from_dict({
             "goal": "optimize",
-            "constraints": ["pytest"],
+            "gates": ["pytest"],
             "budget": {"cost": -1},
         })
         issues = config.validate()
@@ -679,7 +685,7 @@ class TestBudgetConfig:
     def test_zero_cost_error(self):
         config = Config.from_dict({
             "goal": "optimize",
-            "constraints": ["pytest"],
+            "gates": ["pytest"],
             "budget": {"cost": 0},
         })
         issues = config.validate()
@@ -689,7 +695,7 @@ class TestBudgetConfig:
     def test_invalid_time_string_error(self):
         config = Config.from_dict({
             "goal": "optimize",
-            "constraints": ["pytest"],
+            "gates": ["pytest"],
             "budget": {"time": "abc"},
         })
         issues = config.validate()
@@ -703,7 +709,7 @@ class TestBudgetConfig:
     def test_invalid_cost_string_error(self):
         config = Config.from_dict({
             "goal": "optimize",
-            "constraints": ["pytest"],
+            "gates": ["pytest"],
             "budget": {"cost": "not_a_number"},
         })
         issues = config.validate()
@@ -717,7 +723,7 @@ class TestBudgetConfig:
     def test_cost_bool_true_error(self):
         config = Config.from_dict({
             "goal": "optimize",
-            "constraints": ["pytest"],
+            "gates": ["pytest"],
             "budget": {"cost": True},
         })
         issues = config.validate()
@@ -727,7 +733,7 @@ class TestBudgetConfig:
     def test_cost_bool_false_error(self):
         config = Config.from_dict({
             "goal": "optimize",
-            "constraints": ["pytest"],
+            "gates": ["pytest"],
             "budget": {"cost": False},
         })
         issues = config.validate()
@@ -741,7 +747,7 @@ class TestBudgetConfig:
     def test_negative_zero_cost_error(self):
         config = Config.from_dict({
             "goal": "optimize",
-            "constraints": ["pytest"],
+            "gates": ["pytest"],
             "budget": {"cost": -0.0},
         })
         issues = config.validate()
@@ -751,7 +757,7 @@ class TestBudgetConfig:
     def test_time_zero_seconds_error(self):
         config = Config.from_dict({
             "goal": "optimize",
-            "constraints": ["pytest"],
+            "gates": ["pytest"],
             "budget": {"time": "0s"},
         })
         issues = config.validate()
@@ -767,7 +773,7 @@ class TestBudgetConfig:
     def test_invalid_cost_string_has_specific_error(self):
         config = Config.from_dict({
             "goal": "optimize",
-            "constraints": ["pytest"],
+            "gates": ["pytest"],
             "budget": {"cost": "not_a_number"},
         })
         issues = config.validate()
@@ -777,7 +783,7 @@ class TestBudgetConfig:
     def test_time_bool_true_error(self):
         config = Config.from_dict({
             "goal": "optimize",
-            "constraints": ["pytest"],
+            "gates": ["pytest"],
             "budget": {"time": True},
         })
         issues = config.validate()
@@ -787,7 +793,7 @@ class TestBudgetConfig:
     def test_cost_bool_has_specific_error(self):
         config = Config.from_dict({
             "goal": "optimize",
-            "constraints": ["pytest"],
+            "gates": ["pytest"],
             "budget": {"cost": True},
         })
         issues = config.validate()

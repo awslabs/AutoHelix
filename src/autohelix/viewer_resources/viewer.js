@@ -327,7 +327,10 @@ function summaryCell(r) {
   const why = r.accepted === false ? rejection(r) : '';
   const summary = r.summary && r.summary !== r.reason ? r.summary.split('\n')[0] : '';
   const failed = (r.observe || []).filter((o) => o.ok === false).map((o) => o.name);
+  const baselineGates = r.iteration === 0
+    ? (r.gates || []).filter((g) => g.kind === 'command' && g.passed === false).map((g) => g.text) : [];
   const flags = [
+    baselineGates.length && `gate failed at the baseline: ${baselineGates.join(', ')}`,
     failed.length && `${failed.join(', ')} failed`,
     r.discarded?.length && `${r.discarded.length} out-of-scope change${r.discarded.length === 1 ? '' : 's'} discarded`,
   ].filter(Boolean).join(' · ');
@@ -539,11 +542,13 @@ function fillCard(card, d) {
   ].filter(Boolean));
 
   const discarded = d.discarded || [];
+  const frozen = new Set(d.discarded_frozen || []);
   show(card.discarded.node, discarded.length > 0);
   setText(card.discarded.count, discarded.length ? `· ${discarded.length} path${discarded.length === 1 ? '' : 's'}` : '');
   card.discarded.body.replaceChildren(...(discarded.length ? [
-    el('p', { className: 'warn', textContent: 'Changes outside the editable scope were discarded:' }),
-    el('ul', { className: 'paths' }, ...discarded.map((p) => el('li', {}, el('code', { textContent: p })))),
+    el('p', { className: 'warn', textContent: 'Changes outside the scope (not editable, or frozen) were discarded:' }),
+    el('ul', { className: 'paths' }, ...discarded.map((p) => el('li', {}, el('code', { textContent: p }),
+      frozen.has(p) ? ' (frozen)' : ''))),
   ] : []));
 
   fillGates(card, d.gates || [], d.failure_output);

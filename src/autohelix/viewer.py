@@ -340,6 +340,7 @@ class RunData:
                 "seconds": (r.usage.get("wall_clock_ms") or 0) / 1000 or None,
                 "gates": r.gates, "observe": r.observe,
                 "discarded": [p for p in _field(r, "discarded") or [] if isinstance(p, str)],
+                "discarded_frozen": [p for p in _field(r, "discarded_frozen") or [] if isinstance(p, str)],
             })
         return rows
 
@@ -450,6 +451,7 @@ class RunData:
             "observe": self.observations(n, record, config, outputs=outputs),
             "summary": summary if isinstance(summary, str) and summary.strip() else None,
             "discarded": [p for p in _field(record, "discarded") or [] if isinstance(p, str)],
+            "discarded_frozen": [p for p in _field(record, "discarded_frozen") or [] if isinstance(p, str)],
             # What `/iteration/<n>/diff` compares: the commit the attempt started from and its frozen tree.
             "attempt": {"base": base, "tree": tree, "commit": record.commit if record else None,
                         "rejected_ref": rejected_ref if isinstance(rejected_ref, str) else None}

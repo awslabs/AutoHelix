@@ -409,8 +409,11 @@ Controls which files the agent's changes are kept for:
 Changes outside the scope are discarded when the agent's copy is frozen, before
 any gate runs, so gates check exactly the tree that would be accepted. Nothing
 is written back into the agent's copy. Discarded paths are recorded with the
-iteration (`discarded` in history), shown in the viewer, and the next agent is
-told ("Your changes to tests/x.py were discarded: outside the editable scope").
+iteration (`discarded` in history, the frozen ones also in `discarded_frozen`),
+shown in the console, `view` and the viewer, and the next agent is told ("Your
+changes to tests/x.py were discarded: outside the editable scope", or "...:
+frozen" for frozen paths). A rejected attempt whose changes were all discarded
+keeps no tree and gives the next agent no `rejected.patch`.
 
 With no scope, the agent may edit the tests and benchmarks that gate it; a run
 whose config has gate or observe commands but no scope warns at start. Patterns
@@ -527,8 +530,8 @@ replacement; there are no aliases and no migration.
 | `agent.timeout_seconds` | `agent.timeout` (a duration) | `` `agent.timeout_seconds` is now `agent.timeout` (a duration such as 30m) `` |
 | `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | `` `budget.iteration_time` is now `agent.timeout` `` |
 | `agent.settings.model` | `agent.model` | `` `agent.settings.model` is now `agent.model` `` |
-| `max_regression_pct: 5` | `regress: 5%` (a bare number is an error) | `write the percentage with %, e.g. 5%` |
-| `timeout:` in seconds | durations everywhere (a bare number is still seconds) | |
+| a bare number as the threshold (`max_regression_pct: 5` was one; `regress: 5` now) | `regress: 5%` | `write the percentage with %, e.g. 5%, got 5` |
+| `timeout:` in seconds | durations everywhere (a bare number, or a string of digits like `"90"`, is still seconds) | |
 | `.autohelix/prompt.md` | `prompt_template:` (relative to the config) | a warning at run start |
 
 ## Example Configs

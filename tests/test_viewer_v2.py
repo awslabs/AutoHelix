@@ -268,7 +268,7 @@ def test_terminal_tables_show_gates_summaries_and_titles(project):
     assert table[1].endswith("baseline")
     assert table[2].endswith("Use the built-in sort")
     assert table[3].strip() == "! observe review failed: exited 2"
-    assert table[4].strip() == "! discarded, outside the editable scope: tests/test_sort.py"
+    assert table[4].strip() == "! discarded, outside the scope: tests/test_sort.py"
     assert table[5].split()[:2] == ["2", "✗"] and table[5].endswith("gate failed: pytest -q")
     assert table[6].strip() == "Try radix sort"
     assert len(table) == 7

@@ -259,9 +259,9 @@ def _line(width: int, *parts: tuple[str, str]) -> Text:
     return line
 
 
-def header_lines(config, run_id: str, project: str, max_iterations: int) -> list[Text]:
+def header_lines(config, run_id: str, project: str, max_iterations: int, width: int = 100) -> list[Text]:
     """`AutoHelix · run <short> · <name>`, then Goal, Agent, Gates, Observe, Scope and
-    Budget lines (each only if it has something to say)."""
+    Budget lines (each only if it has something to say), each cut to `width`."""
     from autohelix.iteration_time import format_duration
     from autohelix.runs import short_id
 
@@ -292,10 +292,7 @@ def header_lines(config, run_id: str, project: str, max_iterations: int) -> list
     lines = [title]
     for label, value in rows:
         if value:
-            line = Text("  ")
-            line.append(f"{label:<9}", style="dim")
-            line.append(clean(value))
-            lines.append(line)
+            lines.append(_line(max(width, 40), ("  ", ""), (f"{label:<9}", "dim"), (clean(value), "")))
     return lines
 
 
@@ -374,14 +371,34 @@ class Transcript:
         return ("  · " + " · ".join(shown)) if shown else ""
 
     def _notes(self, record, summary: bool = True) -> list[Text]:
+        """The dim lines under a row: the agent's summary; at the baseline, gates that
+        failed (they don't reject there, but every iteration will fail them); failed
+        observe entries and metrics an entry didn't report; discarded paths."""
         lines = []
         indent = " " * LABEL
         if summary and record.summary:
             lines.append(_line(self.width, (indent + clean(record.summary), "dim")))
-        failed = [f"observe {item.get('name')} failed ({clean(item.get('error'))})"
-                  for item in record.observe if not item.get("ok", True)]
+        if record.iteration == 0:
+            failed_gates = [f"gate failed at the baseline: {clean(gate.get('text'))}"
+                            for gate in record.gates if gate.get("kind") == "command" and gate.get("passed") is False]
+            for note in failed_gates:
+                lines.append(_line(self.width, (indent + note, "yellow")))
+        failed = []
+        for item in record.observe:
+            if not item.get("ok", True):
+                failed.append(f"observe {clean(item.get('name'))} failed ({clean(item.get('error'))})")
+            elif item.get("metric_errors"):
+                missing = ", ".join(clean(name) for name in item["metric_errors"])
+                failed.append(f"observe {clean(item.get('name'))} reported no {missing}")
         if failed:
             lines.append(_line(self.width, (indent + " · ".join(failed), "dim")))
+        if record.discarded:
+            frozen = set(record.discarded_frozen)
+            shown = ", ".join(clean(p) + (" (frozen)" if p in frozen else "") for p in record.discarded[:3])
+            more = f", … ({len(record.discarded)} paths)" if len(record.discarded) > 3 else ""
+            count = len(record.discarded)
+            lines.append(_line(self.width, (f"{indent}discarded {count} out-of-scope change{'s' * (count != 1)}: "
+                                            f"{shown}{more}", "dim")))
         return lines
 
 

@@ -293,7 +293,7 @@ class StopCheckResult:
     command: str
     return_code: int
     output: str
-    reason: str  # the last non-empty stdout line, or the command itself
+    reason: str  # the last non-empty stdout line (unless just true/false/null), or the command itself
 
     @property
     def stop(self) -> bool:
@@ -322,9 +322,11 @@ def run_stop_checks(
                 on_progress=on_progress, extra_env={**(extra_env or {}), **added},
             )
         lines = [line.strip() for line in r.stdout.splitlines() if line.strip()]
+        # `jq -e` prints the value it tested: true/false/null says nothing, the command does.
+        last = lines[-1] if lines else None
         results.append(StopCheckResult(
             command=c.command, return_code=r.return_code, output=r.output,
-            reason=lines[-1] if lines else c.command,
+            reason=last if last and last not in ("true", "false", "null") else c.command,
         ))
         if r.return_code == 0:
             break
@@ -341,7 +343,7 @@ def parse_structured_metrics(output: str) -> dict[str, float]:
     Returns a dict of metric_name -> value for all structured lines found.
     """
     results = {}
-    for match in re.finditer(r"##autohelix\[(\w+)=([0-9.eE+-]+)\]", output):
+    for match in re.finditer(r"##autohelix\[(\w+)=\s*([0-9.eE+-]+)\s*\]", output):
         try:
             value = float(match.group(2))
         except ValueError:
@@ -417,9 +419,12 @@ class ObserveResult:
 
     def record(self) -> dict:
         """The entry as the history record lists it (`IterationResult.observe`)."""
-        return {"name": self.name, "ok": self.ok, "return_code": self.return_code, "error": self.error,
-                "metrics": dict(self.values),
-                "duration_s": None if self.duration_s is None else round(self.duration_s, 3)}
+        record = {"name": self.name, "ok": self.ok, "return_code": self.return_code, "error": self.error,
+                  "metrics": dict(self.values),
+                  "duration_s": None if self.duration_s is None else round(self.duration_s, 3)}
+        if self.ok and self.errors:  # it ran, but some declared metric couldn't be read: say how to fix it
+            record["metric_errors"] = dict(self.errors)
+        return record
 
 
 def run_observe_entry(

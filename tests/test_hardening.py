@@ -360,3 +360,117 @@ def test_status_names_the_running_observe_entry(repo):
     harness.run(max_iterations=1, report=False)
     assert ("benchmark", "first") in seen and ("benchmark", "second") in seen
     assert seen[-1][1] is None
+
+
+# --- final cleanup: scope reasons, baseline gates, unreported metrics, stop reasons ---
+
+
+def test_frozen_discards_are_said_apart(repo):
+    project = _project(repo)
+    (project / "fixtures").mkdir()
+    (project / "fixtures" / "data.txt").write_text("fixed\n")
+    _configure(project, repo, scope={"editable": ["hello.py", "fixtures/"], "frozen": ["fixtures/"]})
+
+    def act(worktree, iteration):
+        (worktree / "fixtures" / "data.txt").write_text("edited\n")
+        (worktree / "notes.txt").write_text("not editable\n")
+
+    harness = Harness(project, verbose=False, land_mode="manual")
+    agent = Agent(harness, act)
+    harness.run(max_iterations=2, report=False)
+    record = History(project).load()[1]
+    assert record.discarded == ["fixtures/data.txt", "notes.txt"]
+    assert record.discarded_frozen == ["fixtures/data.txt"]
+    prompt = agent.seen[2]["prompt"]
+    assert "Your changes to notes.txt were discarded: outside the editable scope." in prompt
+    assert "Your changes to fixtures/data.txt were discarded: frozen." in prompt
+
+
+def test_a_rejection_that_changed_nothing_keeps_no_tree(repo):
+    project = _project(repo)
+    _configure(project, repo, settings={"change_file": "elsewhere.txt"}, scope={"editable": ["hello.py"]},
+               gates=['[ "$AUTOHELIX_ITERATION" != 1 ]'])
+    harness = Harness(project, verbose=False, land_mode="manual")
+    agent = Agent(harness)
+    harness.run(max_iterations=2, report=False)
+    record = History(project).load()[1]
+    assert not record.accepted and record.discarded == ["elsewhere.txt"]
+    assert record.rejected_ref is None and _refs(repo, harness) == []
+    assert agent.seen[2]["patch"] is None and "rejected.patch" not in agent.seen[2]["prompt"]
+
+
+def test_console_notes_for_baseline_gates_unreported_metrics_and_discards():
+    from autohelix.display import Transcript
+
+    transcript = Transcript(Config.from_dict({"goal": "g", "gates": ["pytest -q"]}), 100)
+    baseline = IterationResult(iteration=0, accepted=True, gates=[{"text": "pytest -q", "kind": "command",
+                                                                    "passed": False}])
+    [_, note] = transcript.baseline(baseline)
+    assert note.plain.strip() == "gate failed at the baseline: pytest -q"
+    record = IterationResult(iteration=1, accepted=True, discarded=[f"f{i}.py" for i in range(5)],
+                             discarded_frozen=["f0.py"],
+                             observe=[{"name": "bench", "ok": True, "metric_errors": {"speed": "hint"}}])
+    lines = [line.plain.strip() for line in transcript.row(record, {}, {})]
+    assert "observe bench reported no speed" in lines
+    assert "discarded 5 out-of-scope changes: f0.py (frozen), f1.py, f2.py, … (5 paths)" in lines
+
+
+def test_view_notes_for_baseline_gates_unreported_metrics_and_discards():
+    from autohelix.run_table import _summary
+
+    _, more = _summary({"iteration": 0, "accepted": True, "gates": [
+        {"text": "pytest -q", "kind": "command", "passed": False}]})
+    assert more == ["! gate failed at the baseline: pytest -q"]
+    _, more = _summary({"iteration": 2, "accepted": True, "summary": "s", "discarded": ["a", "b"],
+                        "discarded_frozen": ["b"], "observe": [{"name": "bench", "ok": True,
+                                                                "metric_errors": {"speed": "hint"}}]})
+    assert more == ["! observe bench reported no speed", "! discarded, outside the scope: a, b (frozen)"]
+
+
+def test_an_unreported_metric_keeps_its_hint_and_reaches_the_prompt(tmp_path):
+    from autohelix.checks import parse_structured_metrics, run_observe_entry
+    from autohelix.config import ObserveEntry
+
+    assert parse_structured_metrics("##autohelix[lines=      12 ]") == {"lines": 12.0}
+    entry = ObserveEntry(name="bench", command="echo done", metrics={"speed": "higher"})
+    record = run_observe_entry(entry, tmp_path).record()
+    assert record["ok"] and "##autohelix[speed=" in record["metric_errors"]["speed"]
+    rendered = _render(tmp_path, [BASELINE, {"iteration": 1, "accepted": True, "observe": [record]}])
+    assert "  bench: .autohelix-iteration/observations/iter-1/bench/ (reported no speed: print" in rendered
+
+
+def test_a_jq_style_last_line_is_not_the_stop_reason(tmp_path):
+    from autohelix.checks import run_stop_checks
+
+    config = Config.from_dict({"goal": "g", "stop": ["echo true"]})
+    [result] = run_stop_checks(config, tmp_path)
+    assert result.stop and result.reason == "echo true"
+
+
+def test_header_lines_are_cut_to_the_width():
+    from autohelix.display import header_lines
+
+    config = Config.from_dict({"goal": "g", "gates": [f"pytest tests/test_{i}.py" for i in range(10)]})
+    lines = header_lines(config, "20261112-1200-abcd", "proj", 3, 60)
+    assert all(len(line.plain) <= 60 for line in lines) and lines[3].plain.endswith("…")
+
+
+def test_baseline_missing_metric_names_the_entry(repo):
+    project = _project(repo)
+    _configure(project, repo, observe=[{"name": "bench", "command": "echo done", "metrics": {"speed": "higher"}}])
+    with pytest.raises(RuntimeError, match=r"observe entry `bench` exited 0 but reported no `speed`"):
+        Harness(project, verbose=False).run(max_iterations=1, report=False)
+
+
+def test_run_start_warnings_wrap_under_their_label(repo, capsys):
+    project = _project(repo)
+    (project / ".autohelix").mkdir(exist_ok=True)
+    (project / ".autohelix" / "prompt.md").write_text("old\n")
+    (project / "prompt.md").write_text("Goal: {{ goal }}; notes in .autohelix/notes/iter-1.md\n")
+    _configure(project, repo, prompt_template="prompt.md")
+    Harness(project, verbose=False, land_mode="manual").run(max_iterations=1, report=False)
+    out = capsys.readouterr().out
+    text = " ".join(out.split())
+    assert ".autohelix/prompt.md is no longer read" in text
+    assert "prompt.md names .autohelix/ paths in the agent's copy" in text
+    assert all(not line.strip() or line.startswith("  ") for line in out.splitlines()[:12])

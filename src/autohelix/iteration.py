@@ -194,6 +194,8 @@ class IterationWorkspace:
         ref, or None if there is no tree (the freeze never happened or failed)."""
         if not self.tree or self.iteration == 0:
             return None
+        if self.tree == self.repo.out("rev-parse", f"{self.base}^{{tree}}"):  # nothing to keep (or apply)
+            return None
         ref = self._run.paths.rejected_ref(self.iteration)
         self.repo.git("update-ref", ref, self.tree)
         return ref

@@ -30,7 +30,7 @@ Failure output:
 {% if last.observe %}
 Read the latest observations ({{ "its" if last.accepted else "what the rejected attempt produced" }}):
 {% for o in last.observe %}
-  {{ o.name }}: {{ o.path }}{% if not o.ok %} (failed: {{ o.error }}){% endif +%}
+  {{ o.name }}: {{ o.path }}{% if not o.ok %} (failed: {{ o.error }}){% elif o.missing %} (reported no {{ o.missing | join(', ') }}: print `##autohelix[<name>=<number>]` lines){% endif +%}
 {% endfor %}
 {% endif %}
 {% if rejected_patch %}
@@ -39,8 +39,12 @@ The previous attempt was rejected{% if last.failure_output %} (failure output ab
 The previous attempt was rejected{% if last.failure_output %} (failure output above){% endif %}. Its changes are too large for a patch file; see them with `{{ rejected_diff }}` (`| git apply` them if it was close), or start over.
 {% endif %}
 {% endif %}
-{% if discarded %}
-Your changes to {{ discarded | join(', ') }} were discarded: outside the editable scope.
+{% set not_editable = discarded | reject("in", discarded_frozen) | list %}
+{% if not_editable %}
+Your changes to {{ not_editable | join(', ') }} were discarded: outside the editable scope.
+{% endif %}
+{% if discarded_frozen %}
+Your changes to {{ discarded_frozen | join(', ') }} were discarded: frozen.
 {% endif %}
 
 {% if gates %}

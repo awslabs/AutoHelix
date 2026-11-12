@@ -372,9 +372,9 @@ def test_guard_allows_feedback_and_exact_non_git_wrapper_outputs(tmp_path):
     guard = DirectoryGuard(tmp_path, allowed=(log, usage))
     log.write_text("log")
     usage.write_text("usage")
-    feedback = tmp_path / ".autohelix" / "review.md"
-    feedback.parent.mkdir()
-    feedback.write_text("review")
+    feedback = tmp_path / ".autohelix-iteration" / "notes" / "iter-1.md"  # the copy's harness material
+    feedback.parent.mkdir(parents=True)
+    feedback.write_text("notes")
     (tmp_path / "__pycache__").mkdir()
     (tmp_path / "__pycache__" / "x.pyc").write_text("cache")
     assert guard.violations() == []

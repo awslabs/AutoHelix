@@ -276,7 +276,7 @@ def test_double_dash_makes_an_option_like_prompt_the_prompt(tmp_path, monkeypatc
 
 def test_opencode_is_refused(tmp_path, monkeypatch):
     result = invoke(["--agent", "opencode", "--", "Check it."], tmp_path, monkeypatch)
-    assert result.exit_code == 2 and "OpenCode" in result.stderr
+    assert result.exit_code == 2 and "Invalid value for '--agent'" in result.stderr  # not offered at all
     (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  backend: opencode\n")
     assert invoke(["--", "Check it."], tmp_path, monkeypatch).exit_code == 2
 

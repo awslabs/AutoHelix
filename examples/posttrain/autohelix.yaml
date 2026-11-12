@@ -3,6 +3,8 @@
 # harness is frozen. Requires a prepared GPU environment — see README.md for setup.
 
 goal: |
+  Post-train Qwen3-4B-Base for GSM8K accuracy.
+
   Train the small base model `Qwen/Qwen3-4B-Base` to do as well as possible on
   GSM8K (Grade School Math 8K). You have full freedom over the approach — data
   sources, training method, and hyperparameters are all yours to choose.

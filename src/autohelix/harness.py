@@ -17,6 +17,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
 from rich.status import Status
+from rich.table import Table
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
@@ -38,7 +39,7 @@ from autohelix.prompt_template import (build_prompt_variables, load_template, re
                                        uses_old_layout)
 from autohelix.run_log import RunLog
 from autohelix.sandbox import ensure_clean_working_tree, ensure_editable_files_ready
-from autohelix.workspace import (SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, CandidateRejected,
+from autohelix.workspace import (path_in_scope, SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, CandidateRejected,
                                  Repo, Scope)
 from autohelix.state import (
     GitExcludeError,
@@ -137,15 +138,6 @@ def _format_time(seconds: int) -> str:
     if s > 0:
         parts.append(f"{s}s")
     return " ".join(parts) if parts else "0s"
-
-
-def _format_tokens(n: int) -> str:
-    """Format token count compactly: 1234 -> '1.2k', 1234567 -> '1.2M'."""
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M "
-    if n >= 1_000:
-        return f"{n / 1_000:.1f}k "
-    return f"{n} "
 
 
 
@@ -303,7 +295,8 @@ class Harness:
     def _print_header(self, max_iter: int, start_iter: int = 1) -> None:
         """The run's header (`display.header_lines`); on resume, the rows so far."""
         self.console.print()
-        for line in header_lines(self.config, self.paths.run_id, self.project_path.name, max_iter):
+        for line in header_lines(self.config, self.paths.run_id, self.project_path.name, max_iter,
+                                 self.console.width or 100):
             self.console.print(line, highlight=False)
         self.console.print()
         if start_iter > 1:  # resuming: the rows so far, for context
@@ -320,6 +313,14 @@ class Harness:
     def _print_baseline(self, record: IterationResult) -> None:
         for line in self._transcript().baseline(record):
             self.console.print(line, highlight=False)
+
+    def _warn(self, message: str) -> None:
+        """A `WARN` line whose continuation lines stay indented under the message."""
+        grid = Table.grid(padding=(0, 1))
+        grid.add_column(no_wrap=True)
+        grid.add_column()
+        grid.add_row(Text("  WARN", style="yellow"), Text(clean(message)))
+        self.console.print(grid)
 
     def _status(self, message: str) -> None:
         """Print a status message."""
@@ -440,29 +441,6 @@ class Harness:
             text = f"{message} Running without time-left hints; agent.timeout still stops the agent."
             self.console.print(f"[yellow]Warning:[/yellow] {text}", highlight=False)
             self.log.warn(text)
-
-    @staticmethod
-    def _format_usage(usage: dict) -> str:
-        """Format usage dict into a compact human-readable string."""
-        parts = []
-        input_t = usage.get("input_tokens")
-        output_t = usage.get("output_tokens")
-        if input_t or output_t:
-            tokens = f"{_format_tokens(input_t or 0)}in / {_format_tokens(output_t or 0)}out"
-            parts.append(tokens)
-        cost = usage.get("cost_usd")
-        if usage:
-            parts.append(format_cost(cost, precision=4))
-        duration = usage.get("duration_ms", usage.get("wall_clock_ms"))
-        if duration is not None:
-            secs = duration / 1000
-            if secs >= 60:
-                mins = int(secs // 60)
-                remaining = int(secs % 60)
-                parts.append(f"{mins}m {remaining}s")
-            else:
-                parts.append(f"{secs:.1f}s")
-        return " | ".join(parts)
 
     def build_prompt(self, iteration: int, worktree_dir: Path, members=(), rejected_diff: str = "") -> str:
         """Build the prompt for the agent using the template; `members` are the other
@@ -777,6 +755,7 @@ class Harness:
         result.base = workspace.base
         result.tree = workspace.tree if workspace.iteration else None
         result.discarded = self._discarded(workspace)
+        result.discarded_frozen = [path for path in result.discarded if path_in_scope(path, self.config.frozen)]
 
     def _gate_text(self, command: str) -> str:
         """A gate command's display text (`ask: <question>` for ask entries)."""
@@ -991,16 +970,13 @@ class Harness:
         return self.paths.relative_log(path)
 
     def _complete_record(self, result, started_at, iter_start, evaluation: _Evaluation | None = None):
-        from dataclasses import asdict
-
         result.started_at = started_at
         result.ended_at = time.time()
         if evaluation is not None:
-            result.constraints = [asdict(check) for check in evaluation.constraints]
             result.gates = [dict(item) for item in evaluation.gates]
             result.observe = [dict(item) for item in evaluation.observe]
         else:
-            result.constraints, result.gates, result.observe = [], [], []
+            result.gates, result.observe = [], []
         agents = [call for call in result.calls if call["role"] == "agent"]
         for call in agents:
             call["usage"]["wall_clock_ms"] = int((time.monotonic() - iter_start) * 1000)
@@ -1138,26 +1114,33 @@ class Harness:
             # LLM's answer missing once may be flakiness. A failed entry produces none.
             metrics = evaluation.metrics
             missing = set(self.config.metric_directions()) - set(metrics)
-            failures = {item["name"]: item["error"] for item in evaluation.observe if not item["ok"]}
+            outcomes = {item["name"]: item for item in evaluation.observe}
 
             def why(names) -> str:
-                entries = dict.fromkeys(self.config.metric_source(name).name for name in sorted(names))
-                failed = [f"{name} {failures[name]}" for name in entries if name in failures]
-                return f" ({'; '.join(failed)})" if failed else ""
+                """`observe entry `bench` exited 0 but reported no `speed``, per entry."""
+                by_entry: dict[str, list[str]] = {}
+                for name in sorted(names):
+                    by_entry.setdefault(self.config.metric_source(name).name, []).append(f"`{name}`")
+                parts = []
+                for entry, metrics in by_entry.items():
+                    item = outcomes.get(entry) or {}
+                    how = "exited 0 but" if item.get("ok") else f"failed ({item.get('error') or 'did not run'}) and"
+                    parts.append(f"observe entry `{entry}` {how} reported no {', '.join(metrics)}")
+                return "; ".join(parts)
             gated = {gate.metric for gate in self.config.metric_gates()}
             advisory = {name for name in missing
                         if self.config.metric_source(name).review is not None and name not in gated}
             if advisory:
-                text = f"Baseline review did not report metric(s): {', '.join(sorted(advisory))}{why(advisory)}"
+                text = f"Baseline: {why(advisory)} (a review's number; no gate uses it)"
                 self.console.print(f"  [yellow]![/yellow] {text}", highlight=False)
                 self.log.warn(text)
             if missing - advisory:
                 names = ", ".join(sorted(missing - advisory))
                 self.log.info(f"baseline FAILED — missing metrics: {names}")
-                raise RuntimeError(f"Baseline benchmark did not produce required metric(s): {names}"
-                                   f"{why(missing - advisory)}")
+                raise RuntimeError(f"Baseline setup error: {why(missing - advisory)}: every declared metric "
+                                   "needs a value at the baseline")
             self._print_baseline(IterationResult(iteration=0, accepted=True, metrics=metrics,
-                                                 observe=evaluation.observe))
+                                                 gates=evaluation.gates, observe=evaluation.observe))
             if metrics:
                 self.log.info("baseline: " + ", ".join(f"{name}: {value:g}" for name, value in metrics.items()))
 
@@ -1269,7 +1252,7 @@ class Harness:
         """Print preflight warnings and errors; False if there are errors."""
         issues = preflight_check(self.config, self._raw_config, self.project_path)
         for w in (i for i in issues if i.level == "warning"):
-            self.console.print(f"  [yellow]WARN[/yellow] {w.message}")
+            self._warn(w.message)
         errors = [i for i in issues if i.level == "error"]
         for e in errors:
             self.console.print(f"  [red]FAIL[/red] {e.message}")
@@ -1359,23 +1342,22 @@ class Harness:
         self._print_header(max_iter, start_iter)
         remove_copies(self.run_state.copies_root, self.log.warn)  # left by a segment that crashed
         if not self.repo.attr_source:
-            self.console.print(f"  [yellow]WARN[/yellow] {ATTR_SOURCE_LIMITATION}")
+            self._warn(ATTR_SOURCE_LIMITATION)
         if warning := scope_warning(self.config):
-            self.console.print(f"  [yellow]WARN[/yellow] {warning}", highlight=False)
+            self._warn(warning)
             self.log.info(warning)
         if (self.project_path / ".autohelix" / "prompt.md").exists():
-            self.console.print("  [yellow]WARN[/yellow] .autohelix/prompt.md is no longer read: the built-in "
+            self._warn(".autohelix/prompt.md is no longer read: the built-in "
                                "prompt is used. To keep a custom prompt, move it next to your config, set "
                                "`prompt_template: <file>` there, and update its .autohelix/ paths to "
-                               f"{ITERATION_DIR}/. Otherwise delete it.", highlight=False)
+                               f"{ITERATION_DIR}/. Otherwise delete it.")
         if self.config.prompt_template and (unknown := unknown_variables(load_template(self.config))):
-            self.console.print(f"  [yellow]WARN[/yellow] {self.config.prompt_template.name} uses variables the "
-                               f"prompt doesn't have (they render empty): {', '.join(unknown)}. See "
-                               "prompt_template.build_prompt_variables for the names.", highlight=False)
+            self._warn(f"{self.config.prompt_template.name} uses variables the prompt doesn't have "
+                       f"(they render empty): {', '.join(unknown)}. See docs/concepts.md#prompt for the names.")
         if self.config.prompt_template and uses_old_layout(load_template(self.config)):
-            self.console.print(f"  [yellow]WARN[/yellow] {self.config.prompt_template.name} names .autohelix/ paths "
+            self._warn(f"{self.config.prompt_template.name} names .autohelix/ paths "
                                f"in the agent's copy; they are now {ITERATION_DIR}/ (notes written to the old "
-                               "place are lost).", highlight=False)
+                               "place are lost).")
 
         # Run preflight checks before the baseline (silent on success); a first
         # start already ran them before allocating the run.
