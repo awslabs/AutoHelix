@@ -102,13 +102,13 @@ def test_group_and_landing_mode_are_stored_kept_and_changed(project):  # noqa: F
     assert identity(grouped)["group"] == "other" and identity(grouped)["land"] == "manual"
     result = cli(project, "resume", short_id(run_id), "-n", "1", "--no-report", "--group", "", "--land", "auto")
     assert result.exit_code == 0, result.output
-    assert "leaves group other" in result.output and "Landed run" in result.output
+    assert "leaves group other" in result.output and "  Landed " in result.output
     data = identity(grouped)
     assert "group" not in data and data["land"] == "auto"
 
     configure(project, land="manual")  # the config's land: is the default for new runs only
     result = cli(project, "resume", short_id(run_id), "-n", "1", "--no-report")
-    assert result.exit_code == 0 and identity(grouped)["land"] == "auto" and "Landed run" in result.output
+    assert result.exit_code == 0 and identity(grouped)["land"] == "auto" and "  Landed " in result.output
     fresh, _ = started(project)
     assert identity(fresh)["land"] == "manual"
     explicit, _ = started(project, "--group", "perf", "--land", "auto")
@@ -253,9 +253,9 @@ def test_a_template_naming_the_old_copy_layout_is_flagged():
 def test_a_new_member_doesnt_warn_about_unlanded_members(project):  # noqa: F811
     first, _ = started(project, "--group", "g")  # manual landing: its commit stays unlanded
     _, result = started(project, "--group", "g")
-    assert "unlanded" not in result.output and "Previous run" not in result.output
+    assert "unlanded commit" not in result.output.split("  AutoHelix ·")[0] and "Previous run" not in result.output
     _, result = started(project)  # outside the group the warning stands
-    assert "unlanded commit" in result.output
+    assert "unlanded commit" in result.output.split("  AutoHelix ·")[0]  # the warning, before the header
 
 
 def test_a_checks_copy_gets_the_complete_change_and_nothing_else(project):  # noqa: F811

@@ -16,25 +16,23 @@ from pathlib import Path
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
-from rich.rule import Rule
 from rich.status import Status
-from rich.table import Table
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
 from autohelix.config import MetricGate, load_config
 from autohelix.costs import summarize_costs
-from autohelix.display import LiveDisplay
+from autohelix.display import LiveDisplay, Transcript, clean, header_lines
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git, allocate_call,
-                            claim_copies, remove_copies, short_id, write_json, write_text)
+                            claim_copies, remove_copies, short_id, unlanded, write_json, write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning)
 from autohelix.run_status import RunStatus
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
-from autohelix.formatting import format_cost, format_delta, format_duration, format_total_cost
+from autohelix.formatting import format_cost, format_total_cost
 from autohelix.prompt_template import build_prompt_variables, load_template, render_template, uses_old_layout
 from autohelix.run_log import RunLog
 from autohelix.sandbox import ensure_clean_working_tree, ensure_editable_files_ready
@@ -301,95 +299,25 @@ class Harness:
         return failure
 
     def _print_header(self, max_iter: int, start_iter: int = 1) -> None:
-        """Print a compact run header summarizing config."""
+        """The run's header (`display.header_lines`); on resume, the rows so far."""
         self.console.print()
-        from autohelix import __version__
-        self.console.print(f"  [bold]AutoHelix[/bold] [dim]v{__version__} · run {self.paths.run_id}[/dim]", highlight=False)
-        self.console.print(Rule(style="white"))
+        for line in header_lines(self.config, self.paths.run_id, self.project_path.name, max_iter):
+            self.console.print(line, highlight=False)
         self.console.print()
-
-        # Goal — shown in full, with hanging indent for wrapped lines
-        label_width = 11  # "  Goal       " = 13 chars total, label is 11 after "  "
-        indent = " " * (label_width + 2)
-        goal_text = self.config.goal.strip().replace("\n", " ")
-        # Wrap manually: Rich will wrap, but we want the indent prefix on continuation
-        max_width = (self.console.width or 100) - len(indent)
-        if len(goal_text) <= max_width:
-            self.console.print(f"  [dim]Goal[/dim]       {goal_text}", highlight=False)
-        else:
-            words = goal_text.split()
-            lines: list[str] = []
-            current = ""
-            for word in words:
-                if current and len(current) + 1 + len(word) > max_width:
-                    lines.append(current)
-                    current = word
-                else:
-                    current = f"{current} {word}" if current else word
-            if current:
-                lines.append(current)
-            self.console.print(f"  [dim]Goal[/dim]       {lines[0]}", highlight=False)
-            for line in lines[1:]:
-                self.console.print(f"{indent}{line}", highlight=False)
-
-        # Agent
-        agent_type = self.config.agent.backend
-        model = self.config.agent.model or ""
-        agent_str = f"{agent_type}" + (f" ({model})" if model else "")
-        self.console.print(f"  [dim]Agent[/dim]      {agent_str}", highlight=False)
-
-        # Scope — show editable and frozen if configured
-        scope_parts = []
-        if self.config.editable:
-            scope_parts.append(f"editable: {', '.join(self.config.editable)}")
-        if self.config.frozen:
-            scope_parts.append(f"frozen: {', '.join(self.config.frozen)}")
-        if scope_parts:
-            self.console.print(f"  [dim]Scope[/dim]      {' │ '.join(scope_parts)}", highlight=False)
-
-        # Metrics with direction arrows
-        directions = self.config.metric_directions()
-        if directions:
-            metric_parts = []
-            for name, direction in directions.items():
-                arrow = "↑" if direction == "higher" else "↓"
-                metric_parts.append(f"{name} {arrow}")
-            self.console.print(f"  [dim]Metrics[/dim]    {', '.join(metric_parts)}", highlight=False)
-
-        # Gates — short list
-        if self.config.gates:
-            if len(self.config.gates) == 1:
-                self.console.print(f"  [dim]Gates[/dim]      {self.config.gates[0].text}", highlight=False)
-            else:
-                self.console.print(f"  [dim]Gates[/dim]      {len(self.config.gates)} gates", highlight=False)
-
-        # Budget
-        budget_parts = [f"{max_iter} iterations"]
-        if self.config.agent.timeout is not None:
-            budget_parts.append(f"{_format_time(self.config.agent.timeout)}/iter")
-        if self.config.max_cost_usd is not None:
-            cost = self.config.max_cost_usd
-            # Whole dollars show no decimals; sub-dollar caps need cents ($0.10, not $0).
-            cost_str = f"${cost:.0f}" if cost == int(cost) else f"${cost:.2f}"
-            budget_parts.append(f"{cost_str} max")
-        if self.config.max_time_seconds is not None:
-            budget_parts.append(f"{_format_time(self.config.max_time_seconds)} total")
-        self.console.print(f"  [dim]Budget[/dim]     {', '.join(budget_parts)}", highlight=False)
-
-        self.console.print()
-        self.console.print(Rule(style="dim"))
-        self.console.print()
-
-        # On resume, show prior results so user has context
-        if start_iter > 1:
+        if start_iter > 1:  # resuming: the rows so far, for context
             prior = self.history.load()
-            baseline = next((r for r in prior if r.iteration == 0), None)
-            if baseline and baseline.metrics:
-                metric_str = ", ".join(f"{n}: {v:g}" for n, v in baseline.metrics.items())
-                self.console.print(f"  baseline │ {metric_str}", highlight=False)
+            baseline = next((r for r in prior if r.iteration == 0 and r.accepted), None)
+            if baseline:
+                self._print_baseline(baseline)
             for r in sorted((r for r in prior if r.iteration > 0), key=lambda r: r.iteration):
                 self._print_iteration_summary(r)
-            self.console.print()
+
+    def _transcript(self) -> Transcript:
+        return Transcript(self.config, self.console.width or 100)
+
+    def _print_baseline(self, record: IterationResult) -> None:
+        for line in self._transcript().baseline(record):
+            self.console.print(line, highlight=False)
 
     def _status(self, message: str) -> None:
         """Print a status message."""
@@ -663,8 +591,8 @@ class Harness:
                     )
                 display.flush()
 
-            if result.error:
-                self.console.print(f"[red]Error:[/red] {result.error}")
+            if result.error and self.verbose:  # otherwise the run's error says it, once
+                self.console.print(Text(f"Agent error: {clean(result.error)}", style="red"), highlight=False)
             if self.verbose:
                 self.console.print()
             return result
@@ -945,16 +873,16 @@ class Harness:
                     self._observe(workspace, iteration, checks, evaluation, command_env, records,
                                   verify=verify, progress=progress, notes=notes)
         finally:
-            if not baseline:
+            # The row shows the outcome (`_print_iteration_summary`); details with --verbose.
+            if self.verbose and not baseline:
                 for r in evaluation.constraints:
+                    mark = "[green]✓[/green]" if r.passed else "[red]✗[/red]"
+                    self.console.print(f"  {mark} {self._gate_text(r.command)}", highlight=False)
                     if not r.passed:
-                        self.console.print(f"  [red]✗[/red] {self._gate_text(r.command)}", highlight=False)
-                        if self.verbose:
-                            self.console.print(Panel(r.output[:2000], title="Gate output", border_style="red"))
-                    elif self.verbose:
-                        self.console.print(f"  [green]✓[/green] {self._gate_text(r.command)}", highlight=False)
-            for note in notes:
-                self.console.print(note, highlight=False)
+                        self.console.print(Panel(r.output[:2000], title="Gate output", border_style="red"))
+            if self.verbose:
+                for note in notes:
+                    self.console.print(note, highlight=False)
         workspace.remove(checks)
         if evaluation.metrics and not baseline:
             self.log.info(f"iter {iteration} observe: "
@@ -1214,10 +1142,10 @@ class Harness:
                 self.log.info(f"baseline FAILED — missing metrics: {names}")
                 raise RuntimeError(f"Baseline benchmark did not produce required metric(s): {names}"
                                    f"{why(missing - advisory)}")
+            self._print_baseline(IterationResult(iteration=0, accepted=True, metrics=metrics,
+                                                 observe=evaluation.observe))
             if metrics:
-                metric_str = ", ".join(f"{name}: {value:g}" for name, value in metrics.items())
-                self.console.print(f"  baseline │ {metric_str}", highlight=False)
-                self.log.info(f"baseline: {metric_str}")
+                self.log.info("baseline: " + ", ".join(f"{name}: {value:g}" for name, value in metrics.items()))
 
             baseline = IterationResult(iteration=0, accepted=True, metrics=metrics, commit=None, reason="baseline",
                                        base=workspace.base)
@@ -1288,6 +1216,8 @@ class Harness:
         finally:
             try:
                 original = sys.exc_info()[1]
+                if isinstance(original, Exception) and self._segment_started:
+                    self._report_error(original)  # first: landing and the run page are context
                 try:
                     self._land()
                 except BaseException as e:
@@ -1341,7 +1271,9 @@ class Harness:
                    check=False).stdout.strip() if target else None
 
     def _land(self) -> None:
-        """Auto-land at segment end; in every mode, refuse/warn if the target moved."""
+        """Auto-land at segment end; in every mode, refuse/warn if the target moved.
+        Prints what landed: `Landed N commits on <branch>.`, `N unlanded commits on
+        autohelix/<id>.` (manual), or `Nothing landed: no accepted changes.`"""
         if not self._segment_started or self._land_attempted:
             return
         self._land_attempted = True
@@ -1357,18 +1289,35 @@ class Harness:
                 self.console.print(f"[yellow]{message}[/yellow]", highlight=False)
                 self.log.warn(message)
             if self.land_mode == "auto":
+                before = self._target_tip()
                 land(self.paths, self.run_info, self.run_state.expected_tip)
-                self.console.print(f"[dim]Landed run {short_id(self.paths.run_id)} into {target}.[/dim]")
+                count = self._commits_between(before, self.run_state.expected_tip)
+                if count:
+                    self.console.print(Text(f"  Landed {count} commit{'s' * (count != 1)} on {target}."),
+                                       highlight=False)
+                else:
+                    self.console.print(Text("  Nothing landed: no accepted changes."), highlight=False)
+            elif count := self._unlanded():
+                self.console.print(Text(f"  {count} unlanded commit{'s' * (count != 1)} on "
+                                        f"autohelix/{self.paths.run_id} (manual landing)."), highlight=False)
+            else:
+                self.console.print(Text("  Nothing to land: no accepted changes."), highlight=False)
         except Exception as e:
             self.console.print(f"[yellow]{e}[/yellow]", highlight=False)
             self.log.warn(f"auto-land: {e}")
+
+    def _commits_between(self, old: str | None, new: str) -> int:
+        """Commits `new` has that `old` lacks (all of them without `old`)."""
+        span = f"{old}..{new}" if old else new
+        result = git(self.project_path, "rev-list", "--count", span, check=False)
+        return int(result.stdout.strip() or 0) if result.returncode == 0 else 0
 
     def _write_static(self) -> None:
         from autohelix.viewer import write_static
 
         try:
             path = write_static(self.project_path, self.config_file, run_id=self.paths.run_id)
-            self.console.print(f"[dim]Run page saved to {path.relative_to(self.project_path)}[/dim]")
+            self.console.print(f"[dim]  Run page: {path.relative_to(self.project_path)}[/dim]", highlight=False)
         except Exception as e:  # noqa: BLE001 - never hide the run's own outcome
             self.console.print(f"[yellow]Could not save report.html: {e}[/yellow]")
 
@@ -1513,17 +1462,19 @@ class Harness:
                     "kind": "budget", "budget": "iterations",
                     "detail": f"iteration budget reached ({max_iter})"}
             self.run_status.note(stop_reason=stop_reason)
-            self.console.print(f"\n[dim]Stopped:[/dim] {stop_reason['detail']}", highlight=False)
+            self.console.print()
+            self.console.print(Text(f"  Stopped: {stop_reason['detail']}"), highlight=False)
             self.log.info(f"run stopped — {stop_reason['detail']}")
         except KeyboardInterrupt:
             self.run_status.stop("interrupted")
-            self.console.print(f"\n\n[yellow]Interrupted at iteration {iteration}. Progress saved.[/yellow] "
-                               "[dim]Run [bold]autohelix report[/bold] for a summary.[/dim]")
+            self.console.print()
+            self.console.print(f"  [yellow]Interrupted at iteration {iteration}. Progress saved.[/yellow]",
+                               highlight=False)
             ran = False
-        self._land()
-        if self.land_mode == "manual":
-            self.console.print(f"[dim]Accepted code remains on {self.paths.ref}. Land with autohelix land {short_id(self.paths.run_id)}.[/dim]")
+        # The ending, as plain lines: stop reason (above), totals, what landed, next commands.
         self._print_summary()
+        self._land()
+        self._print_next()
         return ran
 
     @staticmethod
@@ -1533,95 +1484,58 @@ class Harness:
                 "detail": f"stop condition met at {where}: {stop['reason']}"}
 
     def _print_iteration_summary(self, result: IterationResult) -> None:
-        """Print a concise one-liner after each iteration."""
-        from rich.text import Text as RichText
-
-        iteration = result.iteration
-        wall_ms = result.usage.get("wall_clock_ms", result.usage.get("duration_ms", 0))
-        cost = result.cost.cost_usd
-        # "+": known part only (some call's cost is unavailable); the run total says "(incomplete)".
-        cost_text = "—" if cost is None else format_cost(cost) + ("+" if result.cost.incomplete else "")
-
-        directions = self.config.metric_directions()
-
-        # Fixed-width columns so successive lines line up:
-        # iter N │ time │ cost │ metric value (delta) … │ outcome │ reason
-        baseline_results = [r for r in self.history.load() if r.iteration == 0]
-        baseline_metrics = baseline_results[0].metrics if baseline_results else {}
-        parts = [f"{format_duration(wall_ms / 1000):>7}", f"{cost_text:>7}"]
-        for name in [*directions, *(n for n in result.metrics if n not in directions)]:
-            value = result.metrics.get(name)
-            if value is None:  # e.g. rejected before measuring
-                parts.append(f"{name}: {'—':>9} {'':9}")
-                continue
-            baseline_val = baseline_metrics.get(name)
-            delta = format_delta(value, baseline_val) if baseline_val is not None else ""
-            parts.append(f"{name}: {value:>9g} {f'({delta})' if delta else '':9}")
-
-        line = RichText()
-        line.append(f"  iter {iteration:<2} ", style="dim")
-        line.append(" │ ".join(parts) + " │ ")
-        if result.accepted:
-            line.append("✓ accepted", style="green")
-        else:
-            line.append("✗ reject", style="red")
-        if result.reason and not result.accepted:
-            line.append(f" │ {result.reason}")
-
-        self.console.print(line)
+        """An iteration's row and the lines below it (`display.Transcript.row`)."""
+        records = self.history.load()
+        baseline = next((r.metrics for r in records if r.iteration == 0 and r.accepted), {})
+        previous: dict = {}  # each metric's last accepted value before this iteration
+        for r in sorted((r for r in records if r.accepted and r.iteration < result.iteration),
+                        key=lambda r: r.iteration):
+            previous.update(r.metrics)
+        for line in self._transcript().row(result, baseline, previous):
+            self.console.print(line, highlight=False)
 
     def _print_summary(self) -> None:
-        """Print end-of-run summary as a bordered key-value table."""
-        from rich.box import ROUNDED
-
+        """The totals line: iterations, accepted, duration, cost, best value of each
+        command metric (with where it was measured)."""
         results = self.history.load()
         iterations = [r for r in results if r.iteration > 0]
-        accepted = sum(1 for r in iterations if r.accepted)
-        rejected = len(iterations) - accepted
-
         if not iterations and not self.history.cost_usages:
             return
-
-        directions = self.config.metric_directions()
-        baseline_results = [r for r in results if r.iteration == 0]
-        baseline_metrics = baseline_results[0].metrics if baseline_results else {}
-        best = self.history.get_best_metrics(directions)
-
-        # Cumulative stats
+        accepted = sum(1 for r in iterations if r.accepted)
         total_cost_text = format_total_cost(self.history.cost_usages)
-        total_wall_ms = sum(
-            r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0))
-            for r in iterations
-        )
+        total_wall_ms = sum(r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0)) for r in iterations)
         total_time_str = _format_time(int(total_wall_ms / 1000))
+        parts = [f"{len(iterations)} iteration{'s' * (len(iterations) != 1)}", f"{accepted} accepted",
+                 total_time_str, total_cost_text]
+        best = self.history.get_best_metrics(self.config.metric_directions())
+        for name in self._transcript().columns:
+            if name in best:
+                value, where = best[name]
+                parts.append(f"best {name} {value:g} ({'baseline' if where == 0 else f'iter {where}'})")
+        self.console.print(Text("  " + " · ".join(parts)), highlight=False)
+        self.log.info(f"run complete — {accepted} accepted, {len(iterations) - accepted} rejected, "
+                      f"{total_cost_text}, {total_time_str}")
 
+    def _print_next(self) -> None:
+        """What to run next: view and resume, and land when a manual run has unlanded work."""
+        short = short_id(self.paths.run_id)
+        commands = [f"autohelix view {short}", f"autohelix resume {short}"]
+        if self.land_mode == "manual" and self._unlanded():
+            commands.append(f"autohelix land {short}")
+        self.console.print(Text("  " + "  ·  ".join(commands)), highlight=False)
+
+    def _unlanded(self) -> int:
+        try:
+            return unlanded(self.paths, self.run_info)
+        except Exception:  # noqa: BLE001 - display only
+            return 0
+
+    def _report_error(self, error: BaseException) -> None:
+        """Print a segment's error before the landing and run-page lines that follow it,
+        and mark it printed (the CLI then exits without printing it again)."""
         self.console.print()
-
-        table = Table(
-            box=ROUNDED,
-            show_header=False,
-            border_style="dim",
-            padding=(0, 1),
-        )
-        table.add_column("", style="dim", no_wrap=True)
-        table.add_column("", no_wrap=True)
-
-        table.add_row("Iterations", f"{accepted} accepted, {rejected} rejected")
-        table.add_row("Duration", total_time_str)
-        table.add_row("Cost", total_cost_text)
-
-        for name, (best_val, best_iter) in best.items():
-            baseline_val = baseline_metrics.get(name)
-            direction = directions.get(name, "lower")
-            val_text = Text(f"{best_val:g}")
-            delta = format_delta(best_val, baseline_val) if baseline_val is not None else ""
-            if delta:
-                pct = (best_val - baseline_val) / baseline_val * 100
-                improved = (pct < 0) if direction == "lower" else (pct > 0)
-                val_text.append(f" ({delta})", style="green" if improved else "red")
-            val_text.append(f"  iter {best_iter}", style="dim")
-            table.add_row(f"Best {name}", val_text)
-
-        self.console.print(table)
-
-        self.log.info(f"run complete — {accepted} accepted, {rejected} rejected, {total_cost_text}, {total_time_str}")
+        self.console.print(Text(f"  Error: {clean(error) or type(error).__name__}", style="red"), highlight=False)
+        try:
+            error.autohelix_reported = True
+        except AttributeError:
+            pass

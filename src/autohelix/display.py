@@ -1,9 +1,12 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Live display rendering for agent and reviewer sessions."""
+"""Console output: live display of agent and reviewer sessions, and the run's
+transcript (header, baseline and iteration rows)."""
 
+import re
 import time as _time
+import unicodedata
 from collections import deque
 
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
@@ -12,6 +15,7 @@ from rich.segment import Segment
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind
+from autohelix.formatting import format_delta
 
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -241,3 +245,164 @@ def event_presenter(event: AgentEvent) -> tuple[str, str]:
     if isinstance(event.kind, str) and event.kind:
         return event.kind.replace("_", " "), "yellow"
     return "raw", "yellow"
+
+
+# -- The run's transcript: header, a baseline line, two lines per iteration -------
+
+_ESCAPES = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|.)", re.S)
+_BIDI = set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A))
+
+LABEL = 11  # "  iter 12  ": where the duration column (and the summary line) starts
+
+
+def clean(text) -> str:
+    """Agent-written text made safe to print as one line: terminal escape sequences,
+    control and bidirectional-override characters removed, whitespace collapsed."""
+    text = _ESCAPES.sub("", str(text or ""))
+    kept = (" " if ch in "\t\n\r\v\f" else ch for ch in text
+            if ch in "\t\n\r\v\f" or (unicodedata.category(ch) != "Cc" and ord(ch) not in _BIDI))
+    return " ".join("".join(kept).split())
+
+
+def _line(width: int, *parts: tuple[str, str]) -> Text:
+    """One console line from (text, style) parts, cut to `width` with an ellipsis."""
+    line = Text(no_wrap=True, overflow="ellipsis")
+    for text, style in parts:
+        line.append(text, style=style)
+    line.truncate(width, overflow="ellipsis")
+    return line
+
+
+def header_lines(config, run_id: str, project: str, max_iterations: int) -> list[Text]:
+    """`AutoHelix · run <short> · <name>`, then Goal, Agent, Gates, Observe, Scope and
+    Budget lines (each only if it has something to say)."""
+    from autohelix.iteration_time import format_duration
+    from autohelix.runs import short_id
+
+    title = Text("  ")
+    title.append("AutoHelix", style="bold")
+    title.append(f" · run {short_id(run_id)} · {clean(config.name or project)}")
+    agent = config.agent.backend + (f" ({config.agent.model})" if config.agent.model else "")
+    if config.agent.timeout is not None:
+        agent += f" · {format_duration(config.agent.timeout)} per iteration"
+    observe = []
+    for entry in config.observe:
+        metrics = ", ".join(f"{name} {'↑' if direction == 'higher' else '↓'}"
+                            for name, direction in entry.metrics.items())
+        observe.append(f"{entry.name} ({metrics})" if metrics else entry.name)
+    scope = []
+    if config.editable:
+        scope.append("editable: " + ", ".join(config.editable))
+    if config.frozen:
+        scope.append("frozen: " + ", ".join(config.frozen))
+    budget = [f"{max_iterations} iteration{'s' * (max_iterations != 1)}"]
+    if config.max_cost_usd is not None:
+        cost = config.max_cost_usd
+        budget.append(f"${cost:.0f}" if cost == int(cost) else f"${cost:.2f}")
+    if config.max_time_seconds is not None:
+        budget.append(format_duration(config.max_time_seconds))
+    rows = [("Goal", config.title), ("Agent", agent), ("Gates", " · ".join(g.text for g in config.gates)),
+            ("Observe", " · ".join(observe)), ("Scope", " · ".join(scope)), ("Budget", " · ".join(budget))]
+    lines = [title]
+    for label, value in rows:
+        if value:
+            line = Text("  ")
+            line.append(f"{label:<9}", style="dim")
+            line.append(clean(value))
+            lines.append(line)
+    return lines
+
+
+class Transcript:
+    """The console lines for a run's evaluations, in fixed columns: iteration, duration,
+    cost, each command metric with its change from the baseline, then the outcome
+    (`✓ accepted`, or `✗` and the failing gate or reason) and review numbers as a
+    change from the last accepted value (`missing 3 → 2`). Below a row, dimmed: the
+    agent's summary and failed observe entries. Empty columns stay blank."""
+
+    def __init__(self, config, width: int):
+        self.directions = config.metric_directions()
+        reviewed = {name for entry in config.observe if entry.review is not None for name in entry.metrics}
+        self.columns = [name for name in self.directions if name not in reviewed]
+        self.tracked = [name for name in self.directions if name in reviewed]
+        self.width = max(width, 40)
+
+    def _metrics(self, metrics: dict, baseline: dict | None) -> list[tuple[str, str]]:
+        parts = []
+        for name in self.columns:
+            value = metrics.get(name)
+            if not isinstance(value, (int, float)):
+                parts.append((" " * (len(name) + 1 + 9 + 8), ""))
+                continue
+            delta, style = "", ""
+            reference = (baseline or {}).get(name)
+            if baseline is not None and isinstance(reference, (int, float)):
+                delta = format_delta(value, reference).replace(" ", "")
+                if delta:
+                    better = value > reference if self.directions.get(name) != "lower" else value < reference
+                    style = "green" if better else "red"
+            parts.append((f"{name} {value:<9g}", ""))
+            parts.append((f"{delta:<8}", style))
+        return parts
+
+    def baseline(self, record) -> list[Text]:
+        """The baseline's line (its metrics, review numbers), and failed entries."""
+        parts = [(f"{'  baseline':<{LABEL + 9 + 8}}", "dim"), *self._metrics(record.metrics, None)]
+        tracked = self._tracked(record.metrics, {})
+        if tracked:
+            parts.append((tracked, "dim"))
+        return [_line(self.width, *parts), *self._notes(record, summary=False)]
+
+    def row(self, record, baseline: dict, previous: dict) -> list[Text]:
+        """An iteration's two lines (more with failed observe entries). `baseline`: the
+        baseline's metrics; `previous`: the last accepted values before this one."""
+        from autohelix.formatting import format_duration
+
+        wall_ms = record.usage.get("wall_clock_ms", record.usage.get("duration_ms"))
+        duration = format_duration(wall_ms / 1000) if wall_ms else ""
+        cost = record.cost.cost_usd
+        cost_text = "" if cost is None else f"${cost:.2f}" + ("+" if record.cost.incomplete else "")
+        parts = [(f"  {'iter ' + str(record.iteration):<{LABEL - 2}}", "dim"), (f"{duration:>7}  ", ""),
+                 (f"{cost_text:>6}  ", ""), *self._metrics(record.metrics, baseline)]
+        tracked = self._tracked(record.metrics, previous)
+        used = sum(len(text) for text, _ in parts) + len(tracked) + 2
+        if record.accepted:
+            parts.append(("✓ accepted", "green"))
+        else:
+            reason = Text("✗ " + outcome_reason(record.reason), style="red", no_wrap=True)
+            reason.truncate(max(self.width - used, 12), overflow="ellipsis")
+            parts.append((reason.plain, "red"))
+        if tracked:
+            parts.append((tracked, "dim"))
+        return [_line(self.width, *parts), *self._notes(record)]
+
+    def _tracked(self, metrics: dict, previous: dict) -> str:
+        shown = []
+        for name in self.tracked:
+            value = metrics.get(name)
+            if not isinstance(value, (int, float)):
+                continue
+            before = previous.get(name)
+            shown.append(f"{name} {before:g} → {value:g}" if isinstance(before, (int, float)) and before != value
+                         else f"{name} {value:g}")
+        return ("  · " + " · ".join(shown)) if shown else ""
+
+    def _notes(self, record, summary: bool = True) -> list[Text]:
+        lines = []
+        indent = " " * LABEL
+        if summary and record.summary:
+            lines.append(_line(self.width, (indent + clean(record.summary), "dim")))
+        failed = [f"observe {item.get('name')} failed ({clean(item.get('error'))})"
+                  for item in record.observe if not item.get("ok", True)]
+        if failed:
+            lines.append(_line(self.width, (indent + " · ".join(failed), "dim")))
+        return lines
+
+
+def outcome_reason(reason: str | None) -> str:
+    """A rejection as the row's status shows it: the failing gate's text, or the reason."""
+    reason = clean(reason or "rejected")
+    for prefix in ("gate failed: ", "metric gate: "):
+        if reason.startswith(prefix):
+            return reason.removeprefix(prefix)
+    return reason

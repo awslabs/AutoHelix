@@ -179,6 +179,8 @@ def _segment(harness: Harness, iterations: int | None, report: bool) -> None:
     try:
         harness.run(max_iterations=iterations, report=report)
     except RuntimeError as e:
+        if getattr(e, "autohelix_reported", False):  # printed first, above landing and the run page
+            raise SystemExit(1) from e
         raise click.ClickException(str(e)) from e
 
 
