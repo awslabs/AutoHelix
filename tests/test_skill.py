@@ -286,8 +286,6 @@ def test_portable_skill_frontmatter_and_reference_links(resources):
             assert relative in resources, f"Missing portable reference: {relative}"
 
 
-# The skill's documents still use the first config format; they move to config v2 with the docs.
-@pytest.mark.xfail(strict=True, reason="skill docs not yet on config v2")
 @pytest.mark.parametrize("name", ["references/config.md", "references/examples.md"])
 def test_documented_yaml_validates(resources, name):
     snippets = re.findall(r"```yaml\n(.*?)```", resources[name].decode(), re.DOTALL)

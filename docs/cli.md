@@ -37,8 +37,8 @@ rejected before copying. Updates replace individual files; an I/O failure can
 leave a partially updated folder. Correct the error and repeat with `--force`.
 
 After installation, ask your agent to use `autohelix-setup` to prepare your
-experiment. It will inspect the project and help configure scope, constraints,
-command observations, optional metric gates or advisory review, and budgets.
+experiment. It will inspect the project and help configure scope, gates,
+observe entries (commands and reviews), optional metric gates, and budgets.
 Review the configuration and verification results before starting
 `autohelix run`, unless you already requested a run.
 To request ongoing management, ask the agent to prepare, run, and supervise
@@ -102,7 +102,8 @@ by side is the point. Scripts that want to continue where they left off should c
 
 When the run finishes (not when interrupted), it writes a summary to `.autohelix/runs/<id>/output/report.md` — see [Configuration → Report](config.md#report).
 
-On first start, performs preflight checks and captures baseline observables. When the run stops, it saves `.autohelix/runs/<id>/output/report.html`, a one-file copy of the [`autohelix view --web`](#autohelix-view) page — see [Concepts → Run page](concepts.md#run-page).
+On first start, performs preflight checks and evaluates the baseline (see
+[Configuration → Order within an iteration](config.md#order-within-an-iteration)). When the run stops, it saves `.autohelix/runs/<id>/output/report.html`, a one-file copy of the [`autohelix view --web`](#autohelix-view) page — see [Concepts → Run page](concepts.md#run-page).
 
 A refused dirty first start creates no run. The first valid baseline requires
 a clean checkout at the run's starting commit. Resumes use the run's accepted
@@ -215,10 +216,11 @@ autohelix delete RUN_ID... [-p PATH] [--force]
 ```
 
 Deletes runs: their `.autohelix/runs/<id>/` folder (history, notes, logs,
-reports), their ref and any leftover copies. Refuses a running run, and a run
-with accepted commits that its target branch lacks (they would be lost) unless
-`--force`. Code on your branch, external artifacts, `.claudeignore` and the
-project prompt stay intact. To keep a run but hide it, use `archive`.
+reports), their ref, the refs keeping rejected attempts' trees
+(`refs/autohelix-rejected/<id>/<n>`) and any leftover copies. Refuses a running
+run, and a run with accepted commits that its target branch lacks (they would be
+lost) unless `--force`. Code on your branch and external artifacts stay intact.
+To keep a run but hide it, use `archive`.
 
 ## `autohelix view`
 
@@ -230,7 +232,7 @@ autohelix view [RUN_ID] [-p PATH] --once | --json [--config FILE]
 autohelix view [RUN_ID] [-p PATH] --web [--port 8765] [--open] [--config FILE]
 ```
 
-`RUN_ID` (or its last part) picks the run; the default is the current run. By default the terminal shows, on top, the run's status, time and cost, landing, the latest accepted metrics against the baseline, and one row per iteration, refreshed as the run goes. Below that is the live output of whatever the run is doing: the agent during an iteration, the reviewer during a review, and the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (agent, checks, review, …) and time in that phase, read from `.autohelix/runs/<id>/runtime/status.json`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out. When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
+`RUN_ID` (or its last part) picks the run; the default is the current run. By default the terminal shows, on top, the run's status, time and cost, landing, the latest accepted metrics against the baseline, and one row per iteration, refreshed as the run goes. Below that is the live output of the agent during an iteration and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (agent, checks, benchmark, …) and time in that phase, read from `.autohelix/runs/<id>/runtime/status.json`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out. When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/`.
 
 `--once` prints the top part (status and iteration table) once as text and exits. `--json` prints the run once and exits, for scripts and agents managing runs: the run's row from [`dashboard --json`](#json-output) under `run`, plus `iterations`, one entry per iteration with `iteration`, `accepted`, `metrics`, `summary` (the agent's one-line summary; for records without one, the commit subject, or why it was rejected), `reason` (why it was rejected, `null` otherwise), `cost`, `cost_incomplete`, `seconds`, `gates` (in config order: `text`, `kind` (`command` or `metric`), `passed` (`true`, `false`, or `null` when not reached), and for commands that ran `return_code`, `duration_s` and, failed, the `output` tail; for checked metric gates `value`, `reference` and, failed, `reason`), `observe` (the entries that ran, in order: `name`, `ok`, `return_code`, `error`, `metrics`, `duration_s`) and `discarded` (paths outside the editable scope whose changes were dropped). In the text table a rejected iteration shows the gate that failed, with the agent's summary, failed observe entries and discarded paths on the lines under it. Use one of `--once`, `--json` and `--web` at a time.
 
@@ -290,32 +292,105 @@ Requires a selected run (start one first). Appends a timestamped line to `.autoh
 Ask an agent a yes/no question about the current directory.
 
 ```bash
-autohelix ask "QUESTION" [--yes TEXT] [--no TEXT] [--rubric FILE] [--agent TYPE] [--model MODEL] [--effort LEVEL] [--timeout SECONDS]
+autohelix ask [--yes TEXT] [--no TEXT] [--rubric FILE] [--agent BACKEND] [--model MODEL] [--effort LEVEL] [--timeout SECONDS] [--command PATH] -- "QUESTION"
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--yes`, `--no` | What a "yes" or "no" answer means (optional; makes answers more consistent) |
 | `--rubric` | A file with criteria for the answer |
-| `--agent` | `claude` or `codex` (default: `agent.type` from the config) |
-| `--model`, `--effort` | Model and reasoning effort (default: from the config's `agent:`) |
+| `--agent` | `claude` or `codex` (default: `agent.backend` from the config, else `claude`) |
+| `--model`, `--effort` | Model and reasoning effort (default: from the config's `agent:`, unless `--agent` names another backend) |
 | `--timeout` | Seconds before giving up, including the retry (default 600) |
+| `--command` | The backend's executable (default: `agent.command` from the config, unless `--agent` names another backend) |
 
-Exits **0** for yes, **1** for no and **2** if no valid answer was produced, and prints the reason, so it works anywhere a command does: `stop:`, `constraints:`, or a script.
+Put the question after `--`, so a question starting with `-` isn't read as an
+option. Exits **0** for yes, **1** for no and **2** if no valid answer was
+produced, and prints the reason, so it works anywhere a command does: `gates:`
+(where an `ask:` entry is shorthand for it), `stop:`, or a script.
 
 ```yaml
 stop:
-  - autohelix ask "Is every item in SPEC.md implemented and tested?"
+  - autohelix ask -- "Is every item in SPEC.md implemented and tested?"
 ```
 
 - **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run) or `./autohelix.yaml`: backend, command, model and effort only, never `agent.settings` or `extra_args`.
 - **Candidate contents are checked before and after every judge call.** Tracked and nonignored files, modes, symlinks and submodule contents must remain unchanged; runtime feedback/log outputs are allowed. A stop judge after acceptance cannot change accepted code: its edits are discarded and its verdict ignored, with error and usage recorded. Backend restrictions remain best effort.
 - **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox; it still reads an `AGENTS.md` in the directory. OpenCode can't be used as a judge yet: it has no read-only mode.
 - **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `budget.cost`, and its transcript is saved as `.autohelix/runs/<id>/logs/iter-N/call-*-command/ask.log`. Outside a run, the cost is printed to stderr.
-- An invalid answer or failed call is retried once. The command stays inside the timeout of the check that runs it.
+- An invalid answer or failed call is retried once. The command stays inside the timeout of the command that runs it.
 - **Scripts own the exit code.** `ask` exits non-zero when it can't answer; a script that swallows that (`autohelix ask ... || true`) and exits 0 passes.
 - **Judges can't change what they judge.** Each call fingerprints the files in its directory first. If the call changes one or adds a non-ignored file, it ends without retry: standalone ask exits 2, and in a run the call's usage record keeps an `integrity_violation` flag that rejects the iteration even if a wrapper script restores the files and exits 0.
-- **Limits.** The judge reads the directory it runs in. In a run that is the checks or stop copy: the candidate's files, with no notes or other harness material, but with any new or gitignored files earlier commands left there. Keep criteria files out of `scope.editable`.
+- **Limits.** The judge reads the directory it runs in. In a run that is the checks or stop copy: the candidate's files and (in the checks copy) `.autohelix-iteration/candidate.diff`, with no notes or other harness material, but with any new or gitignored files earlier commands left there. Keep criteria files out of `scope.editable`.
+
+## `autohelix review`
+
+Review a change with a read-only agent; prints the review as feedback.
+
+```bash
+autohelix review [--previous] [--metric NAME:higher|lower]... [--agent BACKEND] [--model MODEL] [--effort LEVEL] [--timeout SECONDS] [--command PATH] [--base REV] -- "PROMPT"
+```
+
+| Option | Description |
+|--------|-------------|
+| `--previous` | In a run: include this entry's own review from the last accepted iteration |
+| `--metric NAME:higher\|lower` | A number the review must report (repeatable) |
+| `--agent` | `claude` or `codex` (default: `agent.backend` from the config, else `claude`) |
+| `--model`, `--effort` | Model and reasoning effort (default: from the config's `agent:`, unless `--agent` names another backend) |
+| `--timeout` | Seconds before giving up, including the retry (default: the command's deadline in a run, else 1800) |
+| `--command` | The backend's executable (default: `agent.command` from the config, unless `--agent` names another backend) |
+| `--base REV` | By hand: the commit the working tree is compared with (default `HEAD`) |
+
+PROMPT is the review request; put it after `--`. A `review:` entry in
+`observe:` is shorthand for this command (see
+[Configuration → Review entries](config.md#review-entries)), and scripts can
+call it directly, as they call `autohelix ask`.
+
+**Two modes:**
+
+- **In a run** (`$AUTOHELIX_CANDIDATE` is set, as for every command the harness
+  runs): it makes its own fresh copy of exactly the candidate tree, with HEAD at
+  `$AUTOHELIX_BASE`, inside `$AUTOHELIX_SCRATCH`, and removes it afterwards. The
+  complete change (new files included) is `.autohelix-iteration/candidate.diff`
+  there. With `--previous`, its own output from the last accepted iteration in
+  which it succeeded (`$AUTOHELIX_PREVIOUS/stdout.txt`, without the metric
+  lines) is `.autohelix-iteration/previous.md`, and the reviewer is told to treat
+  it as a starting point and re-verify every item. Symlinks pointing outside
+  the copy are removed, not followed, and listed in the reviewer's prompt.
+  `--base` is ignored there, with a warning. It never reads the checks copy:
+  gate and observe commands leave files there and run candidate code.
+- **By hand**: it reviews the current directory in place. The change is the
+  working tree (new, non-ignored files included; AutoHelix state left out)
+  against `--base`, limited to the current directory. It is computed in a
+  temporary index, so your index is untouched, but untracked files are hashed
+  into `.git/objects` (as `git add` would; `git gc` removes them later).
+  `--previous` does nothing there, with a warning. Outside a git repository,
+  there is no diff: the reviewer reviews the files as they are.
+
+**Output.** The review's prose on stdout, escaped so it can't carry a metric
+line, then one `##autohelix[NAME=value]` line per `--metric`, written by the
+command itself. The numbers come from the reviewer's structured answer (its
+JSON output schema requires them); a missing or non-finite one is an error.
+Outside a run, the cost is printed to stderr.
+
+**Exit codes:** 0 when a review was produced; 2 when no valid review was
+produced (after one retry), a requested number is missing, or the reviewer
+changed files; 130 when interrupted.
+
+**Read-only, three layers:**
+
+1. The backend's read-only mode, as for `ask` (Claude Code: read, grep and glob
+   tools, user-level settings only, no MCP; Codex: its read-only sandbox).
+2. The reviewed directory is fingerprinted before and after the call, and in a
+   run `candidate.diff` and `previous.md` must be unchanged too. A change fails
+   the call; in a run its usage record keeps a sticky `integrity_violation`
+   flag that rejects the iteration, even though observe failures otherwise
+   don't.
+3. In a run, its own fresh copy of the candidate tree, so nothing earlier
+   commands or the agent wrote is in front of the reviewer.
+
+Costs and logs are recorded as for `ask`
+(`.autohelix/runs/<id>/logs/iter-N/call-*-command/review.log`).
 
 ## `autohelix report`
 
@@ -329,4 +404,4 @@ autohelix report [RUN_ID] [-p PATH] [--config PATH]
 |--------|-------------|
 | `--config`, `-c` | Path to config file (default: the run's own) |
 
-`autohelix run` and `resume` write the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. One agent call reads the run's history, notes, reviews, logs and commits and writes `.autohelix/runs/<id>/output/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
+`autohelix run` and `resume` write the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. One agent call reads the run's history, notes, logs and commits and writes `.autohelix/runs/<id>/output/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).

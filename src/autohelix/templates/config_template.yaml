@@ -30,6 +30,8 @@ scope:
 #     command: python benchmark.py              # print ##autohelix[throughput=1234]
 #     metrics: {throughput: higher, latency: lower}
 #     # capture: [results/log.json]             # files saved for the next agent
+#   - name: review                              # = autohelix review -- "..."
+#     review: Review the change for correctness. What should the next iteration fix?
 
 # Optional: end the run early once one of these exits 0 (1 = keep going).
 # $AUTOHELIX_METRICS is a JSON file with the metrics just measured.

@@ -26,10 +26,10 @@ project's available evidence, including missing evaluators that would help.
 Carry forward the user's budget and agent preferences; resolve missing
 information that changes the experiment without imposing a fixed questionnaire.
 
-For help choosing measurements, constraints, feedback, and budgets, read
+For help choosing gates, measurements, feedback, and budgets, read
 [loop design](references/loop-design.md). For concrete patterns, read the
 relevant [examples](references/examples.md). A qualitative goal can use captured
-evidence and reviewer feedback without inventing a numeric score.
+evidence and review feedback without inventing a numeric score.
 
 ## Prepare and verify the configuration
 
@@ -38,10 +38,13 @@ the configuration.
 
 For a new setup, `autohelix init` creates the runtime directory and a config
 template; it requires a git repository. For an existing setup, preserve its
-custom prompt and runtime state.
+runtime state; convert a config in the first format (`constraints:`,
+`metrics:`, `reviewer:`, ...), which no longer loads, with the user's
+agreement.
 
-Define a goal, editable scope, constraints, observations, optional metric gates
-or reviewer feedback, and budget settings or a commented template. Keep tests,
+Define a goal (its first line is the run's title), editable scope, gates,
+observe entries (commands, optional reviews), optional metric gates or a
+stop condition, and budget settings or a commented template. Keep tests,
 benchmark definitions, and evaluation criteria outside the editable scope unless
 changing them is part of the user's task.
 
@@ -64,7 +67,7 @@ locations deliberate: rejecting code does not restore external files.
 Always validate the YAML and inspect its structure, declared metric names and
 gate references, scope/input paths, command and dependency setup, working
 directory/import paths, and expected output/capture locations without executing
-the configured commands. Inspect how declared values would be emitted; output
+the configured commands. Inspect how declared metrics would be emitted; output
 files may not exist until evaluation. Use the installed package for validation:
 
 ```python
@@ -85,14 +88,15 @@ or uncertain cost/duration, describe the proposed verification and likely cost
 if known, then ask before executing unless that execution is already explicitly
 authorized by the user's task or budget. A bounded timeout does not establish
 cheapness. Apply this distinction to tests, training, benchmarks, import probes,
-and model reviewers alike.
+and reviews or `ask` gates alike.
 
-A baseline or reviewer call is not required to finish setup. When a command is
+A baseline or review call is not required to finish setup. When a command is
 run, report its result and any output/metric/capture failures. Otherwise record
 that execution was not performed and which behavior remains unverified.
 
-Metrics track progress; only configured metric gates affect acceptance.
-Reviewer feedback is advisory. Explain these choices rather than implying that
+Metrics track progress; only gates affect acceptance. A failing observe entry
+is recorded, not rejected; a metric gate compares with the last accepted
+iteration. Review feedback is advisory. Explain these choices rather than implying that
 every accepted change improves the goal.
 
 ## Hand off or start the run
@@ -133,7 +137,7 @@ and start the run.
 
 Use `autohelix view` (live in a terminal; `--once` or `--json` print a snapshot and
 exit) to inspect a run and its live agent output, and `autohelix hint` to steer
-the next iteration. History, captured evidence, notes, reviews, the run summary
+the next iteration. History, observations (reviews included), notes, the run summary
 (`output/report.md`), and the run page (`output/report.html`) are stored under `.autohelix/`.
 
 ## Manage a requested run

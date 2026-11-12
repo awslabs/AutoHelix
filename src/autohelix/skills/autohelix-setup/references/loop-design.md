@@ -8,17 +8,20 @@ long run. Use the user's budget rather than imposing a fixed iteration count.
 
 | Purpose | AutoHelix mechanism | Example |
 | --- | --- | --- |
-| Preserve required behavior | Constraint command | Existing correctness tests |
-| Observe progress | Command observation and captured files | Runtime and benchmark report |
-| Reject a measured regression | Optional metric gate | No increase in runtime |
-| Guide the next attempt | Reviewer prompt or captured feedback | Editorial suggestions with examples |
+| Preserve required behavior | Gate command (or an `ask:` gate) | Existing correctness tests |
+| Observe progress | `observe:` command entry with metrics and captured files | Runtime and benchmark report |
+| Reject a measured regression | Optional `metric:` gate vs the last accepted iteration | Runtime at most 5% worse |
+| Guide the next attempt | `observe:` review entry or captured feedback | Editorial suggestions with examples |
+| Track a worklist | Review entry with `previous: true` and a count metric | Items still missing |
+| End when done | `stop:` command | Count reaches zero, or an `ask` judgment |
 | Limit effort | Iteration, time, and available cost budgets | A short exploratory pilot |
 
-Make a requirement a constraint when every accepted candidate must satisfy it.
+Make a requirement a gate when every accepted candidate must satisfy it.
 Measuring a number alone does not make it a requirement. Avoid making every
 noisy measurement a strict gate: that can reject useful changes because of
-measurement variation. Consider repeated measurements, a justified tolerance,
-or reporting the distribution.
+measurement variation, and an `improve:` gate on a noisy number keeps lucky
+measurements, so the loop stalls. Consider repeated measurements or medians
+in the benchmark, and a tolerance above the measured noise.
 
 When several metrics conflict, ask what tradeoff matters or start with
 observations and feedback. The current configuration can apply separate gates
@@ -50,7 +53,7 @@ inspect the code before treating a `__file__` probe as cheap execution.
 
 Explain the limits of the evaluation. Passing a small test suite establishes
 that those tests passed; it does not establish universal correctness. A
-training score may improve without improved held-out performance. A reviewer
+training score may improve without improved held-out performance. A review
 can identify useful issues without establishing that all claims are correct.
 
 Preserve useful evidence with `capture`: detailed benchmark results, evaluation
@@ -60,15 +63,17 @@ iteration needs and which a person needs to inspect.
 ## Qualitative and research goals
 
 A useful loop does not require a numeric score. For a document, keep factual
-or formatting checks as constraints and consider an editorial reviewer. For
+or formatting checks as gates and consider an editorial review entry. For
 research, agree which parts of the question, protocol, and evidence standards
 should stay fixed and which may evolve; let the agent revise experiments and
 reports within that scope. An exploratory study need not use a fixed protocol.
 
-Reviewer prompts benefit from a specified audience and criteria, such as
+Review prompts benefit from a specified audience and criteria, such as
 clarity for a first-time API user or whether a conclusion follows from the
-reported experiment. Request examples and actionable feedback. Avoid claiming
-that a prompt asking for a rating currently creates a tracked scalar metric.
+reported experiment. Request examples and actionable feedback. A number from
+a review exists only when the entry declares it under `metrics:`; its meaning
+comes from the prompt, and it is noisy and gameable, so use it for display
+and `stop:` rather than gates.
 
 Research runs should preserve negative findings and uncertainty. Autonomous
 execution is compatible with an inconclusive result; the goal should not
@@ -80,7 +85,7 @@ Retain the user's stated budgets and agent/model preferences. Use an iteration
 limit to bound improvement attempts and a time budget for the desired duration,
 allowing for agent work and evaluation.
 
-For preparation/design, optional cost, time, and iteration_time may be omitted
+For preparation/design, optional cost, time, and `agent.timeout` may be omitted
 or set to YAML `null`: no cap is configured by that field. Leave proposed values
 as comments or suggestions when not selected; choosing active budgets is not a
 prerequisite for setup-only handoff. If iterations is omitted, including in an
@@ -101,8 +106,9 @@ usage records and backend support rather than making a model call just to check
 accounting. A backend's support for a dollar field alone does not establish that
 the chosen configuration reports it reliably.
 
-Explain that the dollar counter covers optimization-agent and reviewer usage,
-including baseline reviews, and is checked between iterations; it may overshoot.
+Explain that the dollar counter covers the optimization agent and the model
+calls of `ask` gates and reviews, including the baseline's, and is checked
+between iterations; it may overshoot.
 Report generation, external calls, and supervising/setup-agent expenditure
 are separate. If reporting is unsupported, missing,
 or unreliable, say that a dollar budget cannot reliably bound spend. Do not
@@ -126,6 +132,6 @@ AutoHelix's main-agent dollar budget cannot cap unreported model calls in an
 evaluation command.
 
 At handoff, explain what will count as acceptance, which observations will be
-retained, and why the run will end. The currently supported end conditions are
-budgets and manual interruption; semantic completion and plateau conditions
-are not configuration fields yet.
+retained, and why the run will end: budgets, manual interruption, or a `stop:`
+command (a metric target, a tracked count reaching zero, or an
+`autohelix ask` judgment). Plateau detection is not a configuration field.

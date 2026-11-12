@@ -6,20 +6,25 @@ AutoHelix runs a loop where each iteration is isolated, validated, and either ac
 
 ```
 for each iteration:
-    1. agent copy             — fresh copy of the accepted tip A, plus notes/ and reference material
-    2. build_prompt()         — goal + history + metrics + scope
-    3. run_agent()            — agent makes changes in its copy
-    4. freeze                 — snapshot the copy to a tree T; out-of-scope changes are dropped;
-                                notes are saved and the copy is deleted
-    5. checks copy            — fresh copy of T (HEAD at A)
-    6. run_constraints()      — hard gates (tests, linting)
-    7. run_observables()      — measurements (if constraints pass); T's files are
-                                verified after every command
-    8. check_metric_gates()   — optional regression guards
-    9. run_reviewer()         — optional qualitative feedback, in its own copy of T
-   10. accept or discard      — commit exactly T on A, update run ref and durable history atomically
-   11. stop commands          — in a copy of the accepted tip
+    1. agent copy       — fresh copy of the accepted tip A, plus notes/ and reference material
+                          (and rejected.patch after a rejection)
+    2. prompt           — goal, recent history, the last iteration's gates and observations,
+                          gates, observe entries, stop commands, scope
+    3. agent            — makes changes in its copy
+    4. freeze           — snapshot the copy to a tree T; out-of-scope changes are dropped
+                          (and reported); notes are saved and the copy is deleted
+    5. checks copy      — fresh copy of T (HEAD at A); T's files are verified after every command
+    6. gate commands    — in list order (tests, linting, ask: questions); the first failure rejects
+    7. observe entries  — in list order (benchmarks, reviews), each output saved by name;
+                          after each, the metric gates on its numbers; a failure rejects
+    8. accept or reject — commit exactly T on A, update the run ref and history atomically;
+                          or keep T as refs/autohelix-rejected/<id>/<n>
+    9. stop commands    — after an accept, in a copy of the accepted tip
 ```
+
+Iteration 0 is the **baseline**: the gates and observe entries run once on the
+starting code, rejecting nothing, to record the reference numbers (see
+[Configuration → Order within an iteration](config.md#order-within-an-iteration)).
 
 ## Designing Your Own Loop
 
@@ -27,19 +32,19 @@ A useful loop answers five questions:
 
 1. **What should improve?** Define the goal and how progress will be observed.
 2. **What may the agent change?** Define the editable surface.
-3. **What must remain true?** Encode non-negotiable requirements as constraints.
+3. **What must remain true?** Encode non-negotiable requirements as gates.
 4. **What should carry forward?** Decide which metrics, artifacts, reviews,
-   results, and lessons later iterations need.
+   results, and lessons later iterations need: those are `observe:` entries.
 5. **When should the loop stop?** Set an iteration, time, or cost budget that
-   matches the intended scope.
+   matches the intended scope, and a `stop:` condition if "done" is checkable.
 
 ### Tips
 
-- Keep checks and evaluation criteria outside the editable scope.
+- Keep gates, benchmarks and evaluation criteria outside the editable scope.
 - To see exactly what the agent receives, read `.autohelix-iteration/prompt.md`
-  in an agent copy (also saved with each iteration's logs), or the built-in
-  template (`src/autohelix/templates/default_prompt.md`). See
-  [Prompt Template](#prompt-template).
+  in an agent copy (also saved with each iteration's logs as `prompt.txt`), or
+  the built-in template (`src/autohelix/templates/default_prompt.md`). See
+  [Prompt](#prompt).
 - AutoHelix already retains iteration evidence and agent memory. When findings
   should also be user-facing and revisable, keep them in an editable,
   version-controlled file. The [research example](../examples/research/) uses
@@ -54,11 +59,11 @@ combined.
 
 ## Candidate Copies
 
-Every phase of an iteration (agent, checks, reviewer, stop) runs in **its own fresh
+Every phase of an iteration (agent, checks, each review, stop) runs in **its own fresh
 copy** of the code: a private folder holding one fixed tree, with its own small
 `.git`. That `.git` borrows your repository's objects and has copies of its
-branches, tags, remote branches and run refs (a snapshot taken when the copy is
-made; no stash, no remote). This means:
+branches, tags, remote branches, and this run's ref and its group's (a snapshot taken
+when the copy is made; no stash, no remote). This means:
 
 - Whatever the agent does with git (commits, branches, config, hooks) stays in its copy.
   AutoHelix reads the copy from outside, through your repository, and never runs git
@@ -66,19 +71,22 @@ made; no stash, no remote). This means:
 - What gets checked is exactly what gets published: the agent's copy is frozen to a
   tree, checks run on a fresh copy of that tree, and acceptance commits that tree.
 - **Only files git would add reach checks.** Ignored files the agent built (build
-  output, virtualenvs, caches, models) are deleted with the agent's copy. Constraints
+  output, virtualenvs, caches, models) are deleted with the agent's copy. Gates
   must build or install what they need; long-lived outputs such as trained models
   belong at a fixed absolute path outside the project.
-- **Checks are read-only.** Any change a constraint, metric, reviewer or `ask` makes to
-  the candidate's files rejects the iteration. New files are scratch, shared between
+- **Checks are read-only.** Any change a gate command, observe command, review or `ask`
+  makes to the candidate's files rejects the iteration. New files are scratch, shared between
   commands in the checks phase (so build-then-test works) and deleted afterwards. If
   generated code should be accepted, generating it is the agent's job.
 - In a checks copy, plain `git diff` shows changes to tracked files; new files show as
   untracked. The complete change is in `.autohelix-iteration/candidate.diff`; that is
-  the only harness material a checks copy gets (no notes, history or prompt).
+  the only harness material a checks copy gets (no notes, history or prompt). A review's
+  copy gets the same, plus `previous.md` with `previous: true`.
 - Accepted commits advance the run's hidden `refs/autohelix/<id>` first.
 - A process-held per-run lock lets only one process write a run at a time.
-- PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo).
+- PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo), and
+  `autohelix` on a command's `PATH` is a launcher for the harness's own installation
+  (see [Configuration → Command environment](config.md#command-environment)).
 - **A copy holds only committed files.** Commands get
   their tools from the environment AutoHelix started in: run it with your virtualenv
   activated so `python` and `pytest` resolve to it, and reference untracked data by
@@ -101,13 +109,39 @@ active, the whole `copies/` folder is safe to delete. A
 baseline command that modifies the code it checks (for example a formatter without
 `--check`) stops the run with a setup error before any agent runs.
 
+### What copies protect against
+
+Copies, read-only checks and the `autohelix` launcher make the loop correct
+for a cooperative agent, and for candidate code that misbehaves by accident:
+
+- what is checked is exactly what is accepted, and a check can't change it;
+- a gate, entry or judge that edits the files it checks is caught, even if a
+  wrapper script restores them;
+- an observe entry's stored output, `$AUTOHELIX_PREVIOUS` and
+  `$AUTOHELIX_OBSERVATIONS` are written or copied by the harness, so what the
+  next call reads can't be rewritten in place;
+- reviews read their own copy of exactly the candidate, not files earlier
+  commands left behind;
+- `autohelix ask` and `autohelix review` run the harness's own installation,
+  not modules from the candidate's `PYTHONPATH`;
+- a command's background processes are killed when it ends.
+
+They are not a security boundary. The agent and candidate code run as you:
+they can still reach the project, its `.git`, other runs and your home folder
+by absolute path, and write run state there (`.autohelix/runs/<id>/`, including
+the history and observations of earlier iterations) until commands run in a
+sandbox. A child process that starts a session of its own escapes the
+process-group kill. Main-checkout inspection is best effort: it logs possible
+escapes without reverting them. For stronger isolation use the
+[Docker sandbox](docker.md).
+
 ## Notes
 
 The agent's persistent memory across iterations. Stored in `.autohelix/runs/<id>/notes/` (a link to the latest saved version, `notes.<n>/`) and presented to the agent as `.autohelix-iteration/notes/`.
 
 `notes/` is the **sole agent-owned region** and the only thing that round-trips
 between the main project and each iteration's agent copy. Everything else the agent
-sees in `.autohelix-iteration/` (history, observations, hints, the latest review, other runs of its group) is read-only
+sees in `.autohelix-iteration/` (history, observations, hints, `rejected.patch`, other runs of its group) is read-only
 reference — copied *into* the copy but never copied back. That asymmetry is
 the whole contract: the agent freely structures `notes/` however the prompt
 directs (per-iteration files, a journal, subdirectories), and only `notes/`
@@ -126,12 +160,20 @@ Notes are the primary mechanism for the agent to build on previous attempts. The
 
 ## Scope Enforcement
 
-AutoHelix can restrict which files the agent modifies:
+AutoHelix can restrict which files the agent's changes are kept for:
 
-- **Editable (allowlist)**: only matching files are kept
-- **Frozen (denylist)**: changes to matching files are dropped, everything else is kept
+- **Editable**: only matching paths are kept
+- **Frozen**: changes to matching paths are dropped
+- **Both**: editable minus frozen (`editable: [src/, tests/]`, `frozen: [tests/acceptance/]`)
 
-Enforcement happens when the agent's copy is frozen, *before* constraints run, so constraints test exactly the tree that would be accepted. Out-of-scope changes are dropped from the candidate tree only; nothing is written back into the agent's copy.
+Enforcement happens when the agent's copy is frozen, *before* any gate runs, so
+gates test exactly the tree that would be accepted. Out-of-scope changes are
+dropped from the candidate tree only; nothing is written back into the agent's
+copy. The dropped paths are recorded with the iteration, shown in the viewer,
+and named in the next agent's prompt, so it can tell why a change never lands.
+
+With no scope, the agent may edit the tests and benchmarks that judge it; a run
+with gate or observe commands but no scope warns at start.
 
 ## Agent Backends
 
@@ -144,59 +186,179 @@ AutoHelix supports pluggable agent backends:
 | **OpenCode** | `opencode` | JSON format, model variants |
 | **Mock** | (built-in) | Deterministic changes for testing |
 
-All backends implement the same interface: receive a prompt, work in a directory, emit events for the live display.
+All backends implement the same interface: receive a prompt, work in a
+directory, emit events for the live display. Claude Code and Codex can also
+answer `autohelix ask` and `autohelix review`; OpenCode can't, as it has no
+read-only mode.
 
-## Reviewer
+## What the agent sees
 
-An optional second agent that provides qualitative feedback between iterations. It runs after constraints and metric gates pass but *before* acceptance into the run. Landing on the user's branch may happen later, particularly in manual mode.
+Each iteration's prompt (see [Prompt](#prompt)) always holds the goal, the last
+five iterations (one line each: metrics or the rejection reason, then the
+agent's one-line summary), the gates, observe entries and stop commands, the
+scope, where to read notes and hints, and where to write notes. Then, about the
+latest iteration:
 
-It is a full agent working in its own fresh copy of the candidate, with tool access: it inspects the code itself, and `.autohelix-iteration/candidate.diff` holds the complete change. Its entire instruction is the `reviewer.prompt` you configure, plus where to write the result — it does **not** automatically receive the goal or metrics, so include whatever context you want it to consider in the prompt. Example:
+- **After an accepted iteration:** its gate results and where its observations
+  are (`.autohelix-iteration/observations/iter-K/<name>/`, failed entries
+  marked). The copy holds its code.
+- **After a rejection:** the rejected attempt's gate results (passed, failed,
+  or not reached), the failure output, the observations it produced before
+  being rejected, and `.autohelix-iteration/rejected.patch`. The copy is still
+  the last accepted code.
+- **After discarded changes:** the paths that were outside the scope.
+
+Observe commands are different: `$AUTOHELIX_PREVIOUS` (and so
+`review --previous`) always comes from the last *accepted* iteration in which
+the entry succeeded, so a tracker's status moves only with accepted code.
+
+## Rejected work
+
+Every rejected attempt's frozen tree is kept as a hidden ref,
+`refs/autohelix-rejected/<id>/<n>`, including attempts whose agent call failed
+or timed out (only if freezing the copy itself fails is there nothing to keep).
+A timed-out attempt is still rejected without checks: it is kept for the record
+and the next agent, never accepted unchecked.
+
+The next agent's copy gets the latest rejection's change against the tip as
+`.autohelix-iteration/rejected.patch`, and the prompt says: "The previous
+attempt was rejected (failure output above). Its changes are in
+`.autohelix-iteration/rejected.patch`; `git apply` it if it was close, or start
+over."
+
+- It always applies cleanly: a rejection doesn't move the run's ref.
+- Whatever is re-applied is proposed and checked again, like any change.
+- The patch is derived: overwritten on each rejection, absent after an accept.
+- The viewer shows any rejected iteration's diff from its ref.
+- Rejected trees stay in the repository until `autohelix delete` removes the
+  run (`archive` keeps them), and show up in `git log --all`.
+
+## Reviews
+
+A review is an `observe:` entry with `review:` instead of `command:`,
+shorthand for [`autohelix review`](cli.md#autohelix-review). A read-only agent
+reviews the candidate; its text is stored like any entry's stdout, and the next
+agent reads it with the other observations.
 
 ```yaml
-reviewer:
-  prompt: |
-    Review the change just made for clarity, correctness, and performance.
-    What single change would most improve the result next iteration?
-  # model: claude-opus-4-8   # override the model (defaults to the main agent's)
-  # timeout_seconds: 300     # override the timeout
-  # auto_memory: false       # independent reviews (default)
+observe:
+  - name: review
+    review: |
+      Review the change for clarity, correctness, and performance.
+      What single change would most improve the result next iteration?
+    # agent: {backend: codex, model: gpt-5.5}   # a review by another model family
 ```
 
-- The reviewer verdict is **advisory**. Ordinary errors still allow acceptance (with a placeholder review). A reviewer that changes the candidate's files invalidates its verdict and rejects the iteration. Feedback under `.autohelix-iteration/` is allowed. Backend read-only restrictions remain best effort.
-- Each review is archived to `.autohelix/runs/<id>/reviews/iter-N.md`. There is no standing "latest review" file — the latest is derived from the highest-numbered `iter-N.md`.
-- The **latest** review is materialized into the next iteration's agent copy as `.autohelix-iteration/review.md` so the main agent can read it; the `reviews/` archive itself is never copied into a copy.
-- The intended reviewer view omits the review archive and removes the materialized latest `review.md` before its call. Agents can still reach shared project state and git metadata; the directory layout does not isolate that access. `auto_memory: false`, the default, disables Claude Code's cross-session memory.
+- Each review runs in its **own fresh copy of exactly the candidate**, with the
+  complete change as `.autohelix-iteration/candidate.diff`: not the checks copy,
+  where gate and observe commands leave files and run candidate code. Symlinks
+  pointing outside the copy are removed and listed in the reviewer's prompt.
+- The prompt is the reviewer's entire request: it is not handed the goal,
+  metrics, notes or other reviews, so include whatever context it should
+  consider.
+- Several reviews are several entries, each with its own name, prompt and
+  agent. List them last: a metric gate failure skips the entries after it, so
+  their cost isn't spent on an iteration already rejected.
+- A review is **feedback**, not a gate. A failed review (no valid answer, a
+  timeout) is recorded and shown to the next agent, and the run continues. A
+  reviewer that changes the files it reviews rejects the iteration.
+- Read-only has three layers: the backend's read-only mode, a fingerprint of
+  the copy before and after the call (a change is a sticky
+  `integrity_violation` that rejects the iteration), and its own fresh copy.
 
-## Prompt Template
+## Progress tracking
 
-The prompt sent to the agent each iteration is built from a [Jinja2](https://jinja.palletsprojects.com/) template: the built-in one (`src/autohelix/templates/default_prompt.md`: goal, constraints, metrics, where to read notes, the "write notes when done" instruction), so new features reach every project. Most configs only need `goal:`. To replace the whole prompt, point `prompt_template:` in the config at a template file (a path relative to the config file, so it is versioned with it); copying the built-in template is the easiest start. `.autohelix/prompt.md` is no longer read.
+A review with `previous: true` sees its own output from the last accepted
+iteration, as a starting point: it is told to re-verify every item against the
+code (against anchoring: once "done", an item tends to stay done). It sees its
+own previous output only: no agent notes, no other reviews. That makes an
+independent tracker: the status of every item is written by the checker rather
+than the implementer, and moves only with accepted iterations.
 
-Available template variables:
+```yaml
+goal: |
+  Implement every item in PRD.md
+  Each iteration, take the highest-priority unfinished item, implement only
+  that one, and add tests for it.
+
+scope:
+  editable: [src/, tests/]
+  frozen: [PRD.md]          # the agent can't edit what is being tracked
+
+gates:
+  - pytest -q
+  - ask: Does the change keep the public API?
+
+observe:
+  - name: review
+    review: Review the diff for correctness and PRD intent. What is the most important next fix?
+  - name: progress
+    review: |
+      For each PRD.md item, give done / partial / missing with file:line evidence.
+      Report `missing`: the number of items that are not fully done.
+    previous: true
+    metrics: {missing: lower}
+
+stop:
+  - jq -e '.missing == 0' "$AUTOHELIX_METRICS"
+
+budget: {iterations: 30, cost: 20}
+```
+
+`metrics: {missing: lower}` adds `missing` to the review's answer schema; the
+command prints it as `##autohelix[missing=3]`, so it is a number like any
+other: in the terminal, the viewer's chart, and `$AUTOHELIX_METRICS` for
+`stop:`. `$AUTOHELIX_OBSERVATIONS` also lets a stop command read the tracker's
+report (with `grep`, or `autohelix ask` about it).
+
+Review numbers are noisy and gameable: an LLM's count can drift between calls,
+and the agent can write code or comments aimed at the reviewer. They are fine
+for display and `stop:`; gating on them is not recommended.
+
+## Prompt
+
+The prompt sent to the agent each iteration is built from a
+[Jinja2](https://jinja.palletsprojects.com/) template: the built-in one
+(`src/autohelix/templates/default_prompt.md`), so new features reach every
+project. Most configs only need `goal:`. To replace the whole prompt, point
+`prompt_template:` in the config at a template file (a path relative to the
+config file, so it is versioned with it); copying the built-in template is the
+easiest start. `.autohelix/prompt.md` is no longer read.
+
+The variables a template gets are a stable, documented contract:
 
 | Variable | Content |
 |----------|---------|
-| `{{goal}}` | Goal from config |
-| `{{iteration}}` | Current iteration number (baseline is iter-0) |
-| `{{worktree}}` | Absolute path to this iteration's agent copy (write only inside it) |
-| `{{history_summary}}` | Summary of recent iterations (empty on the first) |
-| `{{constraints}}` | List of constraint command strings |
-| `{{observables}}` | List of `{command, metric_labels}` — the metric commands and their labelled directions (e.g. `speed (↑)`) |
-| `{{editable}}` / `{{frozen}}` | Scope patterns (whichever is configured) |
-| `{{iteration_time}}` | Per-iteration time budget as a compact duration (e.g. `15m`); empty if unset |
-| `{{has_reviewer}}` | True when a reviewer is configured (gates the review.md hint) |
-| `{{group}}` / `{{group_runs}}` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group |
-| `{{has_hints}}` | True when `autohelix hint` has left a non-empty `hints.md` |
+| `goal` | The config's goal, whole |
+| `title` | Its first line, cut to about 80 characters |
+| `iteration` | This iteration's number (the baseline is 0) |
+| `worktree` | The agent's working directory (its copy) |
+| `history` | The last iterations, one line each; empty if none |
+| `gates` | Every gate in list order: `{text, kind}`, `kind` being `command` or `metric`; a metric gate's text says what it compares ("speed: at most 5% worse than the last accepted iteration") |
+| `observe` | Every observe entry: `{name, kind, metric_labels}`, `kind` being `command` (with `command`) or `review` (with `prompt`, on one line); `metric_labels` like `speed (↑)` |
+| `stop` | The stop commands |
+| `editable`, `frozen` | The scope patterns |
+| `notes_path` | Where this iteration's notes go (in the copy) |
+| `hints` | `.autohelix-iteration/hints.md` if there are hints, else empty |
+| `rejected_patch` | `.autohelix-iteration/rejected.patch` if the copy has one, else empty |
+| `discarded` | The paths whose changes the latest iteration lost to the scope |
+| `last` | The latest iteration (the baseline before iteration 1), or none: `{iteration, accepted, reason, summary, failure_output, gates: [{text, kind, status}], observe: [{name, ok, error, path}]}`; `status` is `passed`, `failed` or `pending`, and `path` is the entry's folder in the copy |
+| `time_limit` | `agent.timeout` as a compact duration (`15m`), or empty |
+| `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group |
 
-A custom template is a copy: it won't pick up future changes to the built-in one. Remove `prompt_template:` to return to it.
+A custom template is a copy: it won't pick up future changes to the built-in
+one. Remove `prompt_template:` to return to it. A run warns when a custom
+template still names `.autohelix/` paths in the agent's copy (they are now
+`.autohelix-iteration/`).
 
 ### Use case: a soft hold-out eval
 
-Editing the template is also how you can keep an evaluation *out of the agent's view* — useful for measuring generalization without the agent optimizing against the eval itself. Two prompt-only levers:
+Editing the template is also how you can keep an evaluation *out of the agent's view*, useful for measuring generalization without the agent optimizing against the eval itself. Two prompt-only levers:
 
-- **Don't list the eval command.** Drop the `{{observables}}` (or `{{constraints}}`) loop from your `prompt_template:` file. The command still runs and its metric still gates/ranks the run — it just isn't named in the prompt, so the agent isn't handed the exact thing to target.
-- **Fence the agent into its copy.** Add an explicit instruction to only read and write inside `{{worktree}}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in-scope to reverse-engineer.
+- **Don't list the eval command.** Drop the `observe` (or `gates`) loop from your `prompt_template:` file. The command still runs and its metric still gates and ranks the run; it just isn't named in the prompt. Its output is still stored under `.autohelix-iteration/observations/` in the agent's copy, so keep what it prints minimal.
+- **Fence the agent into its copy.** Add an explicit instruction to only read and write inside `{{ worktree }}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in scope to reverse-engineer.
 
-This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence — in testing, Claude declined to read an out-of-copy eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: copies live outside the project, but the agent runs as you, so one that is determined (or explicitly told to cheat) can still reach the project and anything else on disk by absolute path. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
+This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence: in testing, Claude declined to read an out-of-copy eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: copies live outside the project, but the agent runs as you, so one that is determined (or explicitly told to cheat) can still reach the project and anything else on disk by absolute path. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
 
 ## Runs and run state
 
@@ -211,8 +373,7 @@ This is a **best-effort nudge, not a security boundary.** In practice a cooperat
 │   ├── history.jsonl           # schema 1 result/core fields and model calls
 │   ├── notes -> notes.<n>      # agent memory; round-trips (link to the latest version)
 │   ├── notes.<n>/              # the notes as saved after iteration n (all kept)
-│   ├── observations/iter-N/    # stdout and captured artifacts
-│   ├── reviews/iter-N.md       # reviewer feedback archive
+│   ├── observations/iter-N/<name>/  # each observe entry's stdout, stderr and captures
 │   ├── hints.md
 │   ├── logs/iter-N/call-*/     # separate directory per actual agent/judge call
 │   ├── output/report.md
@@ -238,7 +399,7 @@ part of a candidate (it is left out when the copy is frozen):
     ├── notes/                  this run's notes: the only thing saved back
     ├── history.jsonl           this run's iterations
     ├── observations/iter-K/  logs/iter-K/
-    ├── review.md               the latest review (with a reviewer)
+    ├── rejected.patch          after a rejection: the rejected attempt's change
     ├── commit_summary.txt      written by the agent: the commit's first line
     └── runs/<other-id>/        other runs of the group: run.json, history.jsonl, notes/
 ```
@@ -246,9 +407,9 @@ part of a candidate (it is left out when the copy is frozen):
 Only `notes/` round-trips: when the copy is frozen it is saved as a new version,
 `runs/<id>/notes.<n>/`, and the `runs/<id>/notes` link switches to it in one
 step, so a note the agent deletes stays deleted and other runs never read a
-half-saved mix. Everything else is reference material. The review archive never
-enters a copy. The reviewer's copy gets the same material plus
-`candidate.diff`; a checks copy gets only `candidate.diff`, a stop copy none of it.
+half-saved mix. Everything else is reference material. A checks copy gets only
+`candidate.diff`; a review's copy `candidate.diff` (and `previous.md` with
+`previous: true`); a stop copy none of it.
 
 A run is a line of work: `autohelix run` starts one, `autohelix resume` continues
 one (by default the config's most recently active), `archive` sets one aside and
@@ -280,8 +441,9 @@ accepted code. Agents can still reach the project, its `.git`, other runs and
 logs possible escapes, without reverting user edits. Copies are correctness tools
 for cooperative agents, not a filesystem security boundary.
 
-Archive retains evidence and unlanded commits and leaves code intact. Delete
-removes the run directory and ref, while lock files remain outside that
+Archive retains evidence, unlanded commits and rejected trees, and leaves code
+intact. Delete removes the run directory, its ref and its
+`refs/autohelix-rejected/<id>/` refs, while lock files remain outside that
 directory. Runs abandoned by earlier versions read as archived. Legacy top-level
 history must be moved or deleted before run; there is no automatic migration.
 
@@ -293,9 +455,10 @@ Available token usage and cost are captured from agent backends:
 - **Cumulative**: shown in the final summary
 - **Persisted**: stored in `.autohelix/runs/<id>/history.jsonl` for later analysis
 
-Each iteration's cost includes its optimization agent and reviewer. Run totals
-and `budget.cost` also include baseline reviews. History's `calls` list records each agent, reviewer and command-judge attempt with
-its role, usage and log path; baseline judges/reviewer and failed calls count too.
+Each iteration's cost includes its optimization agent and the model calls its
+commands report (`ask`, `review`). Run totals and `budget.cost` also include the
+baseline's. History's `calls` list records each agent and command call with
+its role, usage and log path; baseline calls and failed calls count too.
 Failed main-agent calls consume their iteration number and resume at the next one;
 setup failures before a call do not. Baseline retry calls stay in iteration 0.
 `calls` is the sole persisted usage representation; log paths are relative to the
@@ -323,4 +486,4 @@ the pricing assumptions and accounting limits.
 
 ## Run page
 
-To follow a run live, use [`autohelix view`](cli.md#autohelix-view) in a terminal, or `autohelix view --web` for this page in a browser. When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/runs/<id>/output/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's notes and review, the changes from the baseline to the final code, and the run summary when there is one (see [Configuration → Report](config.md#report)). It leaves out agent and reviewer activity, per-iteration diffs, and captured output; use `autohelix view --web` for those. `autohelix report` also rewrites it.
+To follow a run live, use [`autohelix view`](cli.md#autohelix-view) in a terminal, or `autohelix view --web` for this page in a browser. When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/runs/<id>/output/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's gates, notes and observe entries (status and metrics; a review's text), the changes from the baseline to the final code, and the run summary when there is one (see [Configuration → Report](config.md#report)). It leaves out agent activity, per-iteration diffs, and stdout, stderr and captured files; use `autohelix view --web` for those. `autohelix report` also rewrites it.

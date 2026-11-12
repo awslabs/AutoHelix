@@ -2,6 +2,109 @@
 
 ## Unreleased
 
+### Config v2
+
+A new config format: `gates:` say what can reject an iteration, `observe:`
+what the next agent reads and which numbers the run tracks. See
+[docs/config.md](docs/config.md), including the table of old and new keys.
+
+Breaking:
+
+- **Old keys are errors that name their replacement**; there are no aliases
+  and no migration:
+  - `constraints:` → `gates:` (commands, unchanged);
+  - `metrics:` / `observables:` → `observe:`, every entry with a `name:`;
+    `values:` → `metrics:`; `capture_stdout:` is gone (stdout is always saved);
+  - `acceptance.metric_gates` (`max_regression_pct`) → a `gates:` entry
+    `- metric: NAME` with `regress: N%`, compared with the last accepted
+    iteration instead of the best value;
+  - `reviewer:` → an `observe:` entry with `name:` and `review: <prompt>`;
+    the built-in reviewer, `reviews/` and `review.md` are removed;
+  - `agent.type` → `agent.backend`; `agent.settings.model` → `agent.model`;
+  - `agent.timeout_seconds` and `budget.iteration_time` → `agent.timeout`, a
+    hard kill that also gives time-left hints where the backend supports them
+    (a Codex without hook support warns and runs without them).
+- Metric gate thresholds are percent strings (`regress: 5%`); a bare number
+  is an error. Durations everywhere: a bare number is seconds, strings like
+  `90s`, `30m`, `2h30m`.
+- `.autohelix/prompt.md` is not read (a run warns while it exists); use
+  `prompt_template:`, a path relative to the config file.
+- Observe output is stored by entry name,
+  `observations/iter-N/<name>/` (`stdout.txt`, `stderr.txt`, captures at
+  their relative paths), so captures with one basename no longer collide.
+- Prompt template variables are renamed (see below); custom templates need
+  updating.
+
+Added:
+
+- **`gates:`**: commands, `ask:` entries (shorthand for `autohelix ask`, with
+  `"yes":`/`"no":` and an `agent:` of their own) and `metric:` entries with
+  `regress: N%` or `improve: N%` against the last accepted iteration. Gate
+  commands run first, in order; the first failure rejects.
+- **`observe:`**: named command entries (`metrics:`, `capture:` files or
+  folders, `timeout:`) and `review:` entries, run top to bottom after the
+  gates; each metric gate is checked as soon as its number exists. A failing
+  entry is recorded and shown to the next agent, contributes no metrics, and
+  doesn't reject. Every observe command gets `$AUTOHELIX_PREVIOUS`, a copy of
+  its own output from the last accepted iteration in which it succeeded.
+- **`autohelix review`**: a read-only review of a change, as feedback text. In
+  a run it reviews its own fresh copy of exactly the candidate, with the full
+  change as `candidate.diff`; `--previous` adds its own last accepted review
+  (progress tracking), `--metric NAME:higher|lower` numbers it must report
+  (printed as `##autohelix[...]` lines by the command; the prose can't carry
+  one). By hand it reviews the working tree against `--base` (default `HEAD`).
+  Exits 2 when no valid review was produced or the reviewer changed files.
+- `autohelix ask --command`; rendered `ask`/`review` commands put the
+  question or prompt after `--`.
+- Every harness command gets `$AUTOHELIX_CANDIDATE`, `$AUTOHELIX_BASE`,
+  `$AUTOHELIX_PROJECT` and a private `$AUTOHELIX_SCRATCH`; stop commands also
+  `$AUTOHELIX_OBSERVATIONS`, a copy of the accepted iteration's observations.
+- The baseline runs every gate command and observe entry (rejecting nothing).
+  A missing metric from a command entry stops the run; one from a review only
+  if a gate uses it, otherwise it is a warning.
+- **Rejected work is kept**: each rejected attempt's tree as
+  `refs/autohelix-rejected/<id>/<n>` (also failed or timed-out agent calls;
+  removed by `delete`), and the next agent gets the latest rejection's change
+  as `.autohelix-iteration/rejected.patch`.
+- **Discarded paths are reported**: changes outside the scope are recorded
+  with the iteration (`discarded`), named in the next prompt, and shown in the
+  viewer. `scope.editable` and `scope.frozen` can be combined (editable minus
+  frozen). A run with gate or observe commands but no scope warns.
+- **The prompt is a documented contract**: `goal`, `title`, `iteration`,
+  `worktree`, `history`, `gates`, `observe`, `stop`, `editable`, `frozen`,
+  `notes_path`, `hints`, `rejected_patch`, `discarded`, `last` (the latest
+  iteration's outcome, gate results and observations), `time_limit`, `group`,
+  `group_runs`. The history lines include each iteration's one-line summary.
+  The goal's first line is the run's title (validation warns when it is long).
+- History records `gates` (in list order, not reached ones as `null`),
+  `observe` (per entry: `ok`, `error`, `metrics`), `summary`, `discarded` and
+  `rejected_ref`; `view --json` adds `gates`, `observe`, `summary` and
+  `discarded`.
+- Viewer: one section per observe entry (status, metrics, stdout, stderr,
+  captured files; a review as Markdown), gates in list order with pending
+  ones, the agent's summary per iteration, each iteration's own diff
+  (rejected attempts included), and the goal's title.
+- Console: a failed gate prints its text (`ask: <question>` for `ask:`
+  entries); a failed observe entry prints why its metrics are missing.
+
+Hardening:
+
+- Harness commands call `autohelix` through a launcher first on their `PATH`
+  that runs the harness's own installation in isolated mode, so candidate code
+  on the remapped `PYTHONPATH` can't replace modules inside `ask` or `review`.
+- Gate, observe and stop commands run in their own process group, killed
+  whole when the command ends or times out, so background children can't keep
+  writing after the harness checked the files.
+- Observe output is staged after the command ended and then replaces the
+  entry's folder; `capture:` paths into `.git`, `.autohelix` or
+  `.autohelix-iteration`, or leaving the copy, are config errors; symlinks are
+  never followed and only regular files and folders are copied.
+- Reviews drop symlinks pointing outside their copy, and check that
+  `candidate.diff` and `previous.md` are unchanged after the call.
+- The viewer serves files only from known run folders, opened one path
+  component at a time without following symlinks, and passes git only object
+  names that are plain hex.
+
 ### Changed (breaking)
 
 - **Runs.** Each `autohelix run` starts a new run, with its own id and state
@@ -19,9 +122,9 @@
   `autohelix land`. You can keep working in your checkout while a run goes.
 - **Every phase runs in a fresh private copy outside the project**, under
   `~/.cache/autohelix/copies/` (override with `AUTOHELIX_COPIES_ROOT`). Checks
-  run on exactly the code that would be accepted; a check, reviewer or
+  run on exactly the code that would be accepted; a check, review or
   `autohelix ask` call that changes it rejects the iteration, and the baseline
-  runs the constraints once to catch a check that edits files.
+  runs the gates once to catch a check that edits files.
 - `autohelix archive` hides runs from the dashboard and a bare `resume`,
   keeping everything; `autohelix delete` removes a run's state and ref
   (`--force` with unlanded commits). `clear` is gone.
@@ -46,7 +149,7 @@
   `.autohelix/peer_notes/` and the `peers`/`peer_runs` prompt variables are
   gone (use `group` and `group_runs`).
 - **The agent's copy keeps the harness's material in `.autohelix-iteration/`**
-  (was `.autohelix/`): `notes/`, `history.jsonl`, `hints.md`, `review.md`,
+  (was `.autohelix/`): `notes/`, `history.jsonl`, `hints.md`,
   `commit_summary.txt`, `observations/`, `logs/`, and `prompt.md`, now this
   iteration's rendered prompt. Checks copies get only
   `.autohelix-iteration/candidate.diff`. A copy's git lists only this run's
@@ -87,7 +190,7 @@
   (concurrent runs in one project).
 - From #16: the live run viewer (`autohelix view`), run summaries and
   `report.html`, stop commands and `autohelix ask`, and cost accounting
-  across agents, reviewers and resumed runs.
+  across agents, judges and resumed runs.
 
 ## 0.1.1 — 2026-09-02
 
