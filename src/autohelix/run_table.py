@@ -9,11 +9,21 @@ no colors, so it can be piped.
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime
 from autohelix.formatting import format_delta, format_duration
 
 WORDS = {"crashed": "stopped unexpectedly", "idle": "not started"}  # others as they are (dashboard.js)
+# Control characters (C0, DEL, C1): from agents, configs and paths, they could move the
+# cursor, recolor or retitle the terminal, or start a fake row.
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def clean(text) -> str:
+    """Text safe to print in one terminal cell: tabs and newlines become spaces,
+    other control characters "�"."""
+    return CONTROL.sub(lambda m: " " if m[0] in "\t\n\r" else "�", str(text))
 
 
 def _live(run: dict) -> bool:
@@ -106,6 +116,7 @@ def metric_names(runs: list[dict]) -> list[str]:
 
 
 def _table(rows: list[list[str]], right: set[int]) -> list[str]:
+    rows = [[clean(cell) for cell in row] for row in rows]
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
     return ["  ".join(cell.rjust(w) if i in right else cell.ljust(w)
                       for i, (cell, w) in enumerate(zip(row, widths))).rstrip() for row in rows]
@@ -132,7 +143,7 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
         summary.append(f"{len(archived)} archived (not listed; see --json)")
     lines = [f"{data['project']}  {_where(data)}", " · ".join(summary)]
     if not shown:
-        return "\n".join(lines + ["", "No runs yet." if not runs else "All runs are archived."]) + "\n"
+        return "\n".join(map(clean, lines + ["", "No runs yet." if not runs else "All runs are archived."])) + "\n"
 
     metric = metric or next(iter(metric_names(shown)), None)
     head = ["RUN", "STATUS", "ITER"] + ([metric] if metric else []) + ["LANDING", "ACTIVE", "GOAL"]
@@ -146,7 +157,7 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
                     + [_landing(run), "now" if _live(run) else _ago(run["last_activity"], now),
                        run.get("title") or ""])
         rows.append(["  " + (run["config_file"] or ""), _spent(run, now)] + [""] * (len(head) - 2))
-    return "\n".join(lines + [""] + _table(rows, right={2, 3} if metric else {2})) + "\n"
+    return "\n".join(list(map(clean, lines)) + [""] + _table(rows, right={2, 3} if metric else {2})) + "\n"
 
 
 def format_run(data: dict, now: float | None = None) -> str:
@@ -185,7 +196,7 @@ def format_run(data: dict, now: float | None = None) -> str:
         rows.extend([""] * (len(names) + 4) + [line] for line in more)
     if under_way:
         rows.append([str(under_way), "…"] + [""] * len(names) + ["", "", _state(run, now)])
-    return "\n".join(lines + [""] + _table(rows, right={0, *range(2, len(names) + 4)})) + "\n"
+    return "\n".join(list(map(clean, lines)) + [""] + _table(rows, right={0, *range(2, len(names) + 4)})) + "\n"
 
 
 def _summary(r: dict) -> tuple[str, list[str]]:

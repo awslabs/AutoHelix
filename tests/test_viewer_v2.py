@@ -1,48 +1,20 @@
 """The viewer's config-v2 data: observations by entry, gates, summaries, discarded
 paths, per-iteration diffs and titles (web API and terminal tables)."""
 
-import dataclasses
 import json
 import os
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 
 import pytest
 
 from autohelix import run_table
-from autohelix.history import History, IterationResult
-from autohelix.live import fit
+from autohelix.live import fit, status_line
 from autohelix.runs import RunPaths, write_json
-from autohelix.viewer import ProjectRuns, RunData, make_server, review_markdown
-
-FUTURE = {"summary", "base", "tree", "discarded", "rejected_ref"}
-
-
-@pytest.fixture(autouse=True)
-def future_fields(monkeypatch):
-    """Records keep the fields the harness is adding (summary, base, tree, discarded,
-    rejected_ref) even while `IterationResult` doesn't declare them yet."""
-    missing = FUTURE - {f.name for f in dataclasses.fields(IterationResult)}
-    if not missing:
-        return
-    original = History.load
-
-    def load(self):
-        results = original(self)
-        raw = {}
-        if self.history_path.exists():
-            for line in self.history_path.read_text().splitlines():
-                if line.strip():
-                    data = json.loads(line)
-                    raw[data["iteration"]] = data
-        for result in results:
-            for name in missing:
-                setattr(result, name, raw.get(result.iteration, {}).get(name))
-        return results
-
-    monkeypatch.setattr(History, "load", load)
+from autohelix.viewer import MAX_TEXT, ProjectRuns, RunData, make_server, review_markdown, write_static
 
 
 def git(project, *args):
@@ -142,7 +114,7 @@ def server(project):
 
 def get(url):
     try:
-        with urllib.request.urlopen(url) as response:
+        with urllib.request.urlopen(url, timeout=20) as response:  # a hang fails, not blocks
             return response.status, response.read(), response.headers.get("Content-Type")
     except urllib.error.HTTPError as error:
         return error.code, error.read(), None
@@ -306,3 +278,171 @@ def test_terminal_tables_show_gates_summaries_and_titles(project):
     cut = fit(text, head + 3).splitlines()
     assert cut[head] == "  … 2 earlier iterations"
     assert [line.strip() for line in cut[head + 1:]] == [table[5].strip(), "Try radix sort"]
+
+
+# ---------- hardening ----------
+
+def test_symlinked_observations_folder_lists_and_serves_nothing(project, server):
+    obs = RunPaths(project, "test").observations
+    moved = project / "elsewhere"
+    obs.rename(moved)
+    os.symlink(moved, obs)
+    bench, review = get_json(server + "/api/iteration/1")["observe"]  # still listed: the record names them
+    assert (bench["stdout"], bench["files"], review["html"]) == (None, [], None)
+    assert get(server + "/api/artifact/1/bench/results/deep/log.json")[0] == 404
+    assert [s for s in get_json(server + "/api/iteration/0")["observe"] if s.get("legacy")] == []
+
+
+def test_symlinked_entry_folder_shows_nothing(project, server):
+    obs = RunPaths(project, "test").observations / "iter-1"
+    (obs / "bench").rename(project / "bench-elsewhere")
+    os.symlink(project / "bench-elsewhere", obs / "bench")
+    bench = get_json(server + "/api/iteration/1")["observe"][0]
+    assert (bench["stdout"], bench["files"]) == (None, [])
+    assert get(server + "/api/artifact/1/bench/stdout.txt")[0] == 404
+
+
+def test_hard_links_are_not_listed_or_served(project, server):
+    bench = RunPaths(project, "test").observations / "iter-1" / "bench"
+    os.link(project / "secret.txt", bench / "results" / "hard.txt")
+    (bench / "stdout.txt").unlink()
+    os.link(project / "secret.txt", bench / "stdout.txt")
+    detail = get_json(server + "/api/iteration/1")["observe"][0]
+    assert "bench/results/hard.txt" not in [f["path"] for f in detail["files"]]
+    assert detail["stdout"] is None
+    assert get(server + "/api/artifact/1/bench/results/hard.txt")[0] == 404
+    assert get(server + "/api/artifact/1/bench/stdout.txt")[0] == 404
+    assert get(server + "/api/artifact/1/bench/results/deep/log.json")[0] == 200
+
+
+def test_notes_never_block_on_fifos_or_follow_symlinks(project, server):
+    from autohelix.runs import ensure_copies
+
+    paths = RunPaths(project, "test")
+    version = paths.run_dir / "notes.1"
+    version.mkdir()
+    os.mkfifo(version / "iter-1.md")
+    os.symlink(project / "secret.txt", version / "iter-2.md")
+    (version / "ideas.md").write_text("# Ideas\n")
+    os.symlink("notes.1", paths.run_dir / "notes")
+    state = get_json(server + "/api/state")
+    assert state["notes_files"] == ["ideas.md"]
+    assert get_json(server + "/api/iteration/1")["notes"] is None
+    assert get_json(server + "/api/iteration/2")["notes"] is None
+    assert get(server + "/api/notes/iter-1.md")[0] == 404
+    assert "<h1>Ideas</h1>" in get_json(server + "/api/notes/ideas.md")["html"]
+    # A running iteration's note, read from the agent's copy.
+    ensure_copies(paths.copies)
+    notes = paths.copies / "iter-3-agent" / ".autohelix-iteration" / "notes"
+    notes.mkdir(parents=True)
+    os.mkfifo(notes / "iter-3.md")
+    write_json(paths.status, {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "agent",
+                              "phase_started_at": 1, "iteration_started_at": 1})
+    assert get_json(server + "/api/iteration/3")["notes"] is None
+    (notes / "iter-3.md").unlink()
+    (notes / "iter-3.md").write_text("Working on **it**\n")
+    assert "<strong>it</strong>" in get_json(server + "/api/iteration/3")["notes"]
+
+
+def test_diffs_ignore_the_users_diff_settings(project, server):
+    from autohelix.runs import ensure_copies
+    from autohelix.workspace import Copy, Repo
+
+    for key, value in (("color.ui", "always"), ("color.diff", "always"), ("diff.noprefix", "true"),
+                       ("diff.mnemonicPrefix", "true"), ("diff.relative", "true"),
+                       ("diff.suppressBlankEmpty", "true")):
+        git(project, "config", key, value)
+    attempt = get_json(server + "/api/iteration/1/diff")["diff"]
+    assert "\x1b" not in attempt and "diff --git a/sort.py b/sort.py" in attempt and "--- a/sort.py" in attempt
+
+    paths = RunPaths(project, "test")
+    base = json.loads(paths.identity.read_text())["base_commit"]
+    tree = get_json(server + "/api/iteration/1")["attempt"]["tree"]
+    commit = git(project, "commit-tree", tree, "-p", base, "-m", "accepted")
+    accepted = RunData(project, run_id="test")._diff(base, commit)
+    assert "\x1b" not in accepted and "diff --git a/sort.py b/sort.py" in accepted
+
+    ensure_copies(paths.copies)
+    copy = Copy.create(Repo(project), paths.copies / "iter-3-agent", files="HEAD", head="HEAD")
+    (copy.path / "sort.py").write_text("def sort(xs):\n    return xs\n")
+    write_json(paths.status, {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "agent",
+                              "phase_started_at": 1, "iteration_started_at": 1})
+    live = get_json(server + "/api/iteration/3")["diff"]
+    assert "\x1b" not in live and "diff --git a/sort.py b/sort.py" in live and "+    return xs" in live
+    copy.remove()
+
+
+def test_large_diffs_are_cut_with_a_note_and_the_cache_is_bounded(project, monkeypatch):
+    import autohelix.viewer as viewer_module
+
+    monkeypatch.setattr(viewer_module, "MAX_TEXT", 100)
+    monkeypatch.setattr(viewer_module, "DIFF_CACHE", 2)
+    data = RunData(project, run_id="test")
+    diff = data.attempt_diff(1)
+    assert diff["error"] is None
+    assert diff["diff"].endswith("\n[… diff cut at 0 KB …]\n") and len(diff["diff"].encode()) < 100 + 40
+    base = json.loads(RunPaths(project, "test").identity.read_text())["base_commit"]
+    tree = data.records()[1].tree
+    for a, b in ((base, tree), (tree, base), (base, base)):
+        data._cached_diff(a, b)
+    assert list(data._diffs) == [f"{tree}:{base}", f"{base}:{base}"]
+
+
+def test_terminal_cells_carry_no_control_characters(project):
+    paths = RunPaths(project, "test")
+    rows = [json.loads(line) for line in paths.history.read_text().splitlines()]
+    rows[1]["summary"] = "ok\n   9  ✓  fake row\x1b[31m"
+    rows[1]["discarded"] = ["a\nb.py", "c\x9bd"]
+    rows[2]["gates"][0]["text"] = "pytest\x1b]0;title\x07 -q"
+    rows[1]["observe"][1]["error"] = "exited\r\n2"
+    paths.history.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    (project / "autohelix.yaml").write_text(CONFIG.replace("goal: |\n  Make the sort faster\n",
+                                                           'goal: "Make \\e[2J it faster"\n#'))
+    runs = ProjectRuns(project)
+    for text in (run_table.format_run(runs.run("test")), run_table.format_runs(runs.runs())):
+        assert not run_table.CONTROL.search(text.replace("\n", ""))
+    lines = run_table.format_run(runs.run("test")).splitlines()
+    table = lines[lines.index("") + 1:]
+    assert sum(1 for line in table[1:] if line[:4].strip()) == 3  # no fake row
+    assert "Goal: Make �[2J it faster" in lines
+    stop = {"state": "finished", "stopped_at": time.time(), "stop_reason": {"detail": "done\x1b[2J"}}
+    assert "\x1b" not in status_line(stop)
+
+
+def test_report_page_loads_nothing(project):
+    page = write_static(project, run_id="test").read_text()
+    head = page[:page.index("</head>")]
+    assert ('<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
+            "script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:\">") in head
+    assert head.index("Content-Security-Policy") < head.index("<style>")
+
+
+def test_running_iteration_marks_only_the_entry_running(project, server):
+    paths = RunPaths(project, "test")
+    (paths.observations / "iter-3" / "bench").mkdir(parents=True)
+    (paths.observations / "iter-3" / "bench" / "stdout.txt").write_text("done\n")
+    status = {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "benchmark",
+              "phase_started_at": 1, "iteration_started_at": 1}
+    write_json(paths.status, status)
+    sections = get_json(server + "/api/iteration/3")["observe"]
+    assert [(s["name"], s["running"]) for s in sections] == [("bench", False)]
+    write_json(paths.status, {**status, "entry": "review"})
+    sections = get_json(server + "/api/iteration/3")["observe"]
+    assert [(s["name"], s["running"], s["stdout"]) for s in sections] == [
+        ("bench", False, "done\n"), ("review", True, None)]
+
+
+def test_config_is_parsed_again_only_when_its_file_changes(project, monkeypatch):
+    import autohelix.viewer as viewer_module
+
+    calls = []
+    real = viewer_module.load_config
+    monkeypatch.setattr(viewer_module, "load_config", lambda *a, **k: calls.append(1) or real(*a, **k))
+    data = RunData(project, run_id="test")
+    data.state()
+    data.state()
+    data.iteration(1)
+    assert len(calls) == 1
+    config = project / "autohelix.yaml"
+    config.write_text(config.read_text().replace("Make the sort faster", "Make the sort much faster"))
+    assert data.state()["title"] == "Make the sort much faster" and len(calls) == 2

@@ -647,7 +647,8 @@ function fillObserve(card, d) {
     setText(s.count, [
       o.review ? 'review' : null,
       failed ? `failed${o.error ? `: ${o.error}` : ''}` : null,
-      !o.legacy && !o.ran && o.ok == null ? (isLive(d) ? 'running' : 'not recorded') : null,
+      // While the iteration runs, entries with output have finished; their status comes with the record.
+      o.running ? 'running' : null,
       metrics || null,
       o.files.length ? `${o.files.length} file${o.files.length === 1 ? '' : 's'}` : null,
     ].filter(Boolean).map((x) => `· ${x}`).join(' '));
@@ -679,9 +680,6 @@ function fillObserve(card, d) {
   }));
 }
 
-function isLive(d) {
-  return d.iteration === liveIteration() && !state.iterations.some((x) => x.iteration === d.iteration);
-}
 
 // The attempt's own change (start commit to frozen tree), loaded when its section opens.
 async function loadAttempt(card) {
@@ -812,8 +810,14 @@ function renderDiff(box, stat, text, live) {
   const row = (kind, a, b, sign, code) => el('div', { className: `row ${kind}` },
     el('span', { className: 'ln', textContent: a }), el('span', { className: 'ln', textContent: b }),
     el('span', { className: 'sign', textContent: sign }), el('span', { className: 'code', textContent: code }));
+  let cut = '';
   for (const line of text.split('\n')) {
-    if (line.startsWith('diff --git ')) {
+    if (line.startsWith('[… diff cut')) { // the server stopped reading there
+      cut = line.replace(/^\[|\]$/g, '');
+      file?.rows.push(el('div', { className: 'gap', textContent: cut }));
+    } else if (line === '') {
+      continue; // the end (empty context lines are " ")
+    } else if (line.startsWith('diff --git ')) {
       file = { path: line.replace(/^diff --git .* b\/(.*)$/, '$1'), rows: [], add: 0, del: 0 };
       files.push(file);
       lastNew = 0;
@@ -838,7 +842,7 @@ function renderDiff(box, stat, text, live) {
   }
   const total = files.reduce((n, f) => [n[0] + f.add, n[1] + f.del], [0, 0]);
   setText(stat, (files.length ? `· ${files.length} file${files.length === 1 ? '' : 's'} · +${total[0]} −${total[1]}` : '')
-    + (live ? ' · in progress' : ''));
+    + (live ? ' · in progress' : '') + (cut ? ' · cut' : ''));
   box.replaceChildren(...(files.length ? files.map((f) => el('div', { className: 'diff-file' },
     el('div', { className: 'diff-path' }, el('span', { textContent: f.path }),
       el('span', { className: 'muted', textContent: ` +${f.add} −${f.del}` })),

@@ -7,9 +7,11 @@ Two pages share one server: `/` lists the project's runs, `/run/<id>/` shows one
 run. The pages poll a few JSON routes. There are no write routes. Every file read
 is derived from a run id that must name an existing run directory, an iteration
 number, a file name that must match an entry in notes/, or a relative path inside
-one iteration's observations/iter-N/ folder, opened one component at a time
-without following symlinks (`_open_inside`). Git only gets object names from
-history records that are plain hex. The unprefixed `/api/...` routes serve the
+one iteration's observations/iter-N/ folder. Run state is opened one component at
+a time from the run folder down, without following symlinks or blocking on FIFOs
+(`_open_dir`, `_open_file`). Git only gets object names from history records that
+are plain hex, and its diff output is fixed whatever the user's diff settings and
+cut at MAX_TEXT (`RunData._run_diff`). The unprefixed `/api/...` routes serve the
 server's default run.
 
 `write_static` saves the same page as one file, output/report.html, with the
@@ -25,7 +27,7 @@ import stat
 import subprocess
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
@@ -65,6 +67,8 @@ ASSETS = {
 # Raw HTML in notes and review output is shown as text, never rendered.
 _MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
 CSP = "default-src 'self'; object-src 'none'; frame-ancestors 'none'"
+# report.html, opened from disk: its data and code are inline; it loads nothing.
+STATIC_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:"
 # The lines `autohelix review` prints for its numbers. The review's own prose has
 # them escaped ("##autohelix ["), so only the command's lines match.
 METRIC_LINE = re.compile(r"^[ \t]*##autohelix\[[^\]\n]*\][ \t]*(?:\n|$)", re.MULTILINE)
@@ -93,90 +97,151 @@ def _object(value) -> str | None:
 _OPEN = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
 
 
-def _open_inside(folder: Path, parts: list[str]) -> int | None:
-    """A read descriptor for the regular file `folder/parts...`, or None.
+def _bad_parts(parts) -> bool:
+    return any(not isinstance(part, str) or part in ("", ".", "..") or "/" in part or "\0" in part
+               for part in parts)
 
-    `folder` and every component below it are opened without following symlinks,
-    each relative to the one before: no `..`, no absolute paths, nothing outside
-    `folder`, and no FIFOs or devices."""
-    if not parts or any(part in ("", ".", "..") or "/" in part or "\0" in part for part in parts):
+
+def _open_dir(root: Path, parts) -> int | None:
+    """A descriptor for the folder `root/parts...`, or None. `root`'s last component and
+    every part below it are opened without following symlinks, each relative to the
+    one before: no `..`, no absolute paths, nothing outside `root`."""
+    if _bad_parts(parts):
         return None
-    fds: list[int] = []
+    fd = None
     try:
-        fds.append(os.open(folder, _OPEN | os.O_DIRECTORY))
-        for part in parts[:-1]:
-            fds.append(os.open(part, _OPEN | os.O_DIRECTORY, dir_fd=fds[-1]))
-        fd = os.open(parts[-1], _OPEN | os.O_NONBLOCK, dir_fd=fds[-1])
+        fd = os.open(root, _OPEN | os.O_DIRECTORY)
+        for part in parts:
+            child = os.open(part, _OPEN | os.O_DIRECTORY, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd
+    except OSError:
+        if fd is not None:
+            os.close(fd)
+        return None
+
+
+def _open_file(root: Path, parts, single_link: bool = False) -> int | None:
+    """A read descriptor for the regular file `root/parts...` (opened as `_open_dir`
+    opens folders), or None: never a symlink, FIFO or device, and with `single_link`
+    never a file with other hard links (one planted to point at a file elsewhere)."""
+    if not parts or _bad_parts(parts):
+        return None
+    parent = _open_dir(root, parts[:-1])
+    if parent is None:
+        return None
+    try:
+        fd = os.open(parts[-1], _OPEN | os.O_NONBLOCK, dir_fd=parent)
     except OSError:
         return None
     finally:
-        for parent in fds:
-            os.close(parent)
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(parent)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or (single_link and info.st_nlink != 1):
         os.close(fd)
         return None
     return fd
 
 
-def _read_inside(folder: Path, parts: list[str], limit: int) -> bytes | None:
-    """The whole file, through `_open_inside`; None if it is larger than `limit`."""
-    fd = _open_inside(folder, parts)
+def _read_bytes(root: Path, parts, limit: int, single_link: bool = False) -> bytes | None:
+    """The whole file, through `_open_file`; None if it is larger than `limit`."""
+    fd = _open_file(root, parts, single_link)
     if fd is None:
         return None
     with os.fdopen(fd, "rb") as f:
-        return None if os.fstat(f.fileno()).st_size > limit else f.read()
+        return None if os.fstat(f.fileno()).st_size > limit else f.read(limit + 1)
 
 
-def _read_text_inside(folder: Path, parts: list[str]) -> str | None:
-    """`_read_text` through `_open_inside`."""
-    fd = _open_inside(folder, parts)
-    if fd is None:
-        return None
+def _tail(fd: int) -> str:
+    """A text file's content, keeping the tail if it is very large."""
     with os.fdopen(fd, "rb") as f:
         size = f.seek(0, 2)
         f.seek(max(0, size - MAX_TEXT))
-        text = f.read().decode("utf-8", errors="replace")
+        text = f.read(MAX_TEXT).decode("utf-8", errors="replace")
     return text if size <= MAX_TEXT else "[… earlier content omitted …]\n" + text
 
 
-def _tree_files(folder: Path, skip: tuple[str, ...] = ()) -> list[dict]:
-    """Regular files below a folder as `{"path": "a/b.txt", "size"}`, at most MAX_FILES;
-    symlinks (to files or folders) are left out, and so are `skip` names at the top."""
-    out: list[dict] = []
-    for top, dirs, names in os.walk(folder):
-        dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(top, d)))
-        for name in sorted(names):
-            if top == str(folder) and name in skip:
-                continue
+def _read_text_at(root: Path, parts, single_link: bool = False) -> str | None:
+    """`_tail` of `root/parts...`, through `_open_file`."""
+    fd = _open_file(root, parts, single_link)
+    return None if fd is None else _tail(fd)
+
+
+def _read_user_file(path: Path) -> str | None:
+    """`_tail` of a file the user owns (the config: a symlink to it is fine), never
+    blocking on a FIFO."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return None
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        return None
+    return _tail(fd)
+
+
+def _listing(root: Path, parts) -> list[tuple[str, os.stat_result]]:
+    """The entries of the folder `root/parts...` (opened as `_open_dir` does), with
+    their own lstat."""
+    fd = _open_dir(root, parts)
+    if fd is None:
+        return []
+    out = []
+    try:
+        for name in os.listdir(fd):
             try:
-                info = os.lstat(os.path.join(top, name))
+                out.append((name, os.stat(name, dir_fd=fd, follow_symlinks=False)))
             except OSError:
                 continue
-            if stat.S_ISREG(info.st_mode):
-                out.append({"path": (Path(top) / name).relative_to(folder).as_posix(), "size": info.st_size})
-                if len(out) >= MAX_FILES:
-                    return out
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+    return sorted(out)
+
+
+def _tree_files(root: Path, parts, skip: tuple[str, ...] = ()) -> list[dict]:
+    """Regular single-link files below the folder `root/parts...` (opened as `_open_dir`
+    does) as `{"path": "a/b.txt", "size"}`, at most MAX_FILES, walked through
+    descriptors without following symlinks; `skip` names at the top are left out."""
+    fd = _open_dir(root, parts)
+    if fd is None:
+        return []
+    out: list[dict] = []
+    try:
+        for top, dirs, names, top_fd in os.fwalk(".", dir_fd=fd, follow_symlinks=False):
+            keep = []
+            for name in sorted(dirs):
+                try:
+                    if stat.S_ISDIR(os.stat(name, dir_fd=top_fd, follow_symlinks=False).st_mode):
+                        keep.append(name)
+                except OSError:
+                    pass
+            dirs[:] = keep
+            for name in sorted(names):
+                if top == "." and name in skip:
+                    continue
+                try:
+                    info = os.stat(name, dir_fd=top_fd, follow_symlinks=False)
+                except OSError:
+                    continue
+                if stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                    out.append({"path": os.path.normpath(os.path.join(top, name)), "size": info.st_size})
+                    if len(out) >= MAX_FILES:
+                        return out
+    finally:
+        os.close(fd)
     return out
 
 
-def _read_text(path: Path) -> str | None:
-    """Read a text file, keeping the tail if it is very large."""
-    try:
-        with path.open("rb") as f:
-            size = f.seek(0, 2)
-            f.seek(max(0, size - MAX_TEXT))
-            text = f.read().decode("utf-8", errors="replace")
-        return text if size <= MAX_TEXT else "[… earlier content omitted …]\n" + text
-    except OSError:
-        return None
-
-
-def _files(directory: Path) -> list[os.DirEntry]:
-    """Regular files directly in a directory (no symlinks, no subdirectories)."""
-    try:
-        return [e for e in os.scandir(directory) if e.is_file(follow_symlinks=False)]
-    except OSError:
-        return []
+DIFF_ARGS = ("diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
+             "--no-relative")
+# The user's diff settings must not change the text the page parses.
+DIFF_CONFIG = ("-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "-c", "color.ui=never",
+               "-c", "color.diff=never", "-c", "diff.suppressBlankEmpty=false")
+DIFF_CACHE = 16  # diffs kept per run (each at most MAX_TEXT)
+DIFF_CUT = "[… diff cut at {} KB …]"
 
 
 def _note_order(name: str):
@@ -195,10 +260,16 @@ class RunData:
         self.config_file = config_file
         self.history = History(self.project, self.paths.run_id)
         self._logs: dict[Path, tuple[LogTail, deque]] = {}
-        self._diffs: dict[str, str] = {}
+        # Diffs by their two objects, most recent last (`_cached_diff`). Diffs run git
+        # outside the server's lock, so the cache and a live copy's index have their own.
+        self._diffs: OrderedDict[str, tuple[str | None, str | None]] = OrderedDict()
+        self._diff_lock = threading.Lock()
+        self._live_lock = threading.Lock()
+        self._history_lock = threading.Lock()
         self._clipped: set[Path] = set()  # logs whose oldest events were dropped
         self._subject_cache: dict[str, str | None] = {}
         self._repository = None
+        self._configs: dict[Path, tuple[tuple, object, str | None]] = {}  # path -> (stat key, config, text)
 
     def _refresh_current(self):
         if self.run_id in (None, "current"):
@@ -208,19 +279,35 @@ class RunData:
                 self.root = paths.run_dir
                 self.history = History(self.project, paths.run_id)
                 self._logs.clear()
-                self._diffs.clear()
+                with self._diff_lock:
+                    self._diffs.clear()
+
+    def records(self):
+        """The run's history (diffs read it outside the server's lock)."""
+        with self._history_lock:
+            return self.history.load()
 
     def _config(self):
+        """The run's stored config, parsed again only when its file changes."""
         stored = read_stored_config_path(self.project, self.paths.run_id) if self.paths.run_id else None
-        path = self.config_file or stored or self.project / "autohelix.yaml"
+        path = Path(self.config_file or stored or self.project / "autohelix.yaml")
         try:
-            return load_config(self.project, config_file=path)[0], path
-        except Exception:
-            return None, path
+            info = path.stat()
+            key = (info.st_mtime_ns, info.st_size, info.st_ino)
+        except OSError:
+            key = None
+        cached = self._configs.get(path)
+        if cached is None or cached[0] != key or key is None:
+            try:
+                config = load_config(self.project, config_file=path)[0]
+            except Exception:
+                config = None
+            cached = self._configs[path] = (key, config, _read_user_file(path))
+        return cached[1], path
 
-    @staticmethod
-    def _config_summary(config, path: Path) -> dict:
-        summary = {"file": path.name, "text": _read_text(path)}
+    def _config_summary(self, config, path: Path) -> dict:
+        cached = self._configs.get(path)
+        summary = {"file": path.name, "text": cached[2] if cached else _read_user_file(path)}
         if config:
             summary.update(
                 agent=" · ".join(filter(None, [config.agent.backend, config.agent.model])),
@@ -259,7 +346,7 @@ class RunData:
     def state(self) -> dict:
         self._refresh_current()
         config, config_path = self._config()
-        records = self.history.load() if self.paths.run_id else []
+        records = self.records() if self.paths.run_id else []
         total_cost = summarize_costs([usage for row in records for usage in row.cost_usages])
         iterations = self.iterations(records)
         return {
@@ -270,7 +357,7 @@ class RunData:
             "status": read_run_status(self.project, self.paths.run_id),
             "run_id": self.paths.run_id,
             "config": self._config_summary(config, config_path),
-            "notes_files": sorted((e.name for e in _files(self.root / "notes")), key=_note_order) if self.paths.run_id else [],
+            "notes_files": sorted(self._notes_files(), key=_note_order) if self.paths.run_id else [],
             "iterations": iterations,
             "cost": {
                 "cost_usd": total_cost.cost_usd,
@@ -282,8 +369,23 @@ class RunData:
     def _report(self) -> dict | None:
         if not self.paths.run_id:
             return None
-        html = _markdown(_read_text(self.root / "output" / "report.md"))
+        html = _markdown(_read_text_at(self.root, ["output", "report.md"]))
         return {"html": html, **(read_report_info(self.project, self.paths.run_id) or {})} if html else None
+
+    def changes(self, n: int) -> str | None:
+        """Changes vs baseline: an accepted iteration's code against the run's start, or a
+        running one's edits so far. Runs git; the server calls it outside its lock."""
+        if not self.paths.run_id:
+            return None
+        record = next((r for r in self.records() if r.iteration == n), None)
+        base = _object(self.paths.read_identity().get("base_commit"))
+        if not base:
+            return None
+        if record is None:
+            return self._live_diff(n, base)
+        if record.accepted and _object(record.commit):
+            return self._diff(base, record.commit)
+        return None
 
     def iteration(self, n: int, logs: bool = True, diff: bool = True, outputs: bool = True) -> dict:
         """One iteration's card. Without `outputs` (report.html), observe entries keep their
@@ -293,32 +395,24 @@ class RunData:
             return {"iteration": n, "failure_output": None, "notes": None, "diff": None, "agent": [],
                     "calls": [], "agent_clipped": False, "gates": [], "observe": [], "summary": None,
                     "discarded": [], "attempt": None}
-        records = self.history.load()
+        records = self.records()
         record = next((r for r in records if r.iteration == n), None)
-        # The baseline is the code the run started from: the parent of the first accepted commit.
-        first = next((r.commit for r in records if r.iteration > 0 and r.accepted and r.commit), None)
-        base = (self.paths.read_identity()["base_commit"] if self.paths.run_id
-                else f"{first}^" if first and COMMIT.fullmatch(first) else None)
-        changes = None
-        if not diff:
-            pass
-        elif record is None:  # Still running: its edits so far, from the worktree.
-            changes = self._live_diff(n, base)
-        elif record.accepted and base and record.commit:
-            changes = self._diff(base, record.commit)
+        changes = self.changes(n) if diff else None
         # While an iteration runs, its own notes live in the worktree; a copy in notes/
         # may be left over from an earlier, failed attempt at the same iteration. Once it
         # finished, the version saved with it (the last attempt's: `notes.N-k` after a
         # retry) shows the note as of N, even if the agent later edited or removed it.
-        latest = self.root / "notes" / f"iter-{n}.md"
-        live = self._worktree(n) / ITERATION_DIR / "notes" / f"iter-{n}.md"
+        # Each is (folder, path below it), read without following symlinks or blocking on FIFOs.
+        note = f"iter-{n}.md"
+        latest = [(self.root, [folder, note])] if (folder := self._notes_folder()) else []
         if record is None:
-            notes = [live, latest]
+            notes = [(self.paths.copies, [self._agent_copy(n).name, *self._prefix_parts(),
+                                          ITERATION_DIR, "notes", note])] + latest
         else:
-            versions = sorted(self.root.glob(f"notes.{n}"), key=str) + sorted(
-                self.root.glob(f"notes.{n}-*"), key=lambda p: int(p.name.rsplit("-", 1)[1])
-                if p.name.rsplit("-", 1)[1].isdigit() else 0)
-            notes = [v / f"iter-{n}.md" for v in reversed(versions)] + [latest]
+            names = [name for name, info in _listing(self.root, []) if stat.S_ISDIR(info.st_mode)
+                     and re.fullmatch(rf"notes\.{n}(-\d+)?", name)]
+            names.sort(key=lambda name: int(name.rsplit("-", 1)[1]) if "-" in name else 0)
+            notes = [(self.root, [name, note]) for name in reversed(names)] + latest
         log_dir = self.paths.logs / f"iter-{n}"
         calls = record.calls if record else []
         if record is None:
@@ -346,7 +440,7 @@ class RunData:
         return {
             "iteration": n,
             "failure_output": record.failure_output if record else None,
-            "notes": _markdown(next(filter(None, map(_read_text, notes)), None)),
+            "notes": _markdown(next(filter(None, (_read_text_at(root, parts) for root, parts in notes)), None)),
             "diff": changes,
             "agent": agent_events,
             "calls": phases,
@@ -369,31 +463,44 @@ class RunData:
 
         Review entries (the stored config's `review:` entries; without a readable config,
         entries whose folder holds only stdout.txt) get their stdout rendered as Markdown,
-        minus the metric lines."""
-        folder = self.root / "observations" / f"iter-{n}"
+        minus the metric lines.
+
+        While the iteration runs (no record yet), entries with a folder have finished
+        (their status comes with the record); the one the run status names as running
+        (`entry`, in the benchmark phase) is added, marked `running`.
+
+        Everything is read through descriptors from the run folder down, so a symlinked
+        observations/, iter-N/ or entry folder shows nothing."""
+        where = ["observations", f"iter-{n}"]
         order = [entry.name for entry in config.observe] if config else []
         reviews = {entry.name for entry in config.observe if entry.review is not None} if config else None
         recorded = {}
         for item in (record.observe if record else []):
             if isinstance(item, dict) and isinstance(item.get("name"), str):
                 recorded.setdefault(item["name"], item)
-        try:
-            listing = [] if folder.is_symlink() else list(os.scandir(folder))
-        except OSError:
-            listing = []
-        on_disk = {e.name for e in listing if e.is_dir(follow_symlinks=False) and not e.name.startswith(".")}
+        listing = _listing(self.root, where)
+        on_disk = {name for name, info in listing if stat.S_ISDIR(info.st_mode) and not name.startswith(".")}
         rank = {name: index for index, name in enumerate(order)}
         names = list(recorded) + sorted(on_disk - set(recorded), key=lambda d: (rank.get(d, len(rank)), d))
+        running = None
+        if record is None:
+            status = read_run_status(self.project, self.paths.run_id) or {}
+            if (status.get("state") == "running" and status.get("iteration") == n
+                    and status.get("phase") == "benchmark" and isinstance(status.get("entry"), str)):
+                running = status["entry"]
+                if running not in names:
+                    names.append(running)
         sections = []
         for name in names:
             item = recorded.get(name, {})
-            here = folder / name if name in on_disk else None
-            stdout = _read_text_inside(folder, [name, "stdout.txt"]) if here else None
-            stderr = _read_text_inside(folder, [name, "stderr.txt"]) if here else None
-            files = _tree_files(here, skip=OUTPUT_FILES) if here else []
+            here = name in on_disk
+            stdout = _read_text_at(self.root, [*where, name, "stdout.txt"], single_link=True) if here else None
+            stderr = _read_text_at(self.root, [*where, name, "stderr.txt"], single_link=True) if here else None
+            files = _tree_files(self.root, [*where, name], skip=OUTPUT_FILES) if here else []
             review = name in reviews if reviews is not None else bool(stdout) and not stderr and not files
             sections.append({
                 "name": name, "review": review, "ran": name in recorded,
+                "running": name == running and name not in recorded,
                 "ok": item.get("ok"), "error": item.get("error"), "return_code": item.get("return_code"),
                 "duration_s": item.get("duration_s"), "metrics": item.get("metrics") or {},
                 "stdout": stdout if outputs else None,
@@ -402,42 +509,96 @@ class RunData:
                 "html": review_markdown(stdout) if review else None,
                 "files": [{**f, "path": f"{name}/{f['path']}"} for f in files] if outputs else [],
             })
-        legacy = sorted(({"path": e.name, "size": e.stat(follow_symlinks=False).st_size}
-                         for e in listing if e.is_file(follow_symlinks=False)), key=lambda f: f["path"])
+        legacy = [{"path": name, "size": info.st_size} for name, info in listing
+                  if stat.S_ISREG(info.st_mode) and info.st_nlink == 1]
         if legacy:
-            sections.append({"name": None, "legacy": True, "review": False, "ran": False, "ok": None,
-                             "error": None, "return_code": None, "duration_s": None, "metrics": {},
+            sections.append({"name": None, "legacy": True, "review": False, "ran": False, "running": False,
+                             "ok": None, "error": None, "return_code": None, "duration_s": None, "metrics": {},
                              "stdout": None, "stdout_file": None, "stderr": None, "html": None,
                              "files": legacy if outputs else []})
         return sections
 
     def attempt_diff(self, n: int) -> dict:
         """`/iteration/<n>/diff`: the attempt's own change, from the commit it started from
-        to its frozen tree (kept by the run ref, or `rejected_ref` for a rejected one)."""
-        self._refresh_current()
-        record = next((r for r in self.history.load() if r.iteration == n), None) if self.paths.run_id else None
+        to its frozen tree (kept by the run ref, or `rejected_ref` for a rejected one).
+        Runs git; the server calls it outside its lock."""
+        record = next((r for r in self.records() if r.iteration == n), None) if self.paths.run_id else None
         if record is None:
             return {"diff": None, "error": "This iteration has no record yet."}
         base, tree = _object(_field(record, "base")), _object(_field(record, "tree"))
         if not (base and tree):
             return {"diff": None, "error": "This iteration's record names no starting commit and tree."}
-        key = f"{base}:{tree}"
-        if key not in self._diffs:
+        diff, error = self._cached_diff(base, tree)
+        if error is not None:
             try:
-                result = self._repo().git("diff", "--no-ext-diff", "--no-textconv", base, tree, "--",
-                                          check=False, timeout=10)
-            except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
-                return {"diff": None, "error": f"Could not read the diff: {exc}"}
-            if result.returncode:
                 missing = [what for what, name in (("starting commit", base), ("tree", tree))
                            if self._repo().git("cat-file", "-e", name, check=False, timeout=5).returncode]
-                return {"diff": None, "error": (
-                    f"The attempt's {' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} no longer "
-                    "in the repository (its run or rejected ref was deleted)." if missing
-                    else "Could not read the diff: " + os.fsdecode(result.stderr).strip())}
-            text = result.stdout.decode(errors="replace")
-            self._diffs[key] = text[:MAX_TEXT] + ("\n[… diff cut …]\n" if len(text) > MAX_TEXT else "")
-        return {"diff": self._diffs[key], "error": None}
+            except (OSError, RuntimeError, subprocess.TimeoutExpired):
+                missing = []
+            if missing:
+                error = (f"The attempt's {' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} no longer "
+                         "in the repository (its run or rejected ref was deleted).")
+            else:
+                error = f"Could not read the diff: {error}"
+        return {"diff": diff, "error": error}
+
+    def _cached_diff(self, a: str, b: str) -> tuple[str | None, str | None]:
+        """`_run_diff(a, b)` for two object names, the last DIFF_CACHE kept (objects
+        don't change; a failure is not kept)."""
+        key = f"{a}:{b}"
+        with self._diff_lock:
+            if key in self._diffs:
+                self._diffs.move_to_end(key)
+                return self._diffs[key]
+        found = self._run_diff([a, b, "--"])
+        if found[1] is None:
+            with self._diff_lock:
+                self._diffs[key] = found
+                while len(self._diffs) > DIFF_CACHE:
+                    self._diffs.popitem(last=False)
+        return found
+
+    def _run_diff(self, args: list[str], *, work_tree: Path | None = None, index: Path | None = None,
+                  timeout: float = 10) -> tuple[str | None, str | None]:
+        """`git diff` on the user's repository with fixed output settings: (text, None),
+        cut after MAX_TEXT bytes with a note (git is stopped there), or (None, error)."""
+        from autohelix.workspace import _SAFE, git_env
+
+        try:
+            repo = self._repo()
+            proc = subprocess.Popen(
+                ["git", "--git-dir", str(repo.git_dir), *(["--work-tree", str(work_tree)] if work_tree else []),
+                 *_SAFE, *DIFF_CONFIG, *DIFF_ARGS, *args],
+                cwd=work_tree or repo.root, env=git_env({"GIT_INDEX_FILE": str(index)} if index else None),
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        except (OSError, RuntimeError) as exc:
+            return None, str(exc)
+        expired = threading.Event()
+
+        def stop():
+            expired.set()
+            proc.kill()
+
+        timer = threading.Timer(timeout, stop)
+        timer.start()
+        try:
+            data = proc.stdout.read(MAX_TEXT + 1)
+            cut = len(data) > MAX_TEXT
+            if cut:
+                proc.kill()
+            error = b"" if cut else proc.stderr.read(64 * 1024)
+            code = proc.wait()
+        finally:
+            timer.cancel()
+            proc.stdout.close()
+            proc.stderr.close()
+        if cut:
+            return data[:MAX_TEXT].decode(errors="replace") + "\n" + DIFF_CUT.format(MAX_TEXT // 1024) + "\n", None
+        if expired.is_set():
+            return None, f"git diff took longer than {timeout:g}s"
+        if code:
+            return None, os.fsdecode(error).strip() or f"git diff exited {code}"
+        return data.decode(errors="replace"), None
 
     def snapshot(self) -> dict:
         """The page's data keyed by route, for report.html: no logs or captured output,
@@ -464,25 +625,39 @@ class RunData:
     def _agent_copy(self, n: int) -> Path:
         return self.paths.copies / f"iter-{n}-agent"
 
-    def _worktree(self, n: int) -> Path:
-        """Where a running iteration's files live (notes are copied back at the end)."""
+    def _prefix_parts(self) -> list[str]:
+        """The project's folder inside the repository, as path components."""
         try:
             prefix = self._repo().prefix
         except RuntimeError:
             prefix = ""
-        return self._agent_copy(n) / prefix
+        return [part for part in prefix.split("/") if part]
+
+    def _notes_folder(self) -> str | None:
+        """The folder `runs/<id>/notes` stands for: the version its link names (a sibling
+        `notes.N`), or a real `notes/` saved before notes had versions."""
+        link = self.root / "notes"
+        try:
+            target = os.readlink(link)
+        except OSError:
+            return "notes" if link.is_dir() and not link.is_symlink() else None
+        return target if re.fullmatch(r"notes\.[^/\0]+", target) else None
+
+    def _notes_files(self) -> list[str]:
+        folder = self._notes_folder()
+        return [name for name, info in _listing(self.root, [folder]) if stat.S_ISREG(info.st_mode)] if folder else []
 
     def note(self, name: str) -> dict | None:
-        if not self.paths.run_id:
+        if not self.paths.run_id or name not in self._notes_files():
             return None
-        entry = next((e for e in _files(self.root / "notes") if e.name == name), None)
-        return {"name": name, "html": _markdown(_read_text(Path(entry.path)))} if entry else None
+        return {"name": name, "html": _markdown(_read_text_at(self.root, [self._notes_folder(), name]))}
 
     def artifact(self, n: int, parts: list[str]) -> tuple[bytes, str] | None:
-        """A file in observations/iter-N/, by its path there (`bench/results/log.json`)."""
+        """A file in observations/iter-N/, by its path there (`bench/results/log.json`):
+        a regular file with no other hard links (captures are copies)."""
         if not self.paths.run_id:
             return None
-        data = _read_inside(self.root / "observations" / f"iter-{n}", parts, MAX_ARTIFACT)
+        data = _read_bytes(self.root, ["observations", f"iter-{n}", *parts], MAX_ARTIFACT, single_link=True)
         if data is None:
             return None
         # Anything that is not a plain image is served as text, so captured
@@ -549,55 +724,47 @@ class RunData:
         the frozen candidate once the agent's copy is gone.
 
         Git runs from outside the copy, through the user's repository, with an
-        index of the viewer's own (kept per copy so unchanged files aren't rehashed)."""
-        if not COMMIT.fullmatch(base.removesuffix("^")):
+        index of the viewer's own (kept per copy so unchanged files aren't rehashed;
+        one request at a time uses it)."""
+        if not _object(base):
             return None
         copy = self._agent_copy(n)
-        index = None
-        try:
-            repo = self._repo()
-            if not copy.is_dir() or copy.is_symlink():
-                # The pin holds an earlier iteration's tree until this one is frozen.
-                status = read_run_status(self.project, self.paths.run_id) or {}
-                if status.get("iteration") != n or status.get("phase") not in FROZEN_PHASES:
-                    return None
-                diff = repo.git("diff", "--no-ext-diff", "--no-textconv", base, self.paths.pin, "--", timeout=5)
-            else:
-                from autohelix.workspace import _private_index_dir
-
-                run, folder = hashlib.sha256(os.fsencode(copy.parent)).hexdigest()[:16], _private_index_dir()
-                index = folder / f"view-{run}-{copy.name}.index"
-                if not index.exists():
-                    for old in folder.glob(f"view-{run}-*.index"):
-                        old.unlink(missing_ok=True)  # an earlier iteration's copy
-                    repo.git("read-tree", base, index=index, timeout=5)
-                repo.git("add", "-A", "--", ".", *repo.unfrozen_excludes(copy, index, timeout=5),
-                         work_tree=copy, index=index, timeout=5)
-                diff = repo.git("diff", "--cached", "--no-ext-diff", "--no-textconv", base, "--",
-                                work_tree=copy, index=index, timeout=5)
-        except (OSError, RuntimeError, subprocess.TimeoutExpired):
-            # A killed git can leave its lock behind; start this copy's index afresh next time.
-            for stale in (index, index.with_name(index.name + ".lock")) if index else ():
-                stale.unlink(missing_ok=True)
-            return None
-        return diff.stdout.decode(errors="replace")[:MAX_TEXT] or None
-
-    def _diff(self, base: str, commit: str) -> str:
-        """Everything changed between the baseline and this iteration's accepted code."""
-        if not (COMMIT.fullmatch(base.removesuffix("^")) and COMMIT.fullmatch(commit)):
-            return "Invalid commit reference."
-        key = f"{base}..{commit}"
-        if key not in self._diffs:
+        with self._live_lock:
+            index = None
             try:
-                result = subprocess.run(
-                    ["git", "diff", "--no-ext-diff", "--no-textconv", base, commit, "--"],
-                    cwd=self.project, capture_output=True, text=True, errors="replace", timeout=5,
-                )
-                diff = result.stdout if result.returncode == 0 else result.stderr.strip()
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                diff = f"Could not read diff: {exc}"
-            self._diffs[key] = diff[:MAX_TEXT]
-        return self._diffs[key]
+                repo = self._repo()
+                if not copy.is_dir() or copy.is_symlink():
+                    # The pin holds an earlier iteration's tree until this one is frozen.
+                    status = read_run_status(self.project, self.paths.run_id) or {}
+                    if status.get("iteration") != n or status.get("phase") not in FROZEN_PHASES:
+                        return None
+                    diff, error = self._run_diff([base, self.paths.pin, "--"])
+                else:
+                    from autohelix.workspace import _private_index_dir
+
+                    run, folder = hashlib.sha256(os.fsencode(copy.parent)).hexdigest()[:16], _private_index_dir()
+                    index = folder / f"view-{run}-{copy.name}.index"
+                    if not index.exists():
+                        for old in folder.glob(f"view-{run}-*.index"):
+                            old.unlink(missing_ok=True)  # an earlier iteration's copy
+                        repo.git("read-tree", base, index=index, timeout=5)
+                    repo.git("add", "-A", "--", ".", *repo.unfrozen_excludes(copy, index, timeout=5),
+                             work_tree=copy, index=index, timeout=5)
+                    diff, error = self._run_diff(["--cached", base, "--"], work_tree=copy, index=index)
+            except (OSError, RuntimeError, subprocess.TimeoutExpired):
+                diff, error = None, "failed"
+            if error is not None and index is not None:
+                # A killed git can leave its lock behind; start this copy's index afresh next time.
+                for stale in (index, index.with_name(index.name + ".lock")):
+                    stale.unlink(missing_ok=True)
+        return diff or None
+
+    def _diff(self, base: str, commit: str) -> str | None:
+        """Everything changed between the baseline and this iteration's accepted code."""
+        if not (_object(base) and _object(commit)):
+            return None
+        diff, error = self._cached_diff(base, commit)
+        return diff if error is None else f"Could not read the diff: {error}"
 
 
 RUN_ID = r"[a-z0-9][a-z0-9-]{0,50}"
@@ -637,7 +804,7 @@ class ProjectRuns:
         """One run for `view --json`: its list row, plus the goal and every iteration."""
         row = self._run(run_id, self._refs(), config_file)
         data = RunData(self.project, config_file, run_id)
-        return {**self._header(), "run": {**row, "iterations": data.iterations(data.history.load())}}
+        return {**self._header(), "run": {**row, "iterations": data.iterations(data.records())}}
 
     def _header(self) -> dict:
         # What the checkout is on: the reference point for each run's landing state.
@@ -767,6 +934,9 @@ def write_static(project: Path, config_file: Path | None = None, *, run_id: str 
     # "<" escaped, so no text in the data can close the script element.
     script = json.dumps(data).replace("<", "\\u003c")
     page = (read("index.html")
+            # No requests at all: images in hostile Markdown can't call out; only inline code and data: images.
+            .replace('<meta charset="utf-8">',
+                     f'<meta charset="utf-8">\n  <meta http-equiv="Content-Security-Policy" content="{STATIC_CSP}">')
             .replace('<link rel="stylesheet" href="/viewer.css">', f"<style>\n{read('viewer.css')}</style>")
             .replace('<script src="/viewer.js" defer></script>', "")
             .replace('  <link rel="icon" href="/logo-light.svg">\n', "")
@@ -785,23 +955,29 @@ def make_server(project: Path, port: int = 8765, config_file: Path | None = None
     data = RunData(project, config_file, run_id)
     dashboard = ProjectRuns(project)
     others: dict[str, RunData] = {}
-    lock = threading.Lock()  # RunData's caches and log tails are not thread-safe
+    # RunData's caches and log tails are not thread-safe. Git diffs run outside the lock
+    # (RunData guards their cache itself), so one big diff doesn't stall every page.
+    lock = threading.Lock()
     resources = files("autohelix").joinpath("viewer_resources")
 
     def run_data(rid: str) -> RunData | None:
         if not dashboard.exists(rid):
             return None
-        if rid == data.paths.run_id:
-            return data  # keeps an explicit --config for the default run
-        if rid not in others:
-            others[rid] = RunData(project, None, rid)
-        return others[rid]
+        with lock:
+            if rid == data.paths.run_id:
+                return data  # keeps an explicit --config for the default run
+            if rid not in others:
+                others[rid] = RunData(project, None, rid)
+            return others[rid]
 
     def run_route(rd: RunData, path: str) -> tuple | None:
         if path == "/state":
-            return 200, rd.state()
+            with lock:
+                return 200, rd.state()
         if match := re.fullmatch(r"/iteration/(\d{1,9})", path):
-            return 200, rd.iteration(int(match[1]))
+            with lock:
+                detail = rd.iteration(int(match[1]), diff=False)
+            return 200, {**detail, "diff": rd.changes(int(match[1]))}
         if match := re.fullmatch(r"/iteration/(\d{1,9})/diff", path):
             return 200, rd.attempt_diff(int(match[1]))
         if match := re.fullmatch(r"/notes/([^/]+)", path):
@@ -835,8 +1011,7 @@ def make_server(project: Path, port: int = 8765, config_file: Path | None = None
             if host not in LOOPBACK:
                 return self._send(403, {"error": "forbidden host"})
             try:
-                with lock:
-                    response = self._route(urlsplit(self.path).path)
+                response = self._route(urlsplit(self.path).path)
                 self._send(*response)
             except (BrokenPipeError, ConnectionResetError):
                 pass
@@ -851,7 +1026,8 @@ def make_server(project: Path, port: int = 8765, config_file: Path | None = None
                 if dashboard.exists(match[1]):
                     return 200, resources.joinpath("index.html").read_bytes(), "text/html; charset=utf-8"
             elif path == "/api/runs":
-                return 200, dashboard.runs()
+                with lock:
+                    return 200, dashboard.runs()
             elif match := re.fullmatch(rf"/api/run/({RUN_ID})(/.+)", path):
                 if (rd := run_data(match[1])) and (response := run_route(rd, match[2])):
                     return response

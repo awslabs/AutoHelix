@@ -32,7 +32,12 @@ STOPPED = {"finished": "Finished", "interrupted": "Interrupted", "failed": "Fail
 
 
 def status_line(status: dict | None, now: float | None = None) -> str:
-    """One line, worded like the viewer's status."""
+    """One line, worded like the viewer's status (the stop reason and phase come from
+    the run's files: no control characters)."""
+    return run_table.clean(_status_line(status, now))
+
+
+def _status_line(status: dict | None, now: float | None = None) -> str:
     now = now or time.time()
     if not status:
         return "No run recorded yet. Waiting for `autohelix run`…"
@@ -131,8 +136,9 @@ class LogFollower:
 
 
 def _lines(text: str) -> Text:
-    """Table text as it is printed, one terminal line per line (cut at the right edge, not wrapped)."""
-    return Text(text.rstrip("\n"), no_wrap=True, overflow="ellipsis")
+    """Table text as it is printed, one terminal line per line (cut at the right edge, not
+    wrapped), with no control characters but the line breaks."""
+    return Text("\n".join(map(run_table.clean, text.rstrip("\n").split("\n"))), no_wrap=True, overflow="ellipsis")
 
 
 def fit(text: str, height: int) -> str:
