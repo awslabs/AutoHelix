@@ -11,7 +11,7 @@
 // each tool runs — the same idea, and the same wording, as the Claude hook.
 //
 // AutoHelix drops this file into <worktree>/.opencode/plugin/ for an iteration
-// when budget.iteration_time is set, and exports these env vars to the agent:
+// when agent.timeout is set, and exports these env vars to the agent:
 //   AUTOHELIX_TIME_LEFT_SCRIPT  path to time_left.sh (the shared, tiered message)
 //   AUTOHELIX_PROJECT           main project dir (used to locate the audit log)
 //

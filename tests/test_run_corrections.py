@@ -6,7 +6,6 @@ import subprocess
 import sys
 import time
 import json
-from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -67,7 +66,7 @@ def test_validation_cannot_stage_protected_files_or_attach_head(project, monkeyp
         kwargs["after_command"]("fake check")
         return []
 
-    monkeypatch.setattr("autohelix.harness.run_constraints", checks)
+    monkeypatch.setattr("autohelix.harness.run_gate_commands", checks)
     try:
         record = harness.run_iteration(1)
         assert not record.accepted
@@ -254,40 +253,15 @@ def test_calls_only_retains_usage_with_unsafe_live_log_metadata(project, tmp_pat
         assert bad["log"] is None and bad["usage"]["cost_usd"] == 0.2
         return []
 
-    monkeypatch.setattr("autohelix.harness.run_constraints", checks)
+    monkeypatch.setattr("autohelix.harness.run_gate_commands", checks)
     try:
         record = harness.run_iteration(1)
         assert record.accepted and record.cost.cost_usd == pytest.approx(0.3)
         assert record.cost.incomplete
         assert all(call.get("log") is None or not Path(call["log"]).is_absolute() for call in record.calls)
         persisted = json.loads(harness.paths.history.read_text().splitlines()[-1])
-        assert not {"usage", "reviewer_usage", "command_usage"} & persisted.keys()
+        assert not {"usage", "command_usage"} & persisted.keys()
         assert len(persisted["calls"]) == 3
-    finally:
-        harness.close()
-
-
-def test_reviewer_returned_cost_survives_verification_failure(project, monkeypatch):
-    from autohelix.workspace import Copy
-
-    harness = Harness(project, land_mode="manual")
-    harness.config.reviewer = SimpleNamespace(model=None, timeout_seconds=None, auto_memory=False, prompt="Review")
-    monkeypatch.setattr("autohelix.harness.create_agent", lambda *_a, **_k: SimpleNamespace(
-        run=lambda **_kwargs: AgentRunResult(success=True, usage={"cost_usd": 0.3})))
-    original = Copy.changed
-
-    def changed(copy):
-        if copy.path.name.endswith("-review"):
-            raise RuntimeError("review cleanup failed")
-        return original(copy)
-
-    monkeypatch.setattr(Copy, "changed", changed)
-    try:
-        record = harness.run_iteration(1)
-        assert not record.accepted and record.reason == "Reviewer changed candidate files"
-        row = harness.history.load()[-1]
-        assert not row.accepted and row.cost.cost_usd == pytest.approx(0.4)
-        assert row.reviewer_usage == [{"cost_usd": 0.3}]
     finally:
         harness.close()
 
@@ -312,9 +286,9 @@ def test_checks_cannot_modify_candidate_but_capture_new_files(project, preexisti
         (project / "metric.txt").write_text("protected candidate content")
         git(project, "add", "metric.txt")
         git(project, "commit", "-qm", "protected capture")
-    configure(project, scope={"editable": ["code.py"]}, observables=[{
-        "command": "echo 'new metric output' > metric.txt; echo 'score: 1'",
-        "values": {"score": "higher"}, "capture": ["metric.txt"],
+    configure(project, scope={"editable": ["code.py"]}, observe=[{
+        "name": "bench", "command": "echo 'new metric output' > metric.txt; echo 'score: 1'",
+        "metrics": {"score": "higher"}, "capture": ["metric.txt"],
     }])
     harness = Harness(project, land_mode="manual")
     try:
@@ -325,7 +299,7 @@ def test_checks_cannot_modify_candidate_but_capture_new_files(project, preexisti
         else:
             result = harness.run_iteration(1)
             assert result.accepted
-            assert (harness.paths.observations / "iter-1" / "metric.txt").read_text() == "new metric output\n"
+            assert (harness.paths.observations / "iter-1" / "bench" / "metric.txt").read_text() == "new metric output\n"
             assert git(project, "cat-file", "-e", f"{harness.paths.ref}:metric.txt", check=False).returncode
     finally:
         harness.close()

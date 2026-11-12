@@ -311,7 +311,7 @@ class ClaudeCodeAgent:
                 log_path=log_path,
                 line_callback=lambda line: self._handle_line(line, event_callback),
                 heartbeat_seconds=self.heartbeat_seconds,
-                timeout_seconds=self.config.timeout_seconds,
+                timeout_seconds=self.config.timeout,
                 env=env,
             )
         except FileNotFoundError:
@@ -326,7 +326,7 @@ class ClaudeCodeAgent:
             event_callback(
                 AgentEvent(
                     kind=AgentEventKind.WARNING,
-                    text=f"Agent {format_timeout_seconds(self.config.timeout_seconds)}",
+                    text=f"Agent {format_timeout_seconds(self.config.timeout)}",
                 )
             )
 
@@ -337,7 +337,7 @@ class ClaudeCodeAgent:
 
         error = self._result_error
         if result.timed_out:
-            error = format_timeout_seconds(self.config.timeout_seconds)
+            error = format_timeout_seconds(self.config.timeout)
         elif result.exit_code != 0 and error is None:
             error = f"Claude Code exited with status {result.exit_code}"
 

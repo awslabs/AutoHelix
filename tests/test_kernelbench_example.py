@@ -193,19 +193,20 @@ def test_autohelix_template_splits_correctness_from_timing():
     raw = yaml.safe_load(rendered)
     config = Config.from_dict(raw)
 
-    assert [constraint.command for constraint in config.constraints] == [
+    assert config.validate(raw) == []
+    assert [gate.command for gate in config.gate_commands()] == [
         "python check_solution.py",
         "python eval_solution.py --check-only",
     ]
-    assert config.constraints[1].timeout == 1234
-    assert len(config.observables) == 1
-    assert config.observables[0].command == "python eval_solution.py"
-    assert config.observables[0].timeout == 1234
+    assert config.gate_commands()[1].timeout == 1234
+    assert len(config.observe) == 1
+    assert config.observe[0].command == "python eval_solution.py"
+    assert config.observe[0].timeout == 1234
     assert config.max_iterations == 7
-    assert config.iteration_time_seconds is None
-    assert config.agent.type == "claude"
+    assert config.agent.timeout is None
+    assert config.agent.backend == "claude"
     assert config.agent.model == "us.anthropic.claude-opus-4-8"
-    assert config.acceptance.metric_gates[0].metric == "mean_speedup"
+    assert [(gate.metric, gate.mode) for gate in config.metric_gates()] == [("mean_speedup", "regress")]
     assert "You may read and run the evaluation scripts" in config.goal
     assert "do not inspect" not in config.goal
 
@@ -310,7 +311,7 @@ def get_init_inputs():
     ).stdout == ""
     assert Config.from_dict(
         yaml.safe_load(output_dir.joinpath("autohelix.yaml").read_text())
-    ).observables[0].command == "python eval_solution.py"
+    ).observe[0].command == "python eval_solution.py"
 
 
 def test_download_repairs_a_partially_populated_level(tmp_path, monkeypatch):

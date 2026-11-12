@@ -295,7 +295,7 @@ def test_documented_yaml_validates(resources, name):
         # The agent/reviewer excerpt is a config fragment, not a whole run.
         data = {
             "goal": "Improve the document while preserving factual accuracy.",
-            "constraints": ["python validate_guide.py"],
+            "gates": ["python validate_guide.py"],
             **raw,
         }
         assert Config.from_dict(data).validate(data) == []

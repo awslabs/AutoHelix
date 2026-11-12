@@ -58,45 +58,44 @@ def test_format_duration():
     assert format_duration(8130) == "2h15m30s"
 
 
-def test_config_parses_iteration_time():
+def test_config_parses_agent_timeout():
     from autohelix.config import Config
 
     cfg = Config.from_dict({
         "goal": "test",
-        "constraints": ["echo ok"],
-        "observables": [{"command": "echo 1", "values": {"score": "higher"}}],
-        "budget": {"iterations": 10, "iteration_time": "1h"},
-    })
-    assert cfg.iteration_time_seconds == 3600
-
-
-def test_config_no_iteration_time_defaults_none():
-    from autohelix.config import Config
-
-    cfg = Config.from_dict({
-        "goal": "test",
-        "constraints": ["echo ok"],
+        "gates": ["echo ok"],
+        "agent": {"timeout": "1h"},
         "budget": {"iterations": 10},
     })
-    assert cfg.iteration_time_seconds is None
+    assert cfg.agent.timeout == 3600
+
+
+def test_config_no_agent_timeout_defaults_none():
+    from autohelix.config import Config
+
+    cfg = Config.from_dict({
+        "goal": "test",
+        "gates": ["echo ok"],
+        "budget": {"iterations": 10},
+    })
+    assert cfg.agent.timeout is None
 
 
 @pytest.mark.parametrize("agent_type", ["claude", "codex", "opencode"])
-def test_iteration_time_allowed(agent_type):
+def test_agent_timeout_allowed(agent_type):
     from autohelix.config import Config
 
     data = {
         "goal": "test",
-        "constraints": ["echo ok"],
-        "agent": {"type": agent_type, "command": f"/usr/bin/{agent_type}"},
-        "budget": {"iteration_time": "1h"},
+        "gates": ["echo ok"],
+        "agent": {"backend": agent_type, "command": f"/usr/bin/{agent_type}", "timeout": "1h"},
     }
     cfg = Config.from_dict(data)
     errors = [issue for issue in cfg.validate(raw_data=data) if issue.level == "error"]
     assert errors == []
 
 
-def test_codex_iteration_time_exits_before_run_if_version_unsupported(tmp_path, monkeypatch):
+def test_codex_without_hook_support_warns_and_runs_without_hints(tmp_path, monkeypatch, capsys):
     from autohelix.agents.codex import CodexAgent
     from autohelix.harness import Harness
 
@@ -105,11 +104,10 @@ def test_codex_iteration_time_exits_before_run_if_version_unsupported(tmp_path, 
     (project / "autohelix.yaml").write_text("""
 goal: test
 agent:
-  type: codex
+  backend: codex
   command: /usr/bin/codex
-budget:
-  iteration_time: 1h
-constraints:
+  timeout: 1h
+gates:
   - "true"
 """)
 
@@ -118,23 +116,23 @@ constraints:
                  ["commit", "-qm", "initial config"]):
         subprocess.run(["git", *args], cwd=project, check=True, capture_output=True)
 
-    # Preflight now runs before the run is allocated; let it find the agent command.
+    # Preflight runs before the run is allocated; let it find the agent command.
     monkeypatch.setattr("autohelix.checks.shutil.which", lambda command: command)
     monkeypatch.setattr(
         CodexAgent,
         "_validate_time_left_hook_support",
-        lambda self, hook_path: "budget.iteration_time for Codex requires codex-cli >= 0.141.0; found 0.140.0.",
+        lambda self, hook_path: "Time-left hints for Codex need codex-cli >= 0.141.0; found 0.140.0.",
     )
 
-    with pytest.raises(SystemExit) as exc:
-        Harness(project)
-
-    assert "Codex iteration_time setup failed" in str(exc.value)
-    # Refused before the run was allocated: no identity, ref or pointer.
-    assert not (project / ".autohelix" / "current").exists()
-    assert not list((project / ".autohelix" / "runs").glob("*/run.json"))
-    refs = subprocess.run(["git", "for-each-ref", "refs/autohelix/"], cwd=project, capture_output=True, text=True)
-    assert refs.stdout.strip() == ""
+    harness = Harness(project)
+    try:
+        assert harness._codex_time_left_hook_path is None
+        assert harness._time_left_script is not None  # still there to run on demand
+        assert harness.config.agent.timeout == 3600
+        out = capsys.readouterr().out
+        assert "found 0.140.0" in out and "Running without time-left hints" in out
+    finally:
+        harness.close()
 
 
 TIME_LEFT = Path(__file__).parent.parent / "src" / "autohelix" / "bin" / "time_left.sh"

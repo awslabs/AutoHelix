@@ -14,7 +14,7 @@ import subprocess
 import pytest
 
 from autohelix.agents import AgentRunResult
-from autohelix.config import Config, ReviewerConfig, load_config
+from autohelix.config import Config, load_config
 from autohelix.harness import AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.runs import RunPaths
@@ -42,12 +42,12 @@ def integration_project(tmp_path):
 goal: Test the integration
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# Modified in iteration {iteration}"
 
-constraints:
+gates:
   - "true"  # Always passes
 """)
 
@@ -92,7 +92,7 @@ class TestMockAgentIntegration:
             assert r.iteration == i
             assert r.accepted is True
 
-    def test_agent_failure_aborts_and_records_failed_attempt(
+    def test_agent_failure_is_a_recorded_rejection_and_the_run_goes_on(
         self, integration_project, monkeypatch
     ):
         harness = Harness(integration_project, verbose=False)
@@ -113,15 +113,13 @@ class TestMockAgentIntegration:
             ),
         )
 
-        with pytest.raises(
-            AutoHelixRunError,
-            match="Iteration 1 agent failed: API Error: invalid model",
-        ):
-            harness.run(max_iterations=1)
+        harness.run(max_iterations=1)  # no error: a failed agent call is a rejection
 
         results = History(integration_project).load()
         assert [result.iteration for result in results] == [0, 1]
         assert not results[-1].accepted and results[-1].cost.incomplete
+        assert results[-1].reason == "Iteration 1 agent failed: API Error: invalid model"
+        assert results[-1].agent_error == "API Error: invalid model"
         assert subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=integration_project,
@@ -129,59 +127,18 @@ class TestMockAgentIntegration:
             capture_output=True,
             text=True,
         ).stdout.strip() == head_before
-
-    def test_iteration_reviewer_failure_merges_with_placeholder(
-        self, integration_project, monkeypatch
-    ):
-        harness = Harness(integration_project, verbose=False)
-        harness.config.reviewer = ReviewerConfig()
-        head_before = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=integration_project,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: AgentRunResult(success=False))
-
-        result = harness.run_iteration(1)
-
-        assert result.accepted is True
-        assert [r.iteration for r in History(integration_project).load()] == [1]
-        assert subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=integration_project,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip() == head_before
-        assert (
-            harness.paths.reviews / "iter-1.md"
-        ).read_text() == "# Review\n\nReviewer failed.\n"
-
-    def test_baseline_reviewer_failure_continues(
-        self, integration_project, monkeypatch
-    ):
-        harness = Harness(integration_project, verbose=False)
-        harness.config.reviewer = ReviewerConfig()
-        monkeypatch.setattr(harness, "run_reviewer", lambda *args, **kwargs: AgentRunResult(success=False))
-
-        harness.run(max_iterations=1)
-
-        results = History(integration_project).load()
-        assert [result.iteration for result in results] == [0, 1]
-        assert all(result.accepted for result in results)
 
     def test_missing_baseline_metric_aborts_before_agent(self, integration_project):
         (integration_project / "autohelix.yaml").write_text("""
 goal: Test baseline failure
 
 agent:
-  type: mock
+  backend: mock
 
-metrics:
-  - command: python -c "print('no metrics here')"
-    values:
+observe:
+  - name: bench
+    command: python -c "print('no metrics here')"
+    metrics:
       score: higher
 """)
         subprocess.run(
@@ -198,12 +155,88 @@ metrics:
         harness = Harness(integration_project, verbose=False)
         with pytest.raises(
             RuntimeError,
-            match="Baseline benchmark did not produce required metric.*score",
+            match="Baseline setup error: observe entry `bench` exited 0 but reported no `score`",
         ):
             harness.run(max_iterations=1)
 
         records = History(integration_project).load()
         assert len(records) == 1 and records[0].iteration == 0 and not records[0].accepted
+
+    def _commit_config(self, project, text, files=()):
+        for name, content in files:
+            (project / name).write_text(content)
+        (project / "autohelix.yaml").write_text(text)
+        subprocess.run(["git", "add", "-A"], cwd=project, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "config"], cwd=project, capture_output=True)
+
+    BENCH = (
+        "import pathlib, re\n"
+        "m = re.findall(r'iteration (\\d+)', pathlib.Path('hello.py').read_text())\n"  # the mock appends
+        "print('##autohelix[speed=%d]' % (100 - 3 * int(m[-1]) if m else 100))\n"
+    )
+
+    def test_metric_gate_compares_with_the_last_accepted_iteration(self, integration_project):
+        # 100 -> 97 -> 94: each step is 3% worse than the last accepted, 6% worse than the baseline.
+        self._commit_config(integration_project, """
+goal: Test metric gates
+agent:
+  backend: mock
+  settings:
+    change_file: hello.py
+    change_content: "# Modified in iteration {iteration}"
+gates:
+  - metric: speed
+    regress: 5%
+observe:
+  - name: bench
+    command: python bench.py
+    metrics: {speed: higher}
+""", files=[("bench.py", self.BENCH)])
+        Harness(integration_project, verbose=False).run(max_iterations=2, report=False)
+        records = History(integration_project).load()
+        assert [(r.iteration, r.accepted, r.metrics.get("speed")) for r in records] == [
+            (0, True, 100), (1, True, 97), (2, True, 94)]
+
+    def test_improve_gate_rejects_a_regression(self, integration_project):
+        self._commit_config(integration_project, """
+goal: Test metric gates
+agent:
+  backend: mock
+  settings:
+    change_file: hello.py
+    change_content: "# Modified in iteration {iteration}"
+gates:
+  - metric: speed
+    improve: 0%
+observe:
+  - name: bench
+    command: python bench.py
+    metrics: {speed: higher}
+""", files=[("bench.py", self.BENCH)])
+        Harness(integration_project, verbose=False).run(max_iterations=1, report=False)
+        [_, record] = History(integration_project).load()
+        assert not record.accepted
+        assert record.reason == "metric gate: speed 97 does not improve on 100"
+
+    @pytest.mark.parametrize("gated", [False, True])
+    def test_missing_baseline_review_metric_stops_only_when_gated(self, integration_project, gated):
+        gate = "gates:\n  - metric: missing\n    improve: 0%\n" if gated else ""
+        self._commit_config(integration_project, f"""
+goal: Test review metrics
+agent:
+  backend: mock
+{gate}observe:
+  - name: progress
+    review: Count the missing items.
+    metrics: {{missing: lower}}
+""")
+        harness = Harness(integration_project, verbose=False)
+        if gated:
+            with pytest.raises(RuntimeError, match="reported no `missing`"):
+                harness.run(max_iterations=1, report=False)
+        else:
+            harness.run(max_iterations=1, report=False)
+            assert [r.accepted for r in History(integration_project).load()] == [True, True]
 
     def test_constraint_failure_rejects(self, integration_project):
         """A failing constraint should reject the iteration."""
@@ -220,12 +253,12 @@ metrics:
 goal: Test constraint failure
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: mock_change.txt
     change_content: "This will cause the constraint to fail"
 
-constraints:
+gates:
   - ./check.sh
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -240,7 +273,7 @@ constraints:
         # Iteration should be rejected
         assert len(results) == 2
         assert results[1].accepted is False
-        assert "constraint failed" in results[1].reason
+        assert "gate failed" in results[1].reason
 
     def test_failure_output_captured(self, integration_project):
         """Constraint failure output should be captured for agent debugging."""
@@ -255,12 +288,12 @@ constraints:
 goal: Test failure output capture
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: mock_change.txt
     change_content: "This triggers the failure"
 
-constraints:
+gates:
   - ./check.sh
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -283,12 +316,12 @@ constraints:
 goal: Test scope enforcement
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# Modified by agent"
 
-constraints:
+gates:
   - "true"
 
 scope:
@@ -322,12 +355,12 @@ scope:
 goal: Test frozen scope enforcement
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# Modified by agent"
 
-constraints:
+gates:
   - "true"
 
 scope:
@@ -357,21 +390,21 @@ scope:
 goal: Test agent failure
 
 agent:
-  type: mock
+  backend: mock
   settings:
     should_fail: true
 
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
         subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
-        with pytest.raises(AutoHelixRunError, match="Iteration 1 agent failed"):
-            harness.run(max_iterations=1)
+        harness.run(max_iterations=1)
 
         history = History(integration_project)
+        assert history.load()[-1].reason == "Iteration 1 agent failed: Mock failure"
         assert [result.iteration for result in history.load()] == [0, 1]
 
         config_path = integration_project / "autohelix.yaml"
@@ -431,10 +464,10 @@ goal: |
   This is a minimal test - make only this small change.
 
 agent:
-  type: claude
-  timeout_seconds: 60
+  backend: claude
+  timeout: 60
 
-constraints:
+gates:
   - python -m py_compile example.py
 """)
 
@@ -482,12 +515,12 @@ class TestBudgetEnforcement:
 goal: Test calculated Codex cost
 report: false
 agent:
-  type: codex
+  backend: codex
   model: gpt-6.1-sol
 budget:
   iterations: 5
   cost: 0.015
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, check=True, capture_output=True)
@@ -529,7 +562,7 @@ constraints:
 goal: Test cost budget
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
@@ -538,7 +571,7 @@ budget:
   iterations: 10
   cost: 0.10
 
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -570,7 +603,7 @@ constraints:
 goal: Test time budget
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
@@ -579,7 +612,7 @@ budget:
   iterations: 10
   time: 5s
 
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -623,7 +656,7 @@ constraints:
 goal: Test multiple budgets
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
@@ -633,7 +666,7 @@ budget:
   cost: 0.10
   time: 1h
 
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -664,7 +697,7 @@ constraints:
 goal: Test exact cost boundary
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
@@ -673,7 +706,7 @@ budget:
   iterations: 10
   cost: 0.10
 
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -702,7 +735,7 @@ constraints:
 goal: Test zero cost iterations
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
@@ -711,7 +744,7 @@ budget:
   iterations: 3
   cost: 1.00
 
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -736,7 +769,7 @@ constraints:
         # All 3 iterations should complete (cost never reaches $1)
         assert len(iterations) == 3
         output = capsys.readouterr().out
-        assert "budget.cost can only track known costs" in output
+        assert "budget.cost counts known costs only" in output
         assert "cost unavailable" in output
 
     def test_cost_budget_persists_across_resume(self, integration_project):
@@ -747,7 +780,7 @@ constraints:
 goal: Test cost resume
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
@@ -756,7 +789,7 @@ budget:
   iterations: 10
   cost: 0.15
 
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -819,7 +852,7 @@ constraints:
 goal: Test time resume
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
@@ -828,7 +861,7 @@ budget:
   iterations: 10
   time: 35s  # 28s used: room to resume (checked before each iteration)
 
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -900,14 +933,14 @@ constraints:
         (integration_project / "autohelix.yaml").write_text("""
 goal: Test wall_clock resume
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 budget:
   iterations: 10
   time: 35s  # 28s used: room to resume (checked before each iteration)
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -959,13 +992,13 @@ constraints:
         (integration_project / "autohelix.yaml").write_text("""
 goal: Test no budget
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 budget:
   iterations: 3
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -985,7 +1018,7 @@ constraints:
 goal: Test float accumulation
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
@@ -994,7 +1027,7 @@ budget:
   iterations: 10
   cost: 0.30
 
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -1026,7 +1059,7 @@ constraints:
 goal: Test zero wall_clock resume
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
@@ -1035,7 +1068,7 @@ budget:
   iterations: 10
   time: 1h
 
-constraints:
+gates:
   - "true"
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -1081,7 +1114,7 @@ constraints:
 goal: Test cost with rejections
 
 agent:
-  type: mock
+  backend: mock
   settings:
     change_file: mock_change.txt
     change_content: "fail"
@@ -1090,7 +1123,7 @@ budget:
   iterations: 10
   cost: 0.10
 
-constraints:
+gates:
   - ./check.sh
 """)
         subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
@@ -1145,32 +1178,3 @@ class TestFormatTime:
     def test_zero(self):
         from autohelix.harness import _format_time
         assert _format_time(0) == "0s"
-
-
-class TestFormatUsage:
-    def test_format_tokens(self):
-        from autohelix.harness import _format_tokens
-        assert "1.2k" in _format_tokens(1234)
-        assert "1.5M" in _format_tokens(1_500_000)
-        assert "42 " == _format_tokens(42)
-
-    def test_format_usage_full(self):
-        usage = {"input_tokens": 10000, "output_tokens": 2000, "cost_usd": 0.1234, "duration_ms": 65000}
-        text = Harness._format_usage(usage)
-        assert "10.0k" in text
-        assert "2.0k" in text
-        assert "$0.1234" in text
-        assert "1m 5s" in text
-
-    def test_format_usage_tokens_only(self):
-        usage = {"input_tokens": 500, "output_tokens": 100}
-        text = Harness._format_usage(usage)
-        assert "500" in text
-        assert "100" in text
-        assert "$" not in text
-
-    def test_format_usage_empty(self):
-        assert Harness._format_usage({}) == ""
-
-    def test_format_usage_uses_saved_wall_clock_when_agent_duration_absent(self):
-        assert "2m 3s" in Harness._format_usage({"wall_clock_ms": 123000})

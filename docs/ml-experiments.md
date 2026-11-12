@@ -17,11 +17,17 @@ benchmark. The `posttrain` example is a full working reference.
 - **Evaluate from that fixed path.** The eval script should read the model from the
   same absolute artifacts path, independent of the current working directory.
 - **Report the score in a parseable form.** AutoHelix reads the metric from your
-  eval command's stdout. It recognizes `##autohelix[score=<number>]` (unambiguous,
-  recommended) or a plain `score: <number>` / `score=<number>` line matching the
-  metric name. Without a recognizable value, the iteration may record nothing (or
-  the wrong number). Use the metric command's `capture:` to also save training logs,
-  eval JSON, etc. for later inspection.
+  eval command's stdout (an `observe:` entry with `metrics: {score: higher}`). It
+  recognizes `##autohelix[score=<number>]` (unambiguous, recommended) or a plain
+  `score: <number>` / `score=<number>` line matching the metric name. Without a
+  recognizable value the metric is missing: the baseline stops with a setup
+  error, and later a `metric:` gate on it fails. Use the entry's `capture:` to
+  also save training logs, eval JSON, etc. for the next agent and for later
+  inspection.
+- **Gate on the score with care.** A `metric: score` gate with `regress: N%`
+  compares with the last accepted iteration. Eval scores are noisy: set N above
+  the run-to-run noise (or make the eval more stable), especially with
+  `improve:`, which otherwise keeps lucky measurements.
 - **Freeze the eval harness.** Put the scorer, eval driver, run scripts, and prompt
   templates in `scope.frozen`. The agent should write *training* code only — never
   the thing that grades it (otherwise it can "fix" the eval to inflate the score).
@@ -48,10 +54,10 @@ mid-run surprises.
   still running — then the eval scores a half-written model (and the orphaned run
   keeps burning the GPU). Foreground keeps the agent's turn open until training
   finishes.
-- **Consider `budget.iteration_time` for long runs.** Instead of a hard mid-step
-  kill, it injects remaining-time into the agent's context so it can wrap up and
-  save notes before the deadline. Supported for Claude Code, Codex CLI >= 0.141.0,
-  and OpenCode.
+- **Set `agent.timeout` for long runs.** It is a hard kill at the deadline, and
+  it also injects the remaining time into the agent's context so it can wrap up
+  and save notes first. Hints are supported for Claude Code, Codex CLI >= 0.141.0
+  (an older Codex warns and runs without them), and OpenCode.
 
 ## Copy-paste goal-prompt rules
 

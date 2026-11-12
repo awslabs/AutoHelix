@@ -2,8 +2,8 @@
 
 **Put an AI agent in a verified improvement loop.**
 
-Set constraints and metrics; an AI agent proposes changes in a loop, and only
-changes that pass your checks get merged. Works with Claude Code, Codex, and
+Set gates and what to observe; an AI agent proposes changes in a loop, and only
+changes that pass your gates get merged. Works with Claude Code, Codex, and
 OpenCode.
 
 ```bash

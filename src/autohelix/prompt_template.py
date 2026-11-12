@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 from jinja2 import BaseLoader, Environment, TemplateSyntaxError
 
+from autohelix.formatting import SUMMARY_LIMIT, clean, clean_block
+
 if TYPE_CHECKING:
     from autohelix.config import Config
     from autohelix.history import History
@@ -86,64 +88,139 @@ def build_prompt_variables(
     *,
     group: str | None = None,
     members=(),
+    rejected_diff: str = "",
 ) -> dict[str, Any]:
-    """Build template variables for the agent prompt. `members` are the other runs of
-    the run's `group`, as `runs.group_members` returns them."""
+    """The variables a prompt template gets: a stable, documented contract
+    (`VARIABLES`; agent-written text in them is cleaned of control characters).
+
+    - `goal`: the config's goal, whole; `title`: its first line (`Config.title`).
+    - `iteration`: this iteration's number (the baseline is 0); `worktree`: the agent's
+      working directory (its copy), as a string.
+    - `history`: the last iterations, one line each (`History.format_summary`); "" if none.
+    - `gates`: every gate in list order, `{"text", "kind": "command"|"metric"}`; a metric
+      gate's text says what it compares ("speed: at most 5% worse than ...").
+    - `observe`: every observe entry, `{"name", "kind": "command"|"review", "command"
+      (command entries) or "prompt" (review entries, on one line), "metric_labels"}`.
+    - `stop`: the stop commands; `editable`, `frozen`: the scope patterns.
+    - `notes_path`: where this iteration's notes go (in the copy).
+    - `hints`: the copy's hints file (`.autohelix-iteration/hints.md`) if there are
+      hints, else "".
+    - `rejected_patch`: `.autohelix-iteration/rejected.patch` if the copy has one (the
+      latest iteration was rejected and its tree was kept), else "".
+    - `rejected_diff`: when that change is too large for the patch file, the `git diff`
+      command that shows it, else "".
+    - `discarded`: the paths whose changes the latest iteration lost to the scope;
+      `discarded_frozen`: those of them that are frozen (the others aren't editable).
+    - `last`: the latest iteration (the baseline before iteration 1), or None:
+      `{"iteration", "accepted", "reason", "summary", "failure_output", "gates": [{"text",
+      "kind", "status": "passed"|"failed"|"pending"}], "observe": [{"name", "ok",
+      "error", "missing" (declared metrics it ran without reporting), "path"}]}`; `path` is its folder in the copy
+      (`.autohelix-iteration/observations/iter-K/<name>/`).
+    - `time_limit`: `agent.timeout` as a compact duration ("15m"), or "".
+    - `group`: the run's group, or ""; `group_runs`: one line per other run of the
+      group (`describe_member`; `members` as `runs.group_members` returns them).
+    """
+    from autohelix.config import MetricGate
     from autohelix.iteration_time import format_duration
+    from autohelix.workspace import ITERATION_DIR
+
+    state = Path(worktree_dir) / ITERATION_DIR
+    latest = history.latest(before=iteration)
+    # The latest rejection's failure output is shown in full (`last`), not in the history too.
+    summary = history.format_summary(without_output=latest.iteration if latest and not latest.accepted else None)
 
     variables: dict[str, Any] = {
         "goal": config.goal.strip(),
+        "title": config.title,
         "iteration": iteration,
         "worktree": str(worktree_dir),
+        "history": "" if summary == "No previous iterations." else summary,
+        "gates": [{"text": _describe_gate(gate), "kind": "metric" if isinstance(gate, MetricGate) else "command"}
+                  for gate in config.gates],
+        "observe": [_describe_entry(entry) for entry in config.observe],
+        "stop": [c.command for c in config.stop],
+        "editable": config.editable,
+        "frozen": config.frozen,
+        "notes_path": str(state / "notes" / f"iter-{iteration}.md"),
+        "hints": "",
+        "rejected_patch": f"{ITERATION_DIR}/rejected.patch" if (state / "rejected.patch").is_file() else "",
+        "rejected_diff": rejected_diff,
+        "discarded": [clean(path) for path in latest.discarded] if latest else [],
+        "discarded_frozen": [clean(path) for path in latest.discarded_frozen] if latest else [],
+        "last": _describe_last(latest) if latest else None,
+        "time_limit": format_duration(config.agent.timeout) if config.agent.timeout is not None else "",
+        "group": group or "",
+        "group_runs": [describe_member(paths, data) for paths, data in members],
+    }
+    hints = history.paths.hints
+    if hints.exists() and hints.stat().st_size > 0:
+        variables["hints"] = f"{ITERATION_DIR}/hints.md"
+    return variables
+
+
+def _describe_entry(entry) -> dict[str, Any]:
+    """One observe entry as the prompt lists it."""
+    labels = [f"{name} ({'↑' if direction == 'higher' else '↓'})" for name, direction in entry.metrics.items()]
+    if entry.review is not None:
+        return {"name": entry.name, "kind": "review", "prompt": " ".join(entry.review.split()),
+                "metric_labels": labels}
+    return {"name": entry.name, "kind": "command", "command": entry.command, "metric_labels": labels}
+
+
+def _describe_last(record) -> dict[str, Any]:
+    """The latest iteration's outcome: what the next agent is told about it."""
+    from autohelix.workspace import ITERATION_DIR
+
+    status = {True: "passed", False: "failed", None: "pending"}
+    return {
+        "iteration": record.iteration,
+        "accepted": record.accepted,
+        "reason": clean(record.reason),
+        "summary": clean(record.summary, SUMMARY_LIMIT),
+        "failure_output": clean_block(record.failure_output).strip(),
+        "gates": [{"text": clean(gate.get("text")), "kind": gate.get("kind", "command"),
+                   "status": status.get(gate.get("passed"), "pending")} for gate in record.gates],
+        "observe": [{"name": clean(item.get("name")), "ok": bool(item.get("ok")), "error": clean(item.get("error")),
+                     "missing": [clean(name) for name in item.get("metric_errors") or {}],
+                     "path": f"{ITERATION_DIR}/observations/iter-{record.iteration}/{clean(item.get('name'))}/"}
+                    for item in record.observe],
     }
 
-    # Recent history
-    history_summary = history.format_summary()
-    if history_summary == "No previous iterations.":
-        variables["history_summary"] = ""
-    else:
-        variables["history_summary"] = history_summary
 
-    # Time limit (only iteration_time is communicated to the agent). Render as a
-    # compact forward-looking duration ("15m"), not the timeout *message*.
-    if config.iteration_time_seconds is not None:
-        variables["iteration_time"] = format_duration(config.iteration_time_seconds)
-    else:
-        variables["iteration_time"] = ""
+# The documented variables (`build_prompt_variables`); a custom template naming others
+# gets a warning at run start (`unknown_variables`).
+VARIABLES = frozenset({
+    "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable", "frozen",
+    "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "time_limit", "group",
+    "group_runs",
+})
 
-    # Constraints
-    variables["constraints"] = [c.command for c in config.constraints]
-    variables["stop"] = [c.command for c in config.stop]
 
-    # Observables — pass structured data for the template to iterate
-    def _format_metric(name: str, direction: str) -> str:
-        arrow = "↑" if direction == "higher" else "↓"
-        return f"{name} ({arrow})"
+def unknown_variables(template: str) -> list[str]:
+    """Names a template uses that are not prompt variables (nor Jinja globals), sorted:
+    e.g. `constraints` or `history_summary` from before config v2. A template that
+    doesn't parse reports none (rendering shows the error)."""
+    from jinja2 import meta
 
-    variables["observables"] = [
-        {
-            "command": obs.command,
-            "metric_labels": [_format_metric(n, d) for n, d in obs.values.items()],
-        }
-        for obs in config.observables
-    ]
+    env = _create_env()
+    try:
+        names = meta.find_undeclared_variables(env.parse(template))
+    except TemplateSyntaxError:
+        return []
+    return sorted(names - VARIABLES - set(env.globals))
 
-    # Scope
-    variables["editable"] = config.editable
-    variables["frozen"] = config.frozen
 
-    # Review
-    variables["has_reviewer"] = config.reviewer is not None
+def _describe_gate(gate) -> str:
+    """One gate as the prompt lists it."""
+    from autohelix.config import MetricGate
 
-    # Other runs of the group: their state is copied into .autohelix-iteration/runs/<id>/.
-    variables["group"] = group or ""
-    variables["group_runs"] = [describe_member(paths, data) for paths, data in members]
-
-    # Hints from `autohelix hint` command
-    hints_path = history.paths.hints
-    variables["has_hints"] = hints_path.exists() and hints_path.stat().st_size > 0
-
-    return variables
+    if not isinstance(gate, MetricGate):
+        return gate.text
+    if gate.mode == "regress":
+        bound = "no worse" if gate.threshold_pct == 0 else f"at most {gate.threshold_pct:g}% worse"
+        return f"{gate.metric}: {bound} than the last accepted iteration"
+    bound = "better" if gate.threshold_pct == 0 else f"at least {gate.threshold_pct:g}% better"
+    return f"{gate.metric}: {bound} than the last accepted iteration"
 
 
 def render_template(template: str, variables: dict[str, Any]) -> str:

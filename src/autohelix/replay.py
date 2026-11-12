@@ -69,7 +69,7 @@ class LogReplay:
                     if streamed:
                         return []
             if backend not in self._parsers:
-                self._parsers[backend] = _PARSERS[backend](AgentConfig(type=backend))
+                self._parsers[backend] = _PARSERS[backend](AgentConfig(backend=backend))
             parser = self._parsers[backend]
             events: list[AgentEvent] = []
             if backend == "claude":

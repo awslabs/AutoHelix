@@ -52,7 +52,7 @@ def run_agent(tmp_path, monkeypatch, config=None, *, usage=USAGE, thread_id=None
 
     monkeypatch.setattr("autohelix.agents.codex.run_process", fake_run_process)
     events = []
-    agent = CodexAgent(config or AgentConfig(type="codex", model="gpt-6.1-sol"))
+    agent = CodexAgent(config or AgentConfig(backend="codex", model="gpt-6.1-sol"))
     result = agent.run(tmp_path, "test", 1, tmp_path / "agent.log", events.append)
     return result, events
 
@@ -242,7 +242,7 @@ def test_invalid_model_context_does_not_reuse_an_earlier_model(tmp_path, monkeyp
 def test_default_model_resolved_from_rollout_overrides_config(tmp_path, monkeypatch):
     rollout(tmp_path, monkeypatch, reasoning_included=False)
     result, _ = run_agent(
-        tmp_path, monkeypatch, AgentConfig(type="codex", model="gpt-6-luna"),
+        tmp_path, monkeypatch, AgentConfig(backend="codex", model="gpt-6-luna"),
         thread_id=THREAD_ID,
     )
     assert result.success
@@ -256,14 +256,14 @@ def test_default_model_resolved_from_rollout_overrides_config(tmp_path, monkeypa
 def test_omitted_model_resolved_from_rollout(tmp_path, monkeypatch):
     rollout(tmp_path, monkeypatch)
     result, _ = run_agent(
-        tmp_path, monkeypatch, AgentConfig(type="codex"), thread_id=THREAD_ID,
+        tmp_path, monkeypatch, AgentConfig(backend="codex"), thread_id=THREAD_ID,
     )
     assert result.usage["cost_usd"] == pytest.approx(1.77)
 
 
 @pytest.mark.parametrize("config", [
-    AgentConfig(type="codex", model="gpt-6.1-sol", extra_args=["--ephemeral"]),
-    AgentConfig(type="codex", settings={"model": "openai.gpt-6.1-sol"}),
+    AgentConfig(backend="codex", model="gpt-6.1-sol", extra_args=["--ephemeral"]),
+    AgentConfig(backend="codex", settings={"model": "openai.gpt-6.1-sol"}),
 ])
 def test_explicit_model_can_price_ephemeral_usage(tmp_path, monkeypatch, config):
     result, _ = run_agent(tmp_path, monkeypatch, config)
@@ -278,14 +278,14 @@ def test_explicit_model_can_price_ephemeral_usage(tmp_path, monkeypatch, config)
 def test_ambiguous_or_resumed_usage_is_not_guessed(tmp_path, monkeypatch, extra_args):
     result, events = run_agent(
         tmp_path, monkeypatch,
-        AgentConfig(type="codex", model="gpt-6.1-sol", extra_args=extra_args),
+        AgentConfig(backend="codex", model="gpt-6.1-sol", extra_args=extra_args),
     )
     assert "cost_usd" not in result.usage
     assert any("Cost unavailable" in event.text for event in events)
 
 
 def test_missing_model_does_not_invent_a_default(tmp_path, monkeypatch):
-    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(type="codex"))
+    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(backend="codex"))
     assert "cost_usd" not in result.usage
 
 
@@ -308,7 +308,7 @@ def test_cumulative_completion_snapshot_replaces_previous_counts(tmp_path, monke
         return ProcessRunResult(exit_code=0)
 
     monkeypatch.setattr("autohelix.agents.codex.run_process", fake_run_process)
-    agent = CodexAgent(AgentConfig(type="codex", model="gpt-6.1-sol"))
+    agent = CodexAgent(AgentConfig(backend="codex", model="gpt-6.1-sol"))
     result = agent.run(tmp_path, "test", 1, tmp_path / "agent.log", lambda event: None)
     assert result.usage["cost_usd"] == pytest.approx(0.004)
 

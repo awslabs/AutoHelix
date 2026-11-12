@@ -9,11 +9,21 @@ no colors, so it can be piped.
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime
 from autohelix.formatting import format_delta, format_duration
 
 WORDS = {"crashed": "stopped unexpectedly", "idle": "not started"}  # others as they are (dashboard.js)
+# Control characters (C0, DEL, C1): from agents, configs and paths, they could move the
+# cursor, recolor or retitle the terminal, or start a fake row.
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def clean(text) -> str:
+    """Text safe to print in one terminal cell: tabs and newlines become spaces,
+    other control characters "�"."""
+    return CONTROL.sub(lambda m: " " if m[0] in "\t\n\r" else "�", str(text))
 
 
 def _live(run: dict) -> bool:
@@ -106,6 +116,7 @@ def metric_names(runs: list[dict]) -> list[str]:
 
 
 def _table(rows: list[list[str]], right: set[int]) -> list[str]:
+    rows = [[clean(cell) for cell in row] for row in rows]
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
     return ["  ".join(cell.rjust(w) if i in right else cell.ljust(w)
                       for i, (cell, w) in enumerate(zip(row, widths))).rstrip() for row in rows]
@@ -132,10 +143,10 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
         summary.append(f"{len(archived)} archived (not listed; see --json)")
     lines = [f"{data['project']}  {_where(data)}", " · ".join(summary)]
     if not shown:
-        return "\n".join(lines + ["", "No runs yet." if not runs else "All runs are archived."]) + "\n"
+        return "\n".join(map(clean, lines + ["", "No runs yet." if not runs else "All runs are archived."])) + "\n"
 
     metric = metric or next(iter(metric_names(shown)), None)
-    head = ["RUN", "STATUS", "ITER"] + ([metric] if metric else []) + ["LANDING", "ACTIVE"]
+    head = ["RUN", "STATUS", "ITER"] + ([metric] if metric else []) + ["LANDING", "ACTIVE", "GOAL"]
     rows = [head]
     for run in shown:
         if run.get("error"):
@@ -143,9 +154,10 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
             continue
         rows.append([_label(run), _state(run, now), _iterations(run)]
                     + ([_metric(run, metric)] if metric else [])
-                    + [_landing(run), "now" if _live(run) else _ago(run["last_activity"], now)])
+                    + [_landing(run), "now" if _live(run) else _ago(run["last_activity"], now),
+                       run.get("title") or ""])
         rows.append(["  " + (run["config_file"] or ""), _spent(run, now)] + [""] * (len(head) - 2))
-    return "\n".join(lines + [""] + _table(rows, right={2, 3} if metric else {2})) + "\n"
+    return "\n".join(list(map(clean, lines)) + [""] + _table(rows, right={2, 3} if metric else {2})) + "\n"
 
 
 def format_run(data: dict, now: float | None = None) -> str:
@@ -162,8 +174,9 @@ def format_run(data: dict, now: float | None = None) -> str:
     stop = (run["status"] or {}).get("stop_reason") or {}
     if not _live(run) and stop.get("detail"):
         lines.append(f"Stopped: {stop['detail']}")
-    if run["goal"]:
-        lines.append(f"Goal: {run['goal'].splitlines()[0]}")
+    title = run.get("title") or (run["goal"].splitlines()[0] if run["goal"] else None)
+    if title:
+        lines.append(f"Goal: {title}")
     metrics = run["metrics"]
     if metrics and metrics["iteration"] > 0:
         parts = [" ".join(filter(None, [f"{v['name']} {_number(v['value'])}",
@@ -175,12 +188,53 @@ def format_run(data: dict, now: float | None = None) -> str:
     names = list(dict.fromkeys(name for r in iterations for name in r["metrics"] or {}))
     rows = [["ITER", "OK"] + names + ["COST", "TIME", "SUMMARY"]]
     for r in iterations:
-        summary = (r["summary"] or ("baseline" if r["iteration"] == 0 else "")).strip()
+        first, more = _summary(r)
         rows.append([str(r["iteration"]), "✓" if r["accepted"] else "✗"]
                     + [_number((r["metrics"] or {}).get(n)) for n in names]
                     + [_money(r["cost"], r["cost_incomplete"]),
-                       format_duration(r["seconds"]) if r["seconds"] else "—",
-                       summary.splitlines()[0] if summary else ""])
+                       format_duration(r["seconds"]) if r["seconds"] else "—", first])
+        rows.extend([""] * (len(names) + 4) + [line] for line in more)
     if under_way:
         rows.append([str(under_way), "…"] + [""] * len(names) + ["", "", _state(run, now)])
-    return "\n".join(lines + [""] + _table(rows, right={0, *range(2, len(names) + 4)})) + "\n"
+    return "\n".join(list(map(clean, lines)) + [""] + _table(rows, right={0, *range(2, len(names) + 4)})) + "\n"
+
+
+def _summary(r: dict) -> tuple[str, list[str]]:
+    """An iteration's SUMMARY cell and the lines under it.
+
+    Rejected: the failing gate (else the harness's reason), then the agent's summary.
+    Accepted: the agent's summary. Then gates that failed at the baseline (they don't
+    reject there), failed observe entries, metrics an entry didn't report, and
+    discarded paths."""
+    def first_line(text) -> str:
+        text = (text or "").strip()
+        return text.splitlines()[0] if text else ""
+
+    reason = r.get("reason")
+    summary = first_line(r.get("summary"))
+    failed_gate = next((g for g in r.get("gates") or [] if isinstance(g, dict) and g.get("passed") is False), None)
+    if r["iteration"] == 0 and not summary:
+        cell, more = "baseline", []
+    elif not r["accepted"]:
+        cell = f"gate failed: {failed_gate.get('text')}" if failed_gate else first_line(reason) or summary
+        more = [summary] if summary and summary != cell and summary != first_line(reason) else []
+    else:
+        cell, more = summary, []
+    if r["iteration"] == 0:
+        for gate in r.get("gates") or []:
+            if isinstance(gate, dict) and gate.get("kind") == "command" and gate.get("passed") is False:
+                more.append(f"! gate failed at the baseline: {gate.get('text')}")
+    for entry in r.get("observe") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("ok") is False:
+            more.append(f"! observe {entry.get('name')} failed" + (f": {entry['error']}" if entry.get("error") else ""))
+        elif isinstance(entry.get("metric_errors"), dict) and entry["metric_errors"]:
+            more.append(f"! observe {entry.get('name')} reported no {', '.join(entry['metric_errors'])}")
+    discarded = r.get("discarded") or []
+    if discarded:
+        frozen = set(r.get("discarded_frozen") or [])
+        shown = ", ".join(p + (" (frozen)" if p in frozen else "") for p in discarded[:5])
+        shown += f", … ({len(discarded)} paths)" if len(discarded) > 5 else ""
+        more.append(f"! discarded, outside the scope: {shown}")
+    return cell, more

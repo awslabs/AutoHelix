@@ -55,10 +55,19 @@ def test_harness_records_finished_run(integration_project):  # noqa: F811
 
 def test_harness_records_failed_run(integration_project, monkeypatch):  # noqa: F811
     harness = Harness(integration_project)
-    monkeypatch.setattr(harness, "run_agent", lambda *a, **k: AgentRunResult(success=False, exit_code=1))
+
+    def broken(*args, **kwargs):  # the harness itself failing, not the agent (that's a rejection)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(harness, "run_agent", broken)
     with pytest.raises(AutoHelixRunError):
         harness.run(max_iterations=1)
     assert read_run_status(integration_project)["state"] == "failed"
+    # A failed agent call is a rejected iteration: the run finishes normally.
+    harness = Harness(integration_project)
+    monkeypatch.setattr(harness, "run_agent", lambda *a, **k: AgentRunResult(success=False, exit_code=1))
+    harness.run(max_iterations=2)
+    assert read_run_status(integration_project)["state"] == "finished"
 
 
 # ---------- viewer server ----------
@@ -94,7 +103,8 @@ def test_state_lists_iterations_and_status(viewer):
     assert state["status"]["state"] == "finished"
     assert state["goal"].startswith("Test the integration")
     assert state["config"]["file"] == "autohelix.yaml"
-    assert state["config"]["checks"] == ["true"]
+    assert state["config"]["gates"] == ["true"]
+    assert state["title"] == "Test the integration"
     assert "goal: Test the integration" in state["config"]["text"]
     # The run finished, so it wrote a summary (the mock agent's fixed text).
     assert state["report"]["html"] == "<p>Mock summary of the run.</p>\n"
@@ -106,7 +116,8 @@ def test_iteration_detail_has_notes_and_diff(viewer):
     assert "<strong>the obvious</strong>" in detail["notes"]
     assert "<script>" not in detail["notes"]  # Raw HTML is escaped, not rendered.
     assert "Modified in iteration 2" in detail["diff"]
-    assert detail["review"] is None
+    assert [(g["text"], g["passed"]) for g in detail["gates"]] == [("true", True)]
+    assert detail["observe"] == [] and detail["discarded"] == []
     assert isinstance(detail["agent"], list)
 
 
@@ -143,19 +154,20 @@ def test_notes_list_and_note_route(viewer):
 
 
 def test_artifacts_listed_and_served_safely(viewer, integration_project):  # noqa: F811
-    obs = RunPaths(integration_project).observations / "iter-2"
+    obs = RunPaths(integration_project).observations / "iter-2" / "bench"
     obs.mkdir(parents=True, exist_ok=True)
     (obs / "page.html").write_text("<script>alert(1)</script>")
     (obs / "plot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-    state = json.loads(get(viewer + "/api/state")[1])
-    assert {"page.html", "plot.png"} <= {a["name"] for a in state["artifacts"]["2"]}
+    sections = json.loads(get(viewer + "/api/iteration/2")[1])["observe"]
+    assert {"bench/page.html", "bench/plot.png"} <= {a["path"] for a in sections[0]["files"]}
 
-    request = urllib.request.Request(viewer + "/api/artifact/2/page.html")
+    request = urllib.request.Request(viewer + "/api/artifact/2/bench/page.html")
     with urllib.request.urlopen(request) as response:
         assert response.headers["Content-Type"].startswith("text/plain")  # never rendered as HTML
-    with urllib.request.urlopen(viewer + "/api/artifact/2/plot.png") as response:
+    with urllib.request.urlopen(viewer + "/api/artifact/2/bench/plot.png") as response:
         assert response.headers["Content-Type"] == "image/png"
     assert get(viewer + "/api/artifact/2/..%2F..%2Fhistory.jsonl")[0] == 404
+    assert get(viewer + "/api/artifact/2/bench/../../../history.jsonl")[0] == 404
 
 
 def test_diff_is_relative_to_baseline(viewer):
@@ -254,7 +266,7 @@ def test_tampered_commit_is_never_passed_to_git(viewer, integration_project):  #
 
 def test_preflight_failure_is_not_recorded_as_a_run(integration_project):  # noqa: F811
     (integration_project / "autohelix.yaml").write_text(
-        (integration_project / "autohelix.yaml").read_text().replace("type: mock", "type: claude\n  command: /nonexistent/agent"))
+        (integration_project / "autohelix.yaml").read_text().replace("backend: mock", "backend: claude\n  command: /nonexistent/agent"))
     subprocess.run(["git", "commit", "-qam", "Use a missing agent"], cwd=integration_project, check=True)
     with pytest.raises(RuntimeError, match="Preflight checks failed"):
         Harness(integration_project)
@@ -278,7 +290,6 @@ def test_stopped_run_saves_static_page(integration_project):  # noqa: F811
     routes = data["routes"]
     assert routes["/api/state"]["status"]["state"] == "finished"
     assert routes["/api/state"]["report"]["last_iteration"] == 2
-    assert routes["/api/state"]["artifacts"] == {}
     assert set(routes) >= {"/api/state", "/api/iteration/0", "/api/iteration/1", "/api/iteration/2"}
     assert all(routes[f"/api/iteration/{n}"]["agent"] == [] for n in (0, 1, 2))
     # One diff: baseline to the final code, on the last accepted iteration.
@@ -395,9 +406,10 @@ def measured_project(integration_project):  # noqa: F811
     """Three runs with a metric: one finished and landed, one manual and unlanded, one archived."""
     config = integration_project / "autohelix.yaml"
     config.write_text(config.read_text() + """
-metrics:
-  - command: python -c "import pathlib; print('##autohelix[speed=%d]' % (100 + 10 * pathlib.Path('hello.py').read_text().count('iteration')))"
-    values:
+observe:
+  - name: bench
+    command: python -c "import pathlib; print('##autohelix[speed=%d]' % (100 + 10 * pathlib.Path('hello.py').read_text().count('iteration')))"
+    metrics:
       speed: higher
 """)
     subprocess.run(["git", "commit", "-qam", "metric"], cwd=integration_project, check=True)
@@ -430,10 +442,11 @@ def test_dashboard_json_and_once(measured_project):
     assert lines[0].startswith(f"test_project  ") and lines[0].endswith(" @ " + subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip())
     assert lines[1].startswith("2 runs") and lines[1].endswith("1 archived (not listed; see --json)")
-    assert lines[3].split() == ["RUN", "STATUS", "ITER", "speed", "LANDING", "ACTIVE"]
+    assert lines[3].split() == ["RUN", "STATUS", "ITER", "speed", "LANDING", "ACTIVE", "GOAL"]
     rows = {line.split()[0]: line for line in lines[4:] if not line.startswith(" ")}
     assert set(rows) == {first, second}
     assert rows[first].split()[1:5] == ["finished", "2/2", "120.0", "landed"]
+    assert rows[first].endswith("Test the integration")
     assert rows[second].split()[1:7] == ["finished", "1/1", "130.0", "1", "commit", "to"]
     assert "  autohelix.yaml" in result.output
 

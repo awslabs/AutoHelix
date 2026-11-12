@@ -7,10 +7,13 @@ import json
 import logging
 import os
 import shutil
+import stat
 from dataclasses import dataclass, field, asdict, fields
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
+from autohelix.config import capture_problem
+from autohelix.formatting import SUMMARY_LIMIT, clean, clean_block
 from autohelix.costs import CostSummary, summarize_costs
 from autohelix.runs import RunPaths, SCHEMA
 
@@ -33,16 +36,31 @@ class IterationResult:
     started_at: float | None = None
     ended_at: float | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
-    constraints: list[dict[str, Any]] = field(default_factory=list)
+    # One item per gate, in list order: {"text", "kind": "command"|"metric", "passed":
+    # true|false|null (not reached)}; commands that ran add "return_code" and
+    # "duration_s", a failed one its "output" tail; checked metric gates add "value",
+    # "reference" and, failed, "reason". Empty if evaluation never started.
+    gates: list[dict[str, Any]] = field(default_factory=list)
+    # One item per observe entry that ran, in order: {"name", "ok", "return_code",
+    # "error", "metrics", "duration_s"}.
+    observe: list[dict[str, Any]] = field(default_factory=list)
+    # The attempt itself: the agent's one-line summary (commit_summary.txt, whenever its
+    # copy was frozen, accepted or not), the commit it was built on (A), the frozen tree
+    # (T), the out-of-scope paths dropped at freeze (project-relative), and for a
+    # rejected attempt with a tree the ref keeping it (refs/autohelix-rejected/<id>/<n>).
+    summary: str | None = None
+    base: str | None = None
+    tree: str | None = None
+    discarded: list[str] = field(default_factory=list)
+    discarded_frozen: list[str] = field(default_factory=list)  # those of `discarded` that are frozen
+    # Why the main agent's call failed or timed out (the attempt was rejected unchecked).
+    agent_error: str | None = None
+    rejected_ref: str | None = None
 
     @property
     def usage(self):
         """Main-agent usage, derived from the authoritative calls."""
         return next((call.get("usage") or {} for call in self.calls if call["role"] == "agent"), {})
-
-    @property
-    def reviewer_usage(self):
-        return [call.get("usage") or {} for call in self.calls if call["role"] == "reviewer"]
 
     @property
     def command_usage(self):
@@ -55,6 +73,16 @@ class IterationResult:
     @property
     def cost(self) -> CostSummary:
         return summarize_costs(self.cost_usages)
+
+
+def _copy_error(error: BaseException) -> str:
+    """One line for a copy failure (shutil.Error carries a list of per-file errors)."""
+    if isinstance(error, shutil.Error) and error.args and isinstance(error.args[0], list):
+        failures = error.args[0]
+        first = failures[0][-1] if failures and isinstance(failures[0], tuple) else error
+        more = f" (and {len(failures) - 1} more)" if len(failures) > 1 else ""
+        return f"{first}{more}"
+    return str(error)
 
 
 class History:
@@ -74,27 +102,103 @@ class History:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def save_stdout(self, iteration: int, output: str, index: int | None = None) -> None:
-        """Save command stdout to the iteration directory.
+    def entry_dir(self, iteration: int, name: str) -> Path:
+        """`observations/iter-N/<name>/`, one observe entry's output (`iter-N/` is
+        created; the entry's folder is not)."""
+        if not name or name.startswith(".") or "/" in name or os.sep in name:
+            raise ValueError(f"Not an observe entry name: {name!r}")
+        d = self._observations_dir / f"iter-{iteration}"
+        if d.is_symlink() or d.is_file():  # planted: never write through it
+            d.unlink()
+        return self.iter_dir(iteration) / name
 
-        Args:
-            iteration: The iteration number.
-            output: The stdout+stderr text.
-            index: If multiple observable commands, the command index (0-based).
-                   None means single command (saves as stdout.txt).
-        """
-        d = self.iter_dir(iteration)
-        if index is not None:
-            path = d / f"stdout-{index}.txt"
+    def clear_observations(self, iteration: int) -> None:
+        """Remove what an earlier attempt at this iteration (a baseline retry) stored."""
+        d = self._observations_dir / f"iter-{iteration}"
+        if d.is_symlink() or d.is_file():
+            d.unlink()
+        elif d.is_dir():
+            shutil.rmtree(d)
+
+    def stage_output(self, stage: Path, stdout: str, stderr: str, root: Path,
+                     captures: list[str]) -> list[str]:
+        """Write an observe entry's output into `stage` (an empty folder): `stdout.txt`,
+        `stderr.txt` (only if non-empty), and each captured file or folder from `root`
+        (the checks copy) at its relative path, so captures with one basename don't
+        collide. Returns the problems with captures (skipped, or partly copied): never
+        raises for one. Paths escaping the copy or naming repository/harness state are
+        refused; symlinks (at or above the path, or inside a folder) are never followed;
+        anything but regular files and folders (FIFOs, sockets, devices) is skipped."""
+        (stage / "stdout.txt").write_text(stdout)
+        if stderr:
+            (stage / "stderr.txt").write_text(stderr)
+        problems = []
+        for capture in captures:
+            try:
+                problem = self._stage_capture(stage, root, capture)
+            except (OSError, shutil.Error) as e:
+                problem = f"capture {capture!r} not saved completely: {_copy_error(e)}"
+            if problem:
+                problems.append(problem)
+        return problems
+
+    @staticmethod
+    def _stage_capture(stage: Path, root: Path, capture: str) -> str | None:
+        if problem := capture_problem(capture):
+            return f"capture {capture!r} skipped: {problem}"
+        parts = [part for part in PurePosixPath(capture).parts if part not in ("", ".")]
+        source = root
+        for part in parts:
+            source = source / part
+            if source.is_symlink():
+                return f"capture {capture!r} skipped: {'/'.join(source.relative_to(root).parts)} is a symlink"
+        try:
+            mode = source.lstat().st_mode
+        except FileNotFoundError:
+            return None  # nothing there to save
+        target = stage.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if stat.S_ISDIR(mode):
+            def ignore(folder, names):  # only regular files and folders, never followed
+                kept = set()
+                for name in names:
+                    try:
+                        if stat.S_ISREG(m := os.lstat(os.path.join(folder, name)).st_mode) or stat.S_ISDIR(m):
+                            kept.add(name)
+                    except OSError:
+                        pass
+                return [name for name in names if name not in kept]
+
+            shutil.copytree(source, target, symlinks=True, ignore=ignore, dirs_exist_ok=True)
+        elif stat.S_ISREG(mode):
+            shutil.copy2(source, target)
         else:
-            path = d / "stdout.txt"
-        path.write_text(output)
+            return f"capture {capture!r} skipped: not a regular file or folder"
+        return None
 
-    def save_capture(self, iteration: int, src_path: Path) -> None:
-        """Copy a captured file into the iteration directory."""
-        d = self.iter_dir(iteration)
-        if src_path.exists():
-            shutil.copy2(src_path, d / src_path.name)
+    def install_observation(self, iteration: int, name: str, stage: Path) -> None:
+        """Make `stage` the entry's `observations/iter-N/<name>/`, replacing whatever is
+        there (e.g. something an earlier command wrote by absolute path)."""
+        target = self.entry_dir(iteration, name)
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        elif target.exists():
+            shutil.rmtree(target)
+        shutil.move(str(stage), str(target))
+
+    def previous_observations(self, name: str, before: int) -> Path | None:
+        """`observations/iter-K/<name>/` of the most recent accepted iteration K < `before`
+        (the baseline and accepted no-ops count) in which that entry succeeded; rejected
+        iterations, and failed runs of the entry, never count."""
+        for record in reversed(self.load()):
+            if not record.accepted or record.iteration >= before:
+                continue
+            if not any(item.get("name") == name and item.get("ok") for item in record.observe):
+                continue
+            d = self._observations_dir / f"iter-{record.iteration}" / name
+            if d.is_dir() and not d.is_symlink():
+                return d
+        return None
 
     def _invalidate_cache(self) -> None:
         """Invalidate the cached results."""
@@ -132,26 +236,8 @@ class History:
 
     @property
     def cost_usages(self) -> list[dict[str, Any]]:
-        """All recorded run calls, including baseline reviews."""
+        """All recorded run calls."""
         return [usage for result in self.load() for usage in result.cost_usages]
-
-    def record_reviewer_usage(
-        self, iteration: int, usage: dict[str, Any], attempt: int | None = None,
-        *, log: str | None = None,
-    ) -> int:
-        """Append a review attempt, or update the usage of a pending attempt."""
-        results = self.load()
-        result = next((r for r in results if r.iteration == iteration), None)
-        if result is None:
-            raise ValueError(f"No history record for iteration {iteration} to attach reviewer usage to.")
-        reviews = [call for call in result.calls if call["role"] == "reviewer"]
-        if attempt is None:
-            attempt = len(reviews)
-            result.calls.append({"role": "reviewer", "usage": usage, "log": log})
-        else:
-            reviews[attempt]["usage"] = usage
-        self._rewrite(results)
-        return attempt
 
     def load(self) -> list[IterationResult]:
         """Load all iteration results from history (cached by file mtime)."""
@@ -225,13 +311,25 @@ class History:
 
         return best
 
+    def latest(self, before: int | None = None) -> IterationResult | None:
+        """The latest iteration's record (below `before`): the highest number and, of
+        records sharing it (a retried baseline), the last one written."""
+        records = [r for r in self.load() if before is None or r.iteration < before]
+        if not records:
+            return None
+        top = max(r.iteration for r in records)
+        return [r for r in records if r.iteration == top][-1]
+
     def get_recent(self, n: int = 5) -> list[IterationResult]:
         """Get the n most recent iteration results."""
         results = self.load()
         return results[-n:] if len(results) > n else results
 
-    def format_summary(self) -> str:
-        """Format a summary of the history for the agent prompt."""
+    def format_summary(self, without_output: int | None = None) -> str:
+        """The last 5 iterations for the agent prompt, one line each: metrics (accepted)
+        or the rejection reason, then the agent's one-line summary; below it a
+        rejection's failure output (not for iteration `without_output`, which the prompt
+        shows in full) and any observe entry that failed. Agent-written text is cleaned."""
         results = self.load()
         if not results:
             return "No previous iterations."
@@ -240,12 +338,17 @@ class History:
         for r in self.get_recent(5):
             if r.accepted:
                 metrics_str = ", ".join(f"{k}={v}" for k, v in r.metrics.items())
-                lines.append(f"- iter {r.iteration}: {metrics_str} (accepted)")
+                line = f"- iter {r.iteration}: {metrics_str + ' ' if metrics_str else ''}(accepted)"
             else:
-                lines.append(f"- iter {r.iteration}: rejected ({r.reason})")
-                # Include failure output so agent can understand what went wrong
-                if r.failure_output:
-                    for line in r.failure_output.splitlines():
-                        lines.append(f"    {line}")
+                line = f"- iter {r.iteration}: rejected ({r.reason})"
+            lines.append(clean_block(line).replace("\n", " ")
+                         + (f" — {clean(r.summary, SUMMARY_LIMIT)}" if r.summary else ""))
+            # Include failure output so agent can understand what went wrong
+            if not r.accepted and r.failure_output and r.iteration != without_output:
+                for output_line in clean_block(r.failure_output).splitlines():
+                    lines.append(f"    {output_line}")
+            for item in r.observe:
+                if not item.get("ok", True):
+                    lines.append(f"    observe {clean(item.get('name'))} failed: {clean(item.get('error'))}")
 
         return "\n".join(lines)

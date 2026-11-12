@@ -52,8 +52,8 @@ def watch_agent(harness, monkeypatch, seen):
 
 
 def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, monkeypatch):  # noqa: F811
-    configure(project, metrics=[{"command": "echo score: 3.5", "values": {"score": "higher"}}],
-              agent={"type": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
+    configure(project, observe=[{"name": "bench", "command": "echo score: 3.5", "metrics": {"score": "higher"}}],
+              agent={"backend": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
                                                   "notes_content": "tried {iteration}"}})
     first = Harness(project, new=True, group="g")
     first.run(max_iterations=1, report=False)
@@ -102,13 +102,13 @@ def test_group_and_landing_mode_are_stored_kept_and_changed(project):  # noqa: F
     assert identity(grouped)["group"] == "other" and identity(grouped)["land"] == "manual"
     result = cli(project, "resume", short_id(run_id), "-n", "1", "--no-report", "--group", "", "--land", "auto")
     assert result.exit_code == 0, result.output
-    assert "leaves group other" in result.output and "Landed run" in result.output
+    assert "leaves group other" in result.output and "  Landed " in result.output
     data = identity(grouped)
     assert "group" not in data and data["land"] == "auto"
 
     configure(project, land="manual")  # the config's land: is the default for new runs only
     result = cli(project, "resume", short_id(run_id), "-n", "1", "--no-report")
-    assert result.exit_code == 0 and identity(grouped)["land"] == "auto" and "Landed run" in result.output
+    assert result.exit_code == 0 and identity(grouped)["land"] == "auto" and "  Landed " in result.output
     fresh, _ = started(project)
     assert identity(fresh)["land"] == "manual"
     explicit, _ = started(project, "--group", "perf", "--land", "auto")
@@ -160,7 +160,7 @@ def test_dashboard_shows_the_group_after_the_id(project):  # noqa: F811
 
 
 def test_notes_are_saved_as_versions_and_delete_removes_them(project):  # noqa: F811
-    configure(project, agent={"type": "mock", "settings": {"change_file": "code.py",
+    configure(project, agent={"backend": "mock", "settings": {"change_file": "code.py",
                                                            "change_content": "# {iteration}",
                                                            "notes_content": "note {iteration}"}})
     paths, _ = started(project, "--group", "g")
@@ -253,14 +253,14 @@ def test_a_template_naming_the_old_copy_layout_is_flagged():
 def test_a_new_member_doesnt_warn_about_unlanded_members(project):  # noqa: F811
     first, _ = started(project, "--group", "g")  # manual landing: its commit stays unlanded
     _, result = started(project, "--group", "g")
-    assert "unlanded" not in result.output and "Previous run" not in result.output
+    assert "unlanded commit" not in result.output.split("  AutoHelix ·")[0] and "Previous run" not in result.output
     _, result = started(project)  # outside the group the warning stands
-    assert "unlanded commit" in result.output
+    assert "unlanded commit" in result.output.split("  AutoHelix ·")[0]  # the warning, before the header
 
 
 def test_a_checks_copy_gets_the_complete_change_and_nothing_else(project):  # noqa: F811
     seen = project / "seen"
-    configure(project, constraints=[
+    configure(project, gates=[
         f"ls -A .autohelix-iteration > {seen}; grep -c '^+' .autohelix-iteration/candidate.diff >> {seen}"])
     started(project)
     listing = seen.read_text().split()
@@ -328,4 +328,4 @@ def test_the_report_copy_lists_the_runs_own_ref(project, monkeypatch):  # noqa: 
 def test_an_old_prompt_file_is_reported_as_no_longer_read(project):  # noqa: F811
     (project / ".autohelix" / "prompt.md").write_text("Old: {{ goal }}\n")
     _, result = started(project)
-    assert ".autohelix/prompt.md is no longer read" in result.output
+    assert ".autohelix/prompt.md is no longer read" in " ".join(result.output.split())  # wrapped under WARN

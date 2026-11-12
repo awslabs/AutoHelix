@@ -210,7 +210,7 @@ class TestPrepareWorktree:
         obs = ah / "observations" / "iter-0"
         obs.mkdir(parents=True)
         (obs / "stdout.txt").write_text("baseline\n")
-        # A prior review — the LATEST should be materialized as review.md
+        # Old runs' reviews are not material for the agent any more
         reviews = ah / "reviews"
         reviews.mkdir()
         (reviews / "iter-1.md").write_text("old review\n")
@@ -223,8 +223,7 @@ class TestPrepareWorktree:
         assert (wt_ah / "notes" / "iter1.md").read_text() == "some notes\n"
         assert (wt_ah / "hints.md").read_text() == "try harder\n"
         assert (wt_ah / "observations" / "iter-0" / "stdout.txt").exists()
-        # Latest review materialized as transient review.md; archive NOT copied
-        assert (wt_ah / "review.md").read_text() == "latest review\n"
+        assert not (wt_ah / "review.md").exists()
         assert not (wt_ah / "reviews").exists()
 
     def test_prepare_worktree_copies_agent_state_only(self, git_project):

@@ -1,4 +1,6 @@
 goal: |
+  Make a fast, correct GPU kernel for {problem_name}.
+
   Write an optimized GPU implementation of the reference PyTorch module and make
   it as fast as possible while staying numerically correct.
 
@@ -31,29 +33,27 @@ goal: |
       the goal; a >2x speedup on a well-known op is suspicious — double-check it.
     - Run `python eval_solution.py` to test.
 
-constraints:
+gates:
   - python check_solution.py
   - command: python eval_solution.py --check-only
     timeout: {evaluation_timeout}
-
-metrics:
-  - command: python eval_solution.py
-    values:
-      mean_speedup: higher
-    timeout: {evaluation_timeout}
-
-acceptance:
   # eval_solution.py emits mean_speedup only on success. This gate makes a
   # missing/zero result reject the iteration instead of merging unmeasured code.
-  metric_gates:
-    - metric: mean_speedup
-      max_regression_pct: 99
+  - metric: mean_speedup
+    regress: 99%
+
+observe:
+  - name: eval
+    command: python eval_solution.py
+    metrics:
+      mean_speedup: higher
+    timeout: {evaluation_timeout}
 
 scope:
   editable: [solution.py]
 
 agent:
-  type: claude
+  backend: claude
   model: {agent_model}
 
 budget:

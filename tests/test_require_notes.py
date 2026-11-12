@@ -15,21 +15,21 @@ HOOK = Path(__file__).parent.parent / "src" / "autohelix" / "bin" / "check_notes
 # --- config parsing -------------------------------------------------------
 
 def test_require_notes_absent_is_none():
-    assert AgentConfig.from_dict({"type": "claude"}).require_notes is None
+    assert AgentConfig.from_dict({"backend": "claude"}).require_notes is None
 
 
 def test_require_notes_false_is_none():
-    assert AgentConfig.from_dict({"type": "claude", "require_notes": False}).require_notes is None
+    assert AgentConfig.from_dict({"backend": "claude", "require_notes": False}).require_notes is None
 
 
 def test_require_notes_bare_true_uses_defaults():
-    rn = AgentConfig.from_dict({"type": "claude", "require_notes": True}).require_notes
+    rn = AgentConfig.from_dict({"backend": "claude", "require_notes": True}).require_notes
     assert rn == RequireNotesConfig(min_chars=50, max_retries=3)
 
 
 def test_require_notes_dict_overrides():
     rn = AgentConfig.from_dict(
-        {"type": "claude", "require_notes": {"min_chars": 200, "max_retries": 5}}
+        {"backend": "claude", "require_notes": {"min_chars": 200, "max_retries": 5}}
     ).require_notes
     assert rn == RequireNotesConfig(min_chars=200, max_retries=5)
 
@@ -41,23 +41,24 @@ def _config(agent):
         {
             "goal": "x",
             "agent": agent,
-            "observables": [{"command": "echo hi", "values": {"s": "higher"}}],
+            "observe": [{"name": "bench", "command": "echo hi", "metrics": {"s": "higher"}}],
         }
     )
 
 
 def test_require_notes_rejected_for_codex():
-    issues = _config({"type": "codex", "require_notes": True}).validate()
+    issues = _config({"backend": "codex", "require_notes": True}).validate()
     assert any("require_notes" in i.message for i in issues)
 
 
 def test_require_notes_allowed_for_claude():
-    issues = _config({"type": "claude", "require_notes": True}).validate()
+    issues = _config({"backend": "claude", "require_notes": True}).validate()
     assert not any("require_notes" in i.message for i in issues)
+    assert not [i.message for i in issues if i.level == "error"]  # the fixture itself is a valid config
 
 
 def test_require_notes_bad_max_retries():
-    issues = _config({"type": "claude", "require_notes": {"max_retries": 0}}).validate()
+    issues = _config({"backend": "claude", "require_notes": {"max_retries": 0}}).validate()
     assert any("max_retries" in i.message for i in issues)
 
 

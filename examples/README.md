@@ -26,7 +26,7 @@ guidance.
 | [**workflow-optimization**](workflow-optimization/) | AI workflow | Workflow code, prompt, and skill |
 
 The checks and evaluators remain outside the agent's editable surface. See each
-example's configuration or README for its exact constraints, metrics, and
+example's configuration or README for its exact gates, observe entries, and
 setup.
 
 ## Set Up an Example

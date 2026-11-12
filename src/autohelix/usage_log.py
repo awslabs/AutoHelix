@@ -3,7 +3,7 @@
 
 """Usage of model calls made by commands the harness runs ($AUTOHELIX_USAGE_FILE).
 
-The harness gives every command it runs (constraints, metrics, stop commands)
+The harness gives every command it runs (gate, observe and stop commands)
 the path of a per-iteration JSONL file. A tool that calls a model, such as
 `autohelix ask`, appends one record when a call starts (cost unknown) and one
 when it ends, with the same id. Reading keeps the last record per id, so a call

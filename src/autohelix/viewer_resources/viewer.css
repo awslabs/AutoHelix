@@ -220,3 +220,25 @@ pre { white-space: pre-wrap; word-break: break-word; }
 .where { margin: 4px 0 0; font-size: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 button.link { font: inherit; color: inherit; background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
 button.link:hover { color: var(--text); }
+
+/* config v2: gates, observe entries, summaries, discarded paths */
+.iterations td.summary .why { color: var(--bad); }
+.iterations td.summary .flag { color: var(--bad); font-size: 12px; }
+.agent-summary { margin: 4px 0 8px; color: var(--muted); }
+.observe > .sec { border-top: 1px solid var(--line); }
+.observe > .sec.failed > summary .muted { color: var(--bad); }
+.sec > div > pre.output { max-height: 360px; overflow: auto; padding: 8px 10px; background: var(--code); border-radius: 6px; }
+.sec > div > .artifacts { display: flex; flex-direction: column; gap: 4px; margin: 0 0 8px; }
+.sec > div > .prose { margin-bottom: 10px; }
+.sec > div > a.raw { color: var(--accent); font-size: 12px; }
+.sec > .gates { padding: 2px 0 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+.gate .mark { display: inline-block; width: 1.4em; font-weight: 600; }
+.gate.passed .mark { color: var(--good); }
+.gate.failed .mark, .gate.failed code { color: var(--bad); }
+.gate.pending { color: var(--muted); }
+.gate > .reason, .gate > pre { margin: 2px 0 6px 1.4em; }
+.gate > pre { max-height: 240px; overflow: auto; padding: 6px 8px; background: var(--code); border-radius: 6px; }
+.warn { color: var(--bad); margin: 2px 0 4px; }
+ul.paths { margin: 0 0 8px; padding-left: 22px; }
+.run-title { color: var(--text); margin-top: 2px; max-width: 60ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sec > .entry { padding: 2px 0 10px 14px; max-height: 640px; overflow: auto; }

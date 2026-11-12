@@ -2,7 +2,7 @@ goal: |
   Work on the first unchecked item in TASKS.md.
   Keep the code tested and check the item off only when it is complete.
 
-constraints:
+gates:
   - pytest -q
 
 scope:

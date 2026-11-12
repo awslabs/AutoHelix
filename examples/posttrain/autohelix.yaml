@@ -3,6 +3,8 @@
 # harness is frozen. Requires a prepared GPU environment — see README.md for setup.
 
 goal: |
+  Post-train Qwen3-4B-Base for GSM8K accuracy.
+
   Train the small base model `Qwen/Qwen3-4B-Base` to do as well as possible on
   GSM8K (Grade School Math 8K). You have full freedom over the approach — data
   sources, training method, and hyperparameters are all yours to choose.
@@ -34,21 +36,20 @@ goal: |
      final model. Do not download an instruction-tuned version.
   5. Do not modify the frozen eval files.
 
-# The agent must have produced a loadable model at the fixed artifacts location.
-constraints:
+# The agent must have produced a loadable model at the fixed artifacts location,
+# scoring at most 10% below the last accepted iteration.
+gates:
   - bash check_final_model.sh
+  - metric: score
+    regress: 10%
 
 # The official scorer reads $ARTIFACTS/final_model and prints GSM8K accuracy.
-metrics:
-  - command: bash run_eval.sh
-    timeout: 1800
-    values:
+observe:
+  - name: eval
+    command: bash run_eval.sh
+    timeout: 30m
+    metrics:
       score: higher
-
-acceptance:
-  metric_gates:
-    - metric: score
-      max_regression_pct: 10
 
 # The agent writes the training code; only the eval harness is protected.
 scope:
@@ -62,10 +63,10 @@ scope:
     - gpu_device.txt
 
 agent:
-  type: claude
+  backend: claude
   reasoning_effort: xhigh   # harder thinking → agent explores the toolkit, not just the obvious method
+  timeout: 2h               # per-iteration wall-clock (agent gets a heads-up before the deadline)
 
 budget:
   iterations: 20
-  iteration_time: 2h        # per-iteration wall-clock (agent gets a heads-up before the deadline)
   time: 10h                 # total wall-clock across the whole run

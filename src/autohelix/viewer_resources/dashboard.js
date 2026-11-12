@@ -163,6 +163,8 @@ function runRow(run) {
     el('td', {}, el('a', { className: 'run-id', href, textContent: run.id }),
       run.group ? el('span', { className: 'muted', title: 'Group: runs that see each other\'s notes and code' },
         ` (${run.group})`) : null,
+      // The goal's first line; the full goal on hover.
+      run.title ? el('div', { className: 'run-title', textContent: run.title, title: run.goal || run.title }) : null,
       file ? el('div', { className: 'status-sub run-config', textContent: file, title: 'Config file' }) : null),
     statusCell(run),
     iterationsCell(run),

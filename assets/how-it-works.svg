@@ -46,16 +46,16 @@
   <text x="325" y="149" text-anchor="middle" class="box-sub">write code, train a model,</text>
   <text x="325" y="163" text-anchor="middle" class="box-sub">run experiments…</text>
   <!-- Annotation: worktree -->
-  <text x="325" y="93" text-anchor="middle" font-family="-apple-system, 'Inter', 'Segoe UI', sans-serif" font-size="11px" fill="#8b949e">fresh git worktree · editable files only</text>
+  <text x="325" y="93" text-anchor="middle" font-family="-apple-system, 'Inter', 'Segoe UI', sans-serif" font-size="11px" fill="#8b949e">fresh private copy · editable files only</text>
 
   <!-- Arrow: agent → checks -->
   <line x1="415" y1="140" x2="465" y2="140" class="arrow" stroke="#484f58" marker-end="url(#ah-gray)"/>
 
   <!-- Box: Checks -->
   <rect x="475" y="100" width="170" height="80" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-  <text x="560" y="131" text-anchor="middle" class="box-label">Constraints pass?</text>
+  <text x="560" y="131" text-anchor="middle" class="box-label">Gates pass?</text>
   <text x="560" y="147" text-anchor="middle" class="box-label">Metrics OK?</text>
-  <text x="560" y="166" text-anchor="middle" class="box-sub">capture metrics + artifacts</text>
+  <text x="560" y="166" text-anchor="middle" class="box-sub">observe: metrics, artifacts, reviews</text>
 
   <!-- ═══ Right: Outcomes ═══ -->
 

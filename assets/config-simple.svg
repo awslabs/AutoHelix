@@ -21,15 +21,15 @@
   <!-- goal -->
   <text x="24" y="68" class="code" xml:space="preserve"><tspan class="key">goal</tspan><tspan class="punct">:</tspan><tspan class="str"> Make sort_list faster in sort.py.</tspan></text>
 
-  <!-- constraints -->
-  <text x="24" y="98" class="code" xml:space="preserve"><tspan class="key">constraints</tspan><tspan class="punct">:</tspan></text>
+  <!-- gates -->
+  <text x="24" y="98" class="code" xml:space="preserve"><tspan class="key">gates</tspan><tspan class="punct">:</tspan></text>
   <text x="38" y="116" class="code" xml:space="preserve"><tspan class="punct">-</tspan><tspan class="str"> pytest test_sort.py</tspan></text>
 
-  <!-- metrics -->
-  <text x="24" y="146" class="code" xml:space="preserve"><tspan class="key">metrics</tspan><tspan class="punct">:</tspan></text>
-  <text x="38" y="164" class="code" xml:space="preserve"><tspan class="punct">-</tspan><tspan class="key"> command</tspan><tspan class="punct">:</tspan><tspan class="str"> python benchmark.py</tspan></text>
-  <text x="52" y="182" class="code" xml:space="preserve"><tspan class="key">values</tspan><tspan class="punct">:</tspan></text>
-  <text x="66" y="200" class="code" xml:space="preserve"><tspan class="key">speed</tspan><tspan class="punct">:</tspan><tspan class="str"> higher</tspan></text>
+  <!-- observe -->
+  <text x="24" y="146" class="code" xml:space="preserve"><tspan class="key">observe</tspan><tspan class="punct">:</tspan></text>
+  <text x="38" y="164" class="code" xml:space="preserve"><tspan class="punct">-</tspan><tspan class="key"> name</tspan><tspan class="punct">:</tspan><tspan class="str"> bench</tspan></text>
+  <text x="52" y="182" class="code" xml:space="preserve"><tspan class="key">command</tspan><tspan class="punct">:</tspan><tspan class="str"> python benchmark.py</tspan></text>
+  <text x="52" y="200" class="code" xml:space="preserve"><tspan class="key">metrics</tspan><tspan class="punct">: {</tspan><tspan class="key">speed</tspan><tspan class="punct">:</tspan><tspan class="str"> higher</tspan><tspan class="punct">}</tspan></text>
 
   <!-- scope -->
   <text x="24" y="230" class="code" xml:space="preserve"><tspan class="key">scope</tspan><tspan class="punct">:</tspan></text>

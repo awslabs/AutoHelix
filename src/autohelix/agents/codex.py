@@ -85,14 +85,14 @@ class CodexAgent:
         required = self._format_version(self._MIN_HOOK_VERSION)
         if version is None:
             return (
-                "budget.iteration_time for Codex requires codex-cli "
+                "Time-left hints for Codex need codex-cli "
                 f">= {required}; could not parse version from: {output or '<empty>'}"
             )
         if version < self._MIN_HOOK_VERSION:
             found = self._format_version(version)
             return (
-                "budget.iteration_time for Codex requires codex-cli "
-                f">= {required}; found {found}. Upgrade Codex or remove budget.iteration_time."
+                "Time-left hints for Codex need codex-cli "
+                f">= {required}; found {found}. Upgrade Codex to get them."
             )
         return None
 
@@ -240,7 +240,7 @@ class CodexAgent:
                 log_path=log_path,
                 line_callback=lambda line: self._handle_line(line, event_callback),
                 heartbeat_seconds=self.heartbeat_seconds,
-                timeout_seconds=self.config.timeout_seconds,
+                timeout_seconds=self.config.timeout,
                 env=env,
             )
         except FileNotFoundError:
@@ -255,13 +255,13 @@ class CodexAgent:
             event_callback(
                 AgentEvent(
                     kind=AgentEventKind.WARNING,
-                    text=f"Agent {format_timeout_seconds(self.config.timeout_seconds)}",
+                    text=f"Agent {format_timeout_seconds(self.config.timeout)}",
                 )
             )
 
         error = self._turn_error
         if result.timed_out:
-            error = format_timeout_seconds(self.config.timeout_seconds)
+            error = format_timeout_seconds(self.config.timeout)
         elif result.exit_code != 0 and error is None:
             error = f"Codex exited with status {result.exit_code}"
 

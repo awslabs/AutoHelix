@@ -25,7 +25,7 @@ Keep it proportional to the run: a few paragraphs for a short run. The page arou
 already shows the iteration table, metric chart and run cost; don't reproduce them. No title; \
 start with the result."""
 
-TIMEOUT_SECONDS = 15 * 60  # cap: agent.timeout_seconds can be hours for ML runs
+TIMEOUT_SECONDS = 15 * 60  # cap: agent.timeout can be hours for ML runs
 
 WRITE_TO = "Write the summary in Markdown to "
 
@@ -74,7 +74,8 @@ State paths are relative to {paths.run_dir}; candidate code is in the current wo
 failure output, commit, cost and time).
 - notes/: notes the agent wrote during the run (iter-N.md, plus shared notes), as of the last \
 iteration; notes.N/ is the version saved with iteration N.
-- reviews/iter-N.md: reviewer feedback, if a reviewer was configured.
+- observations/iter-N/<name>/: each observe entry's stdout.txt (stderr.txt when not empty) and \
+captured files; a review entry's stdout is its review text.
 - logs/iter-N/call-*/agent.log: full agent transcripts. They are large; search them rather \
 than reading them whole.
 {git}
@@ -109,10 +110,10 @@ def write_report(config: Config, project: Path, console, config_path: Path | Non
     last = History(project, paths.run_id).get_last_iteration()
 
     agent = create_agent(AgentConfig(
-        type=config.agent.type,
+        backend=config.agent.backend,
         command=config.agent.command,
         model=config.agent.model,
-        timeout_seconds=min(config.agent.timeout_seconds or TIMEOUT_SECONDS, TIMEOUT_SECONDS),
+        timeout=min(config.agent.timeout or TIMEOUT_SECONDS, TIMEOUT_SECONDS),
     ), heartbeat_seconds=30)
     log_path = paths.logs / "report.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -163,6 +164,11 @@ def write_report(config: Config, project: Path, console, config_path: Path | Non
     info = {"last_iteration": last, "written_at": time.time(), "seconds": seconds,
             "cost_usd": (result.usage or {}).get("cost_usd")}
     (out / "report.json").write_text(json.dumps(info))
-    console.print(f"[green]Summary of iterations 1–{last} written to {out / 'report.md'}[/green]")
+    report = out / "report.md"
+    try:
+        report = report.relative_to(Path.cwd())
+    except ValueError:
+        pass
+    console.print(f"  [dim]Summary: {report}[/dim]", highlight=False, soft_wrap=True)
     return True
 

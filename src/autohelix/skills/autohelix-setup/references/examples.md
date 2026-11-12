@@ -6,7 +6,7 @@ repository's example projects. The commands below assume the named evaluators
 already exist; inspect and replace them with the target project's commands.
 When one is missing, propose its design as described in
 [loop design](loop-design.md) and obtain any needed implementation agreement
-before presenting it as ready. Iteration counts, gates, and reviewers are
+before presenting it as ready. Iteration counts, gates, and reviews are
 illustrations to discuss, not defaults to impose.
 
 ## Ordinary requests
@@ -38,7 +38,7 @@ The third request includes ongoing management; read
 [managed runs](managed-runs.md) for monitoring, hints, and completion handoff.
 
 The installer's `--agent` selects which coding agent discovers the skill.
-The config's `agent.type` selects the backend that performs loop iterations;
+The config's `agent.backend` selects the backend that performs loop iterations;
 these choices can differ.
 
 ## Performance optimization
@@ -52,11 +52,12 @@ goal: |
   Reduce solver runtime on the benchmark cases while preserving behavior.
 scope:
   editable: [src/solver.py]
-constraints:
+gates:
   - python -m pytest tests/test_solver.py
-metrics:
-  - command: python benchmark.py
-    values:
+observe:
+  - name: bench
+    command: python benchmark.py
+    metrics:
       runtime_ms: lower
     capture: [results/benchmark.json]
 budget:
@@ -66,8 +67,8 @@ budget:
 The benchmark must emit `##autohelix[runtime_ms=12.3]` (with the measured value).
 Capture the detailed results so a speedup can be inspected. If timings are
 noisy, choose repeated measurement and a justified tolerance before gating.
-This pattern starts with observation; add a `runtime_ms` gate only if useful
-for the agreed experiment. A focused existing test may be cheap enough to run
+This pattern starts with observation; add a `metric: runtime_ms` gate (with
+`regress: N%`) only if useful for the agreed experiment. A focused existing test may be cheap enough to run
 during setup, while the full suite or benchmark may need execution authorization.
 Without benchmark execution, report runtime and emitted/captured results as
 unverified and provide the benchmark command for later.
@@ -83,14 +84,14 @@ goal: |
   against api-spec.json and include a complete introductory example.
 scope:
   editable: [docs/guide.md]
-constraints:
+gates:
   - python validate_guide.py
-reviewer:
-  prompt: |
-    Read docs/guide.md and api-spec.json. Assess clarity for a first-time user,
-    accuracy against the specification, and whether the example is complete.
-    Support feedback with specific passages and propose useful revisions.
-    Do not modify files.
+observe:
+  - name: review
+    review: |
+      Read docs/guide.md and api-spec.json. Assess clarity for a first-time user,
+      accuracy against the specification, and whether the example is complete.
+      Support feedback with specific passages and propose useful revisions.
 budget:
   iterations: 3
 ```
@@ -98,7 +99,7 @@ budget:
 Do not invent `validate_guide.py` if the project has no such evaluator.
 A small proposal could check local link targets and required example sections,
 explain its limits on semantic accuracy, and estimate its filesystem-only cost.
-Agree on implementation if needed. The reviewer is an optional source of later
+Agree on implementation if needed. The review is an optional source of later
 feedback and is not needed to finish setup; explain the limits if the run relies
 on review alone. No numeric score is required.
 
@@ -116,33 +117,71 @@ goal: |
   findings and describe uncertainty and limitations.
 scope:
   editable: [experiment.py, results/, REPORT.md]
-constraints:
+gates:
   - python validate.py
-observables:
-  - command: python summarize_results.py
+observe:
+  - name: summary
+    command: python summarize_results.py
     capture: [results/latest.json, REPORT.md]
-reviewer:
-  prompt: |
-    Review PROJECT.md, experiment.py, results/latest.json, and REPORT.md.
-    Assess experimental validity, whether claims follow from evidence, and
-    the treatment of uncertainty and negative findings. Give specific
-    feedback. Inspect supplied artifacts without running experiments or
-    modifying files.
+  - name: review
+    review: |
+      Review PROJECT.md, experiment.py, results/latest.json, and REPORT.md.
+      Assess experimental validity, whether claims follow from evidence, and
+      the treatment of uncertainty and negative findings. Give specific
+      feedback. Inspect supplied artifacts without running experiments.
+agent:
+  timeout: 8m
 budget:
   iterations: 4
-  iteration_time: 8m
 ```
 
 The validator and summary command must exist and fit the project's protocol.
-The observation needs no scalar `values`; captured output and files can guide
+The observe entry needs no `metrics`; captured output and files can guide
 the next iteration and support later inspection.
 
 For a missing validator, propose checks for result schema, recorded seeds and
 parameters, and consistency between results and report references; explain that
 these cannot establish scientific validity. Estimate cost by distinguishing
 reading existing results from rerunning experiments. Static inspection can
-finish setup while experiment execution, generated evidence, and reviewer
+finish setup while experiment execution, generated evidence, and review
 feedback remain unverified.
 
 If experiments call models or use remote resources, set limits in those
 commands too. AutoHelix does not automatically count that external expenditure.
+
+## Working through a task list
+
+The user wants a list of tasks implemented one at a time. Freeze the list so
+the agent can't edit what is tracked, gate on the tests, and let an
+independent review keep the status of every item.
+
+```yaml
+goal: |
+  Implement every item in TASKS.md
+  Each iteration, take the highest-priority unfinished item, implement only
+  that one, and add tests for it.
+scope:
+  editable: [src/, tests/]
+  frozen: [TASKS.md]
+gates:
+  - python -m pytest -q
+observe:
+  - name: progress
+    review: |
+      For each TASKS.md item, give done / partial / missing with file:line
+      evidence. Report `missing`: the number of items that are not fully done.
+    previous: true
+    metrics:
+      missing: lower
+stop:
+  - jq -e '.missing == 0' "$AUTOHELIX_METRICS"
+budget:
+  iterations: 10
+```
+
+`previous: true` gives the review its own last accepted status to re-verify,
+so the status is written by the checker, not the implementer, and moves only
+with accepted iterations. The `missing` count is an LLM's answer: use it for
+display and the stop condition, not a gate. Each review is a model call;
+include its cost in the budget discussion. The stop command needs `jq` on the
+harness's `PATH`.

@@ -24,8 +24,9 @@ monitoring, explain that limit and give a concrete handoff; do not claim that
 supervision completed.
 
 Read the id from `.autohelix/current` (or pass a run id to `view` and `report`), then read `.autohelix/runs/<id>/history.jsonl`, the current backend log under
-`.autohelix/runs/<id>/logs/iter-N/`, captured observations under
-`.autohelix/runs/<id>/observations/iter-N/`, and persistent `.autohelix/runs/<id>/notes/iter-N.md`.
+`.autohelix/runs/<id>/logs/iter-N/`, observations under
+`.autohelix/runs/<id>/observations/iter-N/<name>/` (one folder per observe entry, reviews
+included), and persistent `.autohelix/runs/<id>/notes/iter-N.md`.
 `autohelix view --json` (or `--once`) prints the run's state and iterations once; a bare
 `autohelix view` is a live terminal view that does not exit, for people. `.autohelix/runs/<id>/runtime/status.json` records
 the run's state and phase, and `.autohelix/runs/<id>/output/report.html` is saved when it stops. If the view does not present the selected
@@ -70,7 +71,7 @@ post-run checks only under the entrypoint's existing cheap/authorized policy.
 
 Use available usage records and the [accounting boundaries](config.md#budgets-and-run-state).
 Missing dollar usage is unknown, not zero; supervisor/setup expenditure is
-separate from the current loop counter. Do not start additional reviewer,
+separate from the current loop counter. Do not start additional review,
 report, or improvement calls merely to complete the handoff when existing
 records suffice.
 

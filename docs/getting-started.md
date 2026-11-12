@@ -52,7 +52,7 @@ export AUTOHELIX_CLAUDE_CMD=/path/to/my/claude-wrapper
 
 ```yaml
 agent:
-  type: codex
+  backend: codex
   command: /path/to/codex
   model: gpt-5.5
   reasoning_effort: high
@@ -62,7 +62,7 @@ agent:
 
 ```yaml
 agent:
-  type: opencode
+  backend: opencode
   command: /path/to/opencode
 ```
 
@@ -73,7 +73,7 @@ agent:
 Start in a git project with the skill installed as described above. The skill
 helps design the experiment from your existing code, checks, and evidence.
 The installation's `--agent` selects the agent that discovers the skill;
-`agent.type` in the generated configuration selects the loop backend.
+`agent.backend` in the generated configuration selects the loop backend.
 
 For preparation only, ask:
 
@@ -87,8 +87,8 @@ The agent should inspect the project, propose scope and evaluation, write
 `autohelix.yaml`, and validate it without executing evaluators. It can also run
 known cheap checks within the request. Missing evaluators should be proposed
 before implementation unless already authorized. Review the generated goal,
-scope, constraints, observations, optional gates/reviewer, and budget choices.
-Measurements alone do not reject regressions; acceptance gates are optional.
+scope, gates, observe entries (commands and reviews), and budget choices.
+Measurements alone do not reject regressions; metric gates are optional.
 Unset optional budgets provide no cap from those fields, while omitted
 iterations default to five attempts.
 The final reply should show the complete generated YAML, followed by a numbered
@@ -116,8 +116,9 @@ agent to set up and manage the experiment from scratch.
 
 Time thresholds are checked between iterations; per-agent deadlines and check
 timeouts have their own boundaries. Dollar accounting depends on backend
-reporting and includes optimization-agent and reviewer calls, including the
-baseline review. Report generation and supervisor calls are separate. Missing cost
+reporting and includes the optimization agent and the `ask` and `review` calls
+of gates and observe entries, including the baseline's. Report generation and
+supervisor calls are separate. Missing cost
 is unknown, not zero. See [budget details](config.md) before relying on a cap.
 The console, `autohelix view`, the run summary and run page (`report.md`,
 `report.html`), and saved records already support inspecting results.
@@ -140,23 +141,29 @@ This creates:
 
 ### 2. Configure
 
-Edit `autohelix.yaml` — set your goal and uncomment relevant sections:
+Edit `autohelix.yaml`: set your goal and uncomment relevant sections:
 
 ```yaml
 goal: |
   Make the sort function faster while keeping all tests passing.
 
-constraints:
-  - pytest tests/
-
 scope:
   editable: [sort.py]
 
-metrics:
-  - command: python benchmark.py
-    values:
-      speed: higher
+gates:                      # must pass, or the iteration is rejected
+  - pytest tests/
+
+observe:                    # measured after the gates; the next agent reads the output
+  - name: bench
+    command: python benchmark.py     # prints ##autohelix[speed=1234]
+    metrics: {speed: higher}
+  - name: review            # a read-only reviewer's feedback
+    review: Review the change for correctness. What should the next iteration fix?
 ```
+
+`gates:` decide what is accepted; `observe:` entries only inform (a failing
+benchmark doesn't reject anything, unless a `metric:` gate is on its number).
+See the [configuration reference](config.md).
 
 ### 3. Run
 
@@ -175,7 +182,7 @@ the intended environment. Then launch:
 autohelix run -n 5
 ```
 
-You'll see a live display of agent activity, followed by constraint/metric results for each iteration.
+You'll see a live display of agent activity, followed by gate and observe results for each iteration.
 
 Use `autohelix view` in a second terminal to follow the run: its iterations so far, and the
 agent's live output below them (`autohelix view --web` for the same in a browser).
@@ -242,9 +249,9 @@ cd sorting
 autohelix run -n 3
 ```
 
-Optimizes bubble sort. Uses numeric metrics (`python benchmark.py`) to track progress.
+Optimizes bubble sort. An observe entry (`python benchmark.py`) tracks the `speed` metric.
 
-### Writing (reviewer-driven quality)
+### Writing (review-driven quality)
 
 ```bash
 python examples/setup_example.py writing
@@ -252,7 +259,7 @@ cd writing
 autohelix run -n 3
 ```
 
-Improves an API reference doc guided by an LLM reviewer — no numeric metrics, just qualitative feedback between iterations.
+Improves a short blog post guided by a `review:` observe entry: no numeric metrics, just qualitative feedback between iterations.
 
 ### AlgoTune Tasks
 
