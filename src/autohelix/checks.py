@@ -35,24 +35,13 @@ class PreflightIssue:
     message: str
 
 
-def _find_gate_targets(commands, project_path: Path) -> list[str]:
-    """Extract file/directory paths from gate commands that exist on disk.
-
-    Looks for tokens in gate commands that correspond to actual files or
-    directories in the project — these are what the agent could weaken if no
-    scope is configured.
-    """
-    targets: set[str] = set()
-    for c in commands:
-        cmd = c.command if hasattr(c, "command") else c
-        tokens = cmd.split()
-        for token in tokens[1:]:
-            if token.startswith("-"):
-                continue
-            candidate = project_path / token
-            if candidate.exists():
-                targets.add(token)
-    return sorted(targets)
+def scope_warning(config: Config) -> str | None:
+    """The warning for a run with gate or observe commands and no scope: the agent may
+    then edit the tests and benchmarks that judge it. None otherwise."""
+    if config.editable or config.frozen or not (config.gate_commands() or config.observe):
+        return None
+    return ("No scope set: the agent may edit the tests and benchmarks that gate it; "
+            "set scope.editable (and scope.frozen) to protect them.")
 
 
 def preflight_check(
@@ -81,20 +70,7 @@ def preflight_check(
                 message=f"Agent command '{agent_cmd}' not found in PATH",
             ))
 
-    # 3. Check scope configuration
-    if not config.editable and not config.frozen:
-        # Warn that agent can modify gate targets
-        exposed = _find_gate_targets(config.gate_commands(), project_path)
-        if exposed:
-            targets = ", ".join(sorted(exposed))
-            issues.append(PreflightIssue(
-                level="warning",
-                message=(
-                    f"No scope set — agent can modify gate targets ({targets}). "
-                    f"Consider adding scope.editable to protect tests and benchmarks."
-                ),
-            ))
-
+    # 3. Scope patterns that match nothing (no scope at all: `scope_warning`, at run start)
     for label, patterns in [("editable", config.editable), ("frozen", config.frozen)]:
         for pattern in patterns:
             matches = globmod.glob(str(project_path / pattern), recursive=True)

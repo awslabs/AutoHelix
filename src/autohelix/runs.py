@@ -142,6 +142,10 @@ class RunPaths:
     def ref(self): return f"refs/autohelix/{self.run_id}"
     @property
     def pin(self): return f"refs/autohelix-tmp/{self.run_id}"  # the frozen candidate tree
+    # Rejected attempts' trees, one ref per iteration; not in copies, removed by delete.
+    @property
+    def rejected_refs(self): return f"refs/autohelix-rejected/{self.run_id}/"
+    def rejected_ref(self, iteration: int) -> str: return f"{self.rejected_refs}{iteration}"
     @property
     def lock(self): return self.project_runtime / "locks" / f"{self.run_id}.lock"
 
@@ -751,7 +755,7 @@ def archive(paths: RunPaths, *, undo: bool = False) -> None:
 
 
 def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
-    """Remove a run's state, ref, pin and copies. Refuses while it runs, and, unless
+    """Remove a run's state, ref, pin, rejected trees and copies. Refuses while it runs, and, unless
     forced, while it has unlanded commits (they'd become unreachable)."""
     short = short_id(paths.run_id)
     with RunLock(paths.lock):
@@ -768,6 +772,9 @@ def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
                                f"or `autohelix delete --force {short}` to discard them.")
         remove_copies(paths.copies, warn or (lambda message: None))
         git(paths.project, "update-ref", "-d", paths.pin, check=False)
+        kept = git(paths.project, "for-each-ref", "--format=%(refname)", paths.rejected_refs, check=False)
+        for ref in kept.stdout.split() if kept.returncode == 0 else []:
+            git(paths.project, "update-ref", "-d", ref, check=False)
         tip = git(paths.project, "rev-parse", "--verify", paths.ref, check=False)
         if tip.returncode == 0:
             git(paths.project, "update-ref", "--no-deref", "-d", paths.ref, tip.stdout.strip())

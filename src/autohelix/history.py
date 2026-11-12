@@ -44,6 +44,15 @@ class IterationResult:
     # One item per observe entry that ran, in order: {"name", "ok", "return_code",
     # "error", "metrics", "duration_s"}.
     observe: list[dict[str, Any]] = field(default_factory=list)
+    # The attempt itself: the agent's one-line summary (commit_summary.txt, whenever its
+    # copy was frozen, accepted or not), the commit it was built on (A), the frozen tree
+    # (T), the out-of-scope paths dropped at freeze (project-relative), and for a
+    # rejected attempt with a tree the ref keeping it (refs/autohelix-rejected/<id>/<n>).
+    summary: str | None = None
+    base: str | None = None
+    tree: str | None = None
+    discarded: list[str] = field(default_factory=list)
+    rejected_ref: str | None = None
 
     @property
     def usage(self):

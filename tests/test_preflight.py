@@ -96,63 +96,32 @@ class TestPreflightCheck:
         warnings = [i for i in issues if i.level == "warning"]
         assert any("matches no files" in i.message for i in warnings)
 
-    def test_no_scope_warns_about_constraint_targets(self, tmp_path):
-        (tmp_path / "tests").mkdir()
-        (tmp_path / "tests" / "test_foo.py").write_text("")
-        config_text = textwrap.dedent("""\
-            goal: Make it faster
-            gates:
-              - pytest tests/
-        """)
-        (tmp_path / "autohelix.yaml").write_text(config_text)
-        config, raw = load_config(tmp_path)
-        with patch("autohelix.checks.run_command") as mock_c, \
-             patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
-            mock_c.return_value = CommandResult(
-                command="pytest tests/", passed=True, output="ok\n", return_code=0,
-            )
-            issues = preflight_check(config, raw, tmp_path)
-        warnings = [i for i in issues if i.level == "warning"]
-        assert any("No scope set" in i.message and "tests/" in i.message for i in warnings)
+    @pytest.mark.parametrize("config, warns", [
+        ({"gates": ["pytest tests/"]}, True),
+        ({"observe": [{"name": "bench", "command": "python bench.py"}]}, True),
+        ({"gates": [{"metric": "speed", "regress": "5%"}],
+          "observe": [{"name": "bench", "command": "b", "metrics": {"speed": "higher"}}]}, True),
+        ({"gates": ["pytest tests/"], "scope": {"editable": ["src/"]}}, False),
+        ({"gates": ["pytest tests/"], "scope": {"frozen": ["tests/"]}}, False),
+        ({}, False),
+    ])
+    def test_no_scope_warns_when_commands_judge_the_agent(self, config, warns):
+        from autohelix.checks import scope_warning
+        from autohelix.config import Config
 
-    def test_no_scope_warning_absent_when_editable_set(self, tmp_path):
-        (tmp_path / "tests").mkdir()
-        (tmp_path / "tests" / "test_foo.py").write_text("")
-        (tmp_path / "src").mkdir()
-        config_text = textwrap.dedent("""\
-            goal: Make it faster
-            gates:
-              - pytest tests/
-            scope:
-              editable: [src/]
-        """)
-        (tmp_path / "autohelix.yaml").write_text(config_text)
-        config, raw = load_config(tmp_path)
-        with patch("autohelix.checks.run_command") as mock_c, \
-             patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
-            mock_c.return_value = CommandResult(
-                command="pytest tests/", passed=True, output="ok\n", return_code=0,
-            )
-            issues = preflight_check(config, raw, tmp_path)
-        warnings = [i for i in issues if i.level == "warning"]
-        assert not any("No scope set" in i.message for i in warnings)
+        warning = scope_warning(Config.from_dict({"goal": "Make it faster", **config}))
+        assert (warning is not None) == warns
+        if warns:
+            assert "the agent may edit the tests and benchmarks that gate it" in warning
+            assert "scope.editable" in warning
 
-    def test_no_scope_no_warning_when_no_targets_found(self, tmp_path):
-        config_text = textwrap.dedent("""\
-            goal: Make it faster
-            gates:
-              - echo ok
-        """)
-        (tmp_path / "autohelix.yaml").write_text(config_text)
+    def test_preflight_no_longer_guesses_gate_targets(self, tmp_path):
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "autohelix.yaml").write_text("goal: Make it faster\ngates:\n  - pytest tests/\n")
         config, raw = load_config(tmp_path)
-        with patch("autohelix.checks.run_command") as mock_c, \
-             patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
-            mock_c.return_value = CommandResult(
-                command="echo ok", passed=True, output="ok\n", return_code=0,
-            )
+        with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, raw, tmp_path)
-        warnings = [i for i in issues if i.level == "warning"]
-        assert not any("No scope set" in i.message for i in warnings)
+        assert not any("scope" in i.message.lower() for i in issues)
 
     def test_multiple_values_from_one_command(self, tmp_path):
         config_text = textwrap.dedent("""\

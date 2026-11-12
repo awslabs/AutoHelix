@@ -31,7 +31,7 @@ from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, 
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
-                              run_observe_entry, run_stop_checks)
+                              run_observe_entry, run_stop_checks, scope_warning)
 from autohelix.run_status import RunStatus
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
 from autohelix.formatting import format_cost, format_delta, format_duration, format_total_cost
@@ -723,6 +723,12 @@ class Harness:
             if result is None:
                 result = self._rejected(iteration, attempt, (str(failure) or "interrupted") if failure else "interrupted")
             try:
+                self._describe_attempt(result, workspace)
+                if not result.accepted and attempt.agent_attempted:
+                    try:
+                        result.rejected_ref = workspace.keep_rejected()
+                    except Exception as e:  # noqa: BLE001 - never mask the iteration's outcome
+                        self.log.warn(f"Could not keep iteration {iteration}'s rejected tree: {e}")
                 self._complete_record(result, attempt.started_at, attempt.monotonic, attempt.evaluation)
                 # Failures before the agent call don't consume the iteration.
                 if attempt.agent_attempted:
@@ -774,20 +780,14 @@ class Harness:
             if self.verbose:
                 self._status("Agent did not complete successfully")
             detail = agent_result.error or f"agent exited with status {agent_result.exit_code}"
+            # Kept for the record and the next agent (rejected.patch), never checked or accepted.
+            try:
+                self._freeze(workspace)
+            except Exception as e:  # noqa: BLE001 - the agent's failure is the outcome
+                self.log.warn(f"Could not keep iteration {iteration}'s tree: {e}")
             raise AutoHelixRunError(f"Iteration {iteration} agent failed: {detail}")
 
-        # Freeze the candidate: out-of-scope changes never reach the tree.
-        # The viewer shows the pin from "preparing checks" on (viewer.FROZEN_PHASES).
-        discarded = workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen)),
-                                     pinned=lambda: self.run_status.phase("preparing checks"))
-        self.run_status.note(worktree=None)
-        if discarded and self.verbose:
-            reverted = [name.removeprefix(self.repo.prefix) for name in discarded]
-            self.console.print(f"  [yellow]![/yellow] Discarded {len(reverted)} change(s) outside editable scope:")
-            for f in reverted[:5]:
-                self.console.print(f"    [dim]{f}[/dim]")
-            if len(reverted) > 5:
-                self.console.print(f"    [dim]... and {len(reverted) - 5} more[/dim]")
+        self._freeze(workspace)
 
         evaluation = attempt.evaluation = self._new_evaluation()
         self._evaluate(workspace, iteration, evaluation)
@@ -805,6 +805,7 @@ class Harness:
             self._status("Accepting changes...")
         result = IterationResult(iteration=iteration, accepted=True, metrics=metrics,
                                  calls=[{"role": "agent", "usage": attempt.agent_usage}])
+        self._describe_attempt(result, workspace)
         self._complete_record(result, attempt.started_at, attempt.monotonic, evaluation)
         workspace.accept(self._build_commit_message(iteration, metrics, summary=workspace.summary), result)
 
@@ -817,6 +818,31 @@ class Harness:
                 self.console.print(f"  [yellow]![/yellow] Stop check failed: {e}")
                 self.log.info(f"iter {iteration} stop check failed — {e}")
         return result
+
+    def _freeze(self, workspace: IterationWorkspace) -> None:
+        """Freeze the candidate: out-of-scope changes never reach the tree. The viewer
+        shows the pin from "preparing checks" on (viewer.FROZEN_PHASES)."""
+        workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen)),
+                         pinned=lambda: self.run_status.phase("preparing checks"))
+        self.run_status.note(worktree=None)
+        reverted = self._discarded(workspace)
+        if reverted and self.verbose:
+            self.console.print(f"  [yellow]![/yellow] Discarded {len(reverted)} change(s) outside editable scope:")
+            for f in reverted[:5]:
+                self.console.print(f"    [dim]{f}[/dim]")
+            if len(reverted) > 5:
+                self.console.print(f"    [dim]... and {len(reverted) - 5} more[/dim]")
+
+    def _discarded(self, workspace: IterationWorkspace) -> list[str]:
+        """The out-of-scope paths dropped at freeze, relative to the project."""
+        return [name.removeprefix(self.repo.prefix) for name in workspace.discarded]
+
+    def _describe_attempt(self, result: IterationResult, workspace: IterationWorkspace) -> None:
+        """The attempt's own fields on its record: summary, A, T, discarded paths."""
+        result.summary = workspace.summary
+        result.base = workspace.base
+        result.tree = workspace.tree if workspace.iteration else None
+        result.discarded = self._discarded(workspace)
 
     def _gate_text(self, command: str) -> str:
         """A gate command's display text (`ask: <question>` for ask entries)."""
@@ -1193,7 +1219,8 @@ class Harness:
                 self.console.print(f"  baseline │ {metric_str}", highlight=False)
                 self.log.info(f"baseline: {metric_str}")
 
-            baseline = IterationResult(iteration=0, accepted=True, metrics=metrics, commit=None, reason="baseline")
+            baseline = IterationResult(iteration=0, accepted=True, metrics=metrics, commit=None, reason="baseline",
+                                       base=workspace.base)
             if self.config.stop:
                 # A broken stop command fails here, before anything is recorded, so a
                 # typo surfaces before the first iteration is paid for.
@@ -1208,7 +1235,8 @@ class Harness:
             self._write_baseline(baseline)
             return baseline.stop
         except BaseException as error:
-            baseline = IterationResult(iteration=0, accepted=False, reason=f"baseline failed: {error}")
+            baseline = IterationResult(iteration=0, accepted=False, reason=f"baseline failed: {error}",
+                                       base=workspace.base)
             self._complete_record(baseline, time.time(), time.monotonic(), evaluation)
             if any(r.iteration == 0 and r.accepted for r in self.history.load()):
                 raise
@@ -1369,6 +1397,9 @@ class Harness:
         remove_copies(self.run_state.copies_root, self.log.warn)  # left by a segment that crashed
         if not self.repo.attr_source:
             self.console.print(f"  [yellow]WARN[/yellow] {ATTR_SOURCE_LIMITATION}")
+        if warning := scope_warning(self.config):
+            self.console.print(f"  [yellow]WARN[/yellow] {warning}", highlight=False)
+            self.log.info(warning)
         if (self.project_path / ".autohelix" / "prompt.md").exists():
             self.console.print("  [yellow]WARN[/yellow] .autohelix/prompt.md is no longer read: the built-in "
                                "prompt is used. To keep a custom prompt, move it next to your config, set "

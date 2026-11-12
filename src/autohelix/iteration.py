@@ -130,6 +130,7 @@ class IterationWorkspace:
         self.base = run.expected_tip  # A
         self.tree: str | None = None  # T
         self.summary: str | None = None
+        self.discarded: list[str] = []  # out-of-scope names dropped at freeze (repository-relative)
         self.copies: list[Copy] = []
         self.agent: Copy | None = None
         self.result = None  # the accepted result, once recorded
@@ -153,7 +154,35 @@ class IterationWorkspace:
         """A's files with agent-facing material seeded under `.autohelix-iteration/`."""
         self.agent = self._copy("agent", self.base, self.base)
         prepare_state(self._run.paths, self.agent, members=self.members)
+        self._write_rejected_patch()
         return self.agent
+
+    def _write_rejected_patch(self) -> None:
+        """If the latest iteration was rejected and its tree kept, its change against
+        this copy's HEAD (the tip, which a rejection doesn't move, so it applies
+        cleanly) as `.autohelix-iteration/rejected.patch`. Only the latest rejection;
+        none after an accept, or if the attempt changed nothing."""
+        records = self._history.load()
+        last = max(records, key=lambda r: r.iteration, default=None)
+        if last is None or last.accepted or last.iteration == 0 or not last.tree or not last.rejected_ref:
+            return
+        try:
+            diff = self.repo.git("diff", "--binary", "--no-ext-diff", "--no-textconv", self.base, last.tree).stdout
+        except RuntimeError as e:  # e.g. the tree was removed meanwhile
+            self._warn(f"Could not write rejected.patch for iteration {last.iteration}: {e}")
+            return
+        if diff:
+            (self.agent.working_dir / ITERATION_DIR / "rejected.patch").write_bytes(diff)
+
+    def keep_rejected(self) -> str | None:
+        """Keep a rejected attempt's frozen tree as `refs/autohelix-rejected/<id>/<n>`
+        (for the record, the viewer and the next agent's `rejected.patch`). Returns the
+        ref, or None if there is no tree (the freeze never happened or failed)."""
+        if not self.tree or self.iteration == 0:
+            return None
+        ref = self._run.paths.rejected_ref(self.iteration)
+        self.repo.git("update-ref", ref, self.tree)
+        return ref
 
     def write_prompt(self, prompt: str) -> None:
         """Keep this iteration's prompt as `.autohelix-iteration/prompt.md` in the agent's copy."""
@@ -175,7 +204,7 @@ class IterationWorkspace:
                 self.summary = summary.read_text(errors="replace").strip().split("\n")[0] or None
         finally:
             self._release_agent()
-        self.tree = tree
+        self.tree, self.discarded = tree, discarded
         return discarded
 
     def unchanged(self) -> None:
