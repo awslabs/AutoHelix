@@ -46,9 +46,9 @@ name their replacement; when editing an existing config, convert them.
 - A config is `autohelix.yaml` at the project root or `autohelix/<name>.yaml`;
   nowhere else. A bare `autohelix run` uses `autohelix.yaml`, else the only
   config in `autohelix/`.
-- `name` goes into run ids and defaults to the file's stem
-  (`autohelix/perf.yaml` gives `20261112-1400-perf-0mws`; `autohelix.yaml`
-  gives no name).
+- Runs are named after the file (`autohelix/perf.yaml` gives
+  `20261112-1400-perf-0mws`; `autohelix.yaml` gives no name). There is no
+  `name:` key.
 - `prompt_template` is a path relative to the config's folder. Keep templates
   and helper scripts in subfolders (`autohelix/prompts/`), since every `.yaml`
   file directly in `autohelix/` is a config, and commit them: iteration copies

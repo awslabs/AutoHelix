@@ -103,9 +103,8 @@ gates. `.autohelix/` is the runs' state, kept out of git.
 - `autohelix run perf` uses `autohelix/perf.yaml`.
 - A bare `autohelix run` uses `autohelix.yaml`, else the only config in
   `autohelix/`, else stops with the list of configs.
-- The config's `name:` defaults to the file's stem, so runs of
-  `autohelix/perf.yaml` are named like `20261112-1400-perf-0mws`;
-  `autohelix.yaml` gives runs no name.
+- Runs are named after the config file, so runs of `autohelix/perf.yaml` are
+  named like `20261112-1400-perf-0mws`; `autohelix.yaml` gives runs no name.
 - A run keeps the config file it started with: `resume <id>` uses it, and
   `view`, `dashboard` and `report` read it. To change a run's config, edit
   that file.
@@ -123,7 +122,7 @@ retry. AutoHelix leaves that file unchanged.
 Start a new run of the optimization loop.
 
 ```bash
-autohelix run [CONFIG] [-p PATH] [-n ITERATIONS] [--name NAME] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
+autohelix run [CONFIG] [-p PATH] [-n ITERATIONS] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
 ```
 
 `CONFIG` names a config in `autohelix/` (`perf` for `autohelix/perf.yaml`);
@@ -139,7 +138,6 @@ commands use: iteration copies are made from the commit.
 |--------|-------------|
 | `-n`, `--iterations` | Iterations to run (overrides `budget.iterations`) |
 | `--path`, `-p` | Project directory (default: current dir) |
-| `--name NAME` | Readable part of the new run's id, lowercase letters/digits/hyphens, up to 32 characters (default: the config's `name:`, else its file name, none for `autohelix.yaml`) |
 | `--group NAME` | Make the run part of a [group](#groups): it sees the other runs of the group (their notes, history and code), and lands manually by default |
 | `--land auto\|manual` | Land accepted code at the end of each segment, or retain it only on the run ref until `autohelix land`. Stored with the run. Default: `manual` with `--group`, else `land:` in the config, else `auto` |
 | `--verbose` | Show agent command details, file paths, heartbeats |

@@ -142,6 +142,10 @@ Breaking:
   uncommitted changes to tracked files. Commit the config so it's versioned,
   and any scripts its commands use: iteration copies are made from the commit.
   "AutoHelix not initialized" is gone.
+- **`run --name` and the `name:` key removed**: runs are named after the
+  config file (`autohelix/perf.yaml` gives `20261112-1400-perf-0mws`;
+  `autohelix.yaml` gives no name). An old `name:` is an error naming the
+  replacement.
 
 Added:
 
@@ -153,8 +157,6 @@ Added:
   config in `autohelix/`, else lists them. The folder is versioned and can hold
   prompt templates and helper scripts in subfolders, committed with it
   (`prompt_template:` is relative to the config's folder).
-- `name:` defaults to the config file's stem, so runs of
-  `autohelix/perf.yaml` are named like `20261112-1400-perf-0mws`.
 - A bare `resume` uses the config a bare `run` would and errors when that is
   ambiguous (name a run instead); `resume <id>` uses the config the run
   started with. To change a run's config, edit its file.
@@ -163,7 +165,7 @@ Added:
 
 - **Runs.** Each `autohelix run` starts a new run, with its own id and state
   in `.autohelix/runs/<id>/` (ids sort by start: `20261111-1432-k3f9`, with
-  `--name` or the config's name in the middle; commands accept the last part,
+  the config file's name in the middle; commands accept the last part,
   `k3f9`). `autohelix resume [<id>]` continues one (`-n` more iterations,
   `--until` up to an iteration; exit 3 when there is none); `run` never
   refuses, but warns about a run of the same config that is live or has

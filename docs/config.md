@@ -25,7 +25,6 @@ goal: |
   Make sort_list faster in sort.py.
   Keep the public API; don't add dependencies.
 
-# name: perf              # readable part of new run ids
 # land: auto              # new runs: auto (land at segment end) or manual
 # prompt_template: prompts/agent.md   # rare: replaces the built-in agent prompt
 # report: false           # don't write a summary when a run finishes
@@ -74,7 +73,7 @@ budget:
   # time: 2h              # total wall-clock
 ```
 
-Top-level keys: `goal`, `name`, `land`, `prompt_template`, `report`, `agent`,
+Top-level keys: `goal`, `land`, `prompt_template`, `report`, `agent`,
 `scope`, `gates`, `observe`, `stop` and `budget`. An unknown key is a warning
 (a possible typo); a key of the old format is an error that names its
 replacement (see [Old → new](#old--new)). `autohelix run` lists every error and
@@ -476,22 +475,21 @@ baseline and when resuming a run: a run past its budget stops at once
 
 ## Run identity and landing
 
-`name` is an optional readable part of newly generated run ids
-(`20261111-1432-<name>-k3f9`); it does not select an existing run. It accepts
-lowercase letters, digits and hyphens, with at most 32 characters. Without
-it, the config file's stem is the name; see
-[CLI → Config files](cli.md#config-files).
+Runs are named after the config file: runs of `autohelix/perf.yaml` get ids
+like `20261111-1432-perf-k3f9`, and `autohelix.yaml` gives them no name (see
+[CLI → Config files](cli.md#config-files)). The name doesn't select an
+existing run.
 
 `land` is optional: `auto` fast-forwards accepted code to the starting branch
 when a run segment ends, while `manual` keeps it on the run ref until
 `autohelix land`. It is the default for new runs only: each run records its
 mode when it starts (`--land`; else `manual` for a run started with `--group`,
 whatever `land:` says; else `land:`; else `auto`) and keeps it;
-`resume --land` changes it. CLI `--name` and `--land` override these values.
+`resume --land` changes it.
 
 A bare `autohelix resume` picks the most recently active run of the config a
-bare `autohelix run` would use, or name one; neither depends on `name` or
-`land`.
+bare `autohelix run` would use, or name one; neither depends on the run's
+name or `land`.
 
 ## Prompt template
 
@@ -539,6 +537,8 @@ replacement; there are no aliases and no migration.
 | `timeout:` in seconds | durations everywhere (a bare number, or a string of digits like `"90"`, is still seconds) | |
 | `.autohelix/prompt.md` | `prompt_template:` (relative to the config) | a warning at run start |
 | `-c/--config FILE` on `run`, `resume`, `view`, `report` | the config at `autohelix/<name>.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
+| `name:` | the config file's name: `autohelix/<name>.yaml` (and `autohelix run <name>`) | `` `name:` is gone: runs are named after the config file; use autohelix/<name>.yaml `` |
+| `run --name NAME` | the config file's name, as for `name:` | `No such option '--name'.` |
 | `autohelix init [PATH]` | `autohelix setup [NAME] [-p PATH]` (`init` remains another name for it) | a NAME that is a folder is refused, pointing at `-p` |
 
 ## Example Configs
