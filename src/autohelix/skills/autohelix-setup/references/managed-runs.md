@@ -23,13 +23,14 @@ session tools when available. If the environment cannot support continued
 monitoring, explain that limit and give a concrete handoff; do not claim that
 supervision completed.
 
-Read the id from `.autohelix/current` (or pass a run id to `view` and `report`), then read `.autohelix/runs/<id>/history.jsonl`, the current backend log under
-`.autohelix/runs/<id>/logs/iter-N/`, observations under
-`.autohelix/runs/<id>/observations/iter-N/<name>/` (one folder per observe entry, reviews
-included), and persistent `.autohelix/runs/<id>/notes/iter-N.md`.
+Read the id from `.autohelix/.internal/current` (or pass a run id to `view` and `report`), then read `.autohelix/runs/<id>/history.jsonl`, the current backend log
+`.autohelix/runs/<id>/iterations/NNN/agent.log` (NNN: the iteration, three digits), observations under
+`.autohelix/runs/<id>/iterations/NNN/observe/<name>/` (one folder per observe entry, reviews
+included), gate and stop command output under `iterations/NNN/gates/<k>/` and `stop/<k>/` (k: the
+entry's 1-based position in `gates:` / `stop:`), and persistent `.autohelix/runs/<id>/notes/iter-N.md`.
 `autohelix view --json` (or `--once`) prints the run's state and iterations once; a bare
-`autohelix view` is a live terminal view that does not exit, for people. `.autohelix/runs/<id>/runtime/status.json` records
-the run's state and phase, and `.autohelix/runs/<id>/output/report.html` is saved when it stops. If the view does not present the selected
+`autohelix view` is a live terminal view that does not exit, for people. `.autohelix/runs/<id>/.internal/status.json` records
+the run's state and phase, and `.autohelix/runs/<id>/report.html` is saved when it stops. If the view does not present the selected
 backend's activity use its logs and saved records. Infer active execution from
 the launched process, not from the configured iteration count or old logs.
 
@@ -51,7 +52,7 @@ autohelix hint -p PROJECT --run ID 'H1: Evidence and suggested next step.'
 
 Hints are copied into the next iteration's copy (`.autohelix-iteration/hints.md`);
 they do not interrupt the current turn. Send a hint before the next iteration's
-copy is prepared. Without `--run`, the hint goes to the run in `.autohelix/current`
+copy is prepared. Without `--run`, the hint goes to the run in `.autohelix/.internal/current`
 (the most recently selected one); name the run when several are running. Use a recognizable ID
 and briefly record its evidence and rationale outside the editable candidate.
 Avoid repeating advice the iteration agents already follow.
@@ -84,7 +85,7 @@ iterations) in scripts and retries. `resume` exits 3 when there is no run to
 resume. A failed actual main-agent call consumes its number; resume at the next
 iteration. Do not archive or delete runs, reset accepted code, or extend the
 agreed effort without authorization.
-A run that finishes writes its summary to `.autohelix/runs/<id>/output/report.md`; after an
+A run that finishes writes its summary to `.autohelix/runs/<id>/report.md`; after an
 interrupted run, `autohelix report` writes one when requested.
 
 ## Orchestrate several runs

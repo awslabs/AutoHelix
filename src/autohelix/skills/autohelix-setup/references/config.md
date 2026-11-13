@@ -104,7 +104,7 @@ A command entry takes:
 
 Emit numbers on standard output as `##autohelix[runtime_ms=12.3]`. Names must
 match `metrics`. A command can provide evidence without any metrics. Output is
-stored in `.autohelix/runs/<id>/observations/iter-N/<name>/` (`stdout.txt`,
+stored in `.autohelix/runs/<id>/iterations/NNN/observe/<name>/` (`stdout.txt`,
 `stderr.txt`, captures).
 
 A review entry is shorthand for `autohelix review`, a read-only LLM review of

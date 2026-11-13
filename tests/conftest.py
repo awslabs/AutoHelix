@@ -4,17 +4,17 @@ project with a mock-agent config for run tests (`tests.test_runs.configure` edit
 import pytest
 import yaml
 
-from autohelix.runs import RunPaths, git, write_json
+from autohelix.runs import SCHEMA, RunPaths, git, write_json, write_text
 
 
 @pytest.fixture
 def run_paths(tmp_path):
     paths = RunPaths(tmp_path, "test")
     write_json(paths.identity, {
-        "schema": 1, "id": "test", "config_path": "autohelix.yaml",
+        "schema": SCHEMA, "id": "test", "config_path": "autohelix.yaml",
         "base_commit": "0" * 40, "target_branch": None,
     })
-    (paths.root / "current").write_text("test\n")
+    write_text(paths.current, "test\n")
     return paths
 
 

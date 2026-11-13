@@ -181,7 +181,7 @@ and start the run.
 Use `autohelix view` (live in a terminal; `--once` or `--json` print a snapshot and
 exit) to inspect a run and its live agent output, and `autohelix hint` to steer
 the next iteration. History, observations (reviews included), notes, the run summary
-(`output/report.md`), and the run page (`output/report.html`) are stored under `.autohelix/`.
+(`report.md`), and the run page (`report.html`) are stored under `.autohelix/runs/<id>/`.
 
 ## Manage a requested run
 

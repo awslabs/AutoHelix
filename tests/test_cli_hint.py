@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from autohelix.cli import main
-from autohelix.runs import RunPaths, write_json
+from autohelix.runs import SCHEMA, RunPaths, write_json, write_text
 
 
 @pytest.fixture
@@ -19,8 +19,8 @@ def initialized_project(tmp_path):
     """A project with a selected run."""
     paths = RunPaths(tmp_path, "test-1234")
     paths.run_dir.mkdir(parents=True)
-    write_json(paths.identity, {"schema": 1, "id": paths.run_id})
-    (paths.root / "current").write_text(paths.run_id + "\n")
+    write_json(paths.identity, {"schema": SCHEMA, "id": paths.run_id})
+    write_text(paths.current, paths.run_id + "\n")
     return tmp_path
 
 

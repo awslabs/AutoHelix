@@ -83,7 +83,7 @@ class TestBuildWorktreeEnv:
 
         fake_sys_path = [
             str(project / "src"),
-            str(project / ".autohelix" / "runtime" / "bin"),
+            str(project / ".autohelix" / ".internal" / "bin"),
         ]
         with patch.object(sys, "path", fake_sys_path), \
              patch.dict(os.environ, {"PYTHONPATH": ""}, clear=False):
@@ -205,11 +205,8 @@ class TestPrepareWorktree:
         notes_dir = ah / "notes"
         notes_dir.mkdir(parents=True)
         (notes_dir / "iter1.md").write_text("some notes\n")
-        # hints.md + observations/ (read-only reference)
+        # hints.md (read-only reference)
         (ah / "hints.md").write_text("try harder\n")
-        obs = ah / "observations" / "iter-0"
-        obs.mkdir(parents=True)
-        (obs / "stdout.txt").write_text("baseline\n")
         # Old runs' reviews are not material for the agent any more
         reviews = ah / "reviews"
         reviews.mkdir()
@@ -222,7 +219,6 @@ class TestPrepareWorktree:
         assert not (wt.working_dir / ".autohelix").exists()  # nothing in a copy looks like project state
         assert (wt_ah / "notes" / "iter1.md").read_text() == "some notes\n"
         assert (wt_ah / "hints.md").read_text() == "try harder\n"
-        assert (wt_ah / "observations" / "iter-0" / "stdout.txt").exists()
         assert not (wt_ah / "review.md").exists()
         assert not (wt_ah / "reviews").exists()
 
@@ -236,12 +232,12 @@ class TestPrepareWorktree:
         (ah / "history.jsonl").write_text("{}\n")
         (ah / "notes").mkdir()
         (ah / "notes" / "iter-1.md").write_text("test note\n")
-        # logs/ should be copied; runtime/output should NOT
-        (ah / "runtime").mkdir(exist_ok=True)
+        # Internal files, logs and iteration folders are not copied
+        (ah / ".internal").mkdir(exist_ok=True)
         (ah / "logs").mkdir(exist_ok=True)
-        (ah / "logs" / "iter-1").mkdir()
-        (ah / "logs" / "iter-1" / "agent.log").write_text("log\n")
-        (ah / "output").mkdir(exist_ok=True)
+        (ah / "logs" / "run.log").write_text("log\n")
+        (ah / "iterations" / "001").mkdir(parents=True)
+        (ah / "iterations" / "001" / "agent.log").write_text("log\n")
 
         prepare_state(RunPaths(git_project), wt, prompt="Goal: rendered\n")
 
@@ -249,9 +245,8 @@ class TestPrepareWorktree:
         assert (wt_ah / "prompt.md").read_text() == "Goal: rendered\n"
         assert (wt_ah / "history.jsonl").exists()
         assert (wt_ah / "notes" / "iter-1.md").exists()
-        assert (wt_ah / "logs" / "iter-1" / "agent.log").exists()
-        assert not (wt_ah / "runtime").exists()
-        assert not (wt_ah / "output").exists()
+        assert not (wt_ah / "logs").exists() and not (wt_ah / ".internal").exists()
+        assert not (wt_ah / "iterations").exists()
         assert not (wt_ah / "runs").exists()  # no group
 
     def test_prepare_worktree_no_autohelix_dir(self, git_project):
@@ -272,10 +267,10 @@ class TestPrepareWorktree:
         member.run_dir.mkdir(parents=True)
         member.identity.write_text('{"id": "20261111-1432-k3f9"}\n')
         member.history.write_text('{"iteration": 0, "accepted": true}\n')
-        (member.run_dir / "notes.1").mkdir()
-        (member.run_dir / "notes.1" / "iter-1.md").write_text("member note\n")
-        member.notes.symlink_to("notes.1")
-        (member.logs / "iter-1").mkdir(parents=True)
+        (member.notes_versions / "1").mkdir(parents=True)
+        (member.notes_versions / "1" / "iter-1.md").write_text("member note\n")
+        member.notes.symlink_to(".internal/notes/1")
+        member.logs.mkdir(parents=True)
 
         prepare_state(RunPaths(git_project), wt, members=[(member, {})])
 
@@ -299,7 +294,9 @@ class TestSaveNotes:
         saved = git_project / ".autohelix" / "notes" / "iter1.md"
         assert saved.exists()
         assert saved.read_text() == "new notes\n"
-        assert (git_project / ".autohelix" / "notes").readlink() == Path("notes.1")
+        assert (git_project / ".autohelix" / "notes").readlink() == Path(".internal/notes/1")
+        assert (git_project / ".autohelix" / "iterations" / "001" / "notes").readlink() == Path("../../.internal/notes/1")
+        assert (git_project / ".autohelix" / "iterations" / "001" / "notes" / "iter1.md").read_text() == "new notes\n"
 
     def test_save_notes_no_worktree_notes(self, git_project):
         wt = _fake_copy(git_project, 1)
@@ -325,9 +322,9 @@ class TestSaveNotes:
         (seeded / "escape.md").symlink_to("/etc/hosts")
         save_notes(paths, wt, 1)
 
-        assert paths.notes.is_symlink() and paths.notes.readlink() == Path("notes.1")
+        assert paths.notes.is_symlink() and paths.notes.readlink() == Path(".internal/notes/1")
         assert sorted(p.name for p in paths.notes.iterdir()) == ["iter-1.md", "sub"]  # deletion honoured
-        assert (paths.run_dir / "notes.old" / "old.md").read_text() == "old\n"
+        assert (paths.notes_versions / "old" / "old.md").read_text() == "old\n"
 
         second = _fake_copy(git_project, 2)
         prepare_state(paths, second)
@@ -335,13 +332,16 @@ class TestSaveNotes:
         assert not (notes / "old.md").exists() and (notes / "sub" / "deep.md").exists()
         (notes / "iter-1.md").unlink()
         save_notes(paths, second, 2)
-        assert paths.notes.readlink() == Path("notes.2")
+        assert paths.notes.readlink() == Path(".internal/notes/2")
         assert not (paths.notes / "iter-1.md").exists()
-        assert (paths.run_dir / "notes.1" / "iter-1.md").read_text() == "one\n"  # every version stays
+        assert (paths.notes_versions / "1" / "iter-1.md").read_text() == "one\n"  # every version stays
+        assert (paths.iteration_notes(1) / "iter-1.md").read_text() == "one\n"  # as of iteration 1
         # A second save for the same iteration (an attempt that didn't consume it) gets its own version.
         save_notes(paths, second, 2)
-        assert paths.notes.readlink() == Path("notes.2-2")
-        assert not list(paths.run_dir.glob("*.link"))  # the swap leaves no temporary link
+        assert paths.notes.readlink() == Path(".internal/notes/2-2")
+        assert paths.iteration_notes(2).readlink() == Path("../../.internal/notes/2-2")  # the latest save
+        assert not list(paths.run_dir.glob(".*.link"))  # the swap leaves no temporary link
+        assert not list(paths.iteration_dir(2).glob(".*.link"))
 
 
 # ── Sandbox: ensure_editable_files_ready ─────────────────────────────────

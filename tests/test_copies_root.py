@@ -71,6 +71,7 @@ def test_a_changed_base_cleans_the_old_one(project, monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("record", ["relative/base", "/tmp/../tmp", "/a:b"])
 def test_an_invalid_record_is_ignored(run_paths, copies_dir, record):
+    run_paths.copies_record.parent.mkdir(parents=True)
     run_paths.copies_record.write_text(record + "\n")
     assert run_paths.copies == copies_dir / project_key(run_paths.project) / "test"
 
@@ -81,6 +82,7 @@ def test_a_hostile_record_cannot_empty_another_folder(run_paths, tmp_path):
     hostile = tmp_path / "hostile"
     (hostile / project_key(run_paths.project)).mkdir(parents=True)
     (hostile / project_key(run_paths.project) / "test").symlink_to(victim)
+    run_paths.copies_record.parent.mkdir(parents=True)
     run_paths.copies_record.write_text(f"{hostile.resolve()}\n")
     warnings = []
     claim_copies(run_paths, warnings.append)  # a changed base: cleans the recorded one

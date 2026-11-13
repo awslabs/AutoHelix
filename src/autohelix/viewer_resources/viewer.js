@@ -409,29 +409,37 @@ function section(title, source, open = false) {
   return { node, count, body };
 }
 
+// Where a card's parts are stored, below .autohelix/ (section tooltips).
+function iterDir(i) {
+  return `runs/${state?.run_id || '<id>'}/iterations/${String(i).padStart(3, '0')}`;
+}
+
 function cardEl(i) {
+  const where = iterDir(i);
   const summary = el('summary');
   const said = el('p', { className: 'agent-summary', hidden: true });
-  const failure = section('Why rejected', 'history.jsonl');
-  const discarded = section('Discarded changes', 'history.jsonl', true);
-  const gates = section('Gates', 'history.jsonl');
-  const notes = section('Agent note', `notes/iter-${i}.md`);
+  const failure = section('Why rejected', `${where}/record.json`);
+  const discarded = section('Discarded changes', `${where}/record.json`, true);
+  const gates = section('Gates', `${where}/gates/`);
+  const notes = section('Agent note', `${where}/notes/iter-${i}.md`);
   const attempt = section('Changes in this iteration', null);
   const changes = section('Changes vs baseline', null);
   const observe = el('div', { className: 'observe' }); // one section per observe entry
-  const activity = section('Agent activity', `logs/iter-${i}/agent.log`);
-  const phases = section('Call activity', `logs/iter-${i}/call-*/`);
+  const stop = section('Stop checks', `${where}/stop/`);
+  const activity = section('Agent activity', `${where}/agent.log`);
+  const phases = section('Call activity', `${where}/: agent.log; ask*.log, review*.log in gates/<k>/, observe/<name>/, stop/<k>/`);
   notes.body.className = 'prose';
   activity.body.className = 'log';
   attempt.body.className = changes.body.className = 'diff';
-  gates.body.className = 'gates';
+  gates.body.className = stop.body.className = 'gates';
   discarded.body.className = 'entry';
   const node = el('details', { className: 'box card', open: i === selected }, summary,
     // Outcome first, then the agent's account, the evidence, and raw logs last.
     el('div', { className: 'card-body' }, said, failure.node, discarded.node, gates.node, notes.node,
-      attempt.node, changes.node, observe, activity.node, phases.node));
-  const card = { i, node, summary, said, failure, discarded, gates, notes, attempt, changes, observe, activity, phases,
-                 key: undefined, attemptKey: undefined, opened: new Set(), expanded: { activity: new Set() } };
+      attempt.node, changes.node, observe, stop.node, activity.node, phases.node));
+  const card = { i, node, summary, said, failure, discarded, gates, notes, attempt, changes, observe, stop, activity,
+                 phases, key: undefined, attemptKey: undefined, opened: new Set(),
+                 expanded: { activity: new Set(), outputs: new Map() } };
   attempt.node.addEventListener('toggle', () => attempt.node.open && loadAttempt(card));
   node.addEventListener('toggle', () => {
     if (!node.open) return;
@@ -551,7 +559,8 @@ function fillCard(card, d) {
       frozen.has(p) ? ' (frozen)' : ''))),
   ] : []));
 
-  fillGates(card, d.gates || [], d.failure_output);
+  fillGates(card, d.iteration, d.gates || [], d.failure_output);
+  fillStop(card, d.iteration, d.stop || []);
 
   const attemptKey = d.attempt ? `${d.attempt.base}:${d.attempt.tree}` : null;
   show(card.attempt.node, !!d.attempt);
@@ -598,7 +607,7 @@ function fillCard(card, d) {
       const heading = el('h4', { textContent: `Call ${index + 1} · ${call.role}` });
       const log = el('div', { className: 'log' });
       card.expanded.phases ||= new Map();
-      const key = call.log || call.id || `${call.role}-${index}`;
+      const key = call.log || call.live_log || call.id || `${call.role}-${index}`;
       if (!card.expanded.phases.has(key)) card.expanded.phases.set(key, new Set());
       renderEvents(log, call.events, card.expanded.phases.get(key));
       return el('div', {}, heading, log);
@@ -606,8 +615,8 @@ function fillCard(card, d) {
   }
 }
 
-// Gates in list order: ✓ passed, ✗ failed, ○ not reached (pending).
-function fillGates(card, gates, failureOutput) {
+// Gates in list order: ✓ passed, ✗ failed, ○ not reached (pending); each with its stored output.
+function fillGates(card, iteration, gates, failureOutput) {
   show(card.gates.node, gates.length > 0);
   const count = (v) => gates.filter((g) => g.passed === v).length;
   setText(card.gates.count, gates.length ? '· ' + [
@@ -616,7 +625,7 @@ function fillGates(card, gates, failureOutput) {
   const key = JSON.stringify([gates, failureOutput]);
   if (card.gatesKey === key) return;
   card.gatesKey = key; // a property, not an attribute: it holds output text
-  card.gates.body.replaceChildren(...gates.map((g) => {
+  card.gates.body.replaceChildren(...gates.map((g, index) => {
     const outcome = g.passed === true ? 'passed' : g.passed === false ? 'failed' : 'pending';
     const facts = [
       g.kind === 'metric' && typeof g.value === 'number'
@@ -631,8 +640,47 @@ function fillGates(card, gates, failureOutput) {
         facts ? el('span', { className: 'muted', textContent: `  ${facts}` }) : null),
       g.passed === false && g.reason ? el('p', { className: 'reason', textContent: g.reason }) : null,
       // The failing command's output tail ("Why rejected" shows it too when it is the same).
-      g.passed === false && g.output && g.output !== failureOutput ? el('pre', { textContent: g.output }) : null);
+      g.passed === false && g.output && g.output !== failureOutput ? el('pre', { textContent: g.output }) : null,
+      storedEl(card, iteration, 'gates', index + 1, g.stored));
   }));
+}
+
+// The stop commands that ran after this iteration (accepted ones only): ■ the one that stopped the run.
+function fillStop(card, iteration, stops) {
+  show(card.stop.node, stops.length > 0);
+  setText(card.stop.count, stops.length ? `· ${stops.length} ran${stops.some((x) => x.stopped) ? ' · stopped the run' : ''}` : '');
+  const key = JSON.stringify(stops);
+  if (card.stopKey === key) return;
+  card.stopKey = key;
+  card.stop.body.replaceChildren(...stops.map((x) => el('div', { className: `gate ${x.stopped ? 'stopped' : 'ran'}` },
+    el('div', {},
+      el('span', { className: 'mark', textContent: x.stopped ? '■' : '·' }),
+      el('code', { textContent: x.command || `stop/${x.position}` }),
+      x.stopped ? el('span', { className: 'muted', textContent: '  stopped the run' }) : null),
+    storedEl(card, iteration, 'stop', x.position, x.stored))));
+}
+
+// A gate's or stop command's stored files (loaded when opened) and its ask/review transcripts.
+function storedEl(card, iteration, kind, k, stored) {
+  if (!stored) return null;
+  const items = stored.files.map((f) => {
+    const id = `${kind}/${k}/${f.name}`;
+    return fileEl(api(`/api/output/${iteration}/${kind}/${k}/${encodeURIComponent(f.name)}`), f.name, f.size,
+      { opened: card.opened, id, headTail: true });
+  });
+  for (const t of stored.transcripts) {
+    const id = `${kind}/${k}/${t.name}`;
+    const log = el('div', { className: 'log' });
+    if (!card.expanded.outputs.has(id)) card.expanded.outputs.set(id, new Set());
+    const count = t.events.length ? ` · ${t.events.length} event${t.events.length === 1 ? '' : 's'}` : '';
+    const item = el('details', { className: 'artifact', open: card.opened.has(id) },
+      el('summary', {}, el('span', { textContent: t.name }), el('span', { className: 'muted', textContent: count })),
+      el('div', { className: 'artifact-body' }, log));
+    item.addEventListener('toggle', () => (item.open ? card.opened.add(id) : card.opened.delete(id)));
+    renderEvents(log, t.events, card.expanded.outputs.get(id));
+    items.push(item);
+  }
+  return items.length ? el('div', { className: 'artifacts stored', title: `.autohelix/${iterDir(iteration)}/${stored.folder}/` }, ...items) : null;
 }
 
 // One section per observe entry, in the order they ran.
@@ -641,9 +689,8 @@ function fillObserve(card, d) {
   if (card.observeKey === key) return;
   card.observeKey = key;
   card.observe.replaceChildren(...(d.observe || []).map((o) => {
-    const id = o.legacy ? ':legacy' : o.name;
-    const s = section(o.legacy ? 'Captured output' : o.name,
-      `runs/<id>/observations/iter-${d.iteration}/${o.legacy ? '' : o.name + '/'}`, card.opened.has(id));
+    const id = o.name;
+    const s = section(o.name, `${iterDir(d.iteration)}/observe/${o.name}/`, card.opened.has(id));
     s.node.hidden = false;
     s.body.className = 'entry';
     s.node.addEventListener('toggle', () => (s.node.open ? card.opened.add(id) : card.opened.delete(id)));
@@ -666,7 +713,7 @@ function fillObserve(card, d) {
       parts.push(prose);
     } else if (o.stdout) {
       parts.push(el('pre', { className: 'output', textContent: o.stdout }));
-    } else if (!o.legacy && o.stdout === null && SNAPSHOT) {
+    } else if (o.stdout === null && SNAPSHOT) {
       parts.push(el('p', { className: 'muted', textContent: 'Output is not saved in this file; see autohelix view --web.' }));
     }
     if (o.stderr) {
@@ -674,8 +721,7 @@ function fillObserve(card, d) {
         el('div', { className: 'artifact-body' }, el('pre', { textContent: o.stderr }))));
     }
     if (o.files.length) {
-      const prefix = o.legacy ? '' : `${o.name}/`;
-      parts.push(el('div', { className: 'artifacts' }, ...o.files.map((a) => artifactEl(d.iteration, a, prefix))));
+      parts.push(el('div', { className: 'artifacts' }, ...o.files.map((a) => artifactEl(d.iteration, a, `${o.name}/`))));
     }
     if (o.stdout_file && !SNAPSHOT) {
       parts.push(el('a', { className: 'raw', href: artifactUrl(d.iteration, o.stdout_file), target: '_blank', rel: 'noopener', textContent: 'stdout.txt' }));
@@ -709,28 +755,46 @@ function fmtSize(bytes) {
   return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
-// A file in observations/iter-N/, by its path there; each component encoded on its own.
+// A file in iterations/NNN/observe/, by its path there; each component encoded on its own.
 function artifactUrl(iteration, path) {
   return api(`/api/artifact/${iteration}/${path.split('/').map(encodeURIComponent).join('/')}`);
 }
 
 function artifactEl(iteration, a, prefix = '') {
-  const url = artifactUrl(iteration, a.path);
   const name = a.path.startsWith(prefix) ? a.path.slice(prefix.length) : a.path;
+  return fileEl(artifactUrl(iteration, a.path), name, a.size);
+}
+
+// A file loaded when its row is opened. With `opened`/`id` the row stays open across
+// re-renders; `headTail` keeps both ends of a long text (gate output: errors at the top,
+// summaries at the bottom), else its start.
+function fileEl(url, name, size, { opened = null, id = null, headTail = false } = {}) {
   const body = el('div', { className: 'artifact-body' });
-  const item = el('details', { className: 'artifact' },
-    el('summary', {}, el('span', { textContent: name }), el('span', { className: 'muted', textContent: ` · ${fmtSize(a.size)}` })),
+  const item = el('details', { className: 'artifact', open: !!(opened && opened.has(id)) },
+    el('summary', {}, el('span', { textContent: name }), el('span', { className: 'muted', textContent: ` · ${fmtSize(size)}` })),
     body);
-  item.addEventListener('toggle', async () => {
-    if (!item.open || body.childElementCount) return;
-    if (/\.(png|jpe?g|gif|webp)$/i.test(name)) {
-      body.append(el('img', { src: url, alt: name }));
-    } else {
-      const text = await (await fetch(url, { cache: 'no-store' })).text();
-      body.append(el('pre', { textContent: text.length > 262144 ? text.slice(0, 262144) + '\n…' : text }));
-    }
-    body.append(el('a', { href: url, target: '_blank', rel: 'noopener', textContent: 'Open in new tab' }));
+  let loading = false;
+  const load = async () => {
+    if (!item.open || loading || body.childElementCount) return;
+    loading = true;
+    try {
+      if (/\.(png|jpe?g|gif|webp)$/i.test(name)) {
+        body.append(el('img', { src: url, alt: name }));
+      } else {
+        const text = await (await fetch(url, { cache: 'no-store' })).text();
+        const cut = text.length <= 262144 ? text : headTail
+          ? `${text.slice(0, 65536)}\n[… ${fmtSize(text.length - 262144)} not shown …]\n${text.slice(-196608)}`
+          : text.slice(0, 262144) + '\n…';
+        body.append(el('pre', { textContent: cut }));
+      }
+      body.append(el('a', { href: url, target: '_blank', rel: 'noopener', textContent: 'Open in new tab' }));
+    } catch { /* opened again, it retries */ } finally { loading = false; }
+  };
+  item.addEventListener('toggle', () => {
+    if (opened) item.open ? opened.add(id) : opened.delete(id);
+    load();
   });
+  if (item.open) load();
   return item;
 }
 

@@ -92,6 +92,7 @@ class CommandResult:
     output: str
     return_code: int
     stdout: str = ""
+    stderr: str = ""  # stored apart from stdout (`output` is both); why it couldn't start, if so
     timed_out: bool = False
     duration_s: float | None = None
 
@@ -233,16 +234,17 @@ def run_command(
         if run.stdout or run.stderr:
             output += "\n" + run.stdout + run.stderr
         return CommandResult(command=command, passed=False, output=output, return_code=-1,
-                             stdout=run.stdout, timed_out=True, duration_s=run.duration_s)
+                             stdout=run.stdout, stderr=run.stderr, timed_out=True, duration_s=run.duration_s)
     if run.error is not None:
         return CommandResult(command=command, passed=False, output=run.error, return_code=-1,
-                             duration_s=run.duration_s)
+                             stderr=run.error, duration_s=run.duration_s)
     return CommandResult(
         command=command,
         passed=run.return_code == 0,
         output=run.stdout + run.stderr,
         return_code=run.return_code,
         stdout=run.stdout,
+        stderr=run.stderr,
         duration_s=run.duration_s,
     )
 
@@ -267,7 +269,8 @@ def run_gate_commands(
     failure ends the phase (later commands don't run). `per_command` adds variables for
     each call (see `PerCommand`); `after_command` runs after each command (e.g. to
     verify the candidate) and may raise to stop the phase; `on_result` sees each
-    result as soon as it exists (before `after_command`)."""
+    result as soon as it exists: after the command (and its process group) ended, but
+    while its `per_command` context is still open, and before `after_command`."""
     results = []
     for c in commands:
         with (per_command or _no_extra)(c.command) as added:
@@ -275,9 +278,9 @@ def run_gate_commands(
                 c.command, cwd, timeout=c.timeout, project_path=project_path, on_progress=on_progress,
                 extra_env={**(extra_env or {}), **added},
             )
-        results.append(result)
-        if on_result:
-            on_result(c, result)
+            results.append(result)
+            if on_result:
+                on_result(c, result)
         if after_command:
             after_command(c.command)
         if stop_on_failure and not result.passed:
@@ -311,9 +314,11 @@ def run_stop_checks(
     extra_env: dict[str, str | None] | None = None,
     on_progress: ProgressCallback | None = None,
     per_command: PerCommand | None = None,
+    on_result: Callable[[CommandSpec, CommandResult], None] | None = None,
 ) -> list[StopCheckResult]:
     """Run stop commands in order until one exits 0; return the results of those run.
-    `per_command` adds variables for each call (see `PerCommand`)."""
+    `per_command` adds variables for each call (see `PerCommand`); `on_result` sees
+    each command's result as `run_gate_commands`' does (its context still open)."""
     results: list[StopCheckResult] = []
     for c in config.stop:
         with (per_command or _no_extra)(c.command) as added:
@@ -321,6 +326,8 @@ def run_stop_checks(
                 c.command, cwd, timeout=c.timeout, project_path=project_path,
                 on_progress=on_progress, extra_env={**(extra_env or {}), **added},
             )
+            if on_result:
+                on_result(c, r)
         lines = [line.strip() for line in r.stdout.splitlines() if line.strip()]
         # `jq -e` prints the value it tested: true/false/null says nothing, the command does.
         last = lines[-1] if lines else None

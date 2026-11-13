@@ -13,7 +13,7 @@
 // AutoHelix drops this file into <worktree>/.opencode/plugin/ for an iteration
 // when agent.timeout is set, and exports these env vars to the agent:
 //   AUTOHELIX_TIME_LEFT_SCRIPT  path to time_left.sh (the shared, tiered message)
-//   AUTOHELIX_PROJECT           main project dir (used to locate the audit log)
+//   AUTOHELIX_RUN_DIR           the run's state folder (its logs/ holds the audit log)
 //
 // Single source of truth: we shell out to time_left.sh rather than reimplement
 // the tiers, so opencode and Claude inject identical text.
@@ -27,10 +27,10 @@ import path from "path"
 
 function auditLogPath() {
   if (process.env.AUTOHELIX_HOOK_AUDIT_LOG) return process.env.AUTOHELIX_HOOK_AUDIT_LOG
-  const project = process.env.AUTOHELIX_PROJECT
-  if (project) {
+  const run = process.env.AUTOHELIX_RUN_DIR
+  if (run) {
     try {
-      const dir = path.join(project, ".autohelix", "logs")
+      const dir = path.join(run, "logs")
       fs.mkdirSync(dir, { recursive: true })
       return path.join(dir, "opencode_plugin_audit.log")
     } catch (e) {

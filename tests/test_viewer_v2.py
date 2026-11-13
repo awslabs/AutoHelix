@@ -82,24 +82,23 @@ def project(tmp_path, run_paths):
     ]
     run_paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
 
-    obs = run_paths.observations
-    (obs / "iter-1" / "bench" / "results" / "deep").mkdir(parents=True)
-    (obs / "iter-1" / "bench" / "stdout.txt").write_text("##autohelix[speed=12]\nran 3 times\n")
-    (obs / "iter-1" / "bench" / "stderr.txt").write_text("warning: slow disk\n")
-    (obs / "iter-1" / "bench" / "results" / "deep" / "log.json").write_text('{"runs": 3}')
-    (obs / "iter-1" / "bench" / "results" / "page.html").write_text("<script>alert(1)</script>")
-    (obs / "iter-1" / "review").mkdir()
-    (obs / "iter-1" / "review" / "stdout.txt").write_text(
+    one = run_paths.observe_dir(1)
+    (one / "bench" / "results" / "deep").mkdir(parents=True)
+    (one / "bench" / "stdout.txt").write_text("##autohelix[speed=12]\nran 3 times\n")
+    (one / "bench" / "stderr.txt").write_text("warning: slow disk\n")
+    (one / "bench" / "results" / "deep" / "log.json").write_text('{"runs": 3}')
+    (one / "bench" / "results" / "page.html").write_text("<script>alert(1)</script>")
+    (one / "review").mkdir()
+    (one / "review" / "stdout.txt").write_text(
         "**Fix** the `cmp` call.\n\n<b>raw</b>\n\n##autohelix [missing=0] quoted by the reviewer\n"
         "##autohelix[missing=3]\n")
     secret = tmp_path / "secret.txt"
     secret.write_text("SECRET")
-    os.symlink(secret, obs / "iter-1" / "bench" / "results" / "link.txt")
-    os.symlink(tmp_path, obs / "iter-1" / "bench" / "results" / "outside")
-    os.mkfifo(obs / "iter-1" / "bench" / "results" / "pipe")
-    (obs / "iter-0" / "stdout_0.txt").parent.mkdir(parents=True)
-    (obs / "iter-0" / "stdout_0.txt").write_text("old flat layout\n")
-    os.symlink(obs / "iter-1", obs / "iter-7")  # an iteration folder that is a symlink
+    os.symlink(secret, one / "bench" / "results" / "link.txt")
+    os.symlink(tmp_path, one / "bench" / "results" / "outside")
+    os.mkfifo(one / "bench" / "results" / "pipe")
+    run_paths.iteration_dir(0).mkdir()
+    os.symlink(run_paths.iteration_dir(1), run_paths.iteration_dir(7))  # an iteration folder that is a symlink
     return tmp_path
 
 
@@ -158,12 +157,10 @@ def test_observe_sections_by_entry(server):
     assert "review" not in detail and "reviewer" not in detail
 
 
-def test_legacy_flat_observations_and_missing_folders(server):
+def test_missing_folders(server):
     baseline = get_json(server + "/api/iteration/0")["observe"]
-    assert [(s["name"], s.get("legacy", False)) for s in baseline] == [("bench", False), (None, True)]
+    assert [s["name"] for s in baseline] == ["bench"]
     assert baseline[0]["ran"] and baseline[0]["stdout"] is None  # recorded, nothing stored
-    assert [f["path"] for f in baseline[1]["files"]] == ["stdout_0.txt"]
-    assert get(server + "/api/artifact/0/stdout_0.txt")[1] == b"old flat layout\n"
     assert get_json(server + "/api/iteration/2")["observe"] == []
     assert get_json(server + "/api/iteration/7")["observe"] == []  # a symlinked iteration folder is not read
 
@@ -178,11 +175,11 @@ def test_nested_files_served_only_inside_the_iteration(server):
                  "bench/results/outside/secret.txt",  # through a symlinked folder
                  "bench/results/pipe",                # a FIFO (would block a plain open)
                  "bench/results",                     # a folder
-                 "bench/..%2F..%2F..%2F..%2Fsecret.txt", "bench/%2E%2E/%2E%2E/iter-0/stdout_0.txt",
-                 "..%2Fiter-0%2Fstdout_0.txt", "%2Fetc%2Fpasswd", "bench//stdout.txt", "bench/./stdout.txt",
+                 "bench/..%2F..%2F..%2F..%2Fsecret.txt", "bench/%2E%2E/%2E%2E/%2E%2E/record.json",
+                 "..%2F..%2Frecord.json", "%2Fetc%2Fpasswd", "bench//stdout.txt", "bench/./stdout.txt",
                  "bench/stdout.txt%00", "missing.txt"):
         assert get(server + f"/api/artifact/1/{path}")[0] == 404, path
-    assert get(server + "/api/artifact/7/bench/stdout.txt")[0] == 404  # iter-7 is a symlink
+    assert get(server + "/api/artifact/7/bench/stdout.txt")[0] == 404  # iterations/007 is a symlink
 
 
 def test_gates_pending_while_running(project, server):
@@ -282,19 +279,20 @@ def test_terminal_tables_show_gates_summaries_and_titles(project):
 
 # ---------- hardening ----------
 
-def test_symlinked_observations_folder_lists_and_serves_nothing(project, server):
-    obs = RunPaths(project, "test").observations
+@pytest.mark.parametrize("folder", ["iterations", "observe"])
+def test_symlinked_observations_folder_lists_and_serves_nothing(project, server, folder):
+    paths = RunPaths(project, "test")
+    obs = paths.iterations if folder == "iterations" else paths.observe_dir(1)
     moved = project / "elsewhere"
     obs.rename(moved)
     os.symlink(moved, obs)
     bench, review = get_json(server + "/api/iteration/1")["observe"]  # still listed: the record names them
     assert (bench["stdout"], bench["files"], review["html"]) == (None, [], None)
     assert get(server + "/api/artifact/1/bench/results/deep/log.json")[0] == 404
-    assert [s for s in get_json(server + "/api/iteration/0")["observe"] if s.get("legacy")] == []
 
 
 def test_symlinked_entry_folder_shows_nothing(project, server):
-    obs = RunPaths(project, "test").observations / "iter-1"
+    obs = RunPaths(project, "test").observe_dir(1)
     (obs / "bench").rename(project / "bench-elsewhere")
     os.symlink(project / "bench-elsewhere", obs / "bench")
     bench = get_json(server + "/api/iteration/1")["observe"][0]
@@ -303,7 +301,7 @@ def test_symlinked_entry_folder_shows_nothing(project, server):
 
 
 def test_hard_links_are_not_listed_or_served(project, server):
-    bench = RunPaths(project, "test").observations / "iter-1" / "bench"
+    bench = RunPaths(project, "test").observe_entry(1, "bench")
     os.link(project / "secret.txt", bench / "results" / "hard.txt")
     (bench / "stdout.txt").unlink()
     os.link(project / "secret.txt", bench / "stdout.txt")
@@ -319,12 +317,12 @@ def test_notes_never_block_on_fifos_or_follow_symlinks(project, server):
     from autohelix.runs import ensure_copies
 
     paths = RunPaths(project, "test")
-    version = paths.run_dir / "notes.1"
-    version.mkdir()
+    version = paths.notes_versions / "1"
+    version.mkdir(parents=True)
     os.mkfifo(version / "iter-1.md")
     os.symlink(project / "secret.txt", version / "iter-2.md")
     (version / "ideas.md").write_text("# Ideas\n")
-    os.symlink("notes.1", paths.run_dir / "notes")
+    os.symlink(".internal/notes/1", paths.notes)
     state = get_json(server + "/api/state")
     assert state["notes_files"] == ["ideas.md"]
     assert get_json(server + "/api/iteration/1")["notes"] is None
@@ -419,8 +417,8 @@ def test_report_page_loads_nothing(project):
 
 def test_running_iteration_marks_only_the_entry_running(project, server):
     paths = RunPaths(project, "test")
-    (paths.observations / "iter-3" / "bench").mkdir(parents=True)
-    (paths.observations / "iter-3" / "bench" / "stdout.txt").write_text("done\n")
+    paths.observe_entry(3, "bench").mkdir(parents=True)
+    (paths.observe_entry(3, "bench") / "stdout.txt").write_text("done\n")
     status = {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "benchmark",
               "phase_started_at": 1, "iteration_started_at": 1}
     write_json(paths.status, status)
@@ -446,3 +444,131 @@ def test_config_is_parsed_again_only_when_its_file_changes(project, monkeypatch)
     config = project / "autohelix.yaml"
     config.write_text(config.read_text().replace("Make the sort faster", "Make the sort much faster"))
     assert data.state()["title"] == "Make the sort much faster" and len(calls) == 2
+
+
+ASK_LINE = json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Judged: yes"}]}}) + "\n"
+
+
+def _stored(folder, command, stdout="", stderr="", transcripts=()):
+    folder.mkdir(parents=True)
+    (folder / "command.txt").write_text(command + "\n")
+    (folder / "stdout.txt").write_text(stdout)
+    if stderr:
+        (folder / "stderr.txt").write_text(stderr)
+    for name in transcripts:
+        (folder / name).write_text(ASK_LINE)
+
+
+def test_gate_and_stop_output_per_item(project, server):
+    paths = RunPaths(project, "test")
+    _stored(paths.gate_dir(2, 1), "pytest -q", "1 failed\n", "warning\n", transcripts=["ask-2.log", "ask.log"])
+    _stored(paths.stop_dir(1, 1), "jq -e '.speed > 20' $AUTOHELIX_METRICS", "false\n")
+    _stored(paths.stop_dir(1, 2), "autohelix ask -- 'Done?'", "yes\n", transcripts=["ask.log"])
+    paths.history.write_text(paths.history.read_text().replace(
+        '"iteration": 1, "accepted": true,',
+        '"iteration": 1, "accepted": true, "stop": {"command": "autohelix ask -- \'Done?\'", "reason": "yes"},'))
+    gates = get_json(server + "/api/iteration/2")["gates"]
+    stored = gates[0]["stored"]
+    assert stored["folder"] == "gates/1" and stored["command"] == "pytest -q"
+    assert [f["name"] for f in stored["files"]] == ["command.txt", "stdout.txt", "stderr.txt"]
+    assert [t["name"] for t in stored["transcripts"]] == ["ask.log", "ask-2.log"]
+    assert stored["transcripts"][0]["log"] == "iterations/002/gates/1/ask.log"
+    assert any("Judged: yes" in e["text"] for e in stored["transcripts"][0]["events"])
+    assert gates[1]["stored"] is None  # a metric gate runs nothing
+    stops = get_json(server + "/api/iteration/1")["stop"]
+    assert [(s["position"], s["command"], s["stopped"]) for s in stops] == [
+        (1, "jq -e '.speed > 20' $AUTOHELIX_METRICS", False), (2, "autohelix ask -- 'Done?'", True)]
+    assert [t["name"] for t in stops[1]["stored"]["transcripts"]] == ["ask.log"]
+    assert get_json(server + "/api/iteration/2")["stop"] == []
+    status, body, mime = get(server + "/api/output/2/gates/1/stdout.txt")
+    assert (status, body) == (200, b"1 failed\n") and mime.startswith("text/plain")
+    assert get(server + "/api/output/1/stop/1/command.txt")[1] == b"jq -e '.speed > 20' $AUTOHELIX_METRICS\n"
+    assert get(server + "/api/run/test/output/2/gates/1/stderr.txt")[1] == b"warning\n"
+    for route in ("2/gates/1/ask.log", "2/gates/1/record.json", "2/gates/2/stdout.txt", "2/gates/0/stdout.txt",
+                  "2/gates/01/stdout.txt", "2/observe/1/stdout.txt", "2/gates/1/..%2Fstdout.txt",
+                  "1/stop/2/stderr.txt", "7/gates/1/stdout.txt"):
+        assert get(server + f"/api/output/{route}")[0] == 404, route
+
+
+def test_gate_output_refuses_symlinks_and_hard_links(project, server, tmp_path):
+    paths = RunPaths(project, "test")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("SECRET")
+    folder = paths.gate_dir(2, 1)
+    folder.mkdir(parents=True)
+    os.symlink(secret, folder / "stdout.txt")
+    os.link(secret, folder / "stderr.txt")
+    os.link(project / "sort.py", folder / "ask.log")
+    stored = get_json(server + "/api/iteration/2")["gates"][0]["stored"]
+    assert stored["files"] == [] and stored["transcripts"] == [] and stored["command"] is None
+    for name in ("stdout.txt", "stderr.txt"):
+        assert get(server + f"/api/output/2/gates/1/{name}")[0] == 404
+    # A symlinked gates/ folder shows nothing.
+    elsewhere = tmp_path / "elsewhere"
+    _stored(elsewhere / "1", "pytest -q", "SECRET")
+    os.symlink(elsewhere, paths.iteration_dir(1) / "gates")
+    assert get_json(server + "/api/iteration/1")["gates"][0]["stored"] is None
+    assert get(server + "/api/output/1/gates/1/stdout.txt")[0] == 404
+
+
+def test_running_iteration_shows_finished_gates_output(project, server):
+    paths = RunPaths(project, "test")
+    _stored(paths.gate_dir(3, 1), "pytest -q", "3 passed\n")
+    write_json(paths.status, {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "checks",
+                              "phase_started_at": 1, "iteration_started_at": 1})
+    gates = get_json(server + "/api/iteration/3")["gates"]
+    assert [(g["passed"], bool(g["stored"])) for g in gates] == [(None, True), (None, False)]
+
+
+def test_snapshot_has_no_gate_or_stop_output(project):
+    paths = RunPaths(project, "test")
+    _stored(paths.gate_dir(2, 1), "pytest -q", "1 failed\n", transcripts=["ask.log"])
+    _stored(paths.stop_dir(1, 1), "true", "")
+    routes = RunData(project).snapshot()
+    assert routes["/api/iteration/2"]["gates"][0]["stored"] is None
+    assert routes["/api/iteration/1"]["stop"] == [{"position": 1, "command": "true", "stopped": False, "stored": None}]
+
+
+def test_stop_checks_name_what_ran_and_flag_one(project, server):
+    """Labels come from command.txt (`stop:` may have been edited since); with duplicate
+    commands only the first, the one that exited 0, is flagged."""
+    paths = RunPaths(project, "test")
+    (project / "autohelix.yaml").write_text(CONFIG + "stop:\n  - echo edited\n  - echo later\n")
+    _stored(paths.stop_dir(1, 1), "check.sh", "done\n")
+    _stored(paths.stop_dir(1, 2), "check.sh", "")
+    _stored(paths.stop_dir(1, 3), "", "")
+    (paths.stop_dir(1, 3) / "command.txt").unlink()  # unreadable: the config's entry, if any
+    paths.history.write_text(paths.history.read_text().replace(
+        '"iteration": 1, "accepted": true,', '"iteration": 1, "accepted": true, "stop": {"command": "check.sh", "reason": "done"},'))
+    stops = get_json(server + "/api/iteration/1")["stop"]
+    assert [(s["position"], s["command"], s["stopped"]) for s in stops] == [
+        (1, "check.sh", True), (2, "check.sh", False), (3, None, False)]
+    (paths.stop_dir(1, 2) / "command.txt").unlink()
+    assert get_json(server + "/api/iteration/1")["stop"][1]["command"] == "echo later"
+
+
+def test_a_retried_baseline_ignores_the_earlier_attempts_record(project, server):
+    """While the baseline runs again after a recorded failure, the old record (whose folder
+    moved to .internal/attempts/) is not shown with the new attempt's output."""
+    paths = RunPaths(project, "test")
+    records = [json.loads(line) for line in paths.history.read_text().splitlines()]
+    records[0].update(accepted=False, reason="baseline failed: boom", ended_at=100.0,
+                      calls=[{"role": "command", "log": "iterations/000/gates/1/ask.log", "usage": {"id": "old"}}])
+    paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
+    _stored(paths.gate_dir(0, 1), "pytest -q", "running again\n", transcripts=["ask.log"])
+    status = {"state": "running", "pid": os.getpid(), "iteration": 0, "phase": "baseline",
+              "phase_started_at": 200.0, "iteration_started_at": 200.0}
+    write_json(paths.status, status)
+    detail = get_json(server + "/api/iteration/0")
+    assert detail["failure_output"] is None and detail["calls"] == []
+    assert [(g["passed"], bool(g["stored"])) for g in detail["gates"]] == [(None, True), (None, False)]
+    assert get_json(server + "/api/iteration/0/diff")["error"] == "This iteration has no record yet."
+    # A record this attempt wrote (it ended after the attempt started) is current.
+    records[0].update(accepted=True, reason="baseline", ended_at=300.0)
+    paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
+    assert [c["usage"]["id"] for c in get_json(server + "/api/iteration/0")["calls"]] == ["old"]
+    # And once nothing runs, the record is shown whatever its times.
+    write_json(paths.status, {**status, "state": "finished", "stopped_at": 400.0})
+    records[0]["ended_at"] = 100.0
+    paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
+    assert get_json(server + "/api/iteration/0")["gates"][0]["passed"] is True

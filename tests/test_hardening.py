@@ -273,6 +273,18 @@ def test_delete_leaves_runs_whose_id_shares_a_prefix(repo):
 # --- 9, 10, 11: prompt wording, agent-written text, custom templates -------------------
 
 
+def _seed(worktree, records):
+    """The iteration folders seeding would put in the copy: the record, failing gates', observe entries'."""
+    for record in records:
+        folder = worktree / ".autohelix-iteration" / "iterations" / f"{record['iteration']:03d}"
+        folder.mkdir(parents=True, exist_ok=True)
+        for k, gate in enumerate(record.get("gates") or [], start=1):
+            if gate.get("passed") is False and gate.get("kind", "command") == "command":
+                (folder / "gates" / str(k)).mkdir(parents=True, exist_ok=True)
+        for item in record.get("observe") or []:
+            (folder / "observe" / item["name"]).mkdir(parents=True, exist_ok=True)
+
+
 def _render(tmp_path, records, iteration=2, patch=False):
     (tmp_path / ".autohelix").mkdir(parents=True, exist_ok=True)
     history = History(tmp_path)
@@ -282,6 +294,7 @@ def _render(tmp_path, records, iteration=2, patch=False):
     (worktree / ITERATION_DIR).mkdir(parents=True, exist_ok=True)
     if patch:
         (worktree / ITERATION_DIR / "rejected.patch").write_text("diff\n")
+    _seed(worktree, records)
     config = Config(goal="g")
     return render_template(load_template(config), build_prompt_variables(config, history, iteration, worktree))
 
@@ -293,7 +306,8 @@ def test_rejection_wording(tmp_path):
     rendered = _render(tmp_path, [BASELINE, {"iteration": 1, "accepted": False, "reason": "gate failed: t",
                                              "failure_output": "UNIQUE FAILURE LINE", "tree": "t",
                                              "rejected_ref": "r"}], patch=True)
-    assert "Your copy holds the last accepted code." in rendered
+    assert ("Your copy holds the last accepted code (the baseline; its record and observations: "
+            ".autohelix-iteration/iterations/000/).") in rendered
     assert rendered.count("UNIQUE FAILURE LINE") == 1  # in "Failure output", not the history too
     assert "rejected (failure output above). Its changes are in" in rendered
     plain = _render(tmp_path / "b", [BASELINE, {"iteration": 1, "accepted": False, "reason": "agent failed",
@@ -435,7 +449,7 @@ def test_an_unreported_metric_keeps_its_hint_and_reaches_the_prompt(tmp_path):
     record = run_observe_entry(entry, tmp_path).record()
     assert record["ok"] and "##autohelix[speed=" in record["metric_errors"]["speed"]
     rendered = _render(tmp_path, [BASELINE, {"iteration": 1, "accepted": True, "observe": [record]}])
-    assert "  bench: .autohelix-iteration/observations/iter-1/bench/ (reported no speed: print" in rendered
+    assert "  bench: .autohelix-iteration/iterations/001/observe/bench/ (reported no speed: print" in rendered
 
 
 def test_a_jq_style_last_line_is_not_the_stop_reason(tmp_path):

@@ -154,7 +154,7 @@ def test_notes_list_and_note_route(viewer):
 
 
 def test_artifacts_listed_and_served_safely(viewer, integration_project):  # noqa: F811
-    obs = RunPaths(integration_project).observations / "iter-2" / "bench"
+    obs = RunPaths(integration_project).observe_entry(2, "bench")
     obs.mkdir(parents=True, exist_ok=True)
     (obs / "page.html").write_text("<script>alert(1)</script>")
     (obs / "plot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -230,7 +230,7 @@ def test_frozen_candidate_diff_only_once_this_iteration_froze(viewer, integratio
 def test_long_logs_are_clipped_visibly(tmp_path, monkeypatch, run_paths):
     import autohelix.viewer as viewer_module
     monkeypatch.setattr(viewer_module, "MAX_EVENTS", 5)
-    log = run_paths.call_dir(1, "agent") / "agent.log"
+    log = run_paths.agent_log(1)
     log.parent.mkdir(parents=True)
     line = json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}})
     log.write_text("\n".join([json.dumps({"type": "system", "subtype": "init"})] + [line] * 8) + "\n")
@@ -271,7 +271,7 @@ def test_preflight_failure_is_not_recorded_as_a_run(integration_project):  # noq
     with pytest.raises(RuntimeError, match="Preflight checks failed"):
         Harness(integration_project)
     assert read_run_status(integration_project) is None
-    assert not (RunPaths(integration_project).root / "current").exists()
+    assert not (RunPaths(integration_project).current).exists()
 
 
 def _snapshot(page: str) -> dict:
@@ -283,7 +283,7 @@ def test_stopped_run_saves_static_page(integration_project):  # noqa: F811
     (integration_project / "hello.py").write_text('print("</script><b>")\n')  # text that must not break out
     subprocess.run(["git", "commit", "-qam", "tricky"], cwd=integration_project)
     Harness(integration_project).run(max_iterations=2)
-    page = (RunPaths(integration_project).output / "report.html").read_text()
+    page = RunPaths(integration_project).report_html.read_text()
     for ref in ('src="/viewer.js"', 'href="/viewer.css"', 'src="/logo-light.svg"', 'href="/logo-light.svg"'):
         assert ref not in page  # everything is inlined
     data = _snapshot(page)
@@ -305,7 +305,7 @@ def test_interrupted_run_still_saves_static_page(integration_project, monkeypatc
     harness = Harness(integration_project)
     monkeypatch.setattr(harness, "run_iteration", lambda n: (_ for _ in ()).throw(KeyboardInterrupt))
     harness.run(max_iterations=1)
-    page = (RunPaths(integration_project).output / "report.html").read_text()
+    page = RunPaths(integration_project).report_html.read_text()
     state = _snapshot(page)["routes"]["/api/state"]
     assert state["status"]["state"] == "interrupted"
     assert state["report"] is None

@@ -99,7 +99,7 @@ class TestBuildPromptVariables:
                                            worktree_dir=tmp_path)
         assert set(variables) == {
             "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable",
-            "frozen", "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "time_limit", "group",
+            "frozen", "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted", "recent_iterations", "time_limit", "group",
             "group_runs"}
         assert variables["title"] == "Title line."
         assert variables["notes_path"] == str(tmp_path / ".autohelix-iteration" / "notes" / "iter-1.md")
@@ -181,10 +181,22 @@ CONFIG = {
 }
 
 
-def _render(tmp_path, records, iteration, *, patch=False, group=None, members=()):
+def _seed(worktree, records):
+    """The iteration folders seeding would put in the copy: the record, failing gates', observe entries'."""
+    for record in records:
+        folder = worktree / ".autohelix-iteration" / "iterations" / f"{record['iteration']:03d}"
+        folder.mkdir(parents=True, exist_ok=True)
+        for k, gate in enumerate(record.get("gates") or [], start=1):
+            if gate.get("passed") is False and gate.get("kind", "command") == "command":
+                (folder / "gates" / str(k)).mkdir(parents=True, exist_ok=True)
+        for item in record.get("observe") or []:
+            (folder / "observe" / item["name"]).mkdir(parents=True, exist_ok=True)
+
+
+def _render(tmp_path, records, iteration, *, patch=False, group=None, members=(), seed=True):
     from autohelix.history import IterationResult
 
-    (tmp_path / ".autohelix").mkdir(exist_ok=True)
+    (tmp_path / ".autohelix").mkdir(parents=True, exist_ok=True)
     history = History(tmp_path)
     for record in records:
         history.append(IterationResult(**record))
@@ -192,6 +204,8 @@ def _render(tmp_path, records, iteration, *, patch=False, group=None, members=()
     (worktree / ".autohelix-iteration").mkdir(parents=True, exist_ok=True)
     if patch:
         (worktree / ".autohelix-iteration" / "rejected.patch").write_text("diff --git a/sort.py b/sort.py\n")
+    if seed:
+        _seed(worktree, records)
     config = Config.from_dict(CONFIG)
     variables = build_prompt_variables(config, history, iteration, worktree, group=group, members=members)
     return variables, render_template(load_template(config), variables)
@@ -209,7 +223,7 @@ def test_first_iteration(tmp_path):
     assert variables["last"]["iteration"] == 0
     assert "This is iteration 1. Baseline is iter-0." in rendered
     assert "Last accepted: the baseline (iter-0); your copy holds its code." in rendered
-    assert "  bench: .autohelix-iteration/observations/iter-0/bench/" in rendered
+    assert "  bench: .autohelix-iteration/iterations/000/observe/bench/" in rendered
     assert "rejected.patch" not in rendered and "were discarded" not in rendered
     assert "- iter 0: speed=10.0 (accepted)" in rendered
     assert f"write to {tmp_path / 'copy' / '.autohelix-iteration' / 'notes' / 'iter-1.md'}." in rendered
@@ -225,7 +239,7 @@ def test_after_an_accepted_iteration(tmp_path):
     assert "Last accepted: iter-1; your copy holds its code." in rendered
     assert "Its gate results:\n  ✓ pytest -q\n  ✓ speed regress 5%" in rendered
     assert "Read the latest observations (its):" in rendered
-    assert "  progress: .autohelix-iteration/observations/iter-1/progress/ (failed: exited 2)" in rendered
+    assert "  progress: .autohelix-iteration/iterations/001/observe/progress/ (failed: exited 2)" in rendered
     assert "- iter 1: speed=10.0 (accepted) — Use insertion sort" in rendered
     assert "    observe progress failed: exited 2" in rendered
     assert "was rejected" not in rendered
@@ -241,7 +255,9 @@ def test_after_a_rejection_with_patch_and_discarded_paths(tmp_path):
     assert variables["rejected_patch"] == ".autohelix-iteration/rejected.patch"
     assert variables["discarded"] == ["tests/test_sort.py"]
     assert "Iteration 1 was rejected: gate failed: pytest -q" in rendered
-    assert "Its rejected attempt's gate results:\n  ✗ pytest -q\n  · speed regress 5% (not reached)" in rendered
+    assert ("Its rejected attempt's gate results:\n"
+            "  ✗ pytest -q (output: .autohelix-iteration/iterations/001/gates/1/)\n"
+            "  · speed regress 5% (not reached)") in rendered
     assert "Failure output:\n    FAILED test_sort.py::test_negative" in rendered
     assert ("The previous attempt was rejected (failure output above). Its changes are in "
             "`.autohelix-iteration/rejected.patch`; `git apply` it if it was close, or start over.") in rendered
@@ -257,7 +273,7 @@ def test_rejection_after_observe_shows_what_it_produced(tmp_path):
                 "observe": [{"name": "bench", "ok": True, "error": None, "metrics": {"speed": 5.0}}]}
     _, rendered = _render(tmp_path, [BASELINE, rejected], 2)
     assert "Read the latest observations (what the rejected attempt produced):" in rendered
-    assert "  bench: .autohelix-iteration/observations/iter-1/bench/" in rendered
+    assert "  bench: .autohelix-iteration/iterations/001/observe/bench/" in rendered
     assert "rejected.patch" not in rendered  # no kept tree, no patch
 
 
@@ -270,3 +286,38 @@ def test_group_runs(tmp_path):
     assert variables["group"] == "perf" and len(variables["group_runs"]) == 1
     assert "Other runs in group `perf`" in rendered
     assert "`.autohelix-iteration/runs/20261112-1200-other-k3f9/`" in rendered
+
+
+def test_the_prompt_names_only_folders_that_are_in_the_copy(tmp_path):
+    rejected = {"iteration": 1, "accepted": False, "reason": "metric gate failed",
+                "gates": [{"text": "pytest -q", "kind": "command", "passed": False},
+                          {"text": "speed regress 5%", "kind": "metric", "passed": False}],
+                "observe": [{"name": "bench", "ok": False, "error": "exited 1", "metrics": {}}]}
+    variables, rendered = _render(tmp_path, [BASELINE, rejected], 2, seed=False)
+    assert [g["path"] for g in variables["last"]["gates"]] == ["", ""]
+    assert variables["last"]["observe"][0]["path"] == ""
+    assert variables["last_accepted"] == {"iteration": 0, "path": ""}
+    assert "  ✗ pytest -q\n  ✗ speed regress 5%\n" in rendered and "(output:" not in rendered
+    assert "  bench (failed: exited 1)" in rendered
+    assert "Your copy holds the last accepted code (the baseline)." in rendered
+
+    variables, rendered = _render(tmp_path / "seeded", [BASELINE, rejected], 2)
+    # A metric gate runs nothing: never a folder, failed or not.
+    assert [g["path"] for g in variables["last"]["gates"]] == [".autohelix-iteration/iterations/001/gates/1/", ""]
+    assert "  ✗ pytest -q (output: .autohelix-iteration/iterations/001/gates/1/)\n  ✗ speed regress 5%\n" in rendered
+    assert "  bench: .autohelix-iteration/iterations/001/observe/bench/ (failed: exited 1)" in rendered
+    assert variables["last_accepted"] == {"iteration": 0, "path": ".autohelix-iteration/iterations/000/"}
+    assert ("Your copy holds the last accepted code (the baseline; its record and observations: "
+            ".autohelix-iteration/iterations/000/).") in rendered
+
+
+def test_the_prompt_describes_the_copys_iteration_folders(tmp_path):
+    _, rendered = _render(tmp_path, [BASELINE], 1)
+    assert ("- .autohelix-iteration/iterations/NNN/ — the last 5 iterations and the last accepted one: record.json,\n"
+            "  gates/<k>/ of failed gates (k: position in the list above; stdout.txt, stderr.txt, ask.log),\n"
+            "  observe/<name>/ (stdout.txt, stderr.txt, captured files, review.log). "
+            "ask.log/review.log are judge transcripts, often long.\n"
+            "  Older iterations: .autohelix-iteration/history.jsonl") in rendered
+    from autohelix.iteration import SEEDED_ITERATIONS
+
+    assert f"the last {SEEDED_ITERATIONS} iterations" in rendered

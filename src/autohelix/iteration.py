@@ -11,12 +11,16 @@ commands each get a new copy; accepting publishes exactly T.
 import filecmp
 import os
 import shutil
+import stat
 from contextlib import contextmanager
 from pathlib import Path
 
 from autohelix.formatting import SUMMARY_LIMIT, clean
+from autohelix.history import History
 from autohelix.launcher import write_launcher
-from autohelix.runs import RunPaths, RunState, critical_section, ensure_copies, group_members
+from autohelix.runs import (RunPaths, RunState, critical_section, ensure_copies, group_members, is_transcript,
+                            iteration_folder, remove_planted)
+from autohelix.safe_open import copy_dir, copy_file, open_dir
 from autohelix.workspace import ITERATION_DIR, Copy, Repo, Scope, diff_args, remove_copy
 
 
@@ -31,15 +35,70 @@ def _copy_notes(notes: Path, target: Path) -> None:
         shutil.copytree(version, target, dirs_exist_ok=True)
 
 
-def prepare_state(paths: RunPaths, copy, *, members=(), prompt: str | None = None) -> None:
+SEEDED_ITERATIONS = 5  # the last ones an agent copy gets `iterations/NNN/` of (plus the last accepted)
+
+
+def _last_records(records) -> dict[int, object]:
+    """{iteration: the last record written with that number}; `records` are history
+    records (`IterationResult`s), oldest first."""
+    return {record.iteration: record for record in records}
+
+
+def last_accepted(records) -> int | None:
+    """The latest accepted iteration (the baseline counts), judged by the last record
+    written with each number, or None."""
+    return max((n for n, record in _last_records(records).items() if record.accepted), default=None)
+
+
+def seeded_iterations(records) -> list[tuple[int, object]]:
+    """The iterations an agent copy gets `iterations/NNN/` of, in order, each with the
+    last record written with its number: the last SEEDED_ITERATIONS, and the last
+    accepted one (`last_accepted`) wherever it is. `records` are history records
+    (`IterationResult`s), oldest first."""
+    last = _last_records(records)
+    chosen = set(sorted(last)[-SEEDED_ITERATIONS:])
+    if (accepted := last_accepted(records)) is not None:
+        chosen.add(accepted)
+    return [(n, last[n]) for n in sorted(chosen)]
+
+
+def _seed_iteration(paths: RunPaths, record, target: Path) -> None:
+    """Copy what an agent may read of one iteration's folder into `target`: its
+    `record.json`, the folders of its failing gates (`gates/<k>/`), `observe/` and
+    `stop/`. Never its `agent.log`, `prompt.md`, `notes` link, passing gates' output or
+    `rejected.patch`. Every component is reached without following symlinks
+    (`safe_open`), the run folder's own included; only regular single-link files and
+    folders are copied."""
+    folder = list(paths.iteration_dir(record.iteration).relative_to(paths.project).parts)
+    fd = open_dir(paths.project, folder)
+    if fd is None:  # absent, or reached through a symlink
+        return
+    os.close(fd)
+    target.mkdir(parents=True)
+    copy_file(paths.project, [*folder, paths.record(0).name], target / paths.record(0).name)
+    failing = [k for k, gate in enumerate(record.gates, start=1)
+               if isinstance(gate, dict) and gate.get("passed") is False]
+    gates = paths.gate_dir(0, 1).parent.name
+    for k in failing:
+        (target / gates).mkdir(exist_ok=True)
+        copy_dir(paths.project, [*folder, gates, str(k)], target / gates / str(k))
+    if (target / gates).is_dir() and not any((target / gates).iterdir()):
+        (target / gates).rmdir()
+    for kind in (paths.observe_dir(0).name, paths.stop_dir(0, 1).parent.name):
+        copy_dir(paths.project, [*folder, kind], target / kind)
+
+
+def prepare_state(paths: RunPaths, copy, *, members=(), prompt: str | None = None,
+                  before: int | None = None) -> None:
     """Seed a copy's `.autohelix-iteration/` with agent-facing material.
 
     `notes/` round-trips (see `save_notes`); the rest is read-only reference:
     `prompt.md` (this iteration's prompt), `history.jsonl`, `hints.md`,
-    `observations/`, `logs/`, and for each other run of the group (`members`, as `group_members` returns them)
-    its `run.json`, `history.jsonl` and `notes/` under `runs/<id>/`. Copies are
-    anything with a `working_dir`. Project state remains reachable by absolute
-    path; this is not access isolation."""
+    `iterations/NNN/` for the iterations `seeded_iterations` picks (below `before`; as
+    `_seed_iteration` copies them), and for each other run of the group (`members`, as
+    `group_members` returns them) its `run.json`, `history.jsonl` and `notes/` under
+    `runs/<id>/`. Copies are anything with a `working_dir`. Project state remains
+    reachable by absolute path; this is not access isolation."""
     state = copy.working_dir / ITERATION_DIR
     state.mkdir(parents=True, exist_ok=True)
     if prompt is not None:
@@ -51,10 +110,10 @@ def prepare_state(paths: RunPaths, copy, *, members=(), prompt: str | None = Non
             shutil.copy2(source, state / source.name)
     _copy_notes(paths.notes, state / "notes")
     (state / "notes").mkdir(exist_ok=True)
-    for name in ("observations", "logs"):
-        source = paths.run_dir / name
-        if source.is_dir():
-            shutil.copytree(source, state / name, dirs_exist_ok=True)
+    if paths.run_id:
+        records = [r for r in History(paths.project, paths.run_id).load() if before is None or r.iteration < before]
+        for n, record in seeded_iterations(records):
+            _seed_iteration(paths, record, state / "iterations" / paths.iteration_name(n))
     for member, _ in members:  # another run's state: deleted or unreadable must not stop this run
         target = state / "runs" / member.run_id
         try:
@@ -76,11 +135,20 @@ def _unused(directory: Path, name: str) -> Path:
     return path
 
 
+def _link(target: str, link: Path) -> None:
+    """Point `link` at `target` (relative) in one rename: readers see the old or the new."""
+    temporary = link.with_name(f".{link.name}.{os.getpid()}.link")
+    temporary.unlink(missing_ok=True)
+    os.symlink(target, temporary)
+    os.replace(temporary, link)
+
+
 def save_notes(paths: RunPaths, copy, iteration: int) -> None:
-    """Save a copy's `notes/` as a new version, `runs/<id>/notes.<iteration>/`, then
-    point the `runs/<id>/notes` link at it in one rename. A note the agent deleted
-    stays deleted, and readers (other runs of the group) never see a half-saved mix.
-    Every version is kept. Symlinks the agent left in its notes are not saved."""
+    """Save a copy's `notes/` as a new version, `.internal/notes/<iteration>/` (`7-2` for
+    a second save of 7), then point the `runs/<id>/notes` link at it in one rename, and
+    the iteration's `iterations/NNN/notes` link too. A note the agent deleted stays
+    deleted, and readers (other runs of the group) never see a half-saved mix. Every
+    version is kept. Symlinks the agent left in its notes are not saved."""
     state = copy.working_dir / ITERATION_DIR
     if state.is_symlink() or not state.is_dir():  # replaced by the agent: nothing trustworthy to save
         return
@@ -91,7 +159,11 @@ def save_notes(paths: RunPaths, copy, iteration: int) -> None:
         previous = paths.notes.resolve(strict=True) if paths.notes.is_symlink() else None
     except OSError:
         previous = None
-    version = _unused(paths.run_dir, f"notes.{iteration}")
+    versions = paths.notes_versions
+    for planted in (paths.internal, versions):  # outermost first: planted links are never written through
+        remove_planted(planted)
+    versions.mkdir(parents=True, exist_ok=True)
+    version = _unused(versions, str(iteration))
 
     def link_or_copy(src, dst):
         # Files unchanged since the previous version are hard links to it, so keeping
@@ -112,11 +184,10 @@ def save_notes(paths: RunPaths, copy, iteration: int) -> None:
         version.mkdir()
     link = paths.notes
     if link.is_dir() and not link.is_symlink():  # saved before notes had versions
-        link.rename(_unused(paths.run_dir, "notes.old"))
-    temporary = paths.run_dir / f"notes.{os.getpid()}.link"
-    temporary.unlink(missing_ok=True)
-    os.symlink(version.name, temporary)
-    os.replace(temporary, link)
+        link.rename(_unused(versions, "old"))
+    _link(os.path.relpath(version, link.parent), link)
+    folder = iteration_folder(paths, iteration)
+    _link(os.path.relpath(version, folder), paths.iteration_notes(iteration))
 
 
 REJECTED_PATCH_LIMIT = 2 * 1024 * 1024  # bytes; larger rejected changes are named, not written
@@ -158,7 +229,7 @@ class IterationWorkspace:
     def agent_copy(self) -> Copy:
         """A's files with agent-facing material seeded under `.autohelix-iteration/`."""
         self.agent = self._copy("agent", self.base, self.base)
-        prepare_state(self._run.paths, self.agent, members=self.members)
+        prepare_state(self._run.paths, self.agent, members=self.members, before=self.iteration)
         self._write_rejected_patch()
         return self.agent
 
@@ -179,7 +250,7 @@ class IterationWorkspace:
                        f"not the current tip {self.base[:12]}")
             return
         try:
-            diff = self.repo.git(*diff_args(base, last.tree)).stdout
+            diff = self._diff(base, last.tree)
         except RuntimeError as e:  # e.g. the tree was removed meanwhile
             self._warn(f"Could not write rejected.patch for iteration {last.iteration}: {e}")
             return
@@ -187,6 +258,27 @@ class IterationWorkspace:
             self.rejected_diff = f"git diff {base} {last.tree}"
         elif diff:
             (self.agent.working_dir / ITERATION_DIR / "rejected.patch").write_bytes(diff)
+
+    def _diff(self, base: str, tree: str) -> bytes:
+        """A rejected change as `rejected.patch` holds it (`workspace.diff_args`)."""
+        return self.repo.git(*diff_args(base, tree)).stdout
+
+    def store_rejected_patch(self) -> None:
+        """Keep this rejected attempt's change (`base..tree`, the bytes the next agent's
+        copy gets as `rejected.patch`) as `iterations/NNN/rejected.patch`, for an attempt
+        whose tree `keep_rejected` kept. None for an empty change or above
+        REJECTED_PATCH_LIMIT bytes (the record's `rejected_ref` has it). Anything at the
+        path (planted, or left by an earlier write) is removed first, never written
+        through."""
+        diff = self._diff(self.base, self.tree)
+        if not diff or len(diff) > REJECTED_PATCH_LIMIT:
+            return
+        iteration_folder(self._run.paths, self.iteration)
+        target = self._run.paths.rejected_patch(self.iteration)
+        if not remove_planted(target) and target.is_dir():
+            shutil.rmtree(target)
+        with open(target, "xb") as stream:
+            stream.write(diff)
 
     def keep_rejected(self) -> str | None:
         """Keep a rejected attempt's frozen tree as `refs/autohelix-rejected/<id>/<n>`
@@ -246,24 +338,28 @@ class IterationWorkspace:
         folder, removed when the command ends (also on an error or interrupt): an empty
         `scratch/`, `bin/` holding the `autohelix` launcher (`launcher.py`; put it first
         on the command's PATH), plus for each named source a copy of that folder under
-        the same name (an empty folder if the source doesn't exist; no entry for None).
-        Yields {"scratch": path, "bin": path, <name>: path, ...}. A copy keeps what the command reads from
+        the same name (an empty folder if the source doesn't exist or is reached through a
+        symlink; no entry for None).
+        Yields {"scratch": path, "logs": path, "bin": path, <name>: path, ...}. A copy keeps what the command reads from
         run state fixed, whatever the command or the agent writes meanwhile."""
         self._calls += 1
-        folder = ensure_copies(self._run.copies_root) / f"iter-{self.iteration}-call-{self._calls}"
+        folder = ensure_copies(self._run.copies_root) / RunPaths.call_folder_name(self.iteration, self._calls)
         if os.path.lexists(folder):  # left by a crashed process
             remove_copy(folder)
         folder.mkdir(mode=0o700)
         self._call_folders.append(folder)
         try:
-            paths = {"scratch": folder / "scratch"}
+            paths = {"scratch": folder / "scratch", "logs": folder / "logs"}
             paths["scratch"].mkdir()
+            paths["logs"].mkdir()
             paths["bin"] = write_launcher(folder / "bin")  # `autohelix`, immune to the command's env
             for name, source in sources.items():
                 if source is None:
                     continue
                 target = paths[name] = folder / name
-                if source.is_dir() and not source.is_symlink():
+                # Only a real folder, reached without symlinks (one planted in run state
+                # could lead anywhere): else an empty one.
+                if source.is_dir() and os.path.realpath(source) == os.path.abspath(source):
                     shutil.copytree(source, target, symlinks=True)
                 else:
                     target.mkdir()
@@ -280,6 +376,33 @@ class IterationWorkspace:
             remove_copy(stage)
         stage.mkdir(mode=0o700)
         return stage
+
+    @staticmethod
+    def move_transcripts(folders: dict[str, Path], stage: Path) -> dict[str, str]:
+        """Move the judge and review transcripts the command's `ask`/`review` calls wrote
+        to its `logs/` folder into `stage` (after the command ended): only regular,
+        single-link files named like one (`runs.is_transcript`) directly in that folder,
+        never symlinks or anything else the command left there. One already in `stage`
+        (a capture with that name) is replaced. Returns {the path a call recorded
+        (resolved): the name in `stage`}."""
+        logs = folders["logs"]
+        moved = {}
+        if logs.is_symlink() or not logs.is_dir():
+            return moved
+        recorded = os.path.realpath(logs)
+        for entry in os.scandir(logs):
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if not is_transcript(entry.name) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                continue
+            target = stage / entry.name
+            if os.path.lexists(target):
+                remove_copy(target)
+            os.rename(entry.path, target)
+            moved[os.path.join(recorded, entry.name)] = entry.name
+        return moved
 
     def _remove_call_folder(self, folder: Path) -> None:
         try:

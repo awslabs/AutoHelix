@@ -98,7 +98,7 @@ def test_lock_is_atomic_advisory_status_and_delete_keep_lock_inode(project):
         assert result.exit_code == 1 and "is running" in result.output
     harness.close()
     inode = paths.lock.stat().st_ino
-    paths.runtime.mkdir(parents=True, exist_ok=True)
+    paths.status.parent.mkdir(parents=True, exist_ok=True)
     paths.status.write_text(json.dumps({"state": "running", "pid": os.getpid()}))
     resumed = Harness(project)
     assert resumed.paths.run_id == paths.run_id
@@ -134,12 +134,21 @@ def test_process_death_releases_run_lock(project):
     (b'{"iteration":1,"accepted":true}', True),
     (b'{"iteration":1,"accepted":', False),
 ])
-def test_history_tail_repair_preserves_valid_unterminated_record(tmp_path, tail, valid):
-    path = tmp_path / "history.jsonl"
+def test_history_tail_repair_preserves_valid_unterminated_record(run_paths, tail, valid):
+    path = run_paths.history
     first = b'{"iteration":0,"accepted":true}\n'
     path.write_bytes(first + tail)
-    repair_history(path)
-    assert path.read_bytes() == first + (tail + b"\n" if valid else b"")
+    stale = run_paths.record(1)  # written by an earlier attempt's record, say: not this one's
+    stale.parent.mkdir(parents=True)
+    stale.write_text("{}")
+    repair_history(run_paths)
+    lines = [json.loads(line) for line in path.read_bytes().splitlines()]
+    assert path.read_bytes().endswith(b"\n")
+    assert lines == [{"iteration": 0, "accepted": True}] + ([{"iteration": 1, "accepted": True}] if valid else [])
+    if valid:  # complete: its record.json is the record
+        assert json.loads(run_paths.record(1).read_text()) == {"iteration": 1, "accepted": True}
+    else:  # torn: its folder is incomplete, without a record.json
+        assert not run_paths.record(1).exists() and run_paths.iteration_dir(1).is_dir()
 
 
 @pytest.mark.parametrize("content", [
@@ -147,11 +156,11 @@ def test_history_tail_repair_preserves_valid_unterminated_record(tmp_path, tail,
     b'{"iteration":0,"accepted":true}\nbroken\n',
     b'{"iteration":0,"accepted":true}\n{"not":"a record"}',
 ])
-def test_history_corruption_is_not_repaired(tmp_path, content):
-    path = tmp_path / "history.jsonl"
+def test_history_corruption_is_not_repaired(run_paths, content):
+    path = run_paths.history
     path.write_bytes(content)
     with pytest.raises(RuntimeError, match="history record"):
-        repair_history(path)
+        repair_history(run_paths)
     assert path.read_bytes() == content
 
 
@@ -179,6 +188,9 @@ def test_recovery_after_ref_publication_and_torn_append(project, monkeypatch):
     assert recovered.accepted and recovered.iteration == 1
     assert recovered.reason == "recovered" and recovered.commit == tip
     assert recovered.cost.incomplete
+    # The recovered record is the iteration's record.json too, as in history.jsonl.
+    last = json.loads(paths.history.read_text().splitlines()[-1])
+    assert json.loads(paths.record(1).read_text()) == last and last["reason"] == "recovered"
     resumed.close()
 
 
@@ -727,7 +739,7 @@ def test_refused_first_start_creates_no_identity(project, problem):
     with pytest.raises(RuntimeError, match="No files found|Preflight checks failed"):
         Harness(project)
     root = RunPaths(project).root
-    assert not (root / "current").exists()
+    assert not RunPaths(project).current.exists()
     assert not list((root / "runs").glob("*/run.json"))
     assert not git(project, "for-each-ref", "--format=%(refname)", "refs/autohelix/").stdout.strip()
 

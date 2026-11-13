@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run summary: one agent call that writes the selected run's output/report.md.
+"""Run summary: one agent call that writes the selected run's report.md.
 
 The harness calls `write_report` when a run finishes; `autohelix report` calls it on demand.
 The agent writes only the narrative; the viewer shows the facts around it.
@@ -30,17 +30,14 @@ TIMEOUT_SECONDS = 15 * 60  # cap: agent.timeout can be hours for ML runs
 WRITE_TO = "Write the summary in Markdown to "
 
 
-def output_dir(project: Path, run_id: str | None = None) -> Path:
-    return RunPaths(project, run_id).output
-
-
 def read_report_info(project: Path, run_id: str | None = None) -> dict | None:
     """What the saved report covers and what writing it took:
     {"last_iteration": N, "written_at": unix time, "seconds": s, "cost_usd": usd or None}."""
-    if not RunPaths(project, run_id).run_id:
+    paths = RunPaths(project, run_id)
+    if not paths.run_id:
         return None
     try:
-        return json.loads((output_dir(project, run_id) / "report.json").read_text())
+        return json.loads(paths.report_info.read_text())
     except (OSError, ValueError):
         return None
 
@@ -73,11 +70,22 @@ State paths are relative to {paths.run_dir}; candidate code is in the current wo
 - history.jsonl: one record per iteration (accepted, metrics, rejection reason and \
 failure output, commit, cost and time).
 - notes/: notes the agent wrote during the run (iter-N.md, plus shared notes), as of the last \
-iteration; notes.N/ is the version saved with iteration N.
-- observations/iter-N/<name>/: each observe entry's stdout.txt (stderr.txt when not empty) and \
-captured files; a review entry's stdout is its review text.
-- logs/iter-N/call-*/agent.log: full agent transcripts. They are large; search them rather \
-than reading them whole.
+iteration. iterations/NNN/notes/ is the version saved with iteration N (NNN: three digits, 001); \
+every version is in .internal/notes/<N>/.
+- iterations/NNN/: one folder per iteration (000 is the baseline). Parts that don't apply are absent:
+  - record.json: iteration N's record, as in history.jsonl.
+  - prompt.md and agent.log: the agent's prompt and full transcript (not at the baseline). \
+Transcripts are large; search them rather than reading them whole.
+  - gates/<k>/ and stop/<k>/: the output of the entry at 1-based position k in gates: (stop:), \
+metric gates included in the count: command.txt, stdout.txt and stderr.txt (long output keeps its \
+head and tail), an ask's ask.log. Metric gates and gates that never ran have no folder.
+  - observe/<name>/: each observe entry's stdout.txt (stderr.txt when not empty) and captured \
+files; a review entry's stdout is its review text, review.log its transcript.
+  - rejected.patch: a rejected attempt's change (not when over 2 MiB; the record's rejected_ref \
+keeps the tree).
+- .internal/attempts/NNN-<k>/: earlier attempts at iteration N that were superseded (a killed \
+iteration, a baseline retry), laid out like iterations/NNN/.
+- logs/: the harness's own logs: run-<time>.log per run or resume, hook_audit.log, report.log.
 {git}
 - {config_path}: the run's config.
 
@@ -103,9 +111,8 @@ def write_report(config: Config, project: Path, console, config_path: Path, *, r
         with RunLock(paths.lock):
             return write_report(config, project, console, config_path,
                                 run_id=paths.run_id, _owned=True)
-    out = paths.output
-    out.mkdir(parents=True, exist_ok=True)
-    draft = out / "report.draft.md"
+    draft = paths.report_draft
+    draft.parent.mkdir(parents=True, exist_ok=True)
     draft.unlink(missing_ok=True)
     last = History(project, paths.run_id).get_last_iteration()
 
@@ -160,11 +167,11 @@ def write_report(config: Config, project: Path, console, config_path: Path, *, r
         console.print("[yellow]The agent finished without writing a summary; "
                       "the previous report (if any) is unchanged.[/yellow]")
         return False
-    draft.replace(out / "report.md")
+    draft.replace(paths.report)
     info = {"last_iteration": last, "written_at": time.time(), "seconds": seconds,
             "cost_usd": (result.usage or {}).get("cost_usd")}
-    (out / "report.json").write_text(json.dumps(info))
-    report = out / "report.md"
+    paths.report_info.write_text(json.dumps(info))
+    report = paths.report
     try:
         report = report.relative_to(Path.cwd())
     except ValueError:

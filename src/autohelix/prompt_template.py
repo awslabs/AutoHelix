@@ -113,15 +113,24 @@ def build_prompt_variables(
       `discarded_frozen`: those of them that are frozen (the others aren't editable).
     - `last`: the latest iteration (the baseline before iteration 1), or None:
       `{"iteration", "accepted", "reason", "summary", "failure_output", "gates": [{"text",
-      "kind", "status": "passed"|"failed"|"pending"}], "observe": [{"name", "ok",
-      "error", "missing" (declared metrics it ran without reporting), "path"}]}`; `path` is its folder in the copy
-      (`.autohelix-iteration/observations/iter-K/<name>/`).
+      "kind", "status": "passed"|"failed"|"pending", "path"}], "observe": [{"name", "ok",
+      "error", "missing" (declared metrics it ran without reporting), "path"}]}`; `path` is
+      the item's output folder in the copy if it has one there, else "": a failed gate's
+      `.autohelix-iteration/iterations/KKK/gates/<k>/` (passing gates' output isn't in the
+      copy), an observe entry's `.autohelix-iteration/iterations/KKK/observe/<name>/`.
+    - `last_accepted`: the latest accepted iteration (the baseline counts), or None:
+      `{"iteration", "path"}`; `path` is its folder in the copy
+      (`.autohelix-iteration/iterations/KKK/`: its record and observations describe the
+      code in the copy), or "".
+    - `recent_iterations`: how many of the latest iterations the copy has folders of
+      (`iteration.SEEDED_ITERATIONS`; the last accepted one is there too).
     - `time_limit`: `agent.timeout` as a compact duration ("15m"), or "".
     - `group`: the run's group, or ""; `group_runs`: one line per other run of the
       group (`describe_member`; `members` as `runs.group_members` returns them).
     """
     from autohelix.config import MetricGate
     from autohelix.iteration_time import format_duration
+    from autohelix.iteration import SEEDED_ITERATIONS
     from autohelix.workspace import ITERATION_DIR
 
     state = Path(worktree_dir) / ITERATION_DIR
@@ -147,7 +156,9 @@ def build_prompt_variables(
         "rejected_diff": rejected_diff,
         "discarded": [clean(path) for path in latest.discarded] if latest else [],
         "discarded_frozen": [clean(path) for path in latest.discarded_frozen] if latest else [],
-        "last": _describe_last(latest) if latest else None,
+        "last": _describe_last(latest, state) if latest else None,
+        "last_accepted": _describe_accepted(history, iteration, state),
+        "recent_iterations": SEEDED_ITERATIONS,
         "time_limit": format_duration(config.agent.timeout) if config.agent.timeout is not None else "",
         "group": group or "",
         "group_runs": [describe_member(paths, data) for paths, data in members],
@@ -167,32 +178,62 @@ def _describe_entry(entry) -> dict[str, Any]:
     return {"name": entry.name, "kind": "command", "command": entry.command, "metric_labels": labels}
 
 
-def _describe_last(record) -> dict[str, Any]:
-    """The latest iteration's outcome: what the next agent is told about it."""
+def _in_copy(state: Path, *parts: str) -> str:
+    """`.autohelix-iteration/<parts>/` if that folder is in the copy (`state` is its
+    `.autohelix-iteration/`), else ""."""
     from autohelix.workspace import ITERATION_DIR
 
+    folder = state.joinpath(*parts)
+    return clean(f"{ITERATION_DIR}/{'/'.join(parts)}/") if folder.is_dir() and not folder.is_symlink() else ""
+
+
+def _describe_last(record, state: Path) -> dict[str, Any]:
+    """The latest iteration's outcome: what the next agent is told about it."""
+    from autohelix.runs import RunPaths
+
     status = {True: "passed", False: "failed", None: "pending"}
+    folder = ("iterations", RunPaths.iteration_name(record.iteration))
+    gates = []
+    for k, gate in enumerate(record.gates, start=1):
+        failed = gate.get("passed") is False
+        gates.append({"text": clean(gate.get("text")), "kind": gate.get("kind", "command"),
+                      "status": status.get(gate.get("passed"), "pending"),
+                      "path": _in_copy(state, *folder, "gates", str(k)) if failed else ""})
+    observe = []
+    for item in record.observe:
+        name = item.get("name")
+        valid = isinstance(name, str) and name and not name.startswith(".") and "/" not in name
+        observe.append({"name": clean(name), "ok": bool(item.get("ok")), "error": clean(item.get("error")),
+                        "missing": [clean(metric) for metric in item.get("metric_errors") or {}],
+                        "path": _in_copy(state, *folder, "observe", name) if valid else ""})
     return {
         "iteration": record.iteration,
         "accepted": record.accepted,
         "reason": clean(record.reason),
         "summary": clean(record.summary, SUMMARY_LIMIT),
         "failure_output": clean_block(record.failure_output).strip(),
-        "gates": [{"text": clean(gate.get("text")), "kind": gate.get("kind", "command"),
-                   "status": status.get(gate.get("passed"), "pending")} for gate in record.gates],
-        "observe": [{"name": clean(item.get("name")), "ok": bool(item.get("ok")), "error": clean(item.get("error")),
-                     "missing": [clean(name) for name in item.get("metric_errors") or {}],
-                     "path": f"{ITERATION_DIR}/observations/iter-{record.iteration}/{clean(item.get('name'))}/"}
-                    for item in record.observe],
+        "gates": gates,
+        "observe": observe,
     }
+
+
+def _describe_accepted(history, iteration: int, state: Path) -> dict[str, Any] | None:
+    """The latest accepted iteration below `iteration`: its number and folder in the copy."""
+    from autohelix.iteration import last_accepted
+    from autohelix.runs import RunPaths
+
+    n = last_accepted([record for record in history.load() if record.iteration < iteration])
+    if n is None:
+        return None
+    return {"iteration": n, "path": _in_copy(state, "iterations", RunPaths.iteration_name(n))}
 
 
 # The documented variables (`build_prompt_variables`); a custom template naming others
 # gets a warning at run start (`unknown_variables`).
 VARIABLES = frozenset({
     "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable", "frozen",
-    "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "time_limit", "group",
-    "group_runs",
+    "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted",
+    "recent_iterations", "time_limit", "group", "group_runs",
 })
 
 
