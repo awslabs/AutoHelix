@@ -9,14 +9,14 @@ import autohelix.runs as runs
 from autohelix.harness import Harness
 from autohelix.runs import (COPIES_ENV, RunPaths, claim_copies, delete, copies_base, ensure_copies,
                             git, project_key, remove_copies)
-from tests.test_runs import configure, project  # noqa: F401 - fixture
+from tests.test_runs import configure
 
 
 def mode(path):
     return stat.S_IMODE(path.lstat().st_mode)
 
 
-def test_copies_live_outside_the_project_and_go_at_segment_end(project, copies_dir, tmp_path):  # noqa: F811
+def test_copies_live_outside_the_project_and_go_at_segment_end(project, copies_dir, tmp_path):
     seen = tmp_path / "seen"
     configure(project, gates=[f'pwd -P >> {seen}; echo "$GIT_CEILING_DIRECTORIES" >> {seen}'])
     harness = Harness(project, land_mode="manual")
@@ -32,7 +32,7 @@ def test_copies_live_outside_the_project_and_go_at_segment_end(project, copies_d
     assert [p.name for p in root.parent.iterdir()] == ["project.json"]  # the run's folder is gone
 
 
-def test_a_copy_without_git_finds_no_enclosing_repository(project, monkeypatch, tmp_path):  # noqa: F811
+def test_a_copy_without_git_finds_no_enclosing_repository(project, monkeypatch, tmp_path):
     home = tmp_path / "home"  # a home directory can itself be a git repository
     git(home.parent, "init", "-q", str(home))
     monkeypatch.setenv(COPIES_ENV, str(home / ".cache" / "autohelix" / "copies"))
@@ -42,7 +42,7 @@ def test_a_copy_without_git_finds_no_enclosing_repository(project, monkeypatch, 
     assert harness.history.load()[-1].accepted
 
 
-def test_observers_use_the_recorded_base(project, monkeypatch, tmp_path):  # noqa: F811
+def test_observers_use_the_recorded_base(project, monkeypatch, tmp_path):
     harness = Harness(project, land_mode="manual")
     root = ensure_copies(harness.run_state.copies_root)
     (root / "iter-1-agent").mkdir()
@@ -54,7 +54,7 @@ def test_observers_use_the_recorded_base(project, monkeypatch, tmp_path):  # noq
     assert not root.exists()
 
 
-def test_a_changed_base_cleans_the_old_one(project, monkeypatch, tmp_path):  # noqa: F811
+def test_a_changed_base_cleans_the_old_one(project, monkeypatch, tmp_path):
     first = Harness(project, land_mode="manual")
     old = ensure_copies(first.run_state.copies_root)
     (old / "iter-4-agent").mkdir()
@@ -163,7 +163,7 @@ def test_remove_copies_keeps_the_project_folder_of_other_runs(run_paths):
     assert not root.exists() and other.is_dir()
 
 
-def test_delete_finishes_when_copies_cannot_be_removed(project, monkeypatch):  # noqa: F811
+def test_delete_finishes_when_copies_cannot_be_removed(project, monkeypatch):
     harness = Harness(project, land_mode="manual")
     harness.run(max_iterations=1, report=False)
     root = ensure_copies(harness.paths.copies)
@@ -180,7 +180,7 @@ def test_delete_finishes_when_copies_cannot_be_removed(project, monkeypatch):  #
     assert git(project, "rev-parse", "--verify", harness.paths.ref, check=False).returncode != 0
 
 
-def test_delete_removes_copies(project):  # noqa: F811
+def test_delete_removes_copies(project):
     harness = Harness(project, land_mode="manual")
     harness.run(max_iterations=1, report=False)
     root = ensure_copies(harness.paths.copies)

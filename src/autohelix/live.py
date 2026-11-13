@@ -160,13 +160,13 @@ def fit(text: str, height: int) -> str:
     return "\n".join(lines[:head] + [more] + kept)
 
 
-def _read_run(runs: ProjectRuns, project: Path, run_id: str | None, config_file: Path | None) -> dict | str | None:
+def _read_run(runs: ProjectRuns, project: Path, run_id: str | None) -> dict | str | None:
     """The run's `view --json` data, an error to show, or None while there is no run."""
     try:
         selected = RunPaths(project, run_id).run_id
         if not selected or not runs.exists(selected):
             return None
-        return runs.run(selected, config_file)
+        return runs.run(selected)
     except Exception as exc:  # noqa: BLE001 - shown, and retried on the next read
         return f"Cannot read the run: {exc}"
 
@@ -186,7 +186,7 @@ def view_screen(data: dict | str | None, log: LogFollower, status: dict | None, 
 
 
 def view(project: Path, backend: str | None = None, console: Console | None = None, *,
-         run_id: str | None = None, config_file: Path | None = None) -> None:
+         run_id: str | None = None) -> None:
     """Follow a run (the current one unless `run_id`) until interrupted, across its segments."""
     console = console or Console()
     runs = ProjectRuns(project)
@@ -197,7 +197,7 @@ def view(project: Path, backend: str | None = None, console: Console | None = No
             status = read_run_status(project, run_id)
             log.poll(status)
             if read_at is None or status != seen or time.monotonic() - read_at >= TABLE_SECONDS:
-                data, read_at, seen = _read_run(runs, project, run_id, config_file), time.monotonic(), status
+                data, read_at, seen = _read_run(runs, project, run_id), time.monotonic(), status
             live.update(view_screen(data, log, status, console.size.height))
             time.sleep(POLL_SECONDS)
 

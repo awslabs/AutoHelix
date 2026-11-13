@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from autohelix.agents import AgentConfig, AgentEvent, create_agent
+from autohelix.config import ConfigNotFound, find_config
 from autohelix.workspace import Fingerprint, git_env
 from autohelix.runs import allocate_call
 from autohelix.usage_log import append_usage, new_call_id
@@ -103,16 +104,22 @@ def judge_config(base: AgentConfig, *, agent: str | None = None, model: str | No
 
 
 def load_base_config(cwd: Path) -> AgentConfig:
-    """`agent:` from $AUTOHELIX_CONFIG, else ./autohelix.yaml, else defaults.
+    """`agent:` from $AUTOHELIX_CONFIG, else the config a bare `run` here would use
+    (`find_config`), else defaults.
 
     A set but unreadable $AUTOHELIX_CONFIG, or a malformed `agent:`, is an error
-    rather than a silent fallback to other settings."""
+    rather than a silent fallback to other settings. No config, or several, is
+    not: by hand, the defaults serve."""
     import yaml
 
     explicit = os.environ.get(CONFIG_ENV)
-    path = Path(explicit) if explicit else cwd / "autohelix.yaml"
-    if not explicit and not path.exists():
-        return AgentConfig()
+    if explicit:
+        path = Path(explicit)
+    else:
+        try:
+            path = find_config(cwd)
+        except ConfigNotFound:
+            return AgentConfig()
     try:
         data = yaml.safe_load(path.read_text()) or {}
     except (OSError, yaml.YAMLError) as e:

@@ -69,7 +69,7 @@ class ConfigIssue:
 DEFAULT_CHECK_TIMEOUT = 1800
 
 KNOWN_TOP_LEVEL_KEYS = {
-    "goal", "agent", "prompt_template", "scope", "gates", "observe", "stop", "budget", "land", "report", "name",
+    "goal", "agent", "prompt_template", "scope", "gates", "observe", "stop", "budget", "land", "report",
 }
 
 # Keys of the first config format: each is an error naming its replacement.
@@ -81,6 +81,7 @@ RENAMED_TOP_LEVEL_KEYS = {
     "acceptance": ("`acceptance:` is now a `gates:` entry: `- metric: NAME` with `regress: N%` "
                    "(was max_regression_pct) or `improve: N%`"),
     "reviewer": "`reviewer:` is now an `observe:` entry with `name:` and `review: <prompt>`",
+    "name": "`name:` is gone: runs are named after the config file; use autohelix/<name>.yaml",
 }
 
 ENTRY_AGENT_KEYS = ("backend", "model", "reasoning_effort", "timeout", "command")
@@ -158,7 +159,6 @@ class Config:
     max_cost_usd: float | None = None
     max_time_seconds: int | None = None
     report: bool = True  # write a summary (output/report.md) when a run finishes
-    name: str | None = None
     land: str | None = None  # the landing mode of new runs; unset: auto (manual with --group)
     # A Jinja file replacing the built-in agent prompt, resolved against the config file's folder.
     prompt_template: Path | None = None
@@ -208,9 +208,6 @@ class Config:
         for message in self._parse_errors:
             error(message)
 
-        if self.name is not None and (not isinstance(self.name, str)
-                or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", self.name)):
-            error("name must use lowercase letters, digits or hyphens, with at most 32 characters")
         if self.land is not None and self.land not in ("auto", "manual"):
             error("land must be auto or manual")
 
@@ -226,7 +223,7 @@ class Config:
         elif "describe what you want" in self.goal.lower():
             error(
                 "'goal' is still the default placeholder - "
-                "edit autohelix.yaml with your optimization goal"
+                "replace it with your optimization goal"
             )
         elif len(self.goal.strip().split("\n", 1)[0].strip()) > TITLE_LENGTH:
             warning(f"The goal's first line is its title and is shown cut to \"{self.title}\"; "
@@ -344,7 +341,6 @@ class Config:
             max_cost_usd=max_cost_usd,
             max_time_seconds=max_time_seconds,
             report=data.get("report") is not False,
-            name=data.get("name"),
             land=data.get("land"),
             _parse_errors=errors,
         )
@@ -645,26 +641,98 @@ def _parse_stop(value: Any, errors: list[str]) -> list[CommandSpec]:
     return commands
 
 
-def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Config, dict[str, Any]]:
-    """Load configuration from project's autohelix.yaml.
+CONFIG_FILE = "autohelix.yaml"
+CONFIG_DIR = "autohelix"
 
-    Args:
-        project_path: The project directory.
-        config_file: Optional path to a config file. Defaults to autohelix.yaml
-                     in project_path.
+
+class ConfigError(ValueError):
+    """A config file that can't be read as a config (not YAML, not a mapping)."""
+
+
+class ConfigNotFound(FileNotFoundError):
+    """No config by that name, or no single config for a bare command. The message
+    states what was found; `configs` lists the project's configs (project-relative)
+    so each caller can add its own advice."""
+
+    def __init__(self, message: str, configs: list[str]):
+        super().__init__(message)
+        self.configs = configs
+
+
+def _files(project: Path, pattern: str) -> list[str]:
+    """Files matching `pattern` directly in autohelix/, project-relative; dotfiles
+    (editor backups, lock files) are not configs."""
+    folder = project / CONFIG_DIR
+    if not folder.is_dir():
+        return []
+    return sorted(f"{CONFIG_DIR}/{p.name}" for p in folder.glob(pattern)
+                  if p.is_file() and not p.name.startswith("."))
+
+
+def project_configs(project: Path) -> list[str]:
+    """The project's configs, project-relative: autohelix.yaml, then the `.yaml` files
+    directly in autohelix/ (its subfolders hold prompt templates and helper scripts)."""
+    return ([CONFIG_FILE] if (project / CONFIG_FILE).is_file() else []) + _files(project, "*.yaml")
+
+
+def run_command(config_path: str) -> str:
+    """The command that starts runs of a config (project-relative, as run.json has it)."""
+    path = PurePosixPath(config_path)
+    if path.parent == PurePosixPath(CONFIG_DIR) and path.suffix == ".yaml":
+        return f"autohelix run {path.stem}"
+    return "autohelix run"
+
+
+def find_config(project: Path, name: str | None = None) -> Path:
+    """The config `name` names (autohelix/<name>.yaml), else autohelix.yaml, else the
+    only config in autohelix/. Raises ConfigNotFound otherwise, and ValueError for a
+    name that is a path."""
+    configs = project_configs(project)
+    listed = ", ".join(configs)
+    if name is not None:
+        if not re.fullmatch(r"[\w-][\w.-]*", name) or name.endswith((".yaml", ".yml")):
+            raise ValueError(f"{name!r} is not a config name: name a config in {CONFIG_DIR}/ "
+                             f"without .yaml (`perf` for {CONFIG_DIR}/perf.yaml); a bare `autohelix run` "
+                             f"reads {CONFIG_FILE}.")
+        relative = f"{CONFIG_DIR}/{name}.yaml"
+        if relative in configs:
+            return project / relative
+        misnamed = f"{CONFIG_DIR}/{name}.yml"
+        found = (f" (found {misnamed}; configs end in .yaml)" if (project / misnamed).is_file() else "")
+        raise ConfigNotFound(f"No config {relative}{found}." + (f" Configs: {listed}." if configs else ""), configs)
+    if (project / CONFIG_FILE).is_file():
+        return project / CONFIG_FILE
+    if len(configs) == 1:
+        return project / configs[0]
+    if configs:
+        raise ConfigNotFound(f"Several configs: {listed}.", configs)
+    misnamed = (["autohelix.yml"] if (project / "autohelix.yml").is_file() else []) + _files(project, "*.yml")
+    found = f" (found {', '.join(misnamed)}; configs end in .yaml)" if misnamed else ""
+    raise ConfigNotFound(f"No config found in {project}{found}.", configs)
+
+
+def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Config, dict[str, Any]]:
+    """Load configuration from `config_file`, else the project's config (`find_config`).
 
     Returns:
         A tuple of (Config, raw_data) where raw_data is the parsed YAML dict.
         The raw_data is used for unknown-key validation.
     """
-    config_path = Path(config_file) if config_file else project_path / "autohelix.yaml"
+    config_path = Path(config_file) if config_file else find_config(project_path)
     if not config_path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
 
+    try:
+        shown = config_path.resolve().relative_to(Path(project_path).resolve())
+    except ValueError:
+        shown = config_path
     with open(config_path) as f:
-        data = yaml.safe_load(f) or {}
+        try:
+            data = yaml.safe_load(f) or {}
+        except yaml.YAMLError as e:
+            raise ConfigError(f"Cannot parse {shown}: {e}") from None
     if not isinstance(data, dict):
-        raise ValueError(f"{config_path} must be a YAML mapping")
+        raise ConfigError(f"{shown} must be a YAML mapping")
 
     config = Config.from_dict(data)
     template = data.get("prompt_template")

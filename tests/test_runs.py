@@ -21,26 +21,6 @@ from autohelix.runs import RunLock, RunPaths, archive, delete, git, land, repair
 from click.testing import CliRunner
 
 
-@pytest.fixture
-def project(tmp_path):
-    project = tmp_path / "project"
-    project.mkdir()
-    git(project, "init", "-q")
-    git(project, "config", "user.email", "test@example.com")
-    git(project, "config", "user.name", "Test")
-    (project / "code.py").write_text("print('baseline')\n")
-    (project / "autohelix.yaml").write_text(yaml.safe_dump({
-        "goal": "Make a checked change", "report": False,
-        "agent": {"backend": "mock", "settings": {
-            "change_file": "code.py", "change_content": "# iteration {iteration}", "cost_usd": 0.1,
-        }},
-    }))
-    git(project, "add", ".")
-    git(project, "commit", "-qm", "baseline")
-    (project / ".autohelix").mkdir()
-    return project
-
-
 def configure(project, **values):
     path = project / "autohelix.yaml"
     data = yaml.safe_load(path.read_text())
@@ -539,7 +519,7 @@ def test_report_owns_run_and_restores_ref_before_removal(project, monkeypatch):
 
     harness = Harness(project, land_mode="manual")
     with pytest.raises(RuntimeError, match="is running"):
-        write_report(harness.config, project, Console(), run_id=harness.paths.run_id)
+        write_report(harness.config, project, Console(), harness.config_file, run_id=harness.paths.run_id)
     harness.run(max_iterations=1, report=False)
     expected = harness.run_state.expected_tip
 
@@ -548,7 +528,7 @@ def test_report_owns_run_and_restores_ref_before_removal(project, monkeypatch):
         return AgentRunResult(success=True)
 
     monkeypatch.setattr("autohelix.agents.create_agent", lambda *a, **k: SimpleNamespace(run=run))
-    assert not write_report(harness.config, project, Console(), run_id=harness.paths.run_id)
+    assert not write_report(harness.config, project, Console(), harness.config_file, run_id=harness.paths.run_id)
     assert git(project, "rev-parse", harness.paths.ref).stdout.strip() == expected
     assert not harness.paths.copies.exists()
 

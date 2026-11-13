@@ -21,7 +21,6 @@ def _git(cwd, *args) -> str:
 
 CONFIG = {
     "goal": "Make sort_list faster in sort.py.\nMore detail below the title.",
-    "name": "sorting",
     "agent": {"backend": "claude", "model": "opus", "timeout": "30m"},
     "gates": ["pytest -q", {"ask": "keeps the public API?"}, {"metric": "speed", "regress": "5%"}],
     "observe": [{"name": "bench", "command": "python bench.py", "metrics": {"speed": "higher"}},
@@ -36,7 +35,7 @@ CONFIG = {
 
 
 def test_header_lines():
-    lines = [line.plain for line in header_lines(Config.from_dict(CONFIG), "20261112-1200-sorting-0mws", "proj", 20)]
+    lines = [line.plain for line in header_lines(Config.from_dict(CONFIG), "20261112-1200-sorting-0mws", "sorting", 20)]
     assert lines == [
         "  AutoHelix · run 0mws · sorting",
         "  Goal     Make sort_list faster in sort.py.",

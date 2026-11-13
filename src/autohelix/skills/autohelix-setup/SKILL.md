@@ -16,15 +16,38 @@ session, with persistent notes and measurements from earlier attempts.
 
 ## Understand the experiment
 
-Inspect the project's instructions, git state, relevant code, existing
-evaluators, and any `autohelix.yaml`. Preserve existing work and configuration.
-Check `autohelix --help` and relevant subcommand help against the installed
-version. The harness and the target project may use different environments.
+Unless the user has already said what the loop should do, your first message
+is exactly this line and nothing else (no preamble, no mention of this skill):
 
-Establish the desired improvement and propose useful loop designs from the
-project's available evidence, including missing evaluators that would help.
-Carry forward the user's budget and agent preferences; resolve missing
-information that changes the experiment without imposing a fixed questionnaire.
+What should this AutoHelix loop do?
+
+Don't inspect anything before the answer.
+
+Inspect the project's instructions, git state, relevant code, existing
+evaluators, and any AutoHelix configs (`autohelix.yaml`, `autohelix/*.yaml`).
+Preserve existing work and configuration.
+Use the Python and `autohelix` CLI the session's first prompt names, else the
+`autohelix` on `PATH` (a plain `python` may lack the package: pipx, `uv tool`,
+a venv that isn't active). Check `autohelix --help` and relevant subcommand
+help against the installed version. The harness and the target project may use
+different environments.
+
+Recommend, don't interview. From the user's answer and the project (its
+tests, benchmarks, instructions), choose everything yourself: scope, gates,
+observe entries, backend, budget. Then propose the complete config once and ask
+whether they want anything different. Ask before that only when the project
+can't tell you something that changes the loop materially, such as there being
+no way yet to check or measure the goal. Don't ask about budgets, timeouts,
+models or reviews: pick defaults, say what you picked. Carry forward any
+preferences the user states.
+
+Defaults: `budget: {iterations: 3}` and nothing else (no cost or time limit),
+and no timeouts (no `timeout:` on gates or observe entries, no `agent.timeout`):
+the built-in defaults apply. No metric gates (`- metric: … regress:/improve:`)
+either: the agent sees the numbers and decides. Set any of these only when the
+user asks. The
+iteration prompt already tells the agent to leave its edits uncommitted; don't
+repeat that in `goal:`.
 
 For help choosing gates, measurements, feedback, and budgets, read
 [loop design](references/loop-design.md). For concrete patterns, read the
@@ -36,17 +59,26 @@ evidence and review feedback without inventing a numeric score.
 Read [the configuration reference](references/config.md) when writing or editing
 the configuration.
 
-For a new setup, `autohelix init` creates the runtime directory and a config
-template; it requires a git repository. For an existing setup, preserve its
-runtime state; convert a config in the first format (`constraints:`,
+Write the config file yourself, at the path you were given (the session's first
+prompt may name it); never run `autohelix setup` or `autohelix init`. Without a
+path, ask: `autohelix.yaml` for the project's one loop, or
+`autohelix/<name>.yaml` when it has or will have several. Configs live only
+there. Don't write `autohelix.yaml` when `autohelix/` already has configs: it
+would take over a bare `autohelix run`. A name uses lowercase letters, digits
+or hyphens, at most 32 characters, starts with a letter or digit, and isn't
+`autohelix`. If the target holds the commented template, complete it there.
+Naming, and prompt templates and helper scripts in `autohelix/` (committed with
+the config), are under Config files in the [configuration
+reference](references/config.md). Preserve other configs and the run state in
+`.autohelix/`; convert a config in the first format (`constraints:`,
 `metrics:`, `reviewer:`, ...), which no longer loads, with the user's
 agreement.
 
 Define a goal (its first line is the run's title), editable scope, gates,
 observe entries (commands, optional reviews), optional metric gates or a
 stop condition, and budget settings or a commented template. Keep tests,
-benchmark definitions, and evaluation criteria outside the editable scope unless
-changing them is part of the user's task.
+benchmark definitions, evaluation criteria, and `autohelix/` outside the
+editable scope unless changing them is part of the user's task.
 
 Before implementing a new or materially changed evaluator, check, or benchmark,
 describe a small concrete proposal: what it measures or checks, representative
@@ -68,15 +100,21 @@ Always validate the YAML and inspect its structure, declared metric names and
 gate references, scope/input paths, command and dependency setup, working
 directory/import paths, and expected output/capture locations without executing
 the configured commands. Inspect how declared metrics would be emitted; output
-files may not exist until evaluation. Use the installed package for validation:
+files may not exist until evaluation. Validate the config file from the project
+root with AutoHelix's own Python: the one the session's first prompt names, else
+the interpreter on the first line of the `autohelix` executable
+(`head -1 "$(command -v autohelix)"`; for `#!/usr/bin/env python3`, that
+`python3`). Replace `/path/to/python` below with it:
 
-```python
+```sh
+/path/to/python - <<'EOF'
 from pathlib import Path
 from autohelix.config import load_config
 
-config, raw = load_config(Path("."))
+config, raw = load_config(Path("."), Path("autohelix.yaml"))  # the file you wrote, e.g. autohelix.yaml
 for issue in config.validate(raw):
     print(f"{issue.level}: {issue.message}")
+EOF
 ```
 
 Resolve validation errors and explain material warnings. This static review is
@@ -105,7 +143,7 @@ Present the config as an inspectable experiment agreement: goal, editable scope,
 requirements, evidence/acceptance, and budget. Explain the intended agent
 behavior and the current enforcement, accounting, and verification limits;
 scope and run budgets do not provide total security or an absolute spending cap.
-For setup-only requests, show the complete generated `autohelix.yaml` in a
+For setup-only requests, show the complete generated config file in a
 fenced YAML block in the final response, including the full goal and all
 configured fields. Show the file as written, rather than an excerpt of its
 "main settings." Comments are optional; keep them sparse and useful for
@@ -120,9 +158,14 @@ and measurements from acceptance decisions. Explain what was verified and what
 remains open, then give verification and launch commands. File links and a
 durable explanation can supplement this walkthrough.
 
-AutoHelix needs a clean committed working tree before a run. Include generated
-configuration in the handoff; resolve outstanding work according to the user's
-instructions without discarding or committing unrelated changes.
+Setup is preparation only: don't start a run unless the user asks for one.
+The project must be a git checkout with a commit, and the first baseline needs
+no uncommitted changes to tracked files. Commit the config so it's versioned,
+and any scripts its commands use: iteration copies are made from the commit.
+`autohelix run` creates `.autohelix/` itself. The launch command is `autohelix run` for `autohelix.yaml`, `autohelix run <name>`
+for `autohelix/<name>.yaml`. Include the generated configuration in the
+handoff; resolve outstanding work according to the user's instructions without
+discarding or committing unrelated changes.
 Keep the iteration prompt's instruction to leave candidate edits uncommitted:
 AutoHelix validates and commits accepted changes. A setup commit before launch
 is different from an iteration agent or supervisor making extra commits while

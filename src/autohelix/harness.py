@@ -7,6 +7,7 @@ import json
 import hashlib
 import os
 import shutil
+import subprocess
 import sys
 import time
 from contextlib import contextmanager
@@ -21,12 +22,13 @@ from rich.table import Table
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import MetricGate, load_config
+from autohelix.config import MetricGate, find_config, load_config, run_command
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay, Transcript, clean, header_lines
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git, allocate_call,
-                            claim_copies, critical_section, remove_copies, short_id, unlanded, write_json,
+                            claim_copies, config_gone, config_relative, critical_section, new_run_name,
+                            planned_run, remove_copies, require_clean, short_id, unlanded, write_json,
                             write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
@@ -43,6 +45,7 @@ from autohelix.workspace import (path_in_scope, SCRUBBED_GIT_ENV, ATTR_SOURCE_LI
                                  Repo, Scope)
 from autohelix.state import (
     GitExcludeError,
+    ensure_git_exclude_entry,
     ensure_runtime_ignored,
 )
 
@@ -160,12 +163,34 @@ class Harness:
         A new run records its landing mode (`land_mode`, else the config's `land:`,
         else auto, or manual with a `group`) and its `group`. On resume `land_mode`
         and `group` change the stored ones (`group=''` clears it) once the segment
-        starts; otherwise the run keeps its own."""
+        starts; otherwise the run keeps its own. A new run is named after the config
+        file (`name` replaces that, for library callers and tests)."""
+        # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send
+        # every git call (ours, and the agent's, checks' and judges') to another repository.
+        # The CLI does the same in `cli.main`; this covers the Harness as a library.
+        for key in SCRUBBED_GIT_ENV:
+            os.environ.pop(key, None)
         self.project_path = Path(project_path).resolve()
-        if run_id and config_file is None:
-            selected = RunPaths(self.project_path, run_id).read_identity()
-            config_file = self.project_path / selected["config_path"]
-        self.config_file = config_file
+        # Always an explicit file: run.json and $AUTOHELIX_CONFIG name it. A run keeps its own.
+        if run_id:
+            identity = RunPaths(self.project_path, run_id).read_identity()
+            stored = identity["config_path"]
+            if config_file is None:
+                config_file = self.project_path / stored
+                if not config_file.exists():
+                    raise FileNotFoundError(config_gone(self.project_path, run_id, stored,
+                                                        identity.get("base_commit")))
+            elif config_relative(self.project_path, Path(config_file)) != stored:
+                raise RuntimeError(f"Run {short_id(run_id)} was started with {stored}, not "
+                                   f"{config_relative(self.project_path, Path(config_file))}; a run keeps its config.")
+        elif config_file is None:
+            config_file = find_config(self.project_path)
+        self.config_file = config_file = Path(config_file)
+        # Every refusal comes before the first write (the excludes, then .autohelix/): the
+        # run to own, read-only (no run to resume, a run without its ref), the config,
+        # and for a new run its name, a clean tree and readiness. select_run decides
+        # again under its lock.
+        creating = planned_run(self.project_path, config_file, new=new, run_id=run_id, create=create) is None
         self.config, self._raw_config = load_config(self.project_path, config_file=config_file)
         self.verbose = verbose
         self.heartbeat_seconds = heartbeat_seconds
@@ -174,17 +199,22 @@ class Harness:
         if errors:
             for error in errors:
                 self.console.print(f"[red]Error:[/red] {error.message}")
-            raise SystemExit("Config validation failed. Edit autohelix.yaml and try again.")
-        ensure_runtime_ignored(self.project_path)
-        # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send
-        # every child's git (agent, checks, judges) to the user's repository.
-        for key in SCRUBBED_GIT_ENV:
-            os.environ.pop(key, None)
+            raise SystemExit(f"Config validation failed. Edit {config_relative(self.project_path, config_file)} "
+                             "and try again.")
         self._preflight_done = False
+        if creating:
+            name = new_run_name(config_file, name)
+            self._new_run_ready()
+        # The first writes: the local excludes, before .autohelix/ exists.
+        ensure_runtime_ignored(self.project_path)
+        try:  # best effort: only runtime state must be ignored
+            ensure_git_exclude_entry(self.project_path, "__pycache__/")
+        except (OSError, subprocess.CalledProcessError):
+            pass
         self.paths, self.run_info, self._ownership, notices = select_run(
-            self.project_path, config_file or self.project_path / "autohelix.yaml",
-            new=new, run_id=run_id, name=name if name is not None else self.config.name,
-            create=create, ready=self._first_start_ready, group=group or None,
+            self.project_path, config_file,
+            new=new, run_id=run_id, name=name,
+            create=create, ready=None if creating else self._new_run_ready, group=group or None,
             # A group lands manually unless --land says otherwise: the config's `land:` is
             # the default for runs on their own (auto landing in a group diverges the rest).
             land_mode=land_mode or ("manual" if group else self.config.land or "auto"),
@@ -300,7 +330,8 @@ class Harness:
     def _print_header(self, max_iter: int, start_iter: int = 1) -> None:
         """The run's header (`display.header_lines`); on resume, the rows so far."""
         self.console.print()
-        for line in header_lines(self.config, self.paths.run_id, self.project_path.name, max_iter,
+        for line in header_lines(self.config, self.paths.run_id, self.run_info.get("name") or self.project_path.name,
+                                 max_iter,
                                  self.console.width or 100):
             self.console.print(line, highlight=False)
         self.console.print()
@@ -1019,11 +1050,10 @@ class Harness:
     def _command_env(self, iteration: int) -> dict[str, str]:
         """Variables for every command the harness runs (checks, metrics, stop):
         where to record model usage and logs, and which config to read."""
-        config = self.config_file or self.project_path / "autohelix.yaml"
         log_dir = self.paths.logs / f"iter-{iteration}"
         return {
             USAGE_ENV: str(self._usage_path(iteration)),
-            "AUTOHELIX_CONFIG": str(Path(config).resolve()),
+            "AUTOHELIX_CONFIG": str(self.config_file.resolve()),
             "AUTOHELIX_LOG_DIR": str(log_dir),
             "AUTOHELIX_RUN_ID": self.paths.run_id,
             "AUTOHELIX_RUN_DIR": str(self.paths.run_dir),
@@ -1178,15 +1208,6 @@ class Harness:
         finally:
             workspace.close()
 
-    def _resolve_config_rel_path(self) -> str:
-        """Return the config file path relative to the project root."""
-        if self.config_file is None:
-            return "autohelix.yaml"
-        try:
-            return str(self.config_file.resolve().relative_to(self.project_path))
-        except ValueError:
-            return str(self.config_file)
-
     def run(self, max_iterations: int | None = None, report: bool = True) -> None:
         """Run the optimization loop, recording live status in runtime/status.json.
 
@@ -1249,8 +1270,10 @@ class Harness:
     def __del__(self):
         self.close()
 
-    def _first_start_ready(self) -> None:
-        """Readiness checks for a first start, run before any run state exists."""
+    def _new_run_ready(self) -> None:
+        """Readiness checks for a first start, run before any run state exists: a run
+        starts from a commit, so tracked files must be clean."""
+        require_clean(self.project_path)
         ensure_editable_files_ready(Repo(self.project_path), self.project_path, self.config.editable)
         if not self._preflight():
             raise RuntimeError("Preflight checks failed. Fix the issues above before running.")
@@ -1321,7 +1344,7 @@ class Harness:
         from autohelix.viewer import write_static
 
         try:
-            path = write_static(self.project_path, self.config_file, run_id=self.paths.run_id)
+            path = write_static(self.project_path, run_id=self.paths.run_id)
             self.console.print(f"[dim]  Run page: {path.relative_to(self.project_path)}[/dim]", highlight=False)
         except Exception as e:  # noqa: BLE001 - never hide the run's own outcome
             self.console.print(f"[yellow]Could not save report.html: {e}[/yellow]")
@@ -1331,7 +1354,8 @@ class Harness:
         max_iter = max_iterations or self.config.max_iterations
         start_iter = self.history.get_last_iteration() + 1
 
-        # Covers programmatic/repeated runs as well as the CLI's early check.
+        # Again at each segment: the ignore rules may have changed since this Harness was
+        # created (a long-lived programmatic one).
         try:
             ensure_runtime_ignored(self.project_path)
         except GitExcludeError as e:
@@ -1342,8 +1366,8 @@ class Harness:
             ensure_clean_working_tree(self.repo, self.project_path)
             if git(self.project_path, "rev-parse", "HEAD").stdout.strip() != self.run_state.expected_tip:
                 raise AutoHelixRunError("Baseline checkout moved since this run started. Restore its original commit, "
-                                        "or start a new run with `autohelix run` (and `autohelix delete "
-                                        f"{short_id(self.paths.run_id)}` this one).")
+                                        f"or start a new run with `{run_command(self.run_info['config_path'])}` "
+                                        f"(and `autohelix delete {short_id(self.paths.run_id)}` this one).")
             ensure_editable_files_ready(self.repo, self.project_path, self.config.editable)
 
         # Show header
@@ -1403,7 +1427,7 @@ class Harness:
             ) / 1000.0
         loop_start = time.monotonic()  # monotonic counts from boot: never subtract prior time from it
 
-        config_name = self._resolve_config_rel_path()
+        config_name = config_relative(self.project_path, self.config_file)
         self.log.info(f"run started — config: {config_name}, max_iter: {max_iter}, resuming from iter {start_iter}")
 
         ran = False

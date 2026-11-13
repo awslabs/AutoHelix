@@ -2,7 +2,7 @@
 # Run autohelix inside Docker with the current directory mounted.
 #
 # Usage:
-#   docker/run.sh --env ~/my-env.sh run --config autohelix.yaml -n 5
+#   docker/run.sh --env ~/my-env.sh run -n 5
 #   docker/run.sh --env ~/my-env.sh report
 #
 # Tip: alias autohelix-docker='path/to/docker/run.sh --env ~/my-env.sh'

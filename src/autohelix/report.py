@@ -45,7 +45,7 @@ def read_report_info(project: Path, run_id: str | None = None) -> dict | None:
         return None
 
 
-def build_report_prompt(config: Config, project: Path, config_path: Path | None, draft: Path, run_id: str | None = None) -> str:
+def build_report_prompt(config: Config, project: Path, config_path: Path, draft: Path, run_id: str | None = None) -> str:
     paths = RunPaths(project, run_id)
     if not paths.run_id:
         raise RuntimeError("No current run; start a run first.")
@@ -79,7 +79,7 @@ captured files; a review entry's stdout is its review text.
 - logs/iter-N/call-*/agent.log: full agent transcripts. They are large; search them rather \
 than reading them whole.
 {git}
-- {config_path or project / "autohelix.yaml"}: the run's config.
+- {config_path}: the run's config.
 
 ## Instructions
 {INSTRUCTIONS}
@@ -89,7 +89,7 @@ Only read. Don't run tests, benchmarks or experiments, and don't edit any file o
 """
 
 
-def write_report(config: Config, project: Path, console, config_path: Path | None = None, *, run_id: str | None = None, _owned: bool = False) -> bool:
+def write_report(config: Config, project: Path, console, config_path: Path, *, run_id: str | None = None, _owned: bool = False) -> bool:
     """Run the report agent; replace the saved report only if it wrote a new one."""
     from rich.live import Live
 

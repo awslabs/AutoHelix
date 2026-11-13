@@ -81,9 +81,9 @@ require evidence for a predetermined conclusion.
 
 ## Choose a budget that fits the work
 
-Retain the user's stated budgets and agent/model preferences. Use an iteration
-limit to bound improvement attempts and a time budget for the desired duration,
-allowing for agent work and evaluation.
+Retain the user's stated budgets and agent/model preferences. By default, set
+only an iteration limit (`budget: {iterations: 3}`) and no cost or time limit,
+and leave timeouts at their defaults; add any of these when the user asks.
 
 For preparation/design, optional cost, time, and `agent.timeout` may be omitted
 or set to YAML `null`: no cap is configured by that field. Leave proposed values

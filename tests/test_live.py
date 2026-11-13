@@ -101,8 +101,18 @@ def _cli(*args):
 
 
 def test_live_view_exits_with_hints_instead_of_waiting(tmp_path):
-    result = _cli("view", "-p", tmp_path)
-    assert result.exit_code == 1 and "No .autohelix/" in result.output
+    def hint():
+        result = _cli("view", "-p", tmp_path)
+        assert result.exit_code == 1
+        return " ".join(result.output.split())
+
+    assert "Write a config with `autohelix setup`, then `autohelix run`." in hint()
+    (tmp_path / "autohelix").mkdir()
+    (tmp_path / "autohelix" / "perf.yaml").write_text("goal: x\n")
+    assert "Start one with `autohelix run perf`." in hint()
+    (tmp_path / "autohelix.yaml").write_text("goal: x\n")
+    assert ("Start one with `autohelix run [CONFIG]` (configs: autohelix.yaml, autohelix/perf.yaml)."
+            in hint())
 
 
 @pytest.mark.parametrize("command", ["view", "dashboard"])

@@ -455,7 +455,7 @@ def test_dashboard_json_and_once(measured_project):
     assert _cli("dashboard", "-p", project, "--json", "--once").exit_code == 2
 
 
-def test_view_json_and_once(measured_project, monkeypatch):
+def test_view_json_and_once(measured_project):
     project, first, second, gone = measured_project
     data = json.loads(_cli("view", first, "-p", project, "--json").output)
     assert data["project"] == "test_project"
@@ -480,16 +480,10 @@ def test_view_json_and_once(measured_project, monkeypatch):
     missing = _cli("view", "missing-zzzz", "-p", project, "--json")
     assert missing.exit_code == 1 and "missing-zzzz" in missing.output
 
-    # --config is relative to the shell's folder, shown relative to the project.
-    other = project / "other.yaml"
-    other.write_text((project / "autohelix.yaml").read_text().replace("Test the integration", "  Other goal\n"))
-    monkeypatch.chdir(project.parent)
-    run = json.loads(_cli("view", first, "-p", project.name, "--json", "--config", f"{project.name}/other.yaml").output)["run"]
-    assert (run["config_file"], run["goal"]) == ("other.yaml", "Other goal")
-    assert run["metrics"]["values"][0]["direction"] == "higher"
-
-    other.write_text((project / "autohelix.yaml").read_text().replace("Test the integration", '" "'))
-    printed = _cli("view", first, "-p", project.name, "--once", "--config", f"{project.name}/other.yaml")
+    # The table reads the run's config as the file is now.
+    config = project / "autohelix.yaml"
+    config.write_text(config.read_text().replace("Test the integration", '" "'))
+    printed = _cli("view", first, "-p", project, "--once")
     assert printed.exit_code == 0 and "Goal:" not in printed.output
 
 
@@ -525,12 +519,6 @@ def test_live_view_shows_the_run_table_and_where_it_stopped(measured_project, mo
     assert f"{first} · finished" in result.output and "Goal: Test the integration" in result.output
     assert "ITER  OK  speed" in result.output and "Iteration 2 · agent" in result.output
     assert "Finished at " in result.output and "Stopped watching. The run is unaffected." in result.output
-    # With --config, the table reads that config, as --once does.
-    other = project / "other.yaml"
-    other.write_text((project / "autohelix.yaml").read_text().replace("Test the integration", "Other goal"))
-    _stop_after(monkeypatch)
-    result = _cli("view", first, "-p", project, "--config", other)
-    assert result.exit_code == 0 and "Goal: Other goal" in result.output, result.output
 
 
 def test_pin_is_announced_before_the_checks_copy(integration_project, monkeypatch):  # noqa: F811

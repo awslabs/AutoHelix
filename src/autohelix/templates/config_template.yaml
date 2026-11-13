@@ -1,3 +1,7 @@
+# An AutoHelix loop. `autohelix run` starts a run of it (`autohelix run perf`
+# for autohelix/perf.yaml). Commit it, and any scripts its commands use:
+# iteration copies are made from the commit.
+
 # All paths below are relative to the project root — they resolve inside the
 # per-iteration copy, so use relative paths (src/, tests/), not absolute.
 

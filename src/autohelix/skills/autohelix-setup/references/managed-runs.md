@@ -90,11 +90,13 @@ interrupted run, `autohelix report` writes one when requested.
 ## Orchestrate several runs
 
 To compare approaches (models, prompts, budgets, or the same setup several
-times), start K runs of one group, each in its own background session:
+times), write one config per approach (`autohelix/a.yaml`, `autohelix/b.yaml`;
+runs are named after the file; repeats of one setup share a config), commit
+them, and start K runs of one group, each in its own background session:
 
 ```sh
-autohelix run -p PROJECT --group perf -c a.yaml --name a
-autohelix run -p PROJECT --group perf -c b.yaml --name b
+autohelix run a -p PROJECT --group perf
+autohelix run b -p PROJECT --group perf
 ```
 
 Runs of a group see each other's notes and history (copied into each

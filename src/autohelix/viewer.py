@@ -36,10 +36,10 @@ from urllib.parse import quote, unquote, urlsplit
 from markdown_it import MarkdownIt
 
 from autohelix.agents import AgentEventKind
-from autohelix.config import MetricGate, load_config
+from autohelix.config import ConfigNotFound, MetricGate, find_config, load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History
-from autohelix.runs import RunPaths, git, is_archived, last_activity
+from autohelix.runs import RunPaths, config_relative, git, is_archived, last_activity
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
 from autohelix.run_status import read_run_status
@@ -268,12 +268,11 @@ def _note_order(name: str):
 class RunData:
     """Reads one project's .autohelix/ directory for the viewer."""
 
-    def __init__(self, project: Path, config_file: Path | None = None, run_id: str | None = None):
+    def __init__(self, project: Path, run_id: str | None = None):
         self.project = project.resolve()
         self.run_id = run_id
         self.paths = RunPaths(self.project, run_id)
         self.root = self.paths.run_dir
-        self.config_file = config_file
         self.history = History(self.project, self.paths.run_id)
         self._logs: dict[Path, tuple[LogTail, deque]] = {}
         # Diffs by their two objects, most recent last (`_cached_diff`). Diffs run git
@@ -304,9 +303,16 @@ class RunData:
             return self.history.load()
 
     def _config(self):
-        """The run's stored config, parsed again only when its file changes."""
-        stored = read_stored_config_path(self.project, self.paths.run_id) if self.paths.run_id else None
-        path = Path(self.config_file or stored or self.project / "autohelix.yaml")
+        """The run's stored config, parsed again only when its file changes. A run whose
+        file is gone shows it missing, never another; with no run, the project's config
+        if the lookup finds one, else none (None, None)."""
+        if self.paths.run_id:
+            path = read_stored_config_path(self.project, self.paths.run_id)
+        else:
+            try:
+                path = find_config(self.project)
+            except ConfigNotFound:
+                return None, None
         try:
             info = path.stat()
             key = (info.st_mtime_ns, info.st_size, info.st_ino)
@@ -321,9 +327,13 @@ class RunData:
             cached = self._configs[path] = (key, config, _read_user_file(path))
         return cached[1], path
 
-    def _config_summary(self, config, path: Path) -> dict:
+    def _config_summary(self, config, path: Path | None) -> dict | None:
+        if path is None:
+            return None
         cached = self._configs.get(path)
-        summary = {"file": path.name, "text": cached[2] if cached else _read_user_file(path)}
+        summary = {"file": config_relative(self.project, path), "text": cached[2] if cached else _read_user_file(path)}
+        if not path.exists():
+            summary["missing"] = True
         if config:
             summary.update(
                 agent=" · ".join(filter(None, [config.agent.backend, config.agent.model])),
@@ -818,10 +828,10 @@ class ProjectRuns:
         rows.sort(key=lambda r: r.get("last_activity") or 0, reverse=True)
         return {**self._header(), "runs": rows}
 
-    def run(self, run_id: str, config_file: Path | None = None) -> dict:
+    def run(self, run_id: str) -> dict:
         """One run for `view --json`: its list row, plus the goal and every iteration."""
-        row = self._run(run_id, self._refs(), config_file)
-        data = RunData(self.project, config_file, run_id)
+        row = self._run(run_id, self._refs())
+        data = RunData(self.project, run_id)
         return {**self._header(), "run": {**row, "iterations": data.iterations(data.records())}}
 
     def _header(self) -> dict:
@@ -891,17 +901,14 @@ class ProjectRuns:
             {"name": n, "value": latest.metrics[n], "baseline": baseline.get(n), "direction": directions.get(n)}
             for n in names]}
 
-    def _run(self, run_id: str, refs: dict[str, str], config_file: Path | None = None) -> dict:
+    def _run(self, run_id: str, refs: dict[str, str]) -> dict:
         paths = RunPaths(self.project, run_id)
         data = paths.read_identity()
         status = read_run_status(self.project, run_id)
         history = self._histories.setdefault(run_id, History(self.project, run_id))
         records = history.load()
-        if config_file:  # as typed, from the shell's folder; shown relative to the project when inside it
-            config_file = config_file.resolve()
-            config_file = config_file.relative_to(self.project) if config_file.is_relative_to(self.project) else config_file
         # Read from the checkout's current file (phase 2: the segment's config snapshot).
-        config = self._config(str(config_file) if config_file else data.get("config_path"))
+        config = self._config(data.get("config_path"))
 
         attempts = [r for r in records if r.iteration > 0]
         cost = summarize_costs([usage for r in records for usage in r.cost_usages])
@@ -915,6 +922,9 @@ class ProjectRuns:
             "created_at": data.get("created_at"),
             "last_activity": last_activity(paths, data, status or {}),
             "config_file": config.get("file"),
+            # The run's own file, gone (never replaced by another) or no longer valid.
+            "config_missing": bool(config.get("missing")),
+            "config_invalid": bool(config.get("invalid")),
             "goal": config.get("goal"),
             "title": config.get("title"),  # the goal's first line, cut (Config.title)
             "status": status and {k: status.get(k) for k in (
@@ -941,14 +951,14 @@ class ProjectRuns:
         }
 
 
-def write_static(project: Path, config_file: Path | None = None, *, run_id: str | None = None) -> Path:
+def write_static(project: Path, *, run_id: str | None = None) -> Path:
     """Write output/report.html: the viewer page with this run's data built in."""
     resources = files("autohelix").joinpath("viewer_resources")
     read = lambda name: resources.joinpath(name).read_text(encoding="utf-8")  # noqa: E731
     # Each logo once, in the data; the page's theme code sets the <img> from it.
     logos = {theme: "data:image/svg+xml," + quote(read(f"autohelix-{theme}.svg"), safe=" =:/-.,;'\"()")
              for theme in ("light", "dark")}
-    data = {"routes": RunData(project, config_file, run_id).snapshot(), "logos": logos, "saved_at": time.time()}
+    data = {"routes": RunData(project, run_id).snapshot(), "logos": logos, "saved_at": time.time()}
     # "<" escaped, so no text in the data can close the script element.
     script = json.dumps(data).replace("<", "\\u003c")
     page = (read("index.html")
@@ -969,8 +979,8 @@ def write_static(project: Path, config_file: Path | None = None, *, run_id: str 
     return out
 
 
-def make_server(project: Path, port: int = 8765, config_file: Path | None = None, *, run_id: str | None = None) -> ThreadingHTTPServer:
-    data = RunData(project, config_file, run_id)
+def make_server(project: Path, port: int = 8765, *, run_id: str | None = None) -> ThreadingHTTPServer:
+    data = RunData(project, run_id)
     dashboard = ProjectRuns(project)
     others: dict[str, RunData] = {}
     # RunData's caches and log tails are not thread-safe. Git diffs run outside the lock
@@ -983,9 +993,9 @@ def make_server(project: Path, port: int = 8765, config_file: Path | None = None
             return None
         with lock:
             if rid == data.paths.run_id:
-                return data  # keeps an explicit --config for the default run
+                return data  # the default run's, already reading
             if rid not in others:
-                others[rid] = RunData(project, None, rid)
+                others[rid] = RunData(project, rid)
             return others[rid]
 
     def run_route(rd: RunData, path: str) -> tuple | None:

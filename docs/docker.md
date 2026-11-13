@@ -15,7 +15,7 @@ EOF
 
 # 3. Run from your project directory
 cd my-project
-docker/run.sh --env ~/autohelix-env.sh run --config autohelix.yaml -n 10
+docker/run.sh --env ~/autohelix-env.sh run -n 10        # or: run perf -n 10 for autohelix/perf.yaml
 ```
 
 All autohelix commands work: `run`, `resume`, `report`, `view` (in the terminal).

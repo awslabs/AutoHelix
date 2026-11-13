@@ -41,21 +41,6 @@ def git_commit_all(directory: Path) -> None:
     )
 
 
-def autohelix_init(directory: Path) -> bool:
-    """Run `autohelix init` in the scaffolded dir. Returns False if not on PATH.
-
-    Output is captured — setup_example prints its own next-steps block, and
-    init's "edit your goal" hint doesn't apply here (the example ships a goal).
-    """
-    try:
-        subprocess.run(
-            ["autohelix", "init"], cwd=directory, check=True, capture_output=True
-        )
-        return True
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return False
-
-
 def list_bundled() -> list[str]:
     """A bundled example is any dir here with an autohelix.yaml."""
     return sorted(
@@ -87,20 +72,17 @@ def setup_bundled(name: str, output_dir: Path) -> bool:
         else:
             shutil.copy2(item, output_dir / item.name)
 
-    # git init first (autohelix init needs a repo), then autohelix init (writes
-    # .autohelix/ + a .gitignore), then commit so the tree is clean for `run`.
+    # A git repo with the config committed is all `autohelix run` needs: it
+    # creates .autohelix/ (and its local git excludes) itself.
     git_init_repo(output_dir)
-    initialized = autohelix_init(output_dir)
     git_commit_all(output_dir)
 
     print(f"Ready: {output_dir}")
     print()
     print(f"  cd {output_dir}")
-    if initialized:
-        print(f"  autohelix run")
-    else:
-        print(f"  autohelix init      # 'autohelix' not found on PATH — install it first")
-        print(f"  autohelix run")
+    if shutil.which("autohelix") is None:
+        print("  # 'autohelix' not found on PATH — install it first")
+    print("  autohelix run")
     return True
 
 

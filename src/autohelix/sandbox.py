@@ -83,7 +83,7 @@ def ensure_editable_files_ready(repo: Repo, project: Path, editable: list[str]) 
         if pattern not in (".", "./") and not list(project.glob(pattern)):
             raise RuntimeError(
                 f"No files found matching editable pattern '{pattern}'. "
-                "Check your autohelix.yaml scope.editable config."
+                "Check scope.editable in the config."
             )
     if status := user_git(repo, project, "status", "--porcelain", "--", *editable).strip():
         raise RuntimeError(

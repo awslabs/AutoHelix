@@ -2,7 +2,7 @@
 # Quick real-agent dev test against a bundled example.
 #
 # Scaffolds the example into a fresh temp dir (via setup_example.py, the same
-# tool users run), then `autohelix init` + runs the loop.
+# tool users run: a git repo with the config committed), then runs the loop.
 #
 # Usage:
 #   bash scripts/run_dev_test.sh                       # sorting, 1 iteration
@@ -30,7 +30,6 @@ fi
 PROJECT="$(mktemp -d)/$EXAMPLE"
 python "$REPO_ROOT/examples/setup_example.py" "$EXAMPLE" --dir "$PROJECT"
 cd "$PROJECT"
-autohelix init .
 
 echo ""
 echo "=== Dev test: $EXAMPLE ==="

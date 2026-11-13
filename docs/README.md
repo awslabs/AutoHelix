@@ -8,9 +8,9 @@ See the [main README](../README.md) for an overview, quick start, and the config
 
 ## Guides
 
-- **[Getting Started](getting-started.md)** — install, initialize a project, run your first loop
-- **[Configuration](config.md)** — the full `autohelix.yaml` surface: gates, observe, stop, scope, agent, budget
-- **[CLI Reference](cli.md)** — skill installation/export, `init`, `run` (and groups of runs), `resume`, `land`, `archive`, `delete`, `view`, `dashboard`, `hint`, `ask`, `review`, `report`
+- **[Getting Started](getting-started.md)** — install, write a config (with your agent or by hand), run your first loop
+- **[Configuration](config.md)** — the full config surface (`autohelix.yaml`, `autohelix/<name>.yaml`): gates, observe, stop, scope, agent, budget
+- **[CLI Reference](cli.md)** — skill installation/export, `setup`, `run` (and groups of runs), `resume`, `land`, `archive`, `delete`, `view`, `dashboard`, `hint`, `ask`, `review`, `report`
 - **[Docker Sandbox](docker.md)** — run the agent with filesystem isolation
 - **[Concepts](concepts.md)** — how iteration, isolation, and verified improvement
   work, and how to design a loop
