@@ -131,6 +131,21 @@ class TestBuildReportPrompt:
             assert path in prompt
         assert f"`{RunPaths(project).read_identity()['base_commit']}`" in prompt
 
+    def test_where_to_look_matches_the_layout(self, project):
+        prompt = self._prompt(project)
+        for text in ("iterations/NNN/", "record.json", "prompt.md and agent.log", "gates/<k>/ and stop/<k>/",
+                     "observe/<name>/", "review.log", "rejected.patch", "iterations/NNN/notes/",
+                     ".internal/notes/<N>/", ".internal/attempts/NNN-<k>/", "logs/"):
+            assert text in prompt, text
+        paths = RunPaths(project)  # the names it uses are RunPaths'
+        run, folder = paths.run_dir, paths.iteration_dir(1)
+        assert [p.relative_to(folder).as_posix() for p in (
+            paths.record(1), paths.prompt(1), paths.agent_log(1), paths.gate_dir(1, 2), paths.stop_dir(1, 2),
+            paths.observe_entry(1, "x"), paths.rejected_patch(1), paths.iteration_notes(1))] == [
+            "record.json", "prompt.md", "agent.log", "gates/2", "stop/2", "observe/x", "rejected.patch", "notes"]
+        assert [p.relative_to(run).as_posix() for p in (paths.notes_versions, paths.attempt_dir(1, 2), paths.logs)] == [
+            ".internal/notes", ".internal/attempts/001-2", "logs"]
+
     def test_no_accepted_iterations(self, project):
         history = History(project)
         history.history_path.write_text("")

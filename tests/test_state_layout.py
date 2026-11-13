@@ -3,6 +3,7 @@ record.json, superseded attempts kept under `.internal/attempts/`, schema 2."""
 
 import json
 import os
+import shutil
 
 import pytest
 
@@ -445,3 +446,299 @@ def test_a_storage_failure_never_loses_a_gate_or_stop_outcome(project, monkeypat
     assert [g["passed"] for g in baseline.gates] == [True, True]
     assert not first.accepted and [g["passed"] for g in first.gates] == [True, False]
     assert not (paths.iteration_dir(1) / "gates").exists() or _listing(paths.iteration_dir(1) / "gates") == []
+
+
+# --- phase 3: the agent's copy mirrors the run layout, iteration rejected.patch --------
+
+
+def _wrap_agent(harness, act):
+    """Calls `act(worktree, iteration)` before each agent call (the mock agent runs after)."""
+    original = harness.run_agent
+
+    def run_agent(worktree, prompt, iteration):
+        act(worktree, prompt, iteration)
+        return original(worktree, prompt, iteration)
+
+    harness.run_agent = run_agent
+
+
+def _tree(folder):
+    """Every path below `folder` (relative, sorted); symlinks listed, not followed."""
+    out = []
+    for top, dirs, files in os.walk(folder):
+        out += [os.path.relpath(os.path.join(top, name), folder) for name in dirs + files]
+    return sorted(out)
+
+
+def _fill_iteration(paths, n, gates=(True, False)):
+    """An iteration's folder as a run leaves it, beside the record History wrote."""
+    folder = paths.iteration_dir(n)
+    for k, passed in enumerate(gates, start=1):
+        paths.gate_dir(n, k).mkdir(parents=True)
+        (paths.gate_dir(n, k) / "stdout.txt").write_text(f"gate {k} of {n}\n")
+    (paths.observe_entry(n, "bench") / "out").mkdir(parents=True)
+    (paths.observe_entry(n, "bench") / "stdout.txt").write_text(f"bench {n}\n")
+    (paths.observe_entry(n, "bench") / "out" / "plot.txt").write_text("plot\n")
+    paths.stop_dir(n, 1).mkdir(parents=True)
+    (paths.stop_dir(n, 1) / "stdout.txt").write_text("stop\n")
+    for name in ("agent.log", "prompt.md", "rejected.patch"):
+        (folder / name).write_text(name)
+    (paths.notes_versions / str(n)).mkdir(parents=True, exist_ok=True)
+    os.symlink(os.path.relpath(paths.notes_versions / str(n), folder), folder / "notes")
+
+
+def _seeded_history(paths, count=9, accepted=(0,)):
+    history = History(paths.project, paths.run_id)
+    for n in range(count):
+        history.append(IterationResult(
+            iteration=n, accepted=n in accepted,
+            gates=[{"text": "a", "kind": "command", "passed": True},
+                   {"text": "b", "kind": "command", "passed": n in accepted},
+                   {"text": "m", "kind": "metric", "passed": False if n not in accepted else None}],
+            observe=[{"name": "bench", "ok": True}]))
+        _fill_iteration(paths, n)
+    return history
+
+
+def _fake_copy(tmp_path, name="copy"):
+    from types import SimpleNamespace
+
+    (tmp_path / name).mkdir()
+    return SimpleNamespace(working_dir=tmp_path / name)
+
+
+def test_an_agent_copy_gets_the_last_five_iterations_and_the_last_accepted(run_paths, tmp_path):
+    from autohelix.iteration import prepare_state
+
+    _seeded_history(run_paths)
+    run_paths.attempt_dir(8, 1).mkdir(parents=True)  # a superseded attempt: never seeded
+    (run_paths.attempt_dir(8, 1) / "record.json").write_text("{}")
+    copy = _fake_copy(tmp_path)
+    prepare_state(run_paths, copy, before=9)
+    state = copy.working_dir / ".autohelix-iteration"
+    assert _listing(state / "iterations") == ["000", "004", "005", "006", "007", "008"]
+    rejected = state / "iterations" / "007"
+    # Failing gates' folders only (gate 3 is a metric gate: no folder); no agent.log,
+    # prompt.md, notes link or rejected.patch.
+    assert _tree(rejected) == ["gates", "gates/2", "gates/2/stdout.txt", "observe", "observe/bench",
+                               "observe/bench/out", "observe/bench/out/plot.txt", "observe/bench/stdout.txt",
+                               "record.json", "stop", "stop/1", "stop/1/stdout.txt"]
+    assert json.loads((rejected / "record.json").read_text()) == _record_file(run_paths, 7)
+    assert (rejected / "gates" / "2" / "stdout.txt").read_text() == "gate 2 of 7\n"
+    # The baseline, accepted, has no failing gate: no gates/ at all.
+    assert "gates" not in _listing(state / "iterations" / "000")
+    assert (state / "iterations" / "000" / "observe" / "bench" / "stdout.txt").read_text() == "bench 0\n"
+    assert not (state / ".internal").exists() and not (state / "attempts").exists()
+    assert "logs" not in _listing(state) and "observations" not in _listing(state)
+    # `before`: the iteration being attempted (and later ones) are not reference.
+    second = _fake_copy(tmp_path, "second")
+    prepare_state(run_paths, second, before=3)
+    assert _listing(second.working_dir / ".autohelix-iteration" / "iterations") == ["000", "001", "002"]
+
+
+def test_the_last_accepted_is_the_last_record_with_its_number(run_paths, tmp_path):
+    from autohelix.iteration import seeded_iterations
+
+    history = _seeded_history(run_paths, count=8, accepted=(0, 1))
+    history.append(IterationResult(iteration=1, accepted=False))  # a later record for 1 (rewritten)
+    assert [n for n, _ in seeded_iterations(history.load())] == [0, 3, 4, 5, 6, 7]
+
+
+@pytest.mark.parametrize("planted", ["runs", "iterations", "iteration", "observe", "entry", "gate", "stop",
+                                     "record", "file", "hardlink"])
+def test_seeding_never_follows_planted_links(run_paths, tmp_path, planted):
+    from autohelix.iteration import prepare_state
+
+    _seeded_history(run_paths, count=2)
+    secret = tmp_path / "secret"
+    (secret / "bench").mkdir(parents=True)
+    (secret / "stdout.txt").write_text("SECRET\n")
+    (secret / "bench" / "stdout.txt").write_text("SECRET\n")
+    (secret / "record.json").write_text('"SECRET"')
+    folder = run_paths.iteration_dir(1)
+
+    def replace(path, target):
+        shutil.rmtree(path) if path.is_dir() and not path.is_symlink() else path.unlink()
+        path.symlink_to(target)
+
+    if planted == "runs":  # an outer component of the run folder itself
+        moved = tmp_path / "moved-runs"
+        os.rename(run_paths.runs, moved)
+        run_paths.runs.symlink_to(moved)
+    elif planted == "iterations":
+        os.rename(run_paths.iterations, secret / "iterations")
+        run_paths.iterations.symlink_to(secret / "iterations")
+    elif planted == "iteration":
+        os.rename(folder, secret / "001")
+        folder.symlink_to(secret / "001")
+    elif planted == "observe":
+        replace(run_paths.observe_dir(1), secret)
+    elif planted == "entry":
+        replace(run_paths.observe_entry(1, "bench"), secret / "bench")
+    elif planted == "gate":
+        replace(run_paths.gate_dir(1, 2), secret)
+    elif planted == "stop":
+        replace(run_paths.stop_dir(1, 1).parent, secret)
+    elif planted == "record":
+        replace(run_paths.record(1), secret / "record.json")
+    elif planted == "file":
+        replace(run_paths.observe_entry(1, "bench") / "stdout.txt", secret / "stdout.txt")
+    else:
+        (run_paths.observe_entry(1, "bench") / "stdout.txt").unlink()
+        os.link(secret / "stdout.txt", run_paths.observe_entry(1, "bench") / "stdout.txt")
+    copy = _fake_copy(tmp_path)
+    prepare_state(run_paths, copy, before=2)
+    state = copy.working_dir / ".autohelix-iteration"
+    for path in state.rglob("*"):
+        assert not path.is_symlink(), path
+        if path.is_file():
+            assert "SECRET" not in path.read_text(), path
+    if planted in ("runs", "iterations"):
+        assert not (state / "iterations").exists()
+    elif planted == "iteration":
+        assert _listing(state / "iterations") == ["000"]
+    else:
+        assert (state / "iterations" / "000" / "observe" / "bench" / "stdout.txt").read_text() == "bench 0\n"
+
+
+def test_an_agent_copy_holds_a_bounded_number_of_iterations(project):
+    """No quadratic growth: however long the run, a copy gets at most six iteration folders."""
+    _configure(project, gates=['echo "gate of $AUTOHELIX_ITERATION"; [ "$AUTOHELIX_ITERATION" -lt 2 ]'],
+               observe=[{"name": "bench", "command": 'echo "bench $AUTOHELIX_ITERATION"'}])
+    seen = {}
+
+    def act(worktree, prompt, iteration):
+        state = worktree / ".autohelix-iteration"
+        seen[iteration] = (_listing(state / "iterations"), prompt,
+                           {n: _tree(state / "iterations" / n) for n in _listing(state / "iterations") or []})
+
+    harness = Harness(project, land_mode="manual")
+    _wrap_agent(harness, act)
+    try:
+        harness.run(max_iterations=9, report=False)
+    finally:
+        harness.close()
+    assert seen[1][0] == ["000"]
+    assert all(len(listing) <= 6 for listing, _, _ in seen.values())
+    listing, prompt, trees = seen[9]
+    assert listing == ["001", "004", "005", "006", "007", "008"]  # 1: the last accepted
+    # A failed gate rejects before observe runs: its output, no observe/.
+    assert trees["008"] == ["gates", "gates/1", "gates/1/command.txt", "gates/1/stdout.txt", "record.json"]
+    assert trees["001"] == ["observe", "observe/bench", "observe/bench/stdout.txt", "record.json"]  # gate passed
+    assert "  ✗ " in prompt and "(output: .autohelix-iteration/iterations/008/gates/1/)" in prompt
+    assert "iterations/008/observe" not in prompt
+    assert "(iter-1; its record and observations: .autohelix-iteration/iterations/001/)" in prompt
+
+
+def test_a_rejected_attempt_keeps_its_patch_in_its_folder(project):
+    _configure(project, gates=['[ "$AUTOHELIX_ITERATION" != 1 ]'])
+    patches = {}
+
+    def act(worktree, prompt, iteration):
+        patch = worktree / ".autohelix-iteration" / "rejected.patch"
+        patches[iteration] = patch.read_bytes() if patch.exists() else None
+
+    harness = Harness(project, land_mode="manual")
+    _wrap_agent(harness, act)
+    try:
+        harness.run(max_iterations=2, report=False)
+        paths = harness.paths
+    finally:
+        harness.close()
+    _, rejected, accepted = History(project, paths.run_id).load()
+    assert not rejected.accepted and rejected.rejected_ref and accepted.accepted
+    stored = paths.rejected_patch(1).read_bytes()
+    assert stored == patches[2] and b"+# iteration 1" in stored  # the bytes the next copy got
+    assert not paths.rejected_patch(0).exists() and not paths.rejected_patch(2).exists()
+
+
+def test_no_iteration_patch_for_a_no_op(project):
+    _configure(project, agent={"backend": "mock", "settings": {"should_fail": True}})
+    harness = Harness(project, land_mode="manual")
+    try:
+        harness.run(max_iterations=1, report=False)  # fails before changing anything: no tree kept
+        paths = harness.paths
+    finally:
+        harness.close()
+    record = History(project, paths.run_id).load()[-1]
+    assert not record.accepted and record.rejected_ref is None
+    assert paths.record(1).is_file() and not os.path.lexists(paths.rejected_patch(1))
+
+
+def test_no_iteration_patch_for_an_over_limit_change(project, monkeypatch):
+    monkeypatch.setattr("autohelix.iteration.REJECTED_PATCH_LIMIT", 10)
+    _configure(project, gates=['[ "$AUTOHELIX_ITERATION" = 0 ]'])
+    harness = Harness(project, land_mode="manual")
+    try:
+        harness.run(max_iterations=1, report=False)
+        paths = harness.paths
+    finally:
+        harness.close()
+    record = History(project, paths.run_id).load()[-1]
+    assert not record.accepted and record.rejected_ref  # the ref has it
+    assert paths.record(1).is_file() and not os.path.lexists(paths.rejected_patch(1))
+
+
+def test_the_iteration_patch_replaces_what_was_planted(project, tmp_path):
+    _configure(project, gates=['[ "$AUTOHELIX_ITERATION" = 0 ]'])
+    victim = tmp_path / "victim"
+    victim.write_text("keep\n")
+    harness = Harness(project, land_mode="manual")
+
+    def act(worktree, prompt, iteration):  # e.g. the agent, by absolute path
+        harness.paths.iteration_dir(iteration).mkdir(parents=True, exist_ok=True)
+        harness.paths.rejected_patch(iteration).symlink_to(victim)
+
+    _wrap_agent(harness, act)
+    try:
+        harness.run(max_iterations=1, report=False)
+        paths = harness.paths
+    finally:
+        harness.close()
+    assert victim.read_text() == "keep\n"
+    patch = paths.rejected_patch(1)
+    assert not patch.is_symlink() and b"+# iteration 1" in patch.read_bytes()
+
+
+def test_a_patch_write_failure_never_masks_the_outcome(project, monkeypatch):
+    from autohelix.iteration import IterationWorkspace
+
+    def broken(self):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(IterationWorkspace, "store_rejected_patch", broken)
+    _configure(project, gates=['[ "$AUTOHELIX_ITERATION" = 0 ]'])
+    harness = Harness(project, land_mode="manual")
+    try:
+        harness.run(max_iterations=1, report=False)
+        paths = harness.paths
+    finally:
+        harness.close()
+    record = History(project, paths.run_id).load()[-1]
+    assert not record.accepted and record.rejected_ref and paths.record(1).is_file()
+
+
+def test_a_planted_tree_too_deep_to_walk_is_skipped(run_paths, tmp_path, monkeypatch):
+    import inspect
+    import sys
+
+    from autohelix.iteration import prepare_state
+
+    _seeded_history(run_paths, count=2)
+    fd = os.open(run_paths.observe_entry(1, "bench"), os.O_RDONLY)
+    for _ in range(200):  # created relative to each level: no path-length limit
+        os.mkdir("d", dir_fd=fd)
+        child = os.open("d", os.O_RDONLY, dir_fd=fd)
+        os.close(fd)
+        fd = child
+    os.close(fd)
+    copy = _fake_copy(tmp_path)
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(len(inspect.stack()) + 120)
+    try:
+        prepare_state(run_paths, copy, before=2)
+    finally:
+        sys.setrecursionlimit(limit)
+    iterations = copy.working_dir / ".autohelix-iteration" / "iterations"
+    assert (iterations / "001" / "record.json").is_file() and not (iterations / "001" / "observe").exists()
+    assert (iterations / "000" / "observe" / "bench" / "stdout.txt").read_text() == "bench 0\n"

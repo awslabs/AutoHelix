@@ -676,6 +676,11 @@ class Harness:
                             result.rejected_ref = workspace.keep_rejected()
                         except Exception as e:  # noqa: BLE001 - never mask the iteration's outcome
                             self.log.warn(f"Could not keep iteration {iteration}'s rejected tree: {e}")
+                        if result.rejected_ref:
+                            try:
+                                workspace.store_rejected_patch()
+                            except Exception as e:  # noqa: BLE001 - evidence, not the outcome
+                                self.log.warn(f"Could not write iteration {iteration}'s rejected.patch: {e}")
                     self._complete_record(result, attempt.started_at, attempt.monotonic, attempt.evaluation)
                     # Failures before the agent call don't consume the iteration.
                     if attempt.agent_attempted:

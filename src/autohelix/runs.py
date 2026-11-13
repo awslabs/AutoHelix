@@ -198,6 +198,10 @@ class RunPaths:
         """The output of the stop command at 1-based `position` in `stop:`."""
         return self.iteration_dir(iteration) / "stop" / str(position)
 
+    def rejected_patch(self, iteration: int) -> Path:
+        """A rejected attempt's change (`base..tree`), when it had one under the size limit."""
+        return self.iteration_dir(iteration) / "rejected.patch"
+
     def attempt_dir(self, iteration: int, k: int) -> Path:
         """Where the k-th superseded attempt at an iteration's folder is kept."""
         return self.attempts / f"{self.iteration_name(iteration)}-{k}"

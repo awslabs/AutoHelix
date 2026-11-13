@@ -15,12 +15,12 @@ Recent history:
 Last accepted: {{ "the baseline (iter-0)" if last.iteration == 0 else "iter-" ~ last.iteration }}; your copy holds its code.
 {% else %}
 Iteration {{ last.iteration }} was rejected: {{ last.reason }}
-Your copy holds the last accepted code.
+Your copy holds the last accepted code{% if last_accepted %} ({{ "the baseline" if last_accepted.iteration == 0 else "iter-" ~ last_accepted.iteration }}{% if last_accepted.path %}; its record and observations: {{ last_accepted.path }}{% endif %}){% endif %}.
 {% endif %}
 {% if last.gates %}
 {{ "Its" if last.accepted else "Its rejected attempt's" }} gate results:
 {% for g in last.gates %}
-  {{ {"passed": "✓", "failed": "✗", "pending": "·"}[g.status] }} {{ g.text }}{% if g.status == "pending" %} (not reached){% endif +%}
+  {{ {"passed": "✓", "failed": "✗", "pending": "·"}[g.status] }} {{ g.text }}{% if g.status == "pending" %} (not reached){% elif g.path %} (output: {{ g.path }}){% endif +%}
 {% endfor %}
 {% endif %}
 {% if not last.accepted and last.failure_output %}
@@ -30,7 +30,7 @@ Failure output:
 {% if last.observe %}
 Read the latest observations ({{ "its" if last.accepted else "what the rejected attempt produced" }}):
 {% for o in last.observe %}
-  {{ o.name }}: {{ o.path }}{% if not o.ok %} (failed: {{ o.error }}){% elif o.missing %} (reported no {{ o.missing | join(', ') }}: print `##autohelix[<name>=<number>]` lines){% endif +%}
+  {{ o.name }}{% if o.path %}: {{ o.path }}{% endif %}{% if not o.ok %} (failed: {{ o.error }}){% elif o.missing %} (reported no {{ o.missing | join(', ') }}: print `##autohelix[<name>=<number>]` lines){% endif +%}
 {% endfor %}
 {% endif %}
 {% if rejected_patch %}
@@ -77,9 +77,11 @@ Frozen (changes to these files will be reverted{% if editable %}, even inside th
 
 Read before starting:
 - .autohelix-iteration/notes/iter-*.md — your own notes from past iterations
-{% if observe %}
-- .autohelix-iteration/iterations/*/observe/<name>/ — each observe entry's stdout.txt, stderr.txt and captured files
-{% endif %}
+- .autohelix-iteration/iterations/NNN/ — the last {{ recent_iterations }} iterations and the last accepted one: record.json{% if gates %},
+  gates/<k>/ of failed gates (k: position in the list above; stdout.txt, stderr.txt, ask.log){% endif %}{% if observe %},
+  observe/<name>/ (stdout.txt, stderr.txt, captured files, review.log){% endif %}{% if stop %},
+  stop/<k>/ (stop commands' output){% endif %}. ask.log/review.log are judge transcripts, often long.
+  Older iterations: .autohelix-iteration/history.jsonl
 {% if hints %}
 - {{ hints }}
 {% endif %}

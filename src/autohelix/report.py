@@ -70,15 +70,22 @@ State paths are relative to {paths.run_dir}; candidate code is in the current wo
 - history.jsonl: one record per iteration (accepted, metrics, rejection reason and \
 failure output, commit, cost and time).
 - notes/: notes the agent wrote during the run (iter-N.md, plus shared notes), as of the last \
-iteration; iterations/NNN/notes/ is the version saved with iteration N (NNN: three digits, 001).
-- iterations/NNN/record.json: iteration N's record, as in history.jsonl.
-- iterations/NNN/observe/<name>/: each observe entry's stdout.txt (stderr.txt when not empty) and \
-captured files; a review entry's stdout is its review text.
-- iterations/NNN/gates/<k>/ and stop/<k>/: the output of the entry at 1-based position k in gates: \
-(stop:), metric gates included in the count: command.txt, stdout.txt and stderr.txt (long output \
-keeps its head and tail), an ask's ask.log. Metric gates and gates that never ran have no folder.
-- iterations/NNN/agent.log: full agent transcripts (iterations/NNN/prompt.md, the prompt). They \
-are large; search them rather than reading them whole.
+iteration. iterations/NNN/notes/ is the version saved with iteration N (NNN: three digits, 001); \
+every version is in .internal/notes/<N>/.
+- iterations/NNN/: one folder per iteration (000 is the baseline). Parts that don't apply are absent:
+  - record.json: iteration N's record, as in history.jsonl.
+  - prompt.md and agent.log: the agent's prompt and full transcript (not at the baseline). \
+Transcripts are large; search them rather than reading them whole.
+  - gates/<k>/ and stop/<k>/: the output of the entry at 1-based position k in gates: (stop:), \
+metric gates included in the count: command.txt, stdout.txt and stderr.txt (long output keeps its \
+head and tail), an ask's ask.log. Metric gates and gates that never ran have no folder.
+  - observe/<name>/: each observe entry's stdout.txt (stderr.txt when not empty) and captured \
+files; a review entry's stdout is its review text, review.log its transcript.
+  - rejected.patch: a rejected attempt's change (not when over 2 MiB; the record's rejected_ref \
+keeps the tree).
+- .internal/attempts/NNN-<k>/: earlier attempts at iteration N that were superseded (a killed \
+iteration, a baseline retry), laid out like iterations/NNN/.
+- logs/: the harness's own logs: run-<time>.log per run or resume, hook_audit.log, report.log.
 {git}
 - {config_path}: the run's config.
 
