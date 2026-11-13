@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Live run status: the harness writes .autohelix/runtime/status.json, observers read it."""
+"""Live run status: the harness writes runs/<id>/.internal/status.json, observers read it."""
 
 import json
 import os

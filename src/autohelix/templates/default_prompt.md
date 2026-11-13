@@ -78,7 +78,7 @@ Frozen (changes to these files will be reverted{% if editable %}, even inside th
 Read before starting:
 - .autohelix-iteration/notes/iter-*.md — your own notes from past iterations
 {% if observe %}
-- .autohelix-iteration/observations/iter-*/<name>/ — each observe entry's stdout.txt, stderr.txt and captured files
+- .autohelix-iteration/iterations/*/observe/<name>/ — each observe entry's stdout.txt, stderr.txt and captured files
 {% endif %}
 {% if hints %}
 - {{ hints }}

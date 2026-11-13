@@ -4,7 +4,7 @@
 """Persistent `.autohelix/` state management: git exclusions, active config.
 
 Utilities for the state that lives across runs under a project's `.autohelix/`
-directory — as opposed to per-run scaffolding (runs/, runtime/bin, etc.),
+directory — as opposed to per-run scaffolding (runs/, .internal/, etc.),
 which the harness manages directly.
 
 These helpers have no CLI or harness dependency, so both

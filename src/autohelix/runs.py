@@ -21,7 +21,7 @@ from pathlib import Path
 
 from autohelix.config import project_configs, run_command
 
-SCHEMA = 1
+SCHEMA = 2
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}\Z")
 _ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
@@ -80,6 +80,11 @@ class RunPaths:
 
     Without an explicit id, observers follow current. The root remains useful
     for project setup, but observers must not treat it as a run without an id.
+
+    A run's folder holds what people read (run.json, history.jsonl, hints.md,
+    report.md/.html, the `notes` link, `iterations/NNN/`, `logs/`); everything the
+    harness keeps for itself is in its `.internal/`, and the project's own
+    (the current-run pointer, locks, helper scripts) in `.autohelix/.internal/`.
     """
 
     project: Path
@@ -90,17 +95,30 @@ class RunPaths:
         run_id = self.run_id
         if run_id in (None, "current"):
             try:
-                run_id = (self.root / "current").read_text().strip()
+                run_id = self.current.read_text().strip()
             except FileNotFoundError:
                 run_id = None
         if run_id is not None and not _ID.fullmatch(run_id):
             raise RuntimeError(f"Invalid run id: {run_id!r}")
         object.__setattr__(self, "run_id", run_id)
 
+    # The project's state.
     @property
     def root(self): return self.project / ".autohelix"
     @property
+    def project_internal(self): return self.root / ".internal"
+    @property
+    def current(self): return self.project_internal / "current"  # the current run's id
+    @property
+    def locks(self): return self.project_internal / "locks"
+    @property
+    def selection_lock(self): return self.locks / "selection.lock"
+    @property
+    def bin(self): return self.project_internal / "bin"  # helper scripts (time left, notes check)
+    @property
     def runs(self): return self.root / "runs"
+
+    # One run's: what people read.
     @property
     def run_dir(self): return self.runs / self.run_id if self.run_id else self.root
     @property
@@ -108,23 +126,94 @@ class RunPaths:
     @property
     def history(self): return self.run_dir / "history.jsonl"
     @property
-    def notes(self): return self.run_dir / "notes"
-    @property
-    def logs(self): return self.run_dir / "logs"
-    @property
-    def observations(self): return self.run_dir / "observations"
-    @property
     def hints(self): return self.run_dir / "hints.md"
     @property
-    def output(self): return self.run_dir / "output"
+    def report(self): return self.run_dir / "report.md"
     @property
-    def runtime(self): return self.run_dir / "runtime"
+    def report_html(self): return self.run_dir / "report.html"
     @property
-    def status(self): return self.runtime / "status.json"
+    def notes(self): return self.run_dir / "notes"  # a link to the current version
     @property
-    def project_runtime(self): return self.root / "runtime"
+    def iterations(self): return self.run_dir / "iterations"
     @property
-    def copies_record(self): return self.run_dir / "copies"  # the copies base the last segment used
+    def logs(self): return self.run_dir / "logs"  # run logs per invocation, report.log, hook audit
+
+    # One run's internal files.
+    @property
+    def internal(self): return self.run_dir / ".internal"
+    @property
+    def status(self): return self.internal / "status.json"
+    @property
+    def metrics(self): return self.internal / "metrics.json"  # `$AUTOHELIX_METRICS` for stop commands
+    @property
+    def claude_settings(self): return self.internal / "claude_settings.json"
+    @property
+    def copies_record(self): return self.internal / "copies"  # the copies base the last segment used
+    @property
+    def notes_versions(self): return self.internal / "notes"  # notes/<N>/, one per save
+    @property
+    def report_info(self): return self.internal / "report.json"
+    @property
+    def report_draft(self): return self.internal / "report.draft.md"
+    @property
+    def attempts(self): return self.internal / "attempts"  # superseded iteration folders
+
+    def usage(self, iteration: int) -> Path:
+        """`$AUTOHELIX_USAGE_FILE` for the commands one iteration runs."""
+        return self.internal / "usage" / f"{self.iteration_name(iteration)}.jsonl"
+
+    # One iteration's folder.
+    @staticmethod
+    def iteration_name(iteration: int) -> str:
+        """`000`, `001`, ...: three digits, so listings sort in order (past 999 the width grows)."""
+        return f"{iteration:03d}"
+
+    def iteration_dir(self, iteration: int) -> Path:
+        return self.iterations / self.iteration_name(iteration)
+
+    def record(self, iteration: int) -> Path:
+        """The iteration's record, pretty-printed: derived from history.jsonl, written last."""
+        return self.iteration_dir(iteration) / "record.json"
+
+    def prompt(self, iteration: int) -> Path:
+        return self.iteration_dir(iteration) / "prompt.md"
+
+    def agent_log(self, iteration: int) -> Path:
+        return self.iteration_dir(iteration) / "agent.log"
+
+    def iteration_notes(self, iteration: int) -> Path:
+        """A link to the notes version saved with the iteration, if one was."""
+        return self.iteration_dir(iteration) / "notes"
+
+    def observe_dir(self, iteration: int) -> Path:
+        return self.iteration_dir(iteration) / "observe"
+
+    def observe_entry(self, iteration: int, name: str) -> Path:
+        return self.observe_dir(iteration) / name
+
+    def gate_dir(self, iteration: int, position: int) -> Path:
+        """The output of the gate at 1-based `position` in `gates:`."""
+        return self.iteration_dir(iteration) / "gates" / str(position)
+
+    def stop_dir(self, iteration: int, position: int) -> Path:
+        """The output of the stop command at 1-based `position` in `stop:`."""
+        return self.iteration_dir(iteration) / "stop" / str(position)
+
+    def attempt_dir(self, iteration: int, k: int) -> Path:
+        """Where the k-th superseded attempt at an iteration's folder is kept."""
+        return self.attempts / f"{self.iteration_name(iteration)}-{k}"
+
+    def command_logs(self, iteration: int) -> Path:
+        """`$AUTOHELIX_LOG_DIR` for the commands one iteration runs (ask/review logs)."""
+        return self.logs / f"iter-{iteration}"
+
+    def parts(self, path: Path) -> list[str]:
+        """`path`'s components below the run folder (for descriptor-based reads)."""
+        return list(path.relative_to(self.run_dir).parts)
+
+    def copies_under(self, base: Path) -> Path:
+        return base / project_key(self.project) / self.run_id
+
     @property
     def copies(self) -> Path:
         """The run's copies folder, outside the project: `<base>/<dirname>-<hash8>/<id>`,
@@ -138,8 +227,6 @@ class RunPaths:
             base = copies_base()
         return self.copies_under(base)
 
-    def copies_under(self, base: Path) -> Path:
-        return base / project_key(self.project) / self.run_id
     @property
     def ref(self): return f"refs/autohelix/{self.run_id}"
     @property
@@ -149,23 +236,30 @@ class RunPaths:
     def rejected_refs(self): return f"refs/autohelix-rejected/{self.run_id}/"
     def rejected_ref(self, iteration: int) -> str: return f"{self.rejected_refs}{iteration}"
     @property
-    def lock(self): return self.project_runtime / "locks" / f"{self.run_id}.lock"
-
-    def call_dir(self, iteration: int, role: str, index: int = 1) -> Path:
-        return self.logs / f"iter-{iteration}" / f"call-{index:03d}-{role}"
+    def lock(self): return self.locks / f"{self.run_id}.lock"
 
     def relative_log(self, value) -> str | None:
-        """Normalize untrusted log metadata, retaining usage without unsafe logs."""
+        """Normalize untrusted log metadata, retaining usage without unsafe logs: a
+        path inside the run folder (resolved, so no symlink leads out of it) below
+        `logs/`, or an iteration's `iterations/NNN/agent.log`. Returns it relative to
+        the run folder, else None."""
         if not self.run_id or not isinstance(value, (str, Path)) or not value:
             return None
         try:
             path = Path(value)
             path = (path if path.is_absolute() else self.run_dir / path).resolve()
             root = self.run_dir.resolve()
-            logs = self.logs.resolve()
-            if not logs.is_relative_to(root) or not path.is_relative_to(logs):
+            if not path.is_relative_to(root):
                 return None
-            return str(path.relative_to(root))
+            relative = path.relative_to(root)
+            logs = self.logs.resolve()
+            if logs.is_relative_to(root) and path.is_relative_to(logs):
+                return str(relative)
+            parts = relative.parts
+            if (len(parts) == 3 and parts[0] == self.iterations.name and re.fullmatch(r"\d{3,}", parts[1])
+                    and parts[2] == "agent.log"):
+                return str(relative)
+            return None
         except (OSError, ValueError, RuntimeError):
             return None
 
@@ -177,6 +271,16 @@ class RunPaths:
         if data.get("schema") != SCHEMA or data.get("id") != self.run_id:
             raise RuntimeError(f"Unsupported or inconsistent run identity: {self.identity}")
         return data
+
+
+def iteration_folder(paths: RunPaths, iteration: int) -> Path:
+    """`iterations/NNN/`, created as a real folder: a symlink or file planted at it (or
+    at `iterations/`) is removed, never written through."""
+    for folder in (paths.iterations, paths.iteration_dir(iteration)):
+        if folder.is_symlink() or folder.is_file():
+            folder.unlink()
+        folder.mkdir(parents=True, exist_ok=True)
+    return folder
 
 
 def _checked_base(value: str) -> Path:
@@ -639,11 +743,10 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
     raising refuses the start without leaving an identity, ref or pointer. Callers
     that check first (`planned_run`, as the Harness does before writing anything) pass
     None when the decision was a new run."""
-    root = RunPaths(project).root
     _refuse_legacy(project)
     # Serialize selection/creation for this project. The per-run lock remains
     # authoritative throughout the invocation, including final landing.
-    with RunLock(root / "runtime" / "locks" / "selection.lock", blocking=True):
+    with RunLock(RunPaths(project).selection_lock, blocking=True):
         try:
             sweep_copies(project)
         except Exception:  # noqa: BLE001 - a backstop; never blocks a run
@@ -703,36 +806,45 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
             return paths, data, lock, notices
 
 
-def repair_history(path: Path) -> None:
-    """Repair only a torn final JSON record, under run ownership."""
+def repair_history(paths: RunPaths) -> None:
+    """Under run ownership: repair only a torn final JSON record (its iteration is left
+    without a record.json: its folder is incomplete), and rewrite the record.json of
+    iterations whose record.json is missing or differs from history.jsonl (a process
+    killed between the two writes)."""
+    from autohelix.history import stale_records, write_records
+
+    path = paths.history
     if not path.exists():
         return
     raw = path.read_bytes()
     lines = raw.splitlines(keepends=True)
-    offset = 0
+    records = []
     for index, line in enumerate(lines):
         try:
             record = json.loads(line)
         except (ValueError, UnicodeDecodeError):
             if index != len(lines) - 1 or line.endswith(b"\n"):
                 raise RuntimeError(f"Corrupt history record {index + 1}: {path}") from None
-            with path.open("r+b") as stream:
-                stream.truncate(offset)
+            torn = re.match(rb'\s*\{\s*"iteration"\s*:\s*(\d+)\s*[,}]', line)
+            write_records(paths, records, mode="replace",
+                          iterations=stale_records(paths, records) | ({int(torn[1])} if torn else set()))
             return
         if (not isinstance(record, dict) or type(record.get("iteration")) is not int
                 or record["iteration"] < 0 or type(record.get("accepted")) is not bool):
             raise RuntimeError(f"Invalid history record {index + 1}: {path}")
-        offset += len(line)
-    if raw and not raw.endswith(b"\n"):
-        with path.open("ab") as stream:
-            stream.write(b"\n")
+        records.append(record)
+    stale = stale_records(paths, records)
+    if raw and not raw.endswith(b"\n"):  # complete, but unterminated
+        write_records(paths, records, mode="replace", iterations=stale)
+    elif stale:
+        write_records(paths, records, mode="derived", iterations=stale)
 
 
 def reconcile(paths: RunPaths, data: dict, history, land_mode: str) -> tuple[str, str | None]:
     """Recover a ref advance without its record, then pick up target commits."""
     from autohelix.history import IterationResult
 
-    repair_history(paths.history)
+    repair_history(paths)
     history._invalidate_cache()
     tip = git(paths.project, "rev-parse", paths.ref).stdout.strip()
     commits = git(paths.project, "log", "--format=%H%x00%B%x00",
@@ -843,7 +955,7 @@ def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
         if tip.returncode == 0:
             git(paths.project, "update-ref", "--no-deref", "-d", paths.ref, tip.stdout.strip())
         shutil.rmtree(paths.run_dir)
-    current = paths.root / "current"
+    current = paths.current
     try:
         pointed = current.read_text().strip()
     except OSError:

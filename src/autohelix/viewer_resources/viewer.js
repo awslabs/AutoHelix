@@ -643,7 +643,7 @@ function fillObserve(card, d) {
   card.observe.replaceChildren(...(d.observe || []).map((o) => {
     const id = o.legacy ? ':legacy' : o.name;
     const s = section(o.legacy ? 'Captured output' : o.name,
-      `runs/<id>/observations/iter-${d.iteration}/${o.legacy ? '' : o.name + '/'}`, card.opened.has(id));
+      `runs/<id>/iterations/${String(d.iteration).padStart(3, '0')}/observe/${o.legacy ? '' : o.name + '/'}`, card.opened.has(id));
     s.node.hidden = false;
     s.body.className = 'entry';
     s.node.addEventListener('toggle', () => (s.node.open ? card.opened.add(id) : card.opened.delete(id)));
@@ -709,7 +709,7 @@ function fmtSize(bytes) {
   return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
-// A file in observations/iter-N/, by its path there; each component encoded on its own.
+// A file in iterations/NNN/observe/, by its path there; each component encoded on its own.
 function artifactUrl(iteration, path) {
   return api(`/api/artifact/${iteration}/${path.split('/').map(encodeURIComponent).join('/')}`);
 }

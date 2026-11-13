@@ -16,7 +16,7 @@ from pathlib import Path
 
 from autohelix.formatting import SUMMARY_LIMIT, clean
 from autohelix.launcher import write_launcher
-from autohelix.runs import RunPaths, RunState, critical_section, ensure_copies, group_members
+from autohelix.runs import RunPaths, RunState, critical_section, ensure_copies, group_members, iteration_folder
 from autohelix.workspace import ITERATION_DIR, Copy, Repo, Scope, diff_args, remove_copy
 
 
@@ -36,7 +36,7 @@ def prepare_state(paths: RunPaths, copy, *, members=(), prompt: str | None = Non
 
     `notes/` round-trips (see `save_notes`); the rest is read-only reference:
     `prompt.md` (this iteration's prompt), `history.jsonl`, `hints.md`,
-    `observations/`, `logs/`, and for each other run of the group (`members`, as `group_members` returns them)
+    and for each other run of the group (`members`, as `group_members` returns them)
     its `run.json`, `history.jsonl` and `notes/` under `runs/<id>/`. Copies are
     anything with a `working_dir`. Project state remains reachable by absolute
     path; this is not access isolation."""
@@ -51,10 +51,6 @@ def prepare_state(paths: RunPaths, copy, *, members=(), prompt: str | None = Non
             shutil.copy2(source, state / source.name)
     _copy_notes(paths.notes, state / "notes")
     (state / "notes").mkdir(exist_ok=True)
-    for name in ("observations", "logs"):
-        source = paths.run_dir / name
-        if source.is_dir():
-            shutil.copytree(source, state / name, dirs_exist_ok=True)
     for member, _ in members:  # another run's state: deleted or unreadable must not stop this run
         target = state / "runs" / member.run_id
         try:
@@ -76,11 +72,20 @@ def _unused(directory: Path, name: str) -> Path:
     return path
 
 
+def _link(target: str, link: Path) -> None:
+    """Point `link` at `target` (relative) in one rename: readers see the old or the new."""
+    temporary = link.with_name(f".{link.name}.{os.getpid()}.link")
+    temporary.unlink(missing_ok=True)
+    os.symlink(target, temporary)
+    os.replace(temporary, link)
+
+
 def save_notes(paths: RunPaths, copy, iteration: int) -> None:
-    """Save a copy's `notes/` as a new version, `runs/<id>/notes.<iteration>/`, then
-    point the `runs/<id>/notes` link at it in one rename. A note the agent deleted
-    stays deleted, and readers (other runs of the group) never see a half-saved mix.
-    Every version is kept. Symlinks the agent left in its notes are not saved."""
+    """Save a copy's `notes/` as a new version, `.internal/notes/<iteration>/` (`7-2` for
+    a second save of 7), then point the `runs/<id>/notes` link at it in one rename, and
+    the iteration's `iterations/NNN/notes` link too. A note the agent deleted stays
+    deleted, and readers (other runs of the group) never see a half-saved mix. Every
+    version is kept. Symlinks the agent left in its notes are not saved."""
     state = copy.working_dir / ITERATION_DIR
     if state.is_symlink() or not state.is_dir():  # replaced by the agent: nothing trustworthy to save
         return
@@ -91,7 +96,12 @@ def save_notes(paths: RunPaths, copy, iteration: int) -> None:
         previous = paths.notes.resolve(strict=True) if paths.notes.is_symlink() else None
     except OSError:
         previous = None
-    version = _unused(paths.run_dir, f"notes.{iteration}")
+    versions = paths.notes_versions
+    for planted in (paths.internal, versions):  # outermost first: planted links are never written through
+        if planted.is_symlink() or planted.is_file():
+            planted.unlink()
+    versions.mkdir(parents=True, exist_ok=True)
+    version = _unused(versions, str(iteration))
 
     def link_or_copy(src, dst):
         # Files unchanged since the previous version are hard links to it, so keeping
@@ -112,11 +122,10 @@ def save_notes(paths: RunPaths, copy, iteration: int) -> None:
         version.mkdir()
     link = paths.notes
     if link.is_dir() and not link.is_symlink():  # saved before notes had versions
-        link.rename(_unused(paths.run_dir, "notes.old"))
-    temporary = paths.run_dir / f"notes.{os.getpid()}.link"
-    temporary.unlink(missing_ok=True)
-    os.symlink(version.name, temporary)
-    os.replace(temporary, link)
+        link.rename(_unused(versions, "old"))
+    _link(os.path.relpath(version, link.parent), link)
+    folder = iteration_folder(paths, iteration)
+    _link(os.path.relpath(version, folder), paths.iteration_notes(iteration))
 
 
 REJECTED_PATCH_LIMIT = 2 * 1024 * 1024  # bytes; larger rejected changes are named, not written
@@ -246,7 +255,8 @@ class IterationWorkspace:
         folder, removed when the command ends (also on an error or interrupt): an empty
         `scratch/`, `bin/` holding the `autohelix` launcher (`launcher.py`; put it first
         on the command's PATH), plus for each named source a copy of that folder under
-        the same name (an empty folder if the source doesn't exist; no entry for None).
+        the same name (an empty folder if the source doesn't exist or is reached through a
+        symlink; no entry for None).
         Yields {"scratch": path, "bin": path, <name>: path, ...}. A copy keeps what the command reads from
         run state fixed, whatever the command or the agent writes meanwhile."""
         self._calls += 1
@@ -263,7 +273,9 @@ class IterationWorkspace:
                 if source is None:
                     continue
                 target = paths[name] = folder / name
-                if source.is_dir() and not source.is_symlink():
+                # Only a real folder, reached without symlinks (one planted in run state
+                # could lead anywhere): else an empty one.
+                if source.is_dir() and os.path.realpath(source) == os.path.abspath(source):
                     shutil.copytree(source, target, symlinks=True)
                 else:
                     target.mkdir()

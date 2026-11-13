@@ -209,7 +209,7 @@ def test_first_iteration(tmp_path):
     assert variables["last"]["iteration"] == 0
     assert "This is iteration 1. Baseline is iter-0." in rendered
     assert "Last accepted: the baseline (iter-0); your copy holds its code." in rendered
-    assert "  bench: .autohelix-iteration/observations/iter-0/bench/" in rendered
+    assert "  bench: .autohelix-iteration/iterations/000/observe/bench/" in rendered
     assert "rejected.patch" not in rendered and "were discarded" not in rendered
     assert "- iter 0: speed=10.0 (accepted)" in rendered
     assert f"write to {tmp_path / 'copy' / '.autohelix-iteration' / 'notes' / 'iter-1.md'}." in rendered
@@ -225,7 +225,7 @@ def test_after_an_accepted_iteration(tmp_path):
     assert "Last accepted: iter-1; your copy holds its code." in rendered
     assert "Its gate results:\n  ✓ pytest -q\n  ✓ speed regress 5%" in rendered
     assert "Read the latest observations (its):" in rendered
-    assert "  progress: .autohelix-iteration/observations/iter-1/progress/ (failed: exited 2)" in rendered
+    assert "  progress: .autohelix-iteration/iterations/001/observe/progress/ (failed: exited 2)" in rendered
     assert "- iter 1: speed=10.0 (accepted) — Use insertion sort" in rendered
     assert "    observe progress failed: exited 2" in rendered
     assert "was rejected" not in rendered
@@ -257,7 +257,7 @@ def test_rejection_after_observe_shows_what_it_produced(tmp_path):
                 "observe": [{"name": "bench", "ok": True, "error": None, "metrics": {"speed": 5.0}}]}
     _, rendered = _render(tmp_path, [BASELINE, rejected], 2)
     assert "Read the latest observations (what the rejected attempt produced):" in rendered
-    assert "  bench: .autohelix-iteration/observations/iter-1/bench/" in rendered
+    assert "  bench: .autohelix-iteration/iterations/001/observe/bench/" in rendered
     assert "rejected.patch" not in rendered  # no kept tree, no patch
 
 

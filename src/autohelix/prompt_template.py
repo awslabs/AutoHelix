@@ -115,7 +115,7 @@ def build_prompt_variables(
       `{"iteration", "accepted", "reason", "summary", "failure_output", "gates": [{"text",
       "kind", "status": "passed"|"failed"|"pending"}], "observe": [{"name", "ok",
       "error", "missing" (declared metrics it ran without reporting), "path"}]}`; `path` is its folder in the copy
-      (`.autohelix-iteration/observations/iter-K/<name>/`).
+      (`.autohelix-iteration/iterations/KKK/observe/<name>/`).
     - `time_limit`: `agent.timeout` as a compact duration ("15m"), or "".
     - `group`: the run's group, or ""; `group_runs`: one line per other run of the
       group (`describe_member`; `members` as `runs.group_members` returns them).
@@ -169,6 +169,7 @@ def _describe_entry(entry) -> dict[str, Any]:
 
 def _describe_last(record) -> dict[str, Any]:
     """The latest iteration's outcome: what the next agent is told about it."""
+    from autohelix.runs import RunPaths
     from autohelix.workspace import ITERATION_DIR
 
     status = {True: "passed", False: "failed", None: "pending"}
@@ -182,7 +183,8 @@ def _describe_last(record) -> dict[str, Any]:
                    "status": status.get(gate.get("passed"), "pending")} for gate in record.gates],
         "observe": [{"name": clean(item.get("name")), "ok": bool(item.get("ok")), "error": clean(item.get("error")),
                      "missing": [clean(name) for name in item.get("metric_errors") or {}],
-                     "path": f"{ITERATION_DIR}/observations/iter-{record.iteration}/{clean(item.get('name'))}/"}
+                     "path": f"{ITERATION_DIR}/iterations/{RunPaths.iteration_name(record.iteration)}"
+                             f"/observe/{clean(item.get('name'))}/"}
                     for item in record.observe],
     }
 

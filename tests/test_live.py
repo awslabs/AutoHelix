@@ -15,7 +15,7 @@ def _status(**info) -> dict:
     now = time.time()
     return {"state": "running", "iteration": 2, "phase": "agent", "phase_started_at": now - 5,
             "iteration_started_at": now - 65,
-            "calls": [{"role": "agent", "log": "logs/iter-2/call-001-agent/agent.log"}], **info}
+            "calls": [{"role": "agent", "log": "iterations/002/agent.log"}], **info}
 
 
 def test_status_line():
@@ -30,11 +30,11 @@ def test_status_line():
 
 def test_log_for_follows_phases(tmp_path, run_paths):
     logs = run_paths.logs
-    agent = logs / "iter-2" / "call-001-agent" / "agent.log"
+    agent = run_paths.agent_log(2)
     assert W.log_for(tmp_path, _status(), None)[:2] == (agent, "Iteration 2 · agent")
     assert W.log_for(tmp_path, _status(phase="report"), agent)[:2] == (logs / "report.log", "Summary")
     # Between phases the panel stays put; a watcher started then shows the agent log.
-    shown = logs / "iter-2" / "call-002-command" / "ask.log"
+    shown = run_paths.command_logs(2) / "call-002-command" / "ask.log"
     assert W.log_for(tmp_path, _status(phase="accept"), shown) is None
     assert W.log_for(tmp_path, _status(phase="checks"), None)[0] == agent
     # Agent panel time counts from the iteration's start, not the phase's.
@@ -72,7 +72,7 @@ def test_view_shows_the_running_agent_log(tmp_path, monkeypatch, run_paths):
     status = RunStatus(tmp_path)
     status.start()
     status.phase("agent", 1)
-    log = run_paths.call_dir(1, "agent") / "agent.log"
+    log = run_paths.agent_log(1)
     log.parent.mkdir(parents=True)
     status.note(log=str(log), calls=[{"role": "agent", "log": str(log.relative_to(run_paths.run_dir))}])
     log.write_text(json.dumps({"type": "assistant", "message": {"content": [
@@ -199,7 +199,7 @@ def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, r
     status = RunStatus(tmp_path)
     status.start()
     status.phase("agent", 1)
-    log = run_paths.call_dir(1, "agent") / "agent.log"
+    log = run_paths.agent_log(1)
     log.parent.mkdir(parents=True)
     status.note(log=str(log), calls=[{"role": "agent", "log": str(log.relative_to(run_paths.run_dir))}])
     log.write_text("")

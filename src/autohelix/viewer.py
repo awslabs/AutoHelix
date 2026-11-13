@@ -7,14 +7,14 @@ Two pages share one server: `/` lists the project's runs, `/run/<id>/` shows one
 run. The pages poll a few JSON routes. There are no write routes. Every file read
 is derived from a run id that must name an existing run directory, an iteration
 number, a file name that must match an entry in notes/, or a relative path inside
-one iteration's observations/iter-N/ folder. Run state is opened one component at
+one iteration's iterations/NNN/observe/ folder. Run state is opened one component at
 a time from the run folder down, without following symlinks or blocking on FIFOs
 (`_open_dir`, `_open_file`). Git only gets object names from history records that
 are plain hex, and its diff output is fixed whatever the user's diff settings and
 cut at MAX_TEXT (`RunData._run_diff`). The unprefixed `/api/...` routes serve the
 server's default run.
 
-`write_static` saves the same page as one file, output/report.html, with the
+`write_static` saves the same page as one file, report.html, with the
 route data built in.
 """
 
@@ -331,7 +331,7 @@ class RunData:
     def _report(self) -> dict | None:
         if not self.paths.run_id:
             return None
-        html = _markdown(_read_text_at(self.root, ["output", "report.md"]))
+        html = _markdown(_read_text_at(self.root, self.paths.parts(self.paths.report)))
         return {"html": html, **(read_report_info(self.project, self.paths.run_id) or {})} if html else None
 
     def changes(self, n: int) -> str | None:
@@ -362,27 +362,27 @@ class RunData:
         changes = self.changes(n) if diff else None
         # While an iteration runs, its own notes live in the worktree; a copy in notes/
         # may be left over from an earlier, failed attempt at the same iteration. Once it
-        # finished, the version saved with it (the last attempt's: `notes.N-k` after a
-        # retry) shows the note as of N, even if the agent later edited or removed it.
+        # finished, the version saved with it (the last attempt's: `.internal/notes/N-k`
+        # after a retry) shows the note as of N, even if the agent later edited or removed it.
         # Each is (folder, path below it), read without following symlinks or blocking on FIFOs.
         note = f"iter-{n}.md"
-        latest = [(self.root, [folder, note])] if (folder := self._notes_folder()) else []
+        latest = [(self.root, [*folder, note])] if (folder := self._notes_folder()) else []
         if record is None:
             notes = [(self.paths.copies, [self._agent_copy(n).name, *self._prefix_parts(),
                                           ITERATION_DIR, "notes", note])] + latest
         else:
-            names = [name for name, info in _listing(self.root, []) if stat.S_ISDIR(info.st_mode)
-                     and re.fullmatch(rf"notes\.{n}(-\d+)?", name)]
+            versions = self.paths.parts(self.paths.notes_versions)
+            names = [name for name, info in _listing(self.root, versions) if stat.S_ISDIR(info.st_mode)
+                     and re.fullmatch(rf"{n}(-\d+)?", name)]
             names.sort(key=lambda name: int(name.rsplit("-", 1)[1]) if "-" in name else 0)
-            notes = [(self.root, [name, note]) for name in reversed(names)] + latest
-        log_dir = self.paths.logs / f"iter-{n}"
+            notes = [(self.root, [*versions, name, note]) for name in reversed(names)] + latest
         calls = record.calls if record else []
         if record is None:
             from autohelix.usage_log import read_usage
 
             status = read_run_status(self.project, self.paths.run_id) or {}
             calls = list(status.get("calls", [])) if status.get("iteration") == n else []
-            for usage in read_usage(self.paths.runtime / "usage" / f"iter-{n}.jsonl"):
+            for usage in read_usage(self.paths.usage(n)):
                 calls.append({"role": "command", "log": usage.get("log"), "usage": usage})
         phases = []
         for call in calls:
@@ -421,8 +421,8 @@ class RunData:
 
     def observations(self, n: int, record, config, outputs: bool = True) -> list[dict]:
         """One section per observe entry: those the record lists (in the order they ran),
-        then folders in observations/iter-N/ it doesn't (a running iteration's, in config
-        order), then any files directly in that folder (the layout before named entries).
+        then folders in iterations/NNN/observe/ it doesn't (a running iteration's, in config
+        order).
 
         Review entries (the stored config's `review:` entries; without a readable config,
         entries whose folder holds only stdout.txt) get their stdout rendered as Markdown,
@@ -433,8 +433,8 @@ class RunData:
         (`entry`, in the benchmark phase) is added, marked `running`.
 
         Everything is read through descriptors from the run folder down, so a symlinked
-        observations/, iter-N/ or entry folder shows nothing."""
-        where = ["observations", f"iter-{n}"]
+        iterations/, NNN/, observe/ or entry folder shows nothing."""
+        where = self.paths.parts(self.paths.observe_dir(n))
         order = [entry.name for entry in config.observe] if config else []
         reviews = {entry.name for entry in config.observe if entry.review is not None} if config else None
         recorded = {}
@@ -472,13 +472,6 @@ class RunData:
                 "html": review_markdown(stdout) if review else None,
                 "files": [{**f, "path": f"{name}/{f['path']}"} for f in files] if outputs else [],
             })
-        legacy = [{"path": name, "size": info.st_size} for name, info in listing
-                  if stat.S_ISREG(info.st_mode) and info.st_nlink == 1]
-        if legacy:
-            sections.append({"name": None, "legacy": True, "review": False, "ran": False, "running": False,
-                             "ok": None, "error": None, "return_code": None, "duration_s": None, "metrics": {},
-                             "stdout": None, "stdout_file": None, "stderr": None, "html": None,
-                             "files": legacy if outputs else []})
         return sections
 
     def attempt_diff(self, n: int) -> dict:
@@ -596,31 +589,35 @@ class RunData:
             prefix = ""
         return [part for part in prefix.split("/") if part]
 
-    def _notes_folder(self) -> str | None:
-        """The folder `runs/<id>/notes` stands for: the version its link names (a sibling
-        `notes.N`), or a real `notes/` saved before notes had versions."""
-        link = self.root / "notes"
+    def _notes_folder(self) -> list[str] | None:
+        """The folder `runs/<id>/notes` stands for, as parts below the run folder: the
+        version its link names (`.internal/notes/<N>`), else None."""
+        versions = self.paths.parts(self.paths.notes_versions)
         try:
-            target = os.readlink(link)
+            target = os.readlink(self.paths.notes)
         except OSError:
-            return "notes" if link.is_dir() and not link.is_symlink() else None
-        return target if re.fullmatch(r"notes\.[^/\0]+", target) else None
+            return None
+        parts = target.split("/")
+        if parts[:-1] != versions or not re.fullmatch(r"[^/\0.][^/\0]*", parts[-1]):
+            return None
+        return parts
 
     def _notes_files(self) -> list[str]:
         folder = self._notes_folder()
-        return [name for name, info in _listing(self.root, [folder]) if stat.S_ISREG(info.st_mode)] if folder else []
+        return [name for name, info in _listing(self.root, folder) if stat.S_ISREG(info.st_mode)] if folder else []
 
     def note(self, name: str) -> dict | None:
         if not self.paths.run_id or name not in self._notes_files():
             return None
-        return {"name": name, "html": _markdown(_read_text_at(self.root, [self._notes_folder(), name]))}
+        return {"name": name, "html": _markdown(_read_text_at(self.root, [*self._notes_folder(), name]))}
 
     def artifact(self, n: int, parts: list[str]) -> tuple[bytes, str] | None:
-        """A file in observations/iter-N/, by its path there (`bench/results/log.json`):
+        """A file in iterations/NNN/observe/, by its path there (`bench/results/log.json`):
         a regular file with no other hard links (captures are copies)."""
         if not self.paths.run_id:
             return None
-        data = _read_bytes(self.root, ["observations", f"iter-{n}", *parts], MAX_ARTIFACT, single_link=True)
+        data = _read_bytes(self.root, [*self.paths.parts(self.paths.observe_dir(n)), *parts], MAX_ARTIFACT,
+                           single_link=True)
         if data is None:
             return None
         # Anything that is not a plain image is served as text, so captured
@@ -636,7 +633,7 @@ class RunData:
         path = self.paths.run_dir / relative
         if path not in self._logs:
             # Opened through `open_run_log` on every read: never a symlink, FIFO or
-            # hard link planted in logs/ (an agent can reach run state by absolute path).
+            # hard link planted in run state (an agent can reach run state by absolute path).
             self._logs[path] = (LogTail(path, opener=lambda: open_run_log(self.paths, relative)),
                                 deque(maxlen=MAX_EVENTS))
         tail, events = self._logs[path]
@@ -888,7 +885,7 @@ class ProjectRuns:
 
 
 def write_static(project: Path, *, run_id: str | None = None) -> Path:
-    """Write output/report.html: the viewer page with this run's data built in."""
+    """Write report.html: the viewer page with this run's data built in."""
     resources = files("autohelix").joinpath("viewer_resources")
     read = lambda name: resources.joinpath(name).read_text(encoding="utf-8")  # noqa: E731
     # Each logo once, in the data; the page's theme code sets the <img> from it.
@@ -907,7 +904,7 @@ def write_static(project: Path, *, run_id: str | None = None) -> Path:
             .replace(' src="/logo-light.svg"', "")
             .replace("</body>", f"<script>window.AUTOHELIX_SNAPSHOT = {script};</script>\n"
                                 f"<script>\n{read('viewer.js')}</script>\n</body>"))
-    out = RunPaths(project, run_id).output / "report.html"
+    out = RunPaths(project, run_id).report_html
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".tmp")
     tmp.write_text(page, encoding="utf-8")

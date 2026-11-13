@@ -817,7 +817,7 @@ def report(run_id: str | None, path: str):
     """Write (or rewrite) a run's summary (RUN_ID or its last part, default the current run).
 
     One agent call reads the run's history, notes, reviews, logs and commits, and writes
-    the selected run's output/report.md. `run` and `resume` do this automatically when a run
+    the selected run's report.md. `run` and `resume` do this automatically when a run
     finishes; use this after an interrupted run or to regenerate it. It reads the config
     the run started with.
     """
@@ -849,7 +849,7 @@ def report(run_id: str | None, path: str):
     from autohelix.viewer import write_static
 
     write_static(project_path, run_id=run_id)
-    console.print(f"[dim]Run page: {(paths.output / 'report.html').relative_to(project_path)}[/dim]", highlight=False)
+    console.print(f"[dim]Run page: {paths.report_html.relative_to(project_path)}[/dim]", highlight=False)
 
 
 if __name__ == "__main__":

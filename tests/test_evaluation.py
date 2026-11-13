@@ -15,6 +15,7 @@ from autohelix.config import Config, ObserveEntry, capture_problem
 from autohelix.harness import Harness
 from autohelix.history import History
 from autohelix.iteration import IterationWorkspace
+from autohelix.runs import RunPaths
 
 
 def _git(project, *args) -> str:
@@ -60,8 +61,9 @@ def _lines(path) -> list[str]:
     return path.read_text().splitlines() if path.exists() else []
 
 
-def _observations(project):
-    return next((project / ".autohelix" / "runs").iterdir()) / "observations"
+def _observe(project, iteration):
+    """The run's `iterations/NNN/observe/`."""
+    return RunPaths(project, next((project / ".autohelix" / "runs").iterdir()).name).observe_dir(iteration)
 
 
 # --- order and short-circuit ---------------------------------------------------
@@ -87,7 +89,7 @@ def test_failing_gate_skips_later_gates_and_observe(project, log):
     assert "output" not in record.gates[0] and record.gates[0]["return_code"] == 0
     assert record.gates[3]["text"] == "speed regress 5%"
     assert record.observe == [] and record.metrics == {}
-    assert not (_observations(project) / "iter-1").exists()
+    assert not (_observe(project, 1)).exists()
     assert not hasattr(record, "constraints")  # the old field is gone
     # At the baseline the gates ran but didn't reject; metric gates aren't checked there.
     assert baseline.accepted
@@ -112,8 +114,8 @@ def test_metric_gate_failure_after_an_entry_skips_the_next(project, log):
     assert gate["passed"] is False and gate["value"] == 5 and gate["reference"] == 10
     assert gate["reason"] == record.reason
     # A rejected iteration still stores the output of the entries that ran.
-    assert (_observations(project) / "iter-1" / "bench" / "stdout.txt").read_text() == "##autohelix[speed=5]\n"
-    assert not (_observations(project) / "iter-1" / "later").exists()
+    assert (_observe(project, 1) / "bench" / "stdout.txt").read_text() == "##autohelix[speed=5]\n"
+    assert not (_observe(project, 1) / "later").exists()
 
 
 # --- failures continue ---------------------------------------------------------
@@ -140,10 +142,10 @@ def test_failed_entry_contributes_no_metrics_and_the_run_continues(project, log)
     assert isinstance(flaky["duration_s"], float)
     assert other == {**other, "name": "other", "ok": True, "return_code": 0, "error": None, "metrics": {"size": 3}}
     # Its output is kept: stdout and stderr apart, stderr.txt only when there is any.
-    flaky_dir = _observations(project) / "iter-1" / "flaky"
+    flaky_dir = _observe(project, 1) / "flaky"
     assert (flaky_dir / "stdout.txt").read_text() == "##autohelix[score=7]\n"
     assert (flaky_dir / "stderr.txt").read_text() == "oops\n"
-    assert not (_observations(project) / "iter-1" / "other" / "stderr.txt").exists()
+    assert not (_observe(project, 1) / "other" / "stderr.txt").exists()
     persisted = json.loads(History(project).history_path.read_text().splitlines()[-1])
     assert persisted["observe"][0]["error"] == "exited 2"
 
@@ -199,7 +201,7 @@ def test_observations_by_name_with_captures_at_their_relative_paths(project, tmp
     assert record.accepted
     assert record.observe[0]["capture_errors"] == ["capture 'link.txt' skipped: link.txt is a symlink"]
     for iteration in (0, 1):
-        folder = _observations(project) / f"iter-{iteration}"
+        folder = _observe(project, iteration)
         assert sorted(p.name for p in folder.iterdir()) == ["bench", "lint"]
         bench = folder / "bench"
         assert (bench / "stdout.txt").read_text() == "bench\n"
@@ -253,7 +255,7 @@ def test_special_and_unreadable_captures_are_recorded_not_fatal(project):
     assert errors[0].startswith("capture 'out' not saved completely: ") and "locked" in errors[0]
     assert errors[1] == "capture 'top.fifo' skipped: not a regular file or folder"
     assert errors[2].startswith("capture 'top.txt' not saved completely: ")
-    stored = _observations(project) / "iter-1" / "bench"
+    stored = _observe(project, 1) / "bench"
     assert (stored / "out" / "x.txt").read_text() == "ok\n"
     assert not (stored / "out" / "pipe").exists() and not (stored / "top.fifo").exists()
 
@@ -261,7 +263,7 @@ def test_special_and_unreadable_captures_are_recorded_not_fatal(project):
 def test_output_replaces_what_earlier_commands_wrote_there(project, log):
     # A gate and an earlier entry plant files in a later entry's folder by absolute path:
     # neither survives, the entry's folder holds only its own output.
-    plant = ('d="$AUTOHELIX_RUN_DIR/observations/iter-$AUTOHELIX_ITERATION/later"; mkdir -p "$d"; '
+    plant = ('d="$AUTOHELIX_RUN_DIR/iterations/$(printf %03d "$AUTOHELIX_ITERATION")/observe/later"; mkdir -p "$d"; '
              'echo planted > "$d/stdout.txt"; echo planted > "$d/{name}"')
     _configure(project, gates=[plant.format(name="from-gate")], observe=[
         {"name": "first", "command": plant.format(name="from-entry")},
@@ -270,30 +272,30 @@ def test_output_replaces_what_earlier_commands_wrote_there(project, log):
     records = _run(project, 1)
     assert [r.accepted for r in records] == [True, True]
     for iteration in (0, 1):
-        later = _observations(project) / f"iter-{iteration}" / "later"
+        later = _observe(project, iteration) / "later"
         assert sorted(p.name for p in later.iterdir()) == ["stdout.txt"]
         assert (later / "stdout.txt").read_text() == "mine\n"
 
 
-def test_observations_are_cleared_when_an_iteration_starts(project, log):
-    _configure(project, observe=[{"name": "bench", "command": f'ls "$AUTOHELIX_RUN_DIR/observations/" >> {log}'}])
+def test_an_earlier_attempt_is_moved_aside_when_an_iteration_starts(project, log):
+    _configure(project, observe=[{"name": "bench", "command": f'ls -A "$AUTOHELIX_RUN_DIR/iterations/001/" >> {log}'}])
     harness = Harness(project, verbose=False)
     try:
         harness._capture_baseline()
-        stale = harness.paths.observations / "iter-1" / "bench"
+        paths = harness.paths
+        stale = paths.observe_entry(1, "bench")
         stale.mkdir(parents=True)
         (stale / "stdout.txt").write_text("from a killed attempt\n")
-        seen = {}
-        original = harness.build_prompt
-
-        def build_prompt(iteration, worktree_dir, members=(), **kwargs):
-            seen["shown"] = sorted(p.name for p in (worktree_dir / ".autohelix-iteration" / "observations").iterdir())
-            return original(iteration, worktree_dir, members, **kwargs)
-
-        harness.build_prompt = build_prompt
+        paths.prompt(1).write_text("the killed attempt's prompt\n")
         record = harness.run_iteration(1)
         assert record.accepted
-        assert seen["shown"] == ["iter-0"]  # the agent didn't see the stale iter-1
+        # The command saw this attempt's folder only (its prompt, agent log and notes), not the killed one's output.
+        assert _lines(log) == ["agent.log", "notes", "prompt.md"]
+        kept = paths.attempt_dir(1, 1)
+        assert (kept / "observe" / "bench" / "stdout.txt").read_text() == "from a killed attempt\n"
+        assert (kept / "prompt.md").read_text() == "the killed attempt's prompt\n"
+        assert paths.prompt(1).read_text() != "the killed attempt's prompt\n"
+        assert json.loads(paths.record(1).read_text()) == json.loads(paths.history.read_text().splitlines()[-1])
     finally:
         harness.close()
 
@@ -314,7 +316,7 @@ def test_previous_is_a_copy_from_the_last_accepted_iteration(project, log):
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True), (2, False), (3, True)]
 
     def seen(iteration):
-        return (_observations(project) / f"iter-{iteration}" / "tracker" / "stdout.txt").read_text().splitlines()[:2]
+        return (_observe(project, iteration) / "tracker" / "stdout.txt").read_text().splitlines()[:2]
 
     assert seen(0) == ["iter=0", "prev=none"]  # unset at the first evaluation
     assert seen(1) == ["iter=1", "prev=iter=0"]  # the baseline counts
@@ -385,7 +387,7 @@ def test_stop_gets_a_copy_of_the_accepted_observations(project, log):
     assert [r.accepted for r in records] == [True, True]
     assert _lines(log) == ["iter=0", "iter=1"]
     for iteration in (0, 1):
-        stored = _observations(project) / f"iter-{iteration}" / "bench" / "stdout.txt"
+        stored = _observe(project, iteration) / "bench" / "stdout.txt"
         assert stored.read_text() == f"iter={iteration}\n"
 
 
@@ -449,7 +451,7 @@ def test_failed_review_entry_at_the_baseline(project, gated):
 
 
 def _first_lines(project, iteration, name="tracker"):
-    return (_observations(project) / f"iter-{iteration}" / name / "stdout.txt").read_text().splitlines()[:2]
+    return (_observe(project, iteration) / name / "stdout.txt").read_text().splitlines()[:2]
 
 
 TRACKER = ('echo "iter=$AUTOHELIX_ITERATION"; '
@@ -492,14 +494,14 @@ def test_previous_after_resume_and_for_an_entry_added_on_resume(project):
 
 def test_baseline_retry_clears_observations_and_has_no_previous(project, tmp_path, log):
     marker = tmp_path / "second-attempt"
-    _configure(project, gates=['d="$AUTOHELIX_RUN_DIR/observations/iter-0/ghost"; mkdir -p "$d"; touch "$d/x"'],
+    _configure(project, gates=['d="$AUTOHELIX_RUN_DIR/iterations/000/observe/ghost"; mkdir -p "$d"; touch "$d/x"'],
                observe=[{"name": "bench",
                          "command": (f'echo "prev=${{AUTOHELIX_PREVIOUS-unset}}" >> {log}; '
                                      f'[ -e {marker} ] && echo "##autohelix[speed=1]"; true'),
                          "metrics": {"speed": "higher"}}])
     with pytest.raises(RuntimeError, match="Baseline setup error: observe entry `bench`"):
         Harness(project, verbose=False).run(max_iterations=1, report=False)
-    observations = _observations(project) / "iter-0"
+    observations = _observe(project, 0)
     assert sorted(p.name for p in observations.iterdir()) == ["bench", "ghost"]
     marker.touch()
     harness = Harness(project, verbose=False)  # resumes the run: a baseline retry
@@ -508,6 +510,9 @@ def test_baseline_retry_clears_observations_and_has_no_previous(project, tmp_pat
     records = History(project).load()
     assert [(r.iteration, r.accepted) for r in records][:2] == [(0, True), (1, True)]
     assert sorted(p.name for p in observations.iterdir()) == ["bench"]
+    kept = History(project).paths.attempt_dir(0, 1)
+    assert sorted(p.name for p in (kept / "observe").iterdir()) == ["bench", "ghost"]
+    assert json.loads((kept / "record.json").read_text())["accepted"] is False  # the failed attempt's record
     first, retry, iteration_1 = _lines(log)
     assert first == retry == "prev=unset" and iteration_1.startswith("prev=/")
 

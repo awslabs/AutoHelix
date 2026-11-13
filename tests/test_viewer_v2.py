@@ -82,24 +82,23 @@ def project(tmp_path, run_paths):
     ]
     run_paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
 
-    obs = run_paths.observations
-    (obs / "iter-1" / "bench" / "results" / "deep").mkdir(parents=True)
-    (obs / "iter-1" / "bench" / "stdout.txt").write_text("##autohelix[speed=12]\nran 3 times\n")
-    (obs / "iter-1" / "bench" / "stderr.txt").write_text("warning: slow disk\n")
-    (obs / "iter-1" / "bench" / "results" / "deep" / "log.json").write_text('{"runs": 3}')
-    (obs / "iter-1" / "bench" / "results" / "page.html").write_text("<script>alert(1)</script>")
-    (obs / "iter-1" / "review").mkdir()
-    (obs / "iter-1" / "review" / "stdout.txt").write_text(
+    one = run_paths.observe_dir(1)
+    (one / "bench" / "results" / "deep").mkdir(parents=True)
+    (one / "bench" / "stdout.txt").write_text("##autohelix[speed=12]\nran 3 times\n")
+    (one / "bench" / "stderr.txt").write_text("warning: slow disk\n")
+    (one / "bench" / "results" / "deep" / "log.json").write_text('{"runs": 3}')
+    (one / "bench" / "results" / "page.html").write_text("<script>alert(1)</script>")
+    (one / "review").mkdir()
+    (one / "review" / "stdout.txt").write_text(
         "**Fix** the `cmp` call.\n\n<b>raw</b>\n\n##autohelix [missing=0] quoted by the reviewer\n"
         "##autohelix[missing=3]\n")
     secret = tmp_path / "secret.txt"
     secret.write_text("SECRET")
-    os.symlink(secret, obs / "iter-1" / "bench" / "results" / "link.txt")
-    os.symlink(tmp_path, obs / "iter-1" / "bench" / "results" / "outside")
-    os.mkfifo(obs / "iter-1" / "bench" / "results" / "pipe")
-    (obs / "iter-0" / "stdout_0.txt").parent.mkdir(parents=True)
-    (obs / "iter-0" / "stdout_0.txt").write_text("old flat layout\n")
-    os.symlink(obs / "iter-1", obs / "iter-7")  # an iteration folder that is a symlink
+    os.symlink(secret, one / "bench" / "results" / "link.txt")
+    os.symlink(tmp_path, one / "bench" / "results" / "outside")
+    os.mkfifo(one / "bench" / "results" / "pipe")
+    run_paths.iteration_dir(0).mkdir()
+    os.symlink(run_paths.iteration_dir(1), run_paths.iteration_dir(7))  # an iteration folder that is a symlink
     return tmp_path
 
 
@@ -158,12 +157,10 @@ def test_observe_sections_by_entry(server):
     assert "review" not in detail and "reviewer" not in detail
 
 
-def test_legacy_flat_observations_and_missing_folders(server):
+def test_missing_folders(server):
     baseline = get_json(server + "/api/iteration/0")["observe"]
-    assert [(s["name"], s.get("legacy", False)) for s in baseline] == [("bench", False), (None, True)]
+    assert [s["name"] for s in baseline] == ["bench"]
     assert baseline[0]["ran"] and baseline[0]["stdout"] is None  # recorded, nothing stored
-    assert [f["path"] for f in baseline[1]["files"]] == ["stdout_0.txt"]
-    assert get(server + "/api/artifact/0/stdout_0.txt")[1] == b"old flat layout\n"
     assert get_json(server + "/api/iteration/2")["observe"] == []
     assert get_json(server + "/api/iteration/7")["observe"] == []  # a symlinked iteration folder is not read
 
@@ -178,11 +175,11 @@ def test_nested_files_served_only_inside_the_iteration(server):
                  "bench/results/outside/secret.txt",  # through a symlinked folder
                  "bench/results/pipe",                # a FIFO (would block a plain open)
                  "bench/results",                     # a folder
-                 "bench/..%2F..%2F..%2F..%2Fsecret.txt", "bench/%2E%2E/%2E%2E/iter-0/stdout_0.txt",
-                 "..%2Fiter-0%2Fstdout_0.txt", "%2Fetc%2Fpasswd", "bench//stdout.txt", "bench/./stdout.txt",
+                 "bench/..%2F..%2F..%2F..%2Fsecret.txt", "bench/%2E%2E/%2E%2E/%2E%2E/record.json",
+                 "..%2F..%2Frecord.json", "%2Fetc%2Fpasswd", "bench//stdout.txt", "bench/./stdout.txt",
                  "bench/stdout.txt%00", "missing.txt"):
         assert get(server + f"/api/artifact/1/{path}")[0] == 404, path
-    assert get(server + "/api/artifact/7/bench/stdout.txt")[0] == 404  # iter-7 is a symlink
+    assert get(server + "/api/artifact/7/bench/stdout.txt")[0] == 404  # iterations/007 is a symlink
 
 
 def test_gates_pending_while_running(project, server):
@@ -282,19 +279,20 @@ def test_terminal_tables_show_gates_summaries_and_titles(project):
 
 # ---------- hardening ----------
 
-def test_symlinked_observations_folder_lists_and_serves_nothing(project, server):
-    obs = RunPaths(project, "test").observations
+@pytest.mark.parametrize("folder", ["iterations", "observe"])
+def test_symlinked_observations_folder_lists_and_serves_nothing(project, server, folder):
+    paths = RunPaths(project, "test")
+    obs = paths.iterations if folder == "iterations" else paths.observe_dir(1)
     moved = project / "elsewhere"
     obs.rename(moved)
     os.symlink(moved, obs)
     bench, review = get_json(server + "/api/iteration/1")["observe"]  # still listed: the record names them
     assert (bench["stdout"], bench["files"], review["html"]) == (None, [], None)
     assert get(server + "/api/artifact/1/bench/results/deep/log.json")[0] == 404
-    assert [s for s in get_json(server + "/api/iteration/0")["observe"] if s.get("legacy")] == []
 
 
 def test_symlinked_entry_folder_shows_nothing(project, server):
-    obs = RunPaths(project, "test").observations / "iter-1"
+    obs = RunPaths(project, "test").observe_dir(1)
     (obs / "bench").rename(project / "bench-elsewhere")
     os.symlink(project / "bench-elsewhere", obs / "bench")
     bench = get_json(server + "/api/iteration/1")["observe"][0]
@@ -303,7 +301,7 @@ def test_symlinked_entry_folder_shows_nothing(project, server):
 
 
 def test_hard_links_are_not_listed_or_served(project, server):
-    bench = RunPaths(project, "test").observations / "iter-1" / "bench"
+    bench = RunPaths(project, "test").observe_entry(1, "bench")
     os.link(project / "secret.txt", bench / "results" / "hard.txt")
     (bench / "stdout.txt").unlink()
     os.link(project / "secret.txt", bench / "stdout.txt")
@@ -319,12 +317,12 @@ def test_notes_never_block_on_fifos_or_follow_symlinks(project, server):
     from autohelix.runs import ensure_copies
 
     paths = RunPaths(project, "test")
-    version = paths.run_dir / "notes.1"
-    version.mkdir()
+    version = paths.notes_versions / "1"
+    version.mkdir(parents=True)
     os.mkfifo(version / "iter-1.md")
     os.symlink(project / "secret.txt", version / "iter-2.md")
     (version / "ideas.md").write_text("# Ideas\n")
-    os.symlink("notes.1", paths.run_dir / "notes")
+    os.symlink(".internal/notes/1", paths.notes)
     state = get_json(server + "/api/state")
     assert state["notes_files"] == ["ideas.md"]
     assert get_json(server + "/api/iteration/1")["notes"] is None
@@ -419,8 +417,8 @@ def test_report_page_loads_nothing(project):
 
 def test_running_iteration_marks_only_the_entry_running(project, server):
     paths = RunPaths(project, "test")
-    (paths.observations / "iter-3" / "bench").mkdir(parents=True)
-    (paths.observations / "iter-3" / "bench" / "stdout.txt").write_text("done\n")
+    paths.observe_entry(3, "bench").mkdir(parents=True)
+    (paths.observe_entry(3, "bench") / "stdout.txt").write_text("done\n")
     status = {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "benchmark",
               "phase_started_at": 1, "iteration_started_at": 1}
     write_json(paths.status, status)

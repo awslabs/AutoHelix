@@ -76,7 +76,7 @@ def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, mon
     assert "name that run in your summary" in seen["prompt"]
     assert seen["prompt_file"] == seen["prompt"]
     # The first run (alone in its group then) was not told about anyone.
-    first_prompt = next(first.paths.logs.glob("iter-1/call-*-agent/prompt.txt")).read_text()
+    first_prompt = first.paths.prompt(1).read_text()
     assert "Other runs in group" not in first_prompt
 
     # Archiving is how a run leaves its group.
@@ -165,11 +165,16 @@ def test_notes_are_saved_as_versions_and_delete_removes_them(project):
                                                            "notes_content": "note {iteration}"}})
     paths, _ = started(project, "--group", "g")
     other, _ = started(project, "--group", "g")
-    assert paths.notes.is_symlink() and os.readlink(paths.notes) == "notes.1"
+    assert paths.notes.is_symlink() and os.readlink(paths.notes) == ".internal/notes/1"
     assert (paths.notes / "notes.md").read_text() == "note 1"
+    assert os.readlink(paths.iteration_notes(1)) == "../../.internal/notes/1"
+    assert (paths.iteration_notes(1) / "notes.md").read_text() == "note 1"
     result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
-    assert os.readlink(paths.notes) == "notes.2" and (paths.run_dir / "notes.1" / "notes.md").read_text() == "note 1"
+    assert os.readlink(paths.notes) == ".internal/notes/2" and (paths.notes_versions / "1" / "notes.md").read_text() == "note 1"
+    # Each iteration's link keeps the notes as of that iteration.
+    assert (paths.iteration_notes(1) / "notes.md").read_text() == "note 1"
+    assert (paths.iteration_notes(2) / "notes.md").read_text() == "note 2"
     # The viewer reads through the link.
     page = json.loads(cli(project, "view", short_id(paths.run_id), "--json").output)
     assert page["run"]["id"] == paths.run_id
@@ -274,7 +279,7 @@ def test_a_broken_member_doesnt_stop_another_run(project):
     records = [json.loads(line) for line in second.history.read_text().splitlines()]
     assert [r["iteration"] for r in records] == [0, 1] and records[1]["accepted"]
     first.history.unlink()
-    (first.run_dir / "notes.1").rename(first.run_dir / "gone")  # its notes link now dangles
+    (first.notes_versions / "1").rename(first.run_dir / "gone")  # its notes link now dangles
     result = cli(project, "resume", short_id(second.run_id), "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
 
@@ -299,7 +304,7 @@ def test_unchanged_notes_are_hard_links_and_a_removed_notes_folder_stays_removed
     (notes / "keep.md").write_text("same\n")
     (notes / "new.md").write_text("new\n")
     iteration.save_notes(paths, copy, 2)
-    assert os.stat(paths.run_dir / "notes.1" / "keep.md").st_ino == os.stat(paths.notes / "keep.md").st_ino
+    assert os.stat(paths.notes_versions / "1" / "keep.md").st_ino == os.stat(paths.notes / "keep.md").st_ino
     assert (paths.notes / "new.md").read_text() == "new\n"
     import shutil
     shutil.rmtree(notes)

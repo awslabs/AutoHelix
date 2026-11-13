@@ -16,7 +16,7 @@ LINE = json.dumps({"type": "assistant", "message": {"content": [{"type": "text",
 
 
 def _log(run_paths):
-    log = run_paths.call_dir(1, "agent") / "agent.log"
+    log = run_paths.agent_log(1)
     log.parent.mkdir(parents=True)
     return log
 
@@ -61,6 +61,25 @@ def test_a_symlinked_folder_inside_logs_is_refused(run_paths, tmp_path):
     folder.parent.mkdir(parents=True, exist_ok=True)
     folder.symlink_to(elsewhere)
     assert open_run_log(run_paths, str(folder / "agent.log")) is None
+
+
+def test_a_symlinked_iteration_folder_is_refused(run_paths, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "agent.log").write_text(LINE)
+    run_paths.iterations.mkdir(parents=True)
+    run_paths.iteration_dir(1).symlink_to(elsewhere)
+    assert open_run_log(run_paths, str(run_paths.agent_log(1))) is None
+
+
+@pytest.mark.parametrize("name", ["prompt.md", "record.json", "observe/bench/stdout.txt"])
+def test_only_the_agent_log_of_an_iteration_folder_opens(run_paths, name):
+    path = run_paths.iteration_dir(1) / name
+    path.parent.mkdir(parents=True)
+    path.write_text(LINE)
+    assert run_paths.relative_log(str(path)) is None and open_run_log(run_paths, str(path)) is None
+    assert run_paths.relative_log("iterations/001/agent.log") == "iterations/001/agent.log"
+    assert run_paths.relative_log("iterations/1/agent.log") is None
 
 
 def _follow(tmp_path, log):

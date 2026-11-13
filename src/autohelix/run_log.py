@@ -3,7 +3,7 @@
 
 """Structured run logging.
 
-Writes timestamped entries to .autohelix/logs/run-<timestamp>.log
+Writes timestamped entries to runs/<id>/logs/run-<timestamp>.log
 so users can tail -f or review after the fact.
 """
 

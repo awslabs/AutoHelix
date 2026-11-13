@@ -83,10 +83,10 @@ class TestReportCommand:
         with patch("autohelix.agents.create_agent", return_value=self._agent("# Summary\nGood run.")):
             result = runner.invoke(main, ["report", "-p", str(project)])
         assert result.exit_code == 0, result.output
-        assert (RunPaths(project).output / "report.md").read_text() == "# Summary\nGood run."
+        assert (RunPaths(project).report).read_text() == "# Summary\nGood run."
         info = read_report_info(project)
         assert info["last_iteration"] == 3 and info["cost_usd"] == 0.28 and info["seconds"] >= 0
-        assert not (RunPaths(project).output / "report.draft.md").exists()
+        assert not (RunPaths(project).report_draft).exists()
 
     def test_errors_when_agent_changes_files(self, runner, project):
         def change(**kwargs):
@@ -105,13 +105,12 @@ class TestReportCommand:
         assert create.call_args[0][0].timeout == 15 * 60
 
     def test_keeps_old_report_when_agent_writes_nothing(self, runner, project):
-        out = RunPaths(project).output
-        out.mkdir(parents=True)
-        (out / "report.md").write_text("old")
+        report = RunPaths(project).report
+        report.write_text("old")
         with patch("autohelix.agents.create_agent", return_value=self._agent(None)):
             result = runner.invoke(main, ["report", "-p", str(project)])
         assert result.exit_code == 1
-        assert (out / "report.md").read_text() == "old"
+        assert report.read_text() == "old"
 
 
 class TestBuildReportPrompt:

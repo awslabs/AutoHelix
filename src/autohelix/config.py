@@ -158,7 +158,7 @@ class Config:
     max_iterations: int = 5
     max_cost_usd: float | None = None
     max_time_seconds: int | None = None
-    report: bool = True  # write a summary (output/report.md) when a run finishes
+    report: bool = True  # write a summary (report.md) when a run finishes
     land: str | None = None  # the landing mode of new runs; unset: auto (manual with --group)
     # A Jinja file replacing the built-in agent prompt, resolved against the config file's folder.
     prompt_template: Path | None = None
@@ -366,7 +366,7 @@ def _paths(value: Any, where: str, errors: list[str]) -> list[str]:
     return list(value)
 
 
-# An observe entry's own output files in `observations/iter-N/<name>/`, and folders a
+# An observe entry's own output files in `iterations/NNN/observe/<name>/`, and folders a
 # capture may never copy (repository and harness state). Compared case-insensitively:
 # macOS file systems are.
 OUTPUT_FILES = ("stdout.txt", "stderr.txt")

@@ -5,7 +5,7 @@
 
 `dashboard` redraws the run table (run_table.format_runs). `view` shows one
 run's table (run_table.format_run) above the log being written for what the
-run is doing, which its status (runs/<id>/runtime/status.json) says: the
+run is doing, which its status (runs/<id>/.internal/status.json) says: the
 agent's during an iteration, the summary agent's while the summary is written.
 """
 
@@ -86,7 +86,8 @@ def log_for(project: Path, status: dict | None, current: Path | None, run_id: st
     if not agent or not agent.get("log"):
         return None
     agent_log = paths.run_dir / agent["log"]
-    if phase == "agent" or current is None or f"iter-{n}" not in (current.parent.name, current.parent.parent.name):
+    if phase == "agent" or current is None or not any(
+            folder in current.parents for folder in (paths.iteration_dir(n), paths.command_logs(n))):
         return agent_log, f"{label} · agent", status.get("iteration_started_at", phase_start)
     return None  # keep the current panel
 
@@ -114,7 +115,8 @@ class LogFollower:
             self.display = LiveDisplay(console=self.console, title=title, border_style="blue", verbose=True)
         if self.tail is None and self.current is not None:
             # The status file names the log; it's run state an agent can write, so the
-            # log is opened only below the run's logs/, without symlinks or hard links.
+            # log is opened only below the run's logs/ (or as an iteration's agent.log),
+            # without symlinks or hard links.
             paths, log = RunPaths(self.project, self.run_id), self.current
             self.tail = LogTail(log, self.backend, opener=lambda: open_run_log(paths, log))
         if self.tail is not None:

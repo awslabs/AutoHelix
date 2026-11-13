@@ -435,7 +435,7 @@ def test_an_unreported_metric_keeps_its_hint_and_reaches_the_prompt(tmp_path):
     record = run_observe_entry(entry, tmp_path).record()
     assert record["ok"] and "##autohelix[speed=" in record["metric_errors"]["speed"]
     rendered = _render(tmp_path, [BASELINE, {"iteration": 1, "accepted": True, "observe": [record]}])
-    assert "  bench: .autohelix-iteration/observations/iter-1/bench/ (reported no speed: print" in rendered
+    assert "  bench: .autohelix-iteration/iterations/001/observe/bench/ (reported no speed: print" in rendered
 
 
 def test_a_jq_style_last_line_is_not_the_stop_reason(tmp_path):

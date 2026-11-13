@@ -15,7 +15,7 @@ from typing import Any
 from autohelix.config import capture_problem
 from autohelix.formatting import SUMMARY_LIMIT, clean, clean_block
 from autohelix.costs import CostSummary, summarize_costs
-from autohelix.runs import RunPaths, SCHEMA
+from autohelix.runs import RunPaths, SCHEMA, iteration_folder
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,77 @@ def _copy_error(error: BaseException) -> str:
     return str(error)
 
 
+def _write_record_file(path: Path, record: dict) -> None:
+    """Replace `path` atomically with `record`, pretty-printed. The temporary file is
+    created fresh (never through something planted at its name); the rename replaces
+    a symlink at `path` itself, never its target."""
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    if os.path.lexists(temporary):
+        temporary.unlink()
+    with open(temporary, "x") as stream:
+        stream.write(json.dumps(record, indent=2) + "\n")
+    temporary.replace(path)
+
+
+def write_records(paths: RunPaths, records: list[dict], *, mode: str = "append",
+                  iterations=None) -> None:
+    """The one writer of history records. `mode` "append" appends `records` to
+    history.jsonl, "replace" makes them its whole content (atomically), "derived"
+    leaves it alone (`records` is its content as it stands); then, last, rewrites the
+    `record.json` of each affected iteration (`iterations`; when appending, those of
+    `records`) from the last record with its number, or removes it if none is left
+    (a torn record's iteration). history.jsonl stays the source of truth: a
+    record.json marks an iteration folder whose record is complete."""
+    history = paths.history
+    history.parent.mkdir(parents=True, exist_ok=True)
+    lines = "".join(json.dumps(record) + "\n" for record in records)
+    if mode == "derived":
+        pass
+    elif mode == "replace":
+        temporary = history.with_suffix(".tmp")
+        with temporary.open("w") as stream:
+            stream.write(lines)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(history)
+    elif mode == "append":
+        with open(history, "a") as stream:
+            stream.write(lines)
+            stream.flush()
+            os.fsync(stream.fileno())
+    else:
+        raise ValueError(f"Unknown mode: {mode!r}")
+    affected = {record["iteration"] for record in records} if iterations is None else set(iterations)
+    for iteration in sorted(affected):
+        record = next((r for r in reversed(records) if r["iteration"] == iteration), None)
+        if record is not None:
+            _write_record_file(iteration_folder(paths, iteration) / "record.json", record)
+        else:
+            path = paths.record(iteration)
+            if os.path.lexists(path) and not (paths.iterations.is_symlink()
+                                              or paths.iteration_dir(iteration).is_symlink()):
+                path.unlink()
+
+
+def stale_records(paths: RunPaths, records: list[dict]) -> set[int]:
+    """The iterations whose record.json is missing, reached through a symlink, or not
+    the last record with their number in `records` (history.jsonl's content): left so
+    by a process killed between its history write and the record.json after it."""
+    stale = set()
+    for iteration in {record["iteration"] for record in records}:
+        last = next(r for r in reversed(records) if r["iteration"] == iteration)
+        path = paths.record(iteration)
+        try:
+            if os.path.realpath(path) != os.path.abspath(path) or not path.is_file():
+                raise OSError("not a regular file reached without symlinks")
+            if json.loads(path.read_text()) == last:
+                continue
+        except (OSError, ValueError):
+            pass
+        stale.add(iteration)
+    return stale
+
+
 class History:
     """Manages iteration history in .autohelix/."""
 
@@ -92,33 +163,69 @@ class History:
         self.project_path = project_path
         self.paths = RunPaths(project_path, run_id)
         self.history_path = self.paths.history
-        self._observations_dir = self.paths.observations
         self._cache: list[IterationResult] | None = None
         self._cache_mtime: float | None = None
 
-    def iter_dir(self, iteration: int) -> Path:
-        """Return the directory for a given iteration's observation artifacts."""
-        d = self._observations_dir / f"iter-{iteration}"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
     def entry_dir(self, iteration: int, name: str) -> Path:
-        """`observations/iter-N/<name>/`, one observe entry's output (`iter-N/` is
-        created; the entry's folder is not)."""
+        """`iterations/NNN/observe/<name>/`, one observe entry's output (`observe/` is
+        created as a real folder; the entry's folder is not)."""
         if not name or name.startswith(".") or "/" in name or os.sep in name:
             raise ValueError(f"Not an observe entry name: {name!r}")
-        d = self._observations_dir / f"iter-{iteration}"
+        iteration_folder(self.paths, iteration)
+        d = self.paths.observe_dir(iteration)
         if d.is_symlink() or d.is_file():  # planted: never write through it
             d.unlink()
-        return self.iter_dir(iteration) / name
+        d.mkdir(exist_ok=True)
+        return self.paths.observe_entry(iteration, name)
 
-    def clear_observations(self, iteration: int) -> None:
-        """Remove what an earlier attempt at this iteration (a baseline retry) stored."""
-        d = self._observations_dir / f"iter-{iteration}"
-        if d.is_symlink() or d.is_file():
-            d.unlink()
-        elif d.is_dir():
-            shutil.rmtree(d)
+    def supersede(self, iteration: int) -> Path | None:
+        """At an attempt's start: move what an earlier attempt at this iteration left
+        (a killed iteration, a baseline retry), `iterations/NNN/`, to
+        `.internal/attempts/NNN-<k>/` (the first unused k >= 1). Returns where it went,
+        or None if there was nothing (something planted there is removed)."""
+        # Outermost first: anything below a planted link would be reached through it.
+        for planted in (self.paths.iterations, self.paths.iteration_dir(iteration)):
+            if planted.is_symlink() or planted.is_file():
+                planted.unlink()
+                return None
+        folder = self.paths.iteration_dir(iteration)
+        if not folder.is_dir():
+            return None
+        for planted in (self.paths.internal, self.paths.attempts):
+            if planted.is_symlink() or planted.is_file():
+                planted.unlink()
+        self.paths.attempts.mkdir(parents=True, exist_ok=True)
+        k = 1
+        while True:
+            target = self.paths.attempt_dir(iteration, k)
+            if not os.path.lexists(target):
+                try:
+                    os.rename(folder, target)
+                    break
+                except FileExistsError:
+                    pass
+            k += 1
+        self._repoint_notes(target)
+        return target
+
+    def _repoint_notes(self, moved: Path) -> None:
+        """The moved folder's `notes` link was relative to `iterations/NNN/`: point it at
+        the same version from `.internal/attempts/NNN-k/`, or drop it if it isn't a
+        link to a notes version."""
+        link = moved / "notes"
+        if not os.path.lexists(link):
+            return
+        try:
+            parts = os.readlink(link).split("/")
+        except OSError:  # not a link: planted
+            parts = None
+        versions = os.path.relpath(self.paths.notes_versions, self.paths.iteration_dir(0)).split(os.sep)
+        if link.is_dir() and not link.is_symlink():
+            shutil.rmtree(link)
+            return
+        link.unlink()
+        if parts and parts[:-1] == versions and parts[-1] not in ("", ".", ".."):
+            os.symlink(os.path.relpath(self.paths.notes_versions / parts[-1], moved), link)
 
     def stage_output(self, stage: Path, stdout: str, stderr: str, root: Path,
                      captures: list[str]) -> list[str]:
@@ -177,7 +284,7 @@ class History:
         return None
 
     def install_observation(self, iteration: int, name: str, stage: Path) -> None:
-        """Make `stage` the entry's `observations/iter-N/<name>/`, replacing whatever is
+        """Make `stage` the entry's `iterations/NNN/observe/<name>/`, replacing whatever is
         there (e.g. something an earlier command wrote by absolute path)."""
         target = self.entry_dir(iteration, name)
         if target.is_symlink() or target.is_file():
@@ -187,7 +294,7 @@ class History:
         shutil.move(str(stage), str(target))
 
     def previous_observations(self, name: str, before: int) -> Path | None:
-        """`observations/iter-K/<name>/` of the most recent accepted iteration K < `before`
+        """`iterations/KKK/observe/<name>/` of the most recent accepted iteration K < `before`
         (the baseline and accepted no-ops count) in which that entry succeeded; rejected
         iterations, and failed runs of the entry, never count."""
         for record in reversed(self.load()):
@@ -195,8 +302,8 @@ class History:
                 continue
             if not any(item.get("name") == name and item.get("ok") for item in record.observe):
                 continue
-            d = self._observations_dir / f"iter-{record.iteration}" / name
-            if d.is_dir() and not d.is_symlink():
+            d = self.paths.observe_entry(record.iteration, name)
+            if d.is_dir() and os.path.realpath(d) == os.path.abspath(d):  # reached without symlinks
                 return d
         return None
 
@@ -211,11 +318,7 @@ class History:
 
     def append(self, result: IterationResult) -> None:
         """Append an iteration result to history."""
-        self.history_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.history_path, "a") as f:
-            f.write(json.dumps(self._record(result)) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
+        write_records(self.paths, [self._record(result)])
         self._invalidate_cache()
 
     def update(self, result: IterationResult) -> None:
@@ -223,15 +326,10 @@ class History:
         results = self.load()
         if not any(r.iteration == result.iteration for r in results):
             raise ValueError(f"No history record for iteration {result.iteration}")
-        self._rewrite([result if r.iteration == result.iteration else r for r in results])
+        self._rewrite([result if r.iteration == result.iteration else r for r in results], {result.iteration})
 
-    def _rewrite(self, results: list[IterationResult]) -> None:
-        temporary = self.history_path.with_suffix(".tmp")
-        with temporary.open("w") as stream:
-            stream.write("".join(json.dumps(self._record(r)) + "\n" for r in results))
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.replace(self.history_path)
+    def _rewrite(self, results: list[IterationResult], iterations) -> None:
+        write_records(self.paths, [self._record(r) for r in results], mode="replace", iterations=iterations)
         self._invalidate_cache()
 
     @property

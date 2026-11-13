@@ -26,10 +26,10 @@ from autohelix.config import MetricGate, find_config, load_config, run_command
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay, Transcript, clean, header_lines
 from autohelix.history import History, IterationResult
-from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git, allocate_call,
+from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
                             claim_copies, config_gone, config_relative, critical_section, new_run_name,
-                            planned_run, remove_copies, require_clean, short_id, unlanded, write_json,
-                            write_text)
+                            iteration_folder, planned_run, remove_copies, require_clean, short_id, unlanded,
+                            write_json, write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
@@ -236,7 +236,7 @@ class Harness:
             self.history = History(self.project_path, self.paths.run_id)
             tip, warning = reconcile(self.paths, self.run_info, self.history, self.land_mode)
             self.run_state = RunState(self.paths, self.run_info, tip)
-            write_text(self.paths.root / "current", self.paths.run_id + "\n")
+            write_text(self.paths.current, self.paths.run_id + "\n")
             self.repo = Repo(self.project_path)
             self.run_status = RunStatus(self.project_path, self.paths.run_id)
             self.log = RunLog(self.project_path, self.paths.run_id)
@@ -363,7 +363,7 @@ class Harness:
         self.console.print(f"[dim]{message}[/dim]")
 
     def _copy_bin(self, name: str) -> Path | None:
-        """Copy a helper script from the package bin/ into .autohelix/runtime/bin/.
+        """Copy a helper script from the package bin/ into .autohelix/.internal/bin/.
 
         Returns the installed (executable) path, or None if the source is missing
         or the copy fails.
@@ -371,7 +371,7 @@ class Harness:
         src = Path(__file__).parent / "bin" / name
         if not src.exists():
             return None
-        dst_dir = self.paths.project_runtime / "bin"
+        dst_dir = self.paths.bin
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst = dst_dir / name
         try:
@@ -453,9 +453,8 @@ class Harness:
         """Write the accumulated Claude Code hooks to claude_settings.json (if any)."""
         if not hooks:
             return
-        settings_dir = self.paths.runtime
-        settings_dir.mkdir(parents=True, exist_ok=True)
-        settings_path = settings_dir / "claude_settings.json"
+        settings_path = self.paths.claude_settings
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps({"hooks": hooks}, indent=2))
         self._claude_settings_path = settings_path
 
@@ -490,9 +489,12 @@ class Harness:
 
     def run_agent(self, worktree_path: Path, prompt: str, iteration: int) -> AgentRunResult:
         """Run the configured agent in the worktree."""
-        logs_dir = allocate_call(self.paths.logs / f"iter-{iteration}", "agent")
-        prompt_path = logs_dir / "prompt.txt"
-        log_path = logs_dir / "agent.log"
+        iteration_folder(self.paths, iteration)
+        prompt_path = self.paths.prompt(iteration)
+        log_path = self.paths.agent_log(iteration)
+        for path in (prompt_path, log_path):  # planted: never written through
+            if path.is_symlink() or path.exists() and not path.is_file():
+                path.unlink()
         self._agent_logs[iteration] = log_path
         self._live_call("agent", log_path)
         self.run_status.note(log=str(log_path))
@@ -639,10 +641,9 @@ class Harness:
         self.log.info(f"iter {iteration} started")
         self.run_status.phase("agent", iteration)
         self.run_status.note(calls=[])
-        self._start_command_usage(iteration)
-        # An earlier attempt with this number (killed before it was recorded) must not
-        # be shown to the agent as this iteration's observations.
-        self.history.clear_observations(iteration)
+        # An earlier attempt with this number (killed before it was recorded) is kept
+        # aside, so nothing of it is taken for this attempt's.
+        self._start_command_usage(iteration, self.history.supersede(iteration))
         workspace = IterationWorkspace(iteration, self.run_state, self.history, self.repo, warn=self.log.warn)
         workspace.drop_rejected()  # from an earlier attempt with this number that was never recorded
         result: IterationResult | None = None
@@ -815,7 +816,7 @@ class Harness:
 
         1. gate commands in list order; the first failure rejects and skips the rest;
         2. observe entries top to bottom, each output saved under
-           `observations/iter-N/<name>/`; a failed entry contributes no metrics and the
+           `iterations/NNN/observe/<name>/`; a failed entry contributes no metrics and the
            next one runs. After each entry, the metric gates on its metrics (gates list
            order); a failure rejects and skips the remaining entries.
 
@@ -826,7 +827,6 @@ class Harness:
         checks = workspace.eval_copy("checks")
         command_env = {**self._command_env(iteration), **self._candidate_env(workspace),
                        "AUTOHELIX_OBSERVATIONS": None, "AUTOHELIX_METRICS": None}
-        self.history.clear_observations(iteration)  # a baseline retry's earlier attempt
         records = self.history.load()  # the reference for metric gates: the last accepted iteration
         where = "baseline" if baseline else f"iter {iteration}"
         notes: list[str] = []  # printed once the live display is gone, whatever happens
@@ -925,7 +925,7 @@ class Harness:
 
         An entry's output (stdout.txt, stderr.txt, captures) is staged in its call
         folder after the command (and its process group) ended, then replaces
-        `observations/iter-N/<name>/`, so nothing an earlier command wrote there
+        `iterations/NNN/observe/<name>/`, so nothing an earlier command wrote there
         survives. This guards what the harness stores, not run state as such: candidate
         code and the agent can still write run state by absolute path (until commands
         run in a sandbox)."""
@@ -1021,7 +1021,7 @@ class Harness:
             call["usage"]["wall_clock_ms"] = int((time.monotonic() - iter_start) * 1000)
             call["log"] = self._relative_log(self._agent_logs.get(result.iteration))
         commands = []
-        for record in read_usage(self._usage_path(result.iteration)):
+        for record in read_usage(self.paths.usage(result.iteration)):
             usage = dict(record)
             log = usage.pop("log", None)
             commands.append({"role": "command", "usage": usage, "log": self._relative_log(log)})
@@ -1029,32 +1029,59 @@ class Harness:
 
     def _integrity_violation(self, iteration: int) -> str | None:
         """A judge call in this attempt changed the files it judged (sticky)."""
-        for usage in read_usage(self._usage_path(iteration)):
+        for usage in read_usage(self.paths.usage(iteration)):
             if usage.get("id") not in self._usage_starts and usage.get("integrity_violation"):
                 return f"a judge call changed the files it judged ({usage.get('source', 'judge')})"
         return None
 
-    def _usage_path(self, iteration: int) -> Path:
-        return self.paths.runtime / "usage" / f"iter-{iteration}.jsonl"
-
-    def _start_command_usage(self, iteration: int) -> None:
+    def _start_command_usage(self, iteration: int, moved: Path | None = None) -> None:
         """Start an empty usage file for the commands this iteration runs. A baseline
-        retry keeps the earlier attempts' calls, which still count toward its cost."""
-        path = self._usage_path(iteration)
+        retry keeps the earlier attempts' calls, which still count toward its cost; their
+        logs moved with the earlier attempt's folder to `moved` (`History.supersede`),
+        so their `log` paths are rewritten to point there."""
+        path = self.paths.usage(iteration)
         path.parent.mkdir(parents=True, exist_ok=True)
         previous = next((r for r in self.history.load() if r.iteration == iteration), None)
         if previous is None or previous.accepted:
             path.write_text("")
+        elif moved is not None:
+            self._move_usage_logs(path, self.paths.iteration_dir(iteration), moved)
         self._usage_starts = {r.get("id") for r in read_usage(path)}
+
+    def _move_usage_logs(self, path: Path, folder: Path, moved: Path) -> None:
+        """Point the `log` of each usage record in `path` that was inside `folder` at the
+        same file in `moved` (absolute stays absolute, relative to the run folder stays
+        relative). Other lines are kept as they are."""
+        def moved_log(value):
+            if not isinstance(value, str) or not value:
+                return value
+            absolute = os.path.isabs(value)
+            full = os.path.normpath(value if absolute else os.path.join(self.paths.run_dir, value))
+            base = os.path.normpath(folder)
+            if not full.startswith(base + os.sep):
+                return value
+            target = os.path.join(moved, os.path.relpath(full, base))
+            return target if absolute else os.path.relpath(target, self.paths.run_dir)
+
+        lines = []
+        for line in path.read_text().splitlines():
+            try:
+                record = json.loads(line)
+            except ValueError:
+                record = None
+            if isinstance(record, dict) and "log" in record:
+                record["log"] = moved_log(record["log"])
+                line = json.dumps(record)
+            lines.append(line + "\n")
+        write_text(path, "".join(lines))
 
     def _command_env(self, iteration: int) -> dict[str, str]:
         """Variables for every command the harness runs (checks, metrics, stop):
         where to record model usage and logs, and which config to read."""
-        log_dir = self.paths.logs / f"iter-{iteration}"
         return {
-            USAGE_ENV: str(self._usage_path(iteration)),
+            USAGE_ENV: str(self.paths.usage(iteration)),
             "AUTOHELIX_CONFIG": str(self.config_file.resolve()),
-            "AUTOHELIX_LOG_DIR": str(log_dir),
+            "AUTOHELIX_LOG_DIR": str(self.paths.command_logs(iteration)),
             "AUTOHELIX_RUN_ID": self.paths.run_id,
             "AUTOHELIX_RUN_DIR": str(self.paths.run_dir),
             "AUTOHELIX_ITERATION": str(iteration),
@@ -1068,16 +1095,15 @@ class Harness:
         files or a judge violation is an error.
 
         Each command also gets `$AUTOHELIX_OBSERVATIONS`, a copy (made for that call)
-        of the accepted iteration's `observations/iter-N/` (empty if it observed
+        of the accepted iteration's `iterations/NNN/observe/` (empty if it observed
         nothing), and its own `$AUTOHELIX_SCRATCH`."""
         self.run_status.phase("stop check", iteration)
-        runtime = self.paths.runtime
-        runtime.mkdir(parents=True, exist_ok=True)
-        metrics_path = runtime / "metrics.json"
+        metrics_path = self.paths.metrics
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
         metrics_path.write_text(json.dumps(metrics))
         env = {**self._command_env(iteration), **self._candidate_env(workspace),
                "AUTOHELIX_METRICS": str(metrics_path), "AUTOHELIX_PREVIOUS": None}
-        observations = self.paths.observations / f"iter-{iteration}"
+        observations = self.paths.observe_dir(iteration)
 
         @contextmanager
         def stop_call(_command: str):
@@ -1132,7 +1158,7 @@ class Harness:
         try:
             self.log.info("baseline capture started")
             self.run_status.phase("baseline", 0)
-            self._start_command_usage(0)
+            self._start_command_usage(0, self.history.supersede(0))
             try:
                 self._evaluate(workspace, 0, evaluation)
             except CandidateRejected as e:
@@ -1209,11 +1235,11 @@ class Harness:
             workspace.close()
 
     def run(self, max_iterations: int | None = None, report: bool = True) -> None:
-        """Run the optimization loop, recording live status in runtime/status.json.
+        """Run the optimization loop, recording live status in .internal/status.json.
 
         When the loop finishes normally (not interrupted) after running at least one
         iteration, writes the run summary unless `report: false` or `report=False`.
-        However a started run stops, it then saves output/report.html.
+        However a started run stops, it then saves report.html.
         """
         outcome = "finished"
         self._segment_started = False

@@ -12,7 +12,7 @@ import pytest
 
 from autohelix.agents import AgentRunResult
 from autohelix.harness import AutoHelixRunError, Harness
-from autohelix.runs import RunLock, delete, git, land, short_id
+from autohelix.runs import RunLock, RunPaths, delete, git, land, short_id
 from autohelix.usage_log import append_usage
 from autohelix.viewer import RunData
 from tests.test_runs import configure
@@ -144,7 +144,7 @@ def test_dirty_first_start_allocates_no_run(project):
             harness.run(max_iterations=1, report=False)
         finally:
             harness.close()
-    assert not (project / ".autohelix" / "current").exists()
+    assert not RunPaths(project).current.exists()
     assert not list((project / ".autohelix" / "runs").glob("*/run.json"))
     assert not git(project, "for-each-ref", "--format=%(refname)", "refs/autohelix/").stdout.strip()
 
@@ -202,7 +202,7 @@ def test_selection_waits_briefly_and_real_new_runs_allocate_distinct_ids(project
         "h=Harness(Path('.'),new=True,land_mode='manual'); "
         "h.run(max_iterations=1,report=False); print('RESULT='+h.paths.run_id)"
     )
-    lease = RunLock(project / ".autohelix" / "runtime" / "locks" / "selection.lock")
+    lease = RunLock(RunPaths(project).selection_lock)
     processes = [subprocess.Popen([sys.executable, "-c", script], cwd=project,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                  for _ in range(2)]
@@ -270,8 +270,8 @@ def test_no_current_observers_ignore_old_top_level_files(tmp_path):
     root = tmp_path / ".autohelix"
     root.mkdir()
     (root / "history.jsonl").write_text("corrupt legacy history")
-    (root / "runtime").mkdir()
-    (root / "runtime" / "status.json").write_text('{"state":"running"}')
+    (root / ".internal").mkdir()
+    (root / ".internal" / "status.json").write_text('{"state":"running"}')
     (root / "notes").mkdir()
     (root / "notes" / "iter-1.md").write_text("old notes")
     data = RunData(tmp_path)
@@ -299,7 +299,7 @@ def test_checks_cannot_modify_candidate_but_capture_new_files(project, preexisti
         else:
             result = harness.run_iteration(1)
             assert result.accepted
-            assert (harness.paths.observations / "iter-1" / "bench" / "metric.txt").read_text() == "new metric output\n"
+            assert (harness.paths.observe_entry(1, "bench") / "metric.txt").read_text() == "new metric output\n"
             assert git(project, "cat-file", "-e", f"{harness.paths.ref}:metric.txt", check=False).returncode
     finally:
         harness.close()
