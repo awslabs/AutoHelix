@@ -131,7 +131,7 @@ commands are expensive or their cost is unclear.
 AutoHelix's main-agent dollar budget cannot cap unreported model calls in an
 evaluation command.
 
-At handoff, explain what will count as acceptance, which observations will be
-retained, and why the run will end: budgets, manual interruption, or a `stop:`
+In the proposal, explain what will count as acceptance, which observations
+will be retained, and why the run will end: budgets, manual interruption, or a `stop:`
 command (a metric target, a tracked count reaching zero, or an
 `autohelix ask` judgment). Plateau detection is not a configuration field.

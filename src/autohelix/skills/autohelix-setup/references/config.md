@@ -35,8 +35,11 @@ budget:
   iterations: 3
 ```
 
-Top-level keys: `goal`, `name`, `land`, `prompt_template`, `report`, `agent`,
-`scope`, `gates`, `observe`, `stop`, `budget`. Keys of the first config format
+Top-level keys, in the skill's preferred order for generated configs: `goal`,
+`scope`, `gates`, `observe`, `stop`, `agent`, `budget`, `land`, `report`,
+`prompt_template`. This order is a presentation convention; config parsing
+accepts any top-level order. The order of entries within `gates`, `observe`,
+and `stop` affects execution. Keys of the first config format
 (`constraints`, `metrics`, `observables`, `acceptance`, `reviewer`,
 `agent.type`, `agent.timeout_seconds`, `budget.iteration_time`) are errors that
 name their replacement; when editing an existing config, convert them.
@@ -264,16 +267,17 @@ commits). Both leave code unchanged. Resuming, archiving, deleting, and
 resetting code or external artifacts are different operations. Explain the
 intended operation before changing state.
 
-## Explain the generated configuration
+## Explain the proposed configuration
 
-For setup-only requests, display the complete generated YAML in the final
-response before explaining it. Include the full goal and every configured
-section, not just selected settings. Comments can clarify defaults or open
-choices, but are not required. Then give a numbered walkthrough in the file's
-section order, connecting each choice to its effect on the experiment.
+Before writing project files, display the complete proposed YAML and its
+intended path. Include the full goal and every configured section, not just
+selected settings. Comments can clarify defaults or open choices, but are not
+required. Follow the YAML with a numbered walkthrough in configuration order,
+explaining what each section controls, why its settings were chosen, and how
+changing them would affect the experiment. Include effective defaults for
+omitted fields that matter to the run.
 
-After showing the complete YAML at the start of this reference, a walkthrough
-could be:
+For the YAML at the start of this reference, the explanation could be:
 
 1. **Goal:** Ask the agent to reduce runtime while preserving behavior. This
    guides its work; the gates below supply the configured correctness evidence.
@@ -298,6 +302,8 @@ This example does not override the default Claude backend or configure a
 review. Explain the actual backend/model choices and omitted defaults in the
 user's configuration, and flag choices still open.
 
-Finish with the actual validation and execution results, including verification
-not performed, followed by commands to verify and launch later. Link the config
-and any durable explanation as supporting detail.
+Follow the entrypoint's agreement workflow before saving, validating, and
+committing the setup. The final handoff names the saved config and commit,
+reports validation and execution results (including verification not performed),
+and gives commands to verify and launch later. Link the config; the proposal
+already contains the complete YAML and rationale.
