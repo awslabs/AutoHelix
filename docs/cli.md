@@ -38,10 +38,12 @@ leave a partially updated folder. Correct the error and repeat with `--force`.
 After installation, ask your agent to use `autohelix-setup` to prepare your
 experiment (or let [`autohelix setup`](#autohelix-setup) start the agent with
 the bundled skill, without installing anything). It will inspect the project
-and help configure scope, gates, observe entries (commands and reviews),
-optional metric gates, and budgets.
-Review the configuration and verification results before starting
-`autohelix run`, unless you already requested a run.
+and propose scope, gates, observe entries (commands and reviews),
+optional metric gates, and budgets. Review the complete YAML and its
+section-by-section explanation before project files change; agreement to save
+and commit leads to writing, validating, and committing only the setup files.
+It gives verification results and the launch
+command, and starts `autohelix run` only when requested.
 To request ongoing management, ask the agent to prepare, run, and supervise
 within explicit effort limits. It should monitor saved outcomes through process
 termination and use hints when useful for later iterations. See the
@@ -61,7 +63,7 @@ autohelix setup [NAME] [-p PATH] [--agent claude|codex|opencode]
 |--------|-------------|
 | `NAME` | Write `autohelix/NAME.yaml` (lowercase letters, digits, hyphens, up to 32 characters, starting with a letter or digit; not `autohelix`); runs of it are named after it |
 | `--path`, `-p` | Project directory (default: current dir) |
-| `--agent` | Draft the config with this agent, without asking |
+| `--agent` | Draft the config with this agent, skipping the selection menu |
 
 In a terminal, `setup` first asks whether to set up the loop with an agent or
 write an empty config. When several agents are installed (looked for in the
@@ -69,10 +71,14 @@ order `claude`, `codex`, `opencode`), it then asks which one. Choose with â†‘/â†
 and Enter, or an option's number; Enter alone takes the first, Esc or Ctrl-C
 cancels. With an agent, `setup` is replaced by that agent's usual interactive
 session, started in the project with a first prompt to follow the setup skill
-bundled with AutoHelix: it asks what you want to achieve, and writes the
-config with you, with `agent.backend` set to that agent unless you decide
-otherwise. Nothing is installed into the agent's settings, and the skill
-always matches the installed AutoHelix.
+bundled with AutoHelix: it asks what you want to achieve, then shows the complete
+proposed config and walks through each section before changing project files:
+what it controls, why it was chosen, and how to adjust it, including effective
+defaults. Discuss revisions; when you agree to save and commit, it writes,
+validates, and commits the setup.
+`agent.backend` is set to that agent unless you decide otherwise. Nothing is
+installed into the agent's settings, and the skill always matches the installed
+AutoHelix. Setup gives the launch command; it starts a run only when requested.
 
 An empty config is the commented template; then edit it, commit it, and run
 `autohelix run [NAME]`. Without a terminal (a script), `setup` writes the
@@ -80,9 +86,10 @@ template unless `--agent` is given. Without an agent on `PATH` it writes the
 template too.
 
 `setup` never overwrites a file. With `--agent`, an existing config (such as a
-template written earlier) is completed with the agent; without it, an existing
-config is an error. A bare `setup` is refused when `autohelix/` already has
-configs: `autohelix.yaml` would take over a bare `autohelix run`, so name the
+template written earlier) can be revised after reviewing and agreeing on the
+agent's proposal; without it, an existing config is an error. A bare `setup`
+is refused when `autohelix/` already has configs: `autohelix.yaml` would take
+over a bare `autohelix run`, so name the
 new one. `setup` doesn't need git and creates no `.autohelix/`; it warns when
 `run` would refuse the folder (no git repository, or no commit yet).
 

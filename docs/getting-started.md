@@ -74,7 +74,7 @@ agent:
 In your project, run:
 
 ```bash
-autohelix setup          # writes autohelix.yaml
+autohelix setup          # prepare autohelix.yaml
 autohelix setup perf     # or autohelix/perf.yaml, one of several loops
 ```
 
@@ -96,20 +96,29 @@ Describe the outcome you want, such as making data processing faster while
 preserving its results. The agent can propose suitable tests and benchmarks;
 you do not need to specify the evaluation in the initial request.
 
-The agent should inspect the project, propose scope and evaluation, write
-the config (`autohelix.yaml`, or `autohelix/<name>.yaml`), and validate it
-without executing evaluators. It can also run
-known cheap checks within the request. Missing evaluators should be proposed
-before implementation unless already authorized. Review the generated goal,
-scope, gates, observe entries (commands and reviews), and budget choices.
+The agent inspects the project, then shows the complete proposed YAML and its
+intended path (`autohelix.yaml`, or `autohelix/<name>.yaml`) before changing
+project files. A numbered walkthrough follows the YAML in configuration order:
+what each section controls, why its settings were chosen, and how to adjust
+them. It covers the goal, scope, gates, observations and evidence, backend,
+budgets, and effective defaults for omitted fields. Missing evaluators are
+proposed with their design and likely cost before implementation. Discuss
+revisions, then agree to save and commit
+when the proposal fits your goal. You can also ask for a proposal only, or for
+files to be saved without committing.
+
+The skill uses a consistent top-level order for generated configs: `goal`,
+`scope`, `gates`, `observe`, `stop`, `agent`, `budget`, `land`, `report`,
+`prompt_template`, omitting unused fields. This is a presentation convention;
+existing configs can use any top-level order.
+
+After agreement, the agent writes the setup files, validates the config without
+executing evaluators, and commits only the agreed setup changes. It can also run
+known cheap checks within the request. Its final reply gives the saved paths,
+commit, verification results, what remains unverified, and launch instructions.
 Measurements alone do not reject regressions; metric gates are optional.
-Unset optional budgets provide no cap from those fields, while omitted
-iterations default to five attempts.
-The final reply should show the complete generated YAML, followed by a numbered
-walkthrough of its sections: why each choice was made, what it controls, and how
-you can adjust it. Comments can explain defaults or open choices where useful.
-Verification results and launch instructions follow the walkthrough; file links
-and a durable explanation can supplement it.
+The proposed default is three iterations; omitted iterations use the runtime
+default of five. Unset optional budgets provide no cap from those fields.
 
 After reviewing the configuration, ask for a managed execution:
 

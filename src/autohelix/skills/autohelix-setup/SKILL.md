@@ -5,10 +5,12 @@ description: "Design, configure, or manage an AutoHelix experiment for an existi
 
 # Set up an AutoHelix run
 
-Prepare a useful, reviewable improvement experiment for the user's project.
+Turn the user's goal into an agreed, validated, committed experiment
+configuration, ready to run. Propose it in the conversation before changing
+project files; discuss revisions, then save and commit the agreed setup.
 Use the installed `autohelix` CLI; a source checkout is not required.
-Follow the requested mode: preparation, launch, or management through completion
-of the agreed execution. Preparing a configuration does not start a run.
+Setup ends with the configuration and verification handoff. Launch or
+supervise only when the user requests it.
 
 AutoHelix gives each attempt a private copy of the code, runs configured checks
 and measurements on what it froze, and commits accepted changes to the run. Each iteration starts a fresh agent
@@ -33,9 +35,8 @@ help against the installed version. The harness and the target project may use
 different environments.
 
 Recommend, don't interview. From the user's answer and the project (its
-tests, benchmarks, instructions), choose everything yourself: scope, gates,
-observe entries, backend, budget. Then propose the complete config once and ask
-whether they want anything different. Ask before that only when the project
+tests, benchmarks, instructions), choose scope, gates, observe entries, backend,
+and budget. Ask before proposing the config only when the project
 can't tell you something that changes the loop materially, such as there being
 no way yet to check or measure the goal. Don't ask about budgets, timeouts,
 models or reviews: pick defaults, say what you picked. Carry forward any
@@ -54,25 +55,24 @@ For help choosing gates, measurements, feedback, and budgets, read
 relevant [examples](references/examples.md). A qualitative goal can use captured
 evidence and review feedback without inventing a numeric score.
 
-## Prepare and verify the configuration
+## Propose and agree on the configuration
 
-Read [the configuration reference](references/config.md) when writing or editing
-the configuration.
+Read [the configuration reference](references/config.md) when drafting the
+configuration.
 
-Write the config file yourself, at the path you were given (the session's first
-prompt may name it); never run `autohelix setup` or `autohelix init`. Without a
-path, ask: `autohelix.yaml` for the project's one loop, or
-`autohelix/<name>.yaml` when it has or will have several. Configs live only
-there. Don't write `autohelix.yaml` when `autohelix/` already has configs: it
-would take over a bare `autohelix run`. A name uses lowercase letters, digits
+Include the intended path in the proposal, using the path you were given
+(the session's first prompt may name it). Without a path, recommend
+`autohelix.yaml` for the project's one loop, or `autohelix/<name>.yaml` when
+it has or will have several. Configs live only there. Don't propose
+`autohelix.yaml` when `autohelix/` already has configs: it would take over a
+bare `autohelix run`. A name uses lowercase letters, digits
 or hyphens, at most 32 characters, starts with a letter or digit, and isn't
-`autohelix`. If the target holds the commented template, complete it there.
-Naming, and prompt templates and helper scripts in `autohelix/` (committed with
+`autohelix`. If the target holds the commented template, propose completing it
+there. Naming, and prompt templates and helper scripts in `autohelix/` (committed with
 the config), are under Config files in the [configuration
 reference](references/config.md). Preserve other configs and the run state in
-`.autohelix/`; convert a config in the first format (`constraints:`,
-`metrics:`, `reviewer:`, ...), which no longer loads, with the user's
-agreement.
+`.autohelix/`; propose converting a config in the first format (`constraints:`,
+`metrics:`, `reviewer:`, ...), which no longer loads.
 
 Define a goal (its first line is the run's title), editable scope, gates,
 observe entries (commands, optional reviews), optional metric gates or a
@@ -80,13 +80,11 @@ stop condition, and budget settings or a commented template. Keep tests,
 benchmark definitions, evaluation criteria, and `autohelix/` outside the
 editable scope unless changing them is part of the user's task.
 
-Before implementing a new or materially changed evaluator, check, or benchmark,
-describe a small concrete proposal: what it measures or checks, representative
+When a new or materially changed evaluator, check, or benchmark is needed,
+include its design in the proposal: what it measures or checks, representative
 cases and limits, likely runtime/resource/model cost, and its acceptance or
-feedback role. Get agreement before coding unless that implementation is already
-explicitly authorized; do not ask again for permission already supplied. Label
-proposed commands as unimplemented rather than putting invented paths into YAML
-as though ready to run.
+feedback role. Label proposed commands as unimplemented rather than putting
+invented paths into YAML as though ready to run.
 
 Use project-relative paths for code and check commands so they resolve inside
 iteration copies. Check commands must use the intended environment and load
@@ -95,6 +93,43 @@ the original checkout. An absolute path to an agent or Python executable can
 select the intended environment; candidate code, evaluation inputs, and ordinary
 capture outputs should still resolve in the copy. Make external output
 locations deliberate: rejecting code does not restore external files.
+
+Show the complete proposed YAML in a fenced block, including the full goal and
+every configured field. For an existing config, show the proposed replacement
+and summarize the changes. For newly generated configs, use this top-level
+order, omitting unused fields: `goal`, `scope`, `gates`, `observe`, `stop`,
+`agent`, `budget`, `land`, `report`, `prompt_template`. This is a presentation
+convention, not a validation requirement. Preserve an existing config's order
+unless reorganizing it is requested. Keep the order of entries within `gates`,
+`observe`, and `stop`: it affects execution.
+
+Follow the YAML with a numbered, section-by-section
+walkthrough in configuration order: what each setting controls, why it was
+chosen, and how changing it would affect the run. Cover editable and frozen
+scope, each gate, observations and evidence paths, metric directions and metric
+gates or their absence, the backend, and effective budgets/defaults, including
+omitted fields that affect the run.
+Distinguish instructions to the agent from enforced checks, and measurements
+from acceptance decisions. Explain what has been inspected and what remains
+unverified. Include any proposed helper scripts, prompt templates, or evaluators
+and their intended paths. For explanation examples, see
+[the configuration reference](references/config.md).
+
+Keep project files unchanged during discovery, proposal, and revisions: don't
+write configs, implement helpers or evaluators, or make commits yet.
+For design-only requests, finish with the proposal. Otherwise ask whether to
+save and commit or revise; honor requests to save without committing.
+Discuss revisions and show the updated proposal until agreed. Agreement
+authorizes the proposed setup files and their commit, unless the user requests
+otherwise. If prior authorization already covers the concrete configuration
+and these actions, proceed without asking again.
+
+## Save, verify, and commit the agreed setup
+
+Write the agreed config yourself at its intended path; never run
+`autohelix setup` or `autohelix init`. Implement only the agreed helpers,
+templates, and evaluators. Resolve routine validation errors within the agreed
+design; return to the proposal if a fix would materially change the experiment.
 
 Always validate the YAML and inspect its structure, declared metric names and
 gate references, scope/input paths, command and dependency setup, working
@@ -132,51 +167,34 @@ A baseline or review call is not required to finish setup. When a command is
 run, report its result and any output/metric/capture failures. Otherwise record
 that execution was not performed and which behavior remains unverified.
 
-Metrics track progress; only gates affect acceptance. A failing observe entry
-is recorded, not rejected; a metric gate compares with the last accepted
-iteration. Review feedback is advisory. Explain these choices rather than implying that
-every accepted change improves the goal.
+After validation, inspect git state and commit only the agreed setup files,
+using explicit paths. Preserve unrelated work, including staged changes.
+Commit the config so it's versioned, and any scripts its commands use:
+iteration copies are made from the commit. Honor a request to leave files
+uncommitted. If the repository or commit is unavailable, report what remains
+to make the setup ready to run.
 
 ## Hand off or start the run
 
-Present the config as an inspectable experiment agreement: goal, editable scope,
-requirements, evidence/acceptance, and budget. Explain the intended agent
-behavior and the current enforcement, accounting, and verification limits;
-scope and run budgets do not provide total security or an absolute spending cap.
-For setup-only requests, show the complete generated config file in a
-fenced YAML block in the final response, including the full goal and all
-configured fields. Show the file as written, rather than an excerpt of its
-"main settings." Comments are optional; keep them sparse and useful for
-explaining defaults or choices left open.
+Keep the final handoff brief: saved config and helper paths, the setup commit
+(or why no commit was made), validation and execution results, what remains
+unverified, and verification/launch commands. The complete YAML and rationale
+were shown in the proposal; repeat them only if requested or needed to explain
+a revision.
 
-Follow the YAML with a numbered, step-by-step walkthrough of its sections in
-configuration order. Explain why each choice was made, what it controls, and
-how changing it would affect the run. Cover editable scope, checks, observations
-and evidence paths, gates or their absence, the backend, and effective
-budgets/defaults. Distinguish instructions to the agent from enforced checks,
-and measurements from acceptance decisions. Explain what was verified and what
-remains open, then give verification and launch commands. File links and a
-durable explanation can supplement this walkthrough.
-
-Setup is preparation only: don't start a run unless the user asks for one.
-The project must be a git checkout with a commit, and the first baseline needs
-no uncommitted changes to tracked files. Commit the config so it's versioned,
-and any scripts its commands use: iteration copies are made from the commit.
-`autohelix run` creates `.autohelix/` itself. The launch command is `autohelix run` for `autohelix.yaml`, `autohelix run <name>`
-for `autohelix/<name>.yaml`. Include the generated configuration in the
-handoff; resolve outstanding work according to the user's instructions without
-discarding or committing unrelated changes.
+Don't start a run unless the user asks for one. The project must be a git
+checkout with a commit, and the first baseline needs no uncommitted changes to
+tracked files; identify unrelated changes that still prevent launch without
+committing or discarding them. `autohelix run` creates `.autohelix/` itself.
+The launch command is `autohelix run` for `autohelix.yaml`, or
+`autohelix run <name>` for `autohelix/<name>.yaml`.
 Keep the iteration prompt's instruction to leave candidate edits uncommitted:
 AutoHelix validates and commits accepted changes. A setup commit before launch
 is different from an iteration agent or supervisor making extra commits while
 the loop runs.
 
-For setup-only requests, optional budget choices may remain unset with comments
-for later selection; explain the runtime defaults. For a requested launch, use
-given/existing bounds and resolve material budget ambiguity as described in
-the loop-design reference. Finish a setup-only request with static validation and
-any execution results, what remains unverified, and commands to verify later
-and start the run.
+For a requested launch, use given/existing bounds and resolve material budget
+ambiguity as described in the loop-design reference.
 
 Use `autohelix view` (live in a terminal; `--once` or `--json` print a snapshot and
 exit) to inspect a run and its live agent output, and `autohelix hint` to steer

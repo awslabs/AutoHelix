@@ -335,9 +335,9 @@ def test_agent_claude_execs_with_the_skill_and_writes_nothing(project, monkeypat
     assert (skill_dir / "SKILL.md").is_file()
     prompt = argv[4]
     assert f"Read `{skill_dir / 'SKILL.md'}` and follow it" in prompt
-    assert "Write the config to `autohelix/perf.yaml`" in prompt
+    assert "Propose the config for `autohelix/perf.yaml`" in prompt
     assert "`agent.backend: claude`" in prompt
-    assert "Write the file directly (don't run `autohelix setup`)." in prompt
+    assert "Write the agreed file directly (don't run `autohelix setup`)." in prompt
     assert f"To check it, use AutoHelix's own Python, `{sys.executable}`" in prompt
     assert "Start by asking" not in prompt  # the skill's first question is in SKILL.md
 
@@ -364,7 +364,7 @@ def test_agent_codex_and_opencode_argv(project, monkeypatch, execs, agent):
         assert len(argv) == 2
     else:
         assert argv[:3] == ["opencode", str(project.resolve()), "--prompt"] and len(argv) == 4
-    assert f"Write the config to `autohelix.yaml`, with `agent.backend: {agent}`" in argv[-1]
+    assert f"Propose the config for `autohelix.yaml`, with `agent.backend: {agent}`" in argv[-1]
 
 
 def test_agent_with_path_starts_in_the_project(project, monkeypatch, execs, tmp_path):
@@ -375,7 +375,7 @@ def test_agent_with_path_starts_in_the_project(project, monkeypatch, execs, tmp_
     assert result.exit_code == 0, result.output
     [(_, argv, cwd)] = execs
     assert Path(cwd) == other.resolve()
-    assert "Write the config to `autohelix/perf.yaml`" in argv[4]  # relative to the agent's cwd
+    assert "Propose the config for `autohelix/perf.yaml`" in argv[4]  # relative to the agent's cwd
     assert files(other) == [] and files(project) == ["main.py"]
 
 
@@ -466,7 +466,7 @@ def test_one_agent_asks_once_and_the_default_starts_it(project, monkeypatch, exe
     result = setup(input="\n")
     assert result.exit_code == 0, result.output
     assert " · setup · autohelix.yaml\n  Project  " in result.output
-    assert "How do you want to write it?\n  1. With Codex  it asks what you want" in result.output
+    assert "How do you want to write it?\n  1. With Codex  it proposes the config" in result.output
     assert "  2. Empty config  the commented template, to edit by hand\nChoose [1]:" in result.output
     assert "Which agent?" not in result.output
     assert [argv[0] for _, argv, _ in execs] == ["codex"]

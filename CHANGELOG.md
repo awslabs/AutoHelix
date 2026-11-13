@@ -156,6 +156,13 @@ Added:
 - **`setup` as the front door.** In a terminal, `setup` offers to start
   Claude Code, Codex or OpenCode with the bundled skill, or writes the
   template. `autohelix skill install` remains for ordinary agent sessions.
+- **Proposal before setup edits.** The setup agent shows the complete config,
+  uses a consistent field order for generated configs, explains each section
+  and its defaults, and discusses revisions before
+  changing project files. Agreement to save and commit leads to writing,
+  validating, and committing only the setup files;
+  the final handoff gives saved paths, the commit, verification results, and
+  the launch command. Starting a run remains a separate request.
 - **Several configs in an `autohelix/` folder.** `autohelix run perf` uses
   `autohelix/perf.yaml`; a bare `run` uses `autohelix.yaml`, else the only
   config in `autohelix/`, else lists them. The folder is versioned and can hold

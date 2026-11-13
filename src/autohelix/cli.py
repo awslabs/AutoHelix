@@ -92,13 +92,17 @@ def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[st
     `uv tool`, a venv that isn't activated); its PATH is left alone for the project's
     own commands."""
     skill_dir = _skill_dir()
-    where = (f"The config is `{target}`, already there (perhaps still the commented template): complete it there"
-             if exists else f"Write the config to `{target}`")
+    where = (f"The config is `{target}`, already there (perhaps still the commented template): "
+             "propose completing it there"
+             if exists else f"Propose the config for `{target}`")
     launcher = _launcher()
     tools = f"use AutoHelix's own Python, `{sys.executable}`" + (f" (its CLI is `{launcher}`)" if launcher else "")
     prompt = (f"Read `{skill_dir / 'SKILL.md'}` and follow it to help me set up an AutoHelix loop for this "
-              f"project. {where}, with `agent.backend: {agent}` unless we decide otherwise. Write the file "
-              f"directly (don't run `autohelix setup`). To check it, {tools}.")
+              f"project. {where}, with `agent.backend: {agent}` unless we decide otherwise. Show the complete "
+              f"proposal and explain its sections, choices, and effective defaults before changing project "
+              f"files; discuss revisions, then write, validate, and commit "
+              f"the setup when we agree. Don't start a run unless I ask. Write the agreed file directly "
+              f"(don't run `autohelix setup`). To check it, {tools}.")
     if agent == "claude":  # --add-dir lets it read the skill; it takes several folders, hence --
         return ["claude", "--add-dir", str(skill_dir), "--", prompt]
     if agent == "codex":  # reads outside the workspace without a flag (its --add-dir grants writes)
@@ -142,14 +146,15 @@ def _kind(path: Path) -> str:
 @click.option("--path", "-p", type=click.Path(exists=True, file_okay=False), default=".",
               help="Project directory (default: current dir)")
 @click.option("--agent", type=click.Choice(list(SETUP_AGENTS)),
-              help="Draft the config with this agent, without asking.")
+              help="Draft the config with this agent, skipping the selection menu.")
 def setup(name: str | None, path: str, agent: str | None):
     """Write a loop's config: autohelix.yaml, or autohelix/NAME.yaml for NAME.
 
     In a terminal, offers to draft it with a coding agent (Claude Code, Codex or
     OpenCode; it asks which when several are installed) in a session that follows the
-    bundled setup skill; otherwise writes the commented template. `autohelix run [NAME]`
-    then starts runs of the loop.
+    bundled setup skill: propose, discuss, then save and commit when agreed.
+    Otherwise writes the commented template. `autohelix run [NAME]` then starts
+    runs of the loop.
 
     setup itself never overwrites a file: with --agent on an existing config, the agent
     edits it with you.
@@ -204,7 +209,7 @@ def setup(name: str | None, path: str, agent: str | None):
         click.echo("  " + click.style("AutoHelix", bold=True) + click.style(f" {_get_version()}", dim=True)
                    + f" · setup · {relative}")
         click.echo("  " + click.style(f"{'Project':<9}", dim=True) + str(project) + "\n")
-        drafts = "it asks what you want to achieve, then writes the config"
+        drafts = "it proposes the config, then saves and commits when you agree"
         with_agent = (f"With {SETUP_AGENTS[found[0]]}", drafts) if len(found) == 1 else ("With an agent", drafts)
         if choose("How do you want to write it?",
                   [with_agent, ("Empty config", "the commented template, to edit by hand")]) == 0:

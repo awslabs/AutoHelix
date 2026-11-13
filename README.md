@@ -106,9 +106,11 @@ using the configured scope, gates, and observe entries.
 
    > Set up AutoHelix to improve [goal]. [Optional instructions.]
 
-   The agent proposes the experiment, shows the complete config file, and
-   walks through its choices without launching. Review what can change, what
-   must pass (gates), what is observed, and the effective budgets.
+   The agent shows the complete proposed config and walks through each section:
+   what it controls, why it was chosen, and how to adjust it, including effective
+   defaults. Review it before project files change. Discuss revisions; when you
+   agree to save and commit, it writes, validates, and commits the setup, then
+   gives the launch command.
 
 2. **Run and manage**
 
@@ -136,8 +138,10 @@ autohelix setup
 
 In a terminal it offers to start Claude Code, Codex or OpenCode with the
 bundled setup skill (nothing is installed), or writes the commented template
-`autohelix.yaml`. Edit it using the [configuration reference](#configuration),
-review and commit the intended setup changes, then launch with `autohelix run`.
+`autohelix.yaml`. With an agent, review the proposal before it saves and commits
+the agreed setup. With the template, edit it using the
+[configuration reference](#configuration) and commit the intended setup changes.
+Then launch with `autohelix run`.
 For several loops in one project, `autohelix setup perf` writes
 `autohelix/perf.yaml`, which `autohelix run perf` runs. Other commands are
 described in the [CLI reference](docs/cli.md).
