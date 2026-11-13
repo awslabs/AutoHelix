@@ -20,6 +20,7 @@ from autohelix import run_table
 from autohelix.display import LiveDisplay
 from autohelix.formatting import format_duration
 from autohelix.replay import LogTail
+from autohelix.safe_open import open_run_log
 from autohelix.run_status import read_run_status
 from autohelix.runs import RunPaths
 from autohelix.viewer import ProjectRuns
@@ -111,8 +112,11 @@ class LogFollower:
             self.current, title, self.started = choice
             self.tail = None
             self.display = LiveDisplay(console=self.console, title=title, border_style="blue", verbose=True)
-        if self.tail is None and self.current is not None and self.current.is_file():
-            self.tail = LogTail(self.current, self.backend)
+        if self.tail is None and self.current is not None:
+            # The status file names the log; it's run state an agent can write, so the
+            # log is opened only below the run's logs/, without symlinks or hard links.
+            paths, log = RunPaths(self.project, self.run_id), self.current
+            self.tail = LogTail(log, self.backend, opener=lambda: open_run_log(paths, log))
         if self.tail is not None:
             try:
                 events = self.tail.read()

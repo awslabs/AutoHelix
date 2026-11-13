@@ -123,7 +123,9 @@ Hardening:
   `candidate.diff` and `previous.md` are unchanged after the call.
 - The viewer serves files only from known run folders, opened one path
   component at a time without following symlinks, and passes git only object
-  names that are plain hex.
+  names that are plain hex. Agent logs too, in the web viewer and in the
+  terminal `view`: only regular, single-link files below the run's `logs/`
+  (the terminal `view` followed any path the run's status file named).
 
 ### Config files and `autohelix setup`
 

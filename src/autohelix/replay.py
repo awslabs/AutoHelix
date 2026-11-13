@@ -110,8 +110,12 @@ class LogTail:
     I/O errors propagate so callers can warn and retry.
     """
 
-    def __init__(self, path: Path, backend: str | None = None):
+    def __init__(self, path: Path, backend: str | None = None, opener=None):
+        """`opener()`, if given, returns a read descriptor for the log (or None,
+        which counts as an I/O error) instead of opening `path` by name: callers
+        reading logs from run state pass `safe_open.open_run_log`."""
         self.path = path
+        self._opener = opener
         self._hint = backend
         self.replay = LogReplay(backend)
         self._offset = self._size = 0
@@ -124,7 +128,14 @@ class LogTail:
         events: list[AgentEvent] = []
         self.reset = False
         self.updated = False
-        with self.path.open("rb") as log:
+        if self._opener is not None:
+            fd = self._opener()
+            if fd is None:
+                raise OSError(f"not a regular, single-link log file: {self.path}")
+            stream = os.fdopen(fd, "rb")
+        else:
+            stream = self.path.open("rb")
+        with stream as log:
             stat = os.fstat(log.fileno())
             identity = (stat.st_dev, stat.st_ino)
             anchor_offset, anchor = self._anchor
