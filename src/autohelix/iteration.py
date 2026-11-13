@@ -11,12 +11,14 @@ commands each get a new copy; accepting publishes exactly T.
 import filecmp
 import os
 import shutil
+import stat
 from contextlib import contextmanager
 from pathlib import Path
 
 from autohelix.formatting import SUMMARY_LIMIT, clean
 from autohelix.launcher import write_launcher
-from autohelix.runs import RunPaths, RunState, critical_section, ensure_copies, group_members, iteration_folder
+from autohelix.runs import (RunPaths, RunState, critical_section, ensure_copies, group_members, is_transcript,
+                            iteration_folder, remove_planted)
 from autohelix.workspace import ITERATION_DIR, Copy, Repo, Scope, diff_args, remove_copy
 
 
@@ -98,8 +100,7 @@ def save_notes(paths: RunPaths, copy, iteration: int) -> None:
         previous = None
     versions = paths.notes_versions
     for planted in (paths.internal, versions):  # outermost first: planted links are never written through
-        if planted.is_symlink() or planted.is_file():
-            planted.unlink()
+        remove_planted(planted)
     versions.mkdir(parents=True, exist_ok=True)
     version = _unused(versions, str(iteration))
 
@@ -257,7 +258,7 @@ class IterationWorkspace:
         on the command's PATH), plus for each named source a copy of that folder under
         the same name (an empty folder if the source doesn't exist or is reached through a
         symlink; no entry for None).
-        Yields {"scratch": path, "bin": path, <name>: path, ...}. A copy keeps what the command reads from
+        Yields {"scratch": path, "logs": path, "bin": path, <name>: path, ...}. A copy keeps what the command reads from
         run state fixed, whatever the command or the agent writes meanwhile."""
         self._calls += 1
         folder = ensure_copies(self._run.copies_root) / f"iter-{self.iteration}-call-{self._calls}"
@@ -266,8 +267,9 @@ class IterationWorkspace:
         folder.mkdir(mode=0o700)
         self._call_folders.append(folder)
         try:
-            paths = {"scratch": folder / "scratch"}
+            paths = {"scratch": folder / "scratch", "logs": folder / "logs"}
             paths["scratch"].mkdir()
+            paths["logs"].mkdir()
             paths["bin"] = write_launcher(folder / "bin")  # `autohelix`, immune to the command's env
             for name, source in sources.items():
                 if source is None:
@@ -292,6 +294,33 @@ class IterationWorkspace:
             remove_copy(stage)
         stage.mkdir(mode=0o700)
         return stage
+
+    @staticmethod
+    def move_transcripts(folders: dict[str, Path], stage: Path) -> dict[str, str]:
+        """Move the judge and review transcripts the command's `ask`/`review` calls wrote
+        to its `logs/` folder into `stage` (after the command ended): only regular,
+        single-link files named like one (`runs.is_transcript`) directly in that folder,
+        never symlinks or anything else the command left there. One already in `stage`
+        (a capture with that name) is replaced. Returns {the path a call recorded
+        (resolved): the name in `stage`}."""
+        logs = folders["logs"]
+        moved = {}
+        if logs.is_symlink() or not logs.is_dir():
+            return moved
+        recorded = os.path.realpath(logs)
+        for entry in os.scandir(logs):
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if not is_transcript(entry.name) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                continue
+            target = stage / entry.name
+            if os.path.lexists(target):
+                remove_copy(target)
+            os.rename(entry.path, target)
+            moved[os.path.join(recorded, entry.name)] = entry.name
+        return moved
 
     def _remove_call_folder(self, folder: Path) -> None:
         try:

@@ -34,7 +34,7 @@ def test_log_for_follows_phases(tmp_path, run_paths):
     assert W.log_for(tmp_path, _status(), None)[:2] == (agent, "Iteration 2 · agent")
     assert W.log_for(tmp_path, _status(phase="report"), agent)[:2] == (logs / "report.log", "Summary")
     # Between phases the panel stays put; a watcher started then shows the agent log.
-    shown = run_paths.command_logs(2) / "call-002-command" / "ask.log"
+    shown = run_paths.gate_dir(2, 1) / "ask.log"
     assert W.log_for(tmp_path, _status(phase="accept"), shown) is None
     assert W.log_for(tmp_path, _status(phase="checks"), None)[0] == agent
     # Agent panel time counts from the iteration's start, not the phase's.

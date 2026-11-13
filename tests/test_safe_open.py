@@ -1,4 +1,5 @@
-"""Run logs named by untrusted metadata are opened only below logs/, without symlinks or hard links."""
+"""Run logs named by untrusted metadata are opened only below logs/ or as an iteration's agent log or
+judge/review transcripts, without symlinks or hard links."""
 
 import io
 import json
@@ -72,14 +73,57 @@ def test_a_symlinked_iteration_folder_is_refused(run_paths, tmp_path):
     assert open_run_log(run_paths, str(run_paths.agent_log(1))) is None
 
 
-@pytest.mark.parametrize("name", ["prompt.md", "record.json", "observe/bench/stdout.txt"])
-def test_only_the_agent_log_of_an_iteration_folder_opens(run_paths, name):
-    path = run_paths.iteration_dir(1) / name
-    path.parent.mkdir(parents=True)
-    path.write_text(LINE)
-    assert run_paths.relative_log(str(path)) is None and open_run_log(run_paths, str(path)) is None
-    assert run_paths.relative_log("iterations/001/agent.log") == "iterations/001/agent.log"
-    assert run_paths.relative_log("iterations/1/agent.log") is None
+@pytest.mark.parametrize("name", [
+    "prompt.md", "record.json", "observe/bench/stdout.txt", "gates/1/stdout.txt", "gates/1/command.txt",
+    "stop/2/stderr.txt", "gates/0/ask.log", "gates/01/ask.log", "gates/x/ask.log", "gates/1/sub/ask.log",
+    "gates/1/asking.log", "gates/1/ask-.log", "gates/1/ask-x.log", "gates/ask.log", "observe/.hidden/review.log",
+    "observe/bench/sub/review.log", "other/1/ask.log", "notes/ask.log", "ask.log",
+])
+def test_only_logs_of_an_iteration_folder_open(run_paths, name):
+    for folder in (run_paths.iteration_dir(1), run_paths.attempt_dir(1, 2)):
+        path = folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(LINE)
+        assert run_paths.relative_log(str(path)) is None and open_run_log(run_paths, str(path)) is None
+
+
+@pytest.mark.parametrize("name", [
+    "agent.log", "gates/1/ask.log", "gates/12/ask-2.log", "gates/3/review.log", "stop/1/ask.log",
+    "stop/2/review-10.log", "observe/bench/review.log", "observe/review/ask-3.log",
+])
+def test_an_iterations_logs_open(run_paths, name):
+    for folder in (run_paths.iteration_dir(1), run_paths.iteration_dir(1000), run_paths.attempt_dir(3, 2)):
+        path = folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(LINE)
+        relative = str(path.relative_to(run_paths.run_dir))
+        assert run_paths.relative_log(str(path)) == relative == run_paths.relative_log(relative)
+        fd = open_run_log(run_paths, relative)
+        assert fd is not None
+        os.close(fd)
+
+
+@pytest.mark.parametrize("value", [
+    "iterations/1/agent.log", "iterations/01/agent.log", "iterations/abc/agent.log", "iterations/001",
+    ".internal/attempts/001/agent.log", ".internal/attempts/001-0/agent.log", ".internal/attempts/1-1/agent.log",
+    ".internal/attempts/001-1/record.json", ".internal/notes/1/ask.log", ".internal/usage/001.jsonl",
+    ".internal/status.json", "history.jsonl", "../outside/logs/x.log",
+])
+def test_other_paths_are_refused(run_paths, value):
+    assert run_paths.relative_log(value) is None
+
+
+def test_a_planted_link_on_the_way_to_a_transcript_is_refused(run_paths, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "1").mkdir(parents=True)
+    (elsewhere / "1" / "ask.log").write_text(LINE)
+    run_paths.iteration_dir(1).mkdir(parents=True)
+    (run_paths.iteration_dir(1) / "gates").symlink_to(elsewhere)
+    assert open_run_log(run_paths, "iterations/001/gates/1/ask.log") is None
+    log = run_paths.stop_dir(1, 1) / "ask.log"
+    log.parent.mkdir(parents=True)
+    os.link(elsewhere / "1" / "ask.log", log)  # a hard link: refused too
+    assert open_run_log(run_paths, "iterations/001/stop/1/ask.log") is None
 
 
 def _follow(tmp_path, log):

@@ -15,7 +15,7 @@ from typing import Any
 from autohelix.config import capture_problem
 from autohelix.formatting import SUMMARY_LIMIT, clean, clean_block
 from autohelix.costs import CostSummary, summarize_costs
-from autohelix.runs import RunPaths, SCHEMA, iteration_folder
+from autohelix.runs import RunPaths, SCHEMA, iteration_folder, remove_planted
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,29 @@ def _copy_error(error: BaseException) -> str:
         more = f" (and {len(failures) - 1} more)" if len(failures) > 1 else ""
         return f"{first}{more}"
     return str(error)
+
+
+# Gate and stop output keeps its head (compile errors) and tail (test summaries).
+OUTPUT_HEAD = 64 * 1024  # bytes
+OUTPUT_TAIL = 1024 * 1024  # bytes
+
+
+def cap_output(text: str, head: int = OUTPUT_HEAD, tail: int = OUTPUT_TAIL) -> bytes:
+    """`text` as UTF-8, its first `head` and last `tail` bytes (at most; whole
+    characters) with a one-line marker between them saying how many were left out
+    (all of it if it fits)."""
+    data = text.encode("utf-8", errors="replace")
+    if len(data) <= head + tail:
+        return data
+    end, start = head, len(data) - tail
+    # Cut at character boundaries: the head cut moves back, the tail cut forward, past
+    # UTF-8 continuation bytes (0b10xxxxxx), so neither half ends mid-character.
+    while end > 0 and data[end] & 0xC0 == 0x80:
+        end -= 1
+    while start < len(data) and data[start] & 0xC0 == 0x80:
+        start += 1
+    marker = f"\n[autohelix: {start - end} bytes omitted]\n".encode()
+    return data[:end] + marker + data[start:]
 
 
 def _write_record_file(path: Path, record: dict) -> None:
@@ -167,16 +190,36 @@ class History:
         self._cache_mtime: float | None = None
 
     def entry_dir(self, iteration: int, name: str) -> Path:
-        """`iterations/NNN/observe/<name>/`, one observe entry's output (`observe/` is
-        created as a real folder; the entry's folder is not)."""
+        """`iterations/NNN/observe/<name>/`, one observe entry's output."""
         if not name or name.startswith(".") or "/" in name or os.sep in name:
             raise ValueError(f"Not an observe entry name: {name!r}")
+        return self._slot(iteration, self.paths.observe_entry(iteration, name))
+
+    def gate_dir(self, iteration: int, position: int) -> Path:
+        """`iterations/NNN/gates/<k>/`, the output of the gate at 1-based `position`."""
+        return self._slot(iteration, self.paths.gate_dir(iteration, position))
+
+    def stop_dir(self, iteration: int, position: int) -> Path:
+        """`iterations/NNN/stop/<k>/`, the output of the stop command at 1-based `position`."""
+        return self._slot(iteration, self.paths.stop_dir(iteration, position))
+
+    def _slot(self, iteration: int, path: Path) -> Path:
+        """`path`, `iterations/NNN/<kind>/<name>`, with the folders above it created as
+        real folders, outermost first (anything else planted at one, a symlink, file or
+        FIFO, is removed, never written through); `path` itself is not created."""
         iteration_folder(self.paths, iteration)
-        d = self.paths.observe_dir(iteration)
-        if d.is_symlink() or d.is_file():  # planted: never write through it
-            d.unlink()
-        d.mkdir(exist_ok=True)
-        return self.paths.observe_entry(iteration, name)
+        kind = path.parent
+        remove_planted(kind)
+        kind.mkdir(exist_ok=True)
+        return path
+
+    @staticmethod
+    def install(target: Path, stage: Path) -> None:
+        """Make `stage` the folder `target` (from `_slot`), replacing whatever is there
+        (e.g. something an earlier command wrote by absolute path)."""
+        if not remove_planted(target) and target.exists():
+            shutil.rmtree(target)
+        shutil.move(str(stage), str(target))
 
     def supersede(self, iteration: int) -> Path | None:
         """At an attempt's start: move what an earlier attempt at this iteration left
@@ -185,15 +228,13 @@ class History:
         or None if there was nothing (something planted there is removed)."""
         # Outermost first: anything below a planted link would be reached through it.
         for planted in (self.paths.iterations, self.paths.iteration_dir(iteration)):
-            if planted.is_symlink() or planted.is_file():
-                planted.unlink()
+            if remove_planted(planted):
                 return None
         folder = self.paths.iteration_dir(iteration)
         if not folder.is_dir():
             return None
         for planted in (self.paths.internal, self.paths.attempts):
-            if planted.is_symlink() or planted.is_file():
-                planted.unlink()
+            remove_planted(planted)
         self.paths.attempts.mkdir(parents=True, exist_ok=True)
         k = 1
         while True:
@@ -283,15 +324,21 @@ class History:
             return f"capture {capture!r} skipped: not a regular file or folder"
         return None
 
-    def install_observation(self, iteration: int, name: str, stage: Path) -> None:
-        """Make `stage` the entry's `iterations/NNN/observe/<name>/`, replacing whatever is
-        there (e.g. something an earlier command wrote by absolute path)."""
+    def install_observation(self, iteration: int, name: str, stage: Path) -> Path:
+        """Make `stage` the entry's `iterations/NNN/observe/<name>/` (`install`)."""
         target = self.entry_dir(iteration, name)
-        if target.is_symlink() or target.is_file():
-            target.unlink()
-        elif target.exists():
-            shutil.rmtree(target)
-        shutil.move(str(stage), str(target))
+        self.install(target, stage)
+        return target
+
+    @staticmethod
+    def stage_command_output(stage: Path, command: str, stdout: str, stderr: str) -> None:
+        """Write a gate's or stop command's output into `stage` (an empty folder):
+        `command.txt` (the command as run; an `ask:` gate's rendered `autohelix ask`),
+        `stdout.txt` and `stderr.txt` (only if non-empty), both capped (`cap_output`)."""
+        (stage / "command.txt").write_text(command + "\n")
+        (stage / "stdout.txt").write_bytes(cap_output(stdout))
+        if stderr:
+            (stage / "stderr.txt").write_bytes(cap_output(stderr))
 
     def previous_observations(self, name: str, before: int) -> Path | None:
         """`iterations/KKK/observe/<name>/` of the most recent accepted iteration K < `before`

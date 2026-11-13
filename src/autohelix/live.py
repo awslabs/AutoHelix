@@ -86,8 +86,7 @@ def log_for(project: Path, status: dict | None, current: Path | None, run_id: st
     if not agent or not agent.get("log"):
         return None
     agent_log = paths.run_dir / agent["log"]
-    if phase == "agent" or current is None or not any(
-            folder in current.parents for folder in (paths.iteration_dir(n), paths.command_logs(n))):
+    if phase == "agent" or current is None or paths.iteration_dir(n) not in current.parents:
         return agent_log, f"{label} · agent", status.get("iteration_started_at", phase_start)
     return None  # keep the current panel
 

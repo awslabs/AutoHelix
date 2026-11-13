@@ -81,8 +81,9 @@ def open_file(root: Path, parts, single_link: bool = False) -> int | None:
 def open_run_log(paths, value) -> int | None:
     """A read descriptor for a run log named by untrusted metadata (a history
     record's `calls[].log`, the status file's `log`), or None: only a regular,
-    single-link file below the run's `logs/` folder or an iteration's
-    `iterations/NNN/agent.log` (`RunPaths.relative_log`), reached without symlinks."""
+    single-link file below the run's `logs/` folder, or an iteration's agent log or
+    judge/review transcript (`RunPaths.relative_log`, `is_iteration_log`), reached
+    without symlinks."""
     relative = paths.relative_log(value)
     if not relative:
         return None

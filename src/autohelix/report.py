@@ -74,6 +74,9 @@ iteration; iterations/NNN/notes/ is the version saved with iteration N (NNN: thr
 - iterations/NNN/record.json: iteration N's record, as in history.jsonl.
 - iterations/NNN/observe/<name>/: each observe entry's stdout.txt (stderr.txt when not empty) and \
 captured files; a review entry's stdout is its review text.
+- iterations/NNN/gates/<k>/ and stop/<k>/: the output of the entry at 1-based position k in gates: \
+(stop:), metric gates included in the count: command.txt, stdout.txt and stderr.txt (long output \
+keeps its head and tail), an ask's ask.log. Metric gates and gates that never ran have no folder.
 - iterations/NNN/agent.log: full agent transcripts (iterations/NNN/prompt.md, the prompt). They \
 are large; search them rather than reading them whole.
 {git}

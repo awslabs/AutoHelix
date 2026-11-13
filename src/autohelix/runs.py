@@ -58,20 +58,19 @@ def write_json(path: Path, data: dict) -> None:
     write_text(path, json.dumps(data) + "\n")
 
 
-def allocate_call(directory: Path, role: str) -> Path:
-    """Reserve one numbered directory per actual call, including concurrent asks."""
-    directory.mkdir(parents=True, exist_ok=True)
-    index = 1
-    while True:
-        if any(directory.glob(f"call-{index:03d}-*")):
-            index += 1
-            continue
-        path = directory / f"call-{index:03d}-{role}"
-        try:
-            path.mkdir()
-            return path
-        except FileExistsError:
-            index += 1
+_ITERATION = re.compile(r"[0-9]{3,}")
+_ATTEMPT = re.compile(r"[0-9]{3,}-[1-9][0-9]*")
+_POSITION = re.compile(r"[1-9][0-9]*")
+_TRANSCRIPT = re.compile(r"(ask|review)(-[0-9]+)?\.log")  # `judge._log_path`'s names
+
+
+def is_transcript(name: str) -> bool:
+    """A judge or review transcript's file name: `ask.log`, `ask-2.log`, `review.log`, ..."""
+    return bool(_TRANSCRIPT.fullmatch(name))
+
+
+def _at(parts: list, index: int) -> str:
+    return parts[index] if index < len(parts) else ""
 
 
 @dataclass(frozen=True)
@@ -203,10 +202,6 @@ class RunPaths:
         """Where the k-th superseded attempt at an iteration's folder is kept."""
         return self.attempts / f"{self.iteration_name(iteration)}-{k}"
 
-    def command_logs(self, iteration: int) -> Path:
-        """`$AUTOHELIX_LOG_DIR` for the commands one iteration runs (ask/review logs)."""
-        return self.logs / f"iter-{iteration}"
-
     def parts(self, path: Path) -> list[str]:
         """`path`'s components below the run folder (for descriptor-based reads)."""
         return list(path.relative_to(self.run_dir).parts)
@@ -240,9 +235,9 @@ class RunPaths:
 
     def relative_log(self, value) -> str | None:
         """Normalize untrusted log metadata, retaining usage without unsafe logs: a
-        path inside the run folder (resolved, so no symlink leads out of it) below
-        `logs/`, or an iteration's `iterations/NNN/agent.log`. Returns it relative to
-        the run folder, else None."""
+        path inside the run folder (resolved, so no symlink leads out of it) that is
+        below `logs/`, or an iteration's agent log or judge/review transcript
+        (`is_iteration_log`). Returns it relative to the run folder, else None."""
         if not self.run_id or not isinstance(value, (str, Path)) or not value:
             return None
         try:
@@ -255,13 +250,33 @@ class RunPaths:
             logs = self.logs.resolve()
             if logs.is_relative_to(root) and path.is_relative_to(logs):
                 return str(relative)
-            parts = relative.parts
-            if (len(parts) == 3 and parts[0] == self.iterations.name and re.fullmatch(r"\d{3,}", parts[1])
-                    and parts[2] == "agent.log"):
-                return str(relative)
-            return None
+            return str(relative) if self.is_iteration_log(relative.parts) else None
         except (OSError, ValueError, RuntimeError):
             return None
+
+    def is_iteration_log(self, parts) -> bool:
+        """Whether `parts` (below the run folder) name a log an iteration keeps:
+        `iterations/NNN/agent.log`, a judge or review transcript (`ask.log`, `ask-2.log`,
+        `review.log`, ...) in `iterations/NNN/gates/<k>/`, `stop/<k>/` or
+        `observe/<name>/`, or the same in a superseded attempt,
+        `.internal/attempts/NNN-<k>/`. Nothing else (no stdout.txt, prompt.md or
+        record.json)."""
+        parts = list(parts)
+        iterations, attempts = self.parts(self.iterations), self.parts(self.attempts)
+        if parts[:len(iterations)] == iterations and _ITERATION.fullmatch(_at(parts, len(iterations))):
+            rest = parts[len(iterations) + 1:]
+        elif parts[:len(attempts)] == attempts and _ATTEMPT.fullmatch(_at(parts, len(attempts))):
+            rest = parts[len(attempts) + 1:]
+        else:
+            return False
+        if rest == [self.agent_log(0).name]:
+            return True
+        if len(rest) != 3 or not is_transcript(rest[2]):
+            return False
+        kind, name = rest[0], rest[1]
+        if kind in (self.gate_dir(0, 1).parent.name, self.stop_dir(0, 1).parent.name):
+            return bool(_POSITION.fullmatch(name))
+        return kind == self.observe_dir(0).name and not name.startswith(".")
 
     def read_identity(self) -> dict:
         try:
@@ -273,12 +288,21 @@ class RunPaths:
         return data
 
 
+def remove_planted(path: Path) -> bool:
+    """Remove anything at `path` that isn't a real folder (a symlink, file, FIFO,
+    socket or device someone planted there), never following it. Returns whether
+    something was removed."""
+    if path.is_symlink() or os.path.lexists(path) and not path.is_dir():
+        path.unlink()
+        return True
+    return False
+
+
 def iteration_folder(paths: RunPaths, iteration: int) -> Path:
-    """`iterations/NNN/`, created as a real folder: a symlink or file planted at it (or
-    at `iterations/`) is removed, never written through."""
+    """`iterations/NNN/`, created as a real folder: anything else planted at it (or at
+    `iterations/`) is removed, never written through."""
     for folder in (paths.iterations, paths.iteration_dir(iteration)):
-        if folder.is_symlink() or folder.is_file():
-            folder.unlink()
+        remove_planted(folder)
         folder.mkdir(parents=True, exist_ok=True)
     return folder
 

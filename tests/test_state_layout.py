@@ -99,7 +99,7 @@ def test_a_baseline_retry_points_kept_calls_at_the_moved_attempt(project):
         log = paths.iteration_dir(0) / "gates" / "1" / "ask.log"  # a judge log inside the attempt's folder
         log.parent.mkdir(parents=True)
         log.write_text("transcript\n")
-        other = paths.command_logs(0) / "call-001-command" / "ask.log"  # one outside it stays as it is
+        other = paths.logs / "elsewhere" / "ask.log"  # one outside it stays as it is
         usage = paths.usage(0)
         usage.parent.mkdir(parents=True, exist_ok=True)
         usage.write_text(json.dumps({"id": "a", "cost_usd": 0.1, "log": str(log)}) + "\n"
@@ -190,3 +190,258 @@ def test_ownership_recovery_heals_record_json(run_paths, damage):
     assert run_paths.history.read_bytes() == content  # history itself untouched
     assert json.loads(run_paths.record(1).read_text()) == _history_lines(run_paths)[1]
     assert run_paths.record(0).stat().st_mtime_ns == before  # a correct one is not rewritten
+
+
+# --- evaluation evidence: gates/<k>/, stop/<k>/, transcripts in their folders ----------
+
+ITERATION = '"$AUTOHELIX_RUN_DIR/iterations/$(printf %03d "$AUTOHELIX_ITERATION")"'
+
+
+def _configure(project, **values):
+    from tests.test_runs import configure
+
+    configure(project, **values)
+
+
+def _listing(folder):
+    return sorted(os.listdir(folder)) if folder.is_dir() else None
+
+
+def _command_logs(record):
+    return [call["log"] for call in record.calls if call["role"] == "command"]
+
+
+def test_gate_folders_by_position_with_their_output_and_transcripts(project):
+    _configure(project, gates=[
+        "echo out1; echo err1 >&2",                       # 1: passes, both streams
+        {"metric": "speed", "regress": "50%"},           # 2: runs nothing: no folder
+        {"ask": "Done?"},                                 # 3: its transcript joins it
+        'echo only-out; [ "$AUTOHELIX_ITERATION" = 0 ]',  # 4: fails at iteration 1
+        "echo never",                                     # 5: never runs after 4 failed
+    ], observe=[{"name": "bench", "command": "echo '##autohelix[speed=1]'", "metrics": {"speed": "higher"}}])
+    harness = Harness(project, land_mode="manual")
+    try:
+        harness.run(max_iterations=1, report=False)
+        paths = harness.paths
+    finally:
+        harness.close()
+    baseline, first = History(project, paths.run_id).load()
+    assert not first.accepted and first.reason.startswith("gate failed")
+    assert _listing(paths.iteration_dir(0) / "gates") == ["1", "3", "4", "5"]  # the baseline runs every gate
+    assert _listing(paths.iteration_dir(1) / "gates") == ["1", "3", "4"]
+    one = paths.gate_dir(1, 1)
+    assert _listing(one) == ["command.txt", "stderr.txt", "stdout.txt"]  # a passing gate's output is kept
+    assert ((one / "command.txt").read_text(), (one / "stdout.txt").read_text(),
+            (one / "stderr.txt").read_text()) == ("echo out1; echo err1 >&2\n", "out1\n", "err1\n")
+    assert _listing(paths.gate_dir(1, 4)) == ["command.txt", "stdout.txt"]  # stderr only when not empty
+    assert (paths.gate_dir(1, 4) / "stdout.txt").read_text() == "only-out\n"
+    ask = paths.gate_dir(1, 3)
+    assert "ask.log" in _listing(ask) and (ask / "ask.log").read_text().startswith("Mock judge")
+    assert (ask / "command.txt").read_text().startswith("autohelix ask ")  # the rendered ask
+    # The call's usage names the stored transcript, in history.jsonl and record.json alike.
+    assert _command_logs(baseline) == ["iterations/000/gates/3/ask.log"]
+    assert _command_logs(first) == ["iterations/001/gates/3/ask.log"]
+    assert _record_file(paths, 1) == _history_lines(paths)[-1]
+    assert not paths.logs.exists() or not [p for p in paths.logs.iterdir() if p.is_dir()]  # no logs/iter-N/
+
+
+def test_stored_gate_output_replaces_what_commands_planted(project, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _configure(project, gates=[
+        # A link planted at gates/ itself, and junk in its own logs/ folder.
+        f'mkdir -p {ITERATION}; ln -s {elsewhere} {ITERATION}/gates; logs="$AUTOHELIX_LOG_DIR"; '
+        'echo note > "$logs/notes.txt"; ln -s /etc/hosts "$logs/ask-7.log"; mkdir "$logs/review.log"; '
+        'echo x > "$logs/ask-8.log"; ln "$logs/ask-8.log" "$logs/ask-9.log"; echo fake > "$logs/ask-6.log"',
+        # Files planted in a later gate's folder, before it runs and while it runs.
+        f'mkdir -p {ITERATION}/gates/3; echo planted > {ITERATION}/gates/3/planted.txt',
+        f'echo three; echo own > {ITERATION}/gates/3/own.txt',
+    ])
+    harness = Harness(project, land_mode="manual")
+    try:
+        harness.run(max_iterations=1, report=False)
+        paths = harness.paths
+    finally:
+        harness.close()
+    assert list(elsewhere.iterdir()) == []
+    for n in (0, 1):
+        assert not (paths.iteration_dir(n) / "gates").is_symlink()
+        # Only regular single-link transcripts move in (a fake one can't be told apart).
+        assert _listing(paths.gate_dir(n, 1)) == ["ask-6.log", "command.txt", "stdout.txt"]
+        assert _listing(paths.gate_dir(n, 3)) == ["command.txt", "stdout.txt"]
+
+
+def test_a_transcript_that_was_not_stored_leaves_no_log(project):
+    _configure(project, gates=['autohelix ask "Done?"; rm -f "$AUTOHELIX_LOG_DIR/ask.log"', {"ask": "Done?"}])
+    harness = Harness(project, land_mode="manual")
+    try:
+        harness.run(max_iterations=1, report=False)
+        paths = harness.paths
+    finally:
+        harness.close()
+    record = History(project, paths.run_id).load()[-1]
+    assert _command_logs(record) == [None, "iterations/001/gates/2/ask.log"]  # still counted
+
+
+def test_stop_folders_by_position(project):
+    _configure(project, stop=['echo s1; echo e1 >&2; exit 1',
+                              '[ "$AUTOHELIX_ITERATION" = 0 ] && exit 1; autohelix ask "Stop?"'])
+    harness = Harness(project, land_mode="manual")
+    try:
+        harness.run(max_iterations=3, report=False)
+        paths = harness.paths
+    finally:
+        harness.close()
+    baseline, first = History(project, paths.run_id).load()
+    assert first.accepted and first.stop["command"].endswith('autohelix ask "Stop?"')
+    for n in (0, 1):
+        assert _listing(paths.iteration_dir(n) / "stop") == ["1", "2"]
+        one = paths.stop_dir(n, 1)
+        assert ((one / "command.txt").read_text(), (one / "stdout.txt").read_text(),
+                (one / "stderr.txt").read_text()) == ("echo s1; echo e1 >&2; exit 1\n", "s1\n", "e1\n")
+    assert "ask.log" not in _listing(paths.stop_dir(0, 2))
+    assert (paths.stop_dir(1, 2) / "ask.log").read_text().startswith("Mock judge")
+    assert _command_logs(first) == ["iterations/001/stop/2/ask.log"]
+    assert _record_file(paths, 1) == _history_lines(paths)[-1]  # updated after the stop calls
+
+
+def test_gate_and_stop_output_keeps_its_head_and_tail():
+    from autohelix.history import OUTPUT_HEAD, OUTPUT_TAIL, cap_output
+
+    assert cap_output("short") == b"short"
+    assert cap_output("a" * 10 + "b" * 5 + "c" * 10, head=10, tail=10) == (
+        b"a" * 10 + b"\n[autohelix: 5 bytes omitted]\n" + b"c" * 10)
+    fits = "x" * (OUTPUT_HEAD + OUTPUT_TAIL)
+    assert cap_output(fits) == fits.encode()
+    capped = cap_output("H" * OUTPUT_HEAD + "x" * 1000 + "T" * OUTPUT_TAIL)
+    assert capped == b"H" * OUTPUT_HEAD + b"\n[autohelix: 1000 bytes omitted]\n" + b"T" * OUTPUT_TAIL
+
+
+def test_gate_output_is_capped_observe_stdout_is_not(project):
+    big = "import sys; sys.{}.write('h' * 70000 + 'm' * 200000 + 't' * 1048576)"
+    _configure(project, gates=[f'python3 -c "{big.format("stderr")}"'],
+               observe=[{"name": "bench", "command": f'python3 -c "{big.format("stdout")}"'}])
+    harness = Harness(project, land_mode="manual")
+    try:
+        harness._capture_baseline()
+        paths = harness.paths
+    finally:
+        harness.close()
+    from autohelix.history import OUTPUT_HEAD, OUTPUT_TAIL
+
+    stderr = (paths.gate_dir(0, 1) / "stderr.txt").read_bytes()
+    omitted = 70000 + 200000 + 1048576 - OUTPUT_HEAD - OUTPUT_TAIL
+    assert stderr == (b"h" * OUTPUT_HEAD + f"\n[autohelix: {omitted} bytes omitted]\n".encode()
+                      + (b"m" * 200000 + b"t" * 1048576)[-OUTPUT_TAIL:])
+    assert (paths.gate_dir(0, 1) / "stdout.txt").read_bytes() == b""
+    assert (paths.observe_entry(0, "bench") / "stdout.txt").stat().st_size == 70000 + 200000 + 1048576
+
+
+def test_review_transcripts_join_the_observe_entry(project):
+    _configure(project, observe=[{"name": "review", "review": "Is it tidy?"}])
+    harness = Harness(project, land_mode="manual")
+    try:
+        harness.run(max_iterations=2, report=False)
+        paths = harness.paths
+    finally:
+        harness.close()
+    records = History(project, paths.run_id).load()
+    assert [r.observe[0]["ok"] for r in records] == [True, True, True]
+    for record in records:
+        n = record.iteration
+        assert _command_logs(record) == [f"iterations/{n:03d}/observe/review/review.log"]
+        assert (paths.observe_entry(n, "review") / "review.log").is_file()
+
+
+def test_ask_log_names_are_taken_exclusively(tmp_path, monkeypatch):
+    import threading
+
+    from autohelix.judge import _log_path
+
+    logs = tmp_path / "logs"
+    monkeypatch.setenv("AUTOHELIX_LOG_DIR", str(logs))
+    assert _log_path("ask") == logs / "ask.log"
+    (logs / "ask-2.log").symlink_to(tmp_path / "victim")  # planted: skipped, never written through
+    assert _log_path("ask") == logs / "ask-3.log"
+    assert _log_path("review") == logs / "review.log"
+    found = []
+    threads = [threading.Thread(target=lambda: found.append(_log_path("ask"))) for _ in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(set(found)) == 20 and not (tmp_path / "victim").exists()
+    assert sorted(found) == sorted(logs / f"ask-{k}.log" for k in range(4, 24))
+    monkeypatch.delenv("AUTOHELIX_LOG_DIR")  # outside the harness: a private temporary folder
+    outside = _log_path("ask")
+    assert outside.name == "ask.log" and outside.parent != logs and outside.parent.stat().st_mode & 0o077 == 0
+
+
+def test_a_baseline_retry_keeps_its_transcripts_with_the_moved_attempt(project, tmp_path):
+    from autohelix.safe_open import open_run_log
+
+    marker = tmp_path / "second-attempt"
+    _configure(project, gates=[{"ask": "Done?"}], observe=[
+        {"name": "bench", "command": f'[ -e {marker} ] && echo "##autohelix[speed=1]"; true',
+         "metrics": {"speed": "higher"}}])
+    with pytest.raises(RuntimeError, match="Baseline setup error"):
+        Harness(project).run(max_iterations=1, report=False)
+    marker.touch()
+    harness = Harness(project, land_mode="manual")  # resumes the run: a baseline retry
+    try:
+        harness._capture_baseline()
+        paths = harness.paths
+    finally:
+        harness.close()
+    baseline = History(project, paths.run_id).load()[-1]
+    assert baseline.accepted
+    assert _command_logs(baseline) == [".internal/attempts/000-1/gates/1/ask.log", "iterations/000/gates/1/ask.log"]
+    for log in _command_logs(baseline):
+        fd = open_run_log(paths, log)
+        assert fd is not None
+        os.close(fd)
+
+
+def test_capped_output_is_cut_at_character_boundaries():
+    from autohelix.history import cap_output
+
+    capped = cap_output("é" * 20, head=5, tail=5)  # 2 bytes each: both cuts fall mid-character
+    assert capped.decode("utf-8") == "éé\n[autohelix: 32 bytes omitted]\néé"
+    assert cap_output("aé" + "x" * 10 + "€b", head=2, tail=2).decode() == "a\n[autohelix: 15 bytes omitted]\nb"
+
+
+@pytest.mark.parametrize("planted", ["gates", "gates/2", "observe", "observe/bench", "stop", "stop/1"])
+def test_a_planted_fifo_where_output_goes_is_replaced(project, planted):
+    _configure(project, gates=[f'mkdir -p "$(dirname {ITERATION}/{planted})"; mkfifo {ITERATION}/{planted}',
+                               "echo two"],
+               observe=[{"name": "bench", "command": "echo bench"}], stop=["echo stop; exit 1"])
+    harness = Harness(project, land_mode="manual")
+    try:
+        harness.run(max_iterations=1, report=False)
+        paths = harness.paths
+    finally:
+        harness.close()
+    assert [r.accepted for r in History(project, paths.run_id).load()] == [True, True]
+    for n in (0, 1):
+        for folder in (paths.gate_dir(n, 1), paths.gate_dir(n, 2), paths.observe_entry(n, "bench"),
+                       paths.stop_dir(n, 1)):
+            assert folder.is_dir() and not folder.is_symlink() and "stdout.txt" in _listing(folder)
+
+
+def test_a_storage_failure_never_loses_a_gate_or_stop_outcome(project, monkeypatch):
+    def broken(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(History, "stage_command_output", staticmethod(broken))
+    _configure(project, gates=["true", '[ "$AUTOHELIX_ITERATION" = 0 ]'],
+               stop=['[ "$AUTOHELIX_ITERATION" = 2 ]'])
+    harness = Harness(project, land_mode="manual")
+    try:
+        harness.run(max_iterations=1, report=False)
+        paths = harness.paths
+    finally:
+        harness.close()
+    baseline, first = History(project, paths.run_id).load()
+    assert [g["passed"] for g in baseline.gates] == [True, True]
+    assert not first.accepted and [g["passed"] for g in first.gates] == [True, False]
+    assert not (paths.iteration_dir(1) / "gates").exists() or _listing(paths.iteration_dir(1) / "gates") == []

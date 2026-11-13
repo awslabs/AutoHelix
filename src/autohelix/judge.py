@@ -31,7 +31,6 @@ from typing import Any, Callable
 from autohelix.agents import AgentConfig, AgentEvent, create_agent
 from autohelix.config import ConfigNotFound, find_config
 from autohelix.workspace import Fingerprint, git_env
-from autohelix.runs import allocate_call
 from autohelix.usage_log import append_usage, new_call_id
 
 DEFAULT_TIMEOUT = 600
@@ -175,10 +174,24 @@ def _last_json_object(text: str) -> dict | None:
 
 
 def _log_path(name: str) -> Path:
-    directory = Path(os.environ[LOG_DIR_ENV]) if os.environ.get(LOG_DIR_ENV) else Path(tempfile.gettempdir()) / f"autohelix-{name}"
-    directory.mkdir(parents=True, exist_ok=True)
-    call_dir = allocate_call(directory, "command")
-    return call_dir / f"{name}.log"
+    """A new, empty transcript file for one call: `<name>.log` in `$AUTOHELIX_LOG_DIR`
+    (the harness's private `logs/` folder for the command), else `<name>-2.log`,
+    `<name>-3.log`, ... if taken. Each name is created exclusively, so concurrent calls
+    never share one (and nothing planted at a name is written through). Outside the
+    harness, in a new private temporary folder."""
+    if os.environ.get(LOG_DIR_ENV):
+        directory = Path(os.environ[LOG_DIR_ENV])
+        directory.mkdir(parents=True, exist_ok=True)
+    else:
+        directory = Path(tempfile.mkdtemp(prefix=f"autohelix-{name}-"))
+    index = 1
+    while True:
+        path = directory / (f"{name}.log" if index == 1 else f"{name}-{index}.log")
+        try:
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600))
+            return path
+        except FileExistsError:
+            index += 1
 
 
 def deadline_left(margin: int = 10) -> int | None:
@@ -243,7 +256,8 @@ def call_judge(cwd: Path, config: AgentConfig, *, source: str, record: dict, pro
             "Reply with only the JSON object.")
         call_id = new_call_id()
         log_path = _log_path(source)
-        # Readers make it relative to the run (and drop it if it's outside the run's logs).
+        # The harness points it at the stored copy once the command ended; readers make
+        # it relative to the run (and drop it if it isn't a run log).
         entry = {"id": call_id, "source": source, **record, "agent": config.backend,
                  "model": config.model, "log": str(log_path.resolve())}
         append_usage({**entry, "status": "started", "cost_usd": None})

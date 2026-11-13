@@ -842,23 +842,29 @@ class Harness:
             if violation := self._integrity_violation(iteration):
                 raise CandidateRejected(violation)
 
+        positions = {id(gate): index for index, gate in enumerate(self.config.gates)}
+        current: dict = {}  # the running command's call folders; the gate item of the one that just ran
+
         @contextmanager
         def gate_call(_command: str):
             with workspace.call_folder() as folders:
+                current["folders"] = folders
                 yield {"AUTOHELIX_SCRATCH": str(folders["scratch"]), "AUTOHELIX_PREVIOUS": None,
-                       "PATH": command_path(folders["bin"])}
-
-        positions = {id(gate): index for index, gate in enumerate(self.config.gates)}
-        current: dict = {}  # the gate item of the command that just ran
+                       "AUTOHELIX_LOG_DIR": str(folders["logs"]), "PATH": command_path(folders["bin"])}
 
         def gate_result(spec, result) -> None:
+            index = positions[id(spec)]
             evaluation.constraints.append(result)
-            item = current["item"] = evaluation.gates[positions[id(spec)]]
+            item = current["item"] = evaluation.gates[index]
             item.update(passed=result.passed, return_code=result.return_code,
                         duration_s=None if result.duration_s is None else round(result.duration_s, 3))
             if not result.passed:
                 item["output"] = _tail(result.output)
             self.log.info(f"{where} gate: {spec.text} — {'passed' if result.passed else 'FAILED'}")
+            # Its output is stored (passing or not, also if it changed the candidate) while
+            # its call folder still exists, after its outcome is recorded.
+            self._store_command_output(iteration, current["folders"], spec.command, result,
+                                       lambda: self.history.gate_dir(iteration, index + 1))
 
         def verify_gate(command: str) -> None:
             try:
@@ -939,16 +945,17 @@ class Harness:
             with workspace.call_folder(previous=previous) as folders:
                 env = {**command_env, "AUTOHELIX_SCRATCH": str(folders["scratch"]),
                        "AUTOHELIX_PREVIOUS": str(folders["previous"]) if "previous" in folders else None,
-                       "PATH": command_path(folders["bin"])}
+                       "AUTOHELIX_LOG_DIR": str(folders["logs"]), "PATH": command_path(folders["bin"])}
                 result = run_observe_entry(entry, checks.working_dir, project_path=self.project_path,
                                            on_progress=progress, extra_env=env)
                 record = result.record()
                 evaluation.observe.append(record)  # before captures: a capture problem can't lose it
                 # Stored before anything can reject: a rejected iteration keeps its output.
-                stage = workspace.stage_folder(folders)
-                problems = self.history.stage_output(stage, result.stdout, result.stderr, checks.working_dir,
-                                                     entry.capture)
-                self.history.install_observation(iteration, entry.name, stage)
+                problems = self._store(
+                    iteration, folders,
+                    lambda stage: self.history.stage_output(stage, result.stdout, result.stderr,
+                                                            checks.working_dir, entry.capture),
+                    lambda stage: self.history.install_observation(iteration, entry.name, stage))
             if problems:
                 record["capture_errors"] = problems
                 for problem in problems:
@@ -1008,6 +1015,59 @@ class Harness:
     def _relative_log(self, path):
         return self.paths.relative_log(path)
 
+    def _store(self, iteration: int, folders: dict, fill, install):
+        """Store one command's output: `fill(stage)` writes it into a fresh `output/` in
+        the command's call folder (made after the command and its process group ended),
+        the transcripts its `ask`/`review` calls left in its `logs/` join it
+        (`IterationWorkspace.move_transcripts`), then `install(stage)` puts it in place in
+        run state, replacing whatever is there, and returns where. The calls' usage
+        records then name the stored transcripts (`_point_usage_logs`). Returns what
+        `fill` returned."""
+        stage = IterationWorkspace.stage_folder(folders)
+        filled = fill(stage)
+        moved = IterationWorkspace.move_transcripts(folders, stage)
+        target = install(stage)
+        self._point_usage_logs(iteration, folders["logs"],
+                               {recorded: str(target / name) for recorded, name in moved.items()})
+        return filled
+
+    def _store_command_output(self, iteration: int, folders: dict, command: str, result, target) -> None:
+        """A gate's or stop command's output (`History.stage_command_output`), installed
+        at `target()` (`History.gate_dir` / `stop_dir`). A failure to store it is logged,
+        never fatal: the command's outcome counts either way."""
+        def install(stage: Path) -> Path:
+            folder = target()
+            self.history.install(folder, stage)
+            return folder
+
+        try:
+            self._store(iteration, folders,
+                        lambda stage: self.history.stage_command_output(stage, command, result.stdout,
+                                                                        result.stderr),
+                        install)
+        except Exception as e:  # noqa: BLE001 - evidence, not the outcome
+            self.log.warn(f"Could not store the output of {command!r} (iteration {iteration}): {e}")
+            try:  # its calls' transcripts weren't stored
+                self._point_usage_logs(iteration, folders["logs"], {})
+            except Exception:  # noqa: BLE001 - readers drop logs outside the run anyway
+                pass
+
+    def _point_usage_logs(self, iteration: int, logs: Path, stored: dict[str, str]) -> None:
+        """This attempt's usage records whose `log` is in a command's private `logs/`
+        folder: point them at the stored transcript, or at nothing (None) if it wasn't
+        stored. Calls kept from an earlier attempt (`_usage_starts`) are left alone: an
+        earlier call folder may have had the same path."""
+        folder = os.path.realpath(logs)
+
+        def point(record: dict) -> None:
+            value = record.get("log")
+            if (record.get("id") in self._usage_starts or not isinstance(value, str)
+                    or not os.path.isabs(value) or os.path.dirname(os.path.normpath(value)) != folder):
+                return
+            record["log"] = stored.get(os.path.normpath(value))
+
+        self._rewrite_usage(self.paths.usage(iteration), point)
+
     def _complete_record(self, result, started_at, iter_start, evaluation: _Evaluation | None = None):
         result.started_at = started_at
         result.ended_at = time.time()
@@ -1051,37 +1111,50 @@ class Harness:
     def _move_usage_logs(self, path: Path, folder: Path, moved: Path) -> None:
         """Point the `log` of each usage record in `path` that was inside `folder` at the
         same file in `moved` (absolute stays absolute, relative to the run folder stays
-        relative). Other lines are kept as they are."""
-        def moved_log(value):
+        relative)."""
+        def moved_log(record: dict) -> None:
+            value = record.get("log")
             if not isinstance(value, str) or not value:
-                return value
+                return
             absolute = os.path.isabs(value)
             full = os.path.normpath(value if absolute else os.path.join(self.paths.run_dir, value))
             base = os.path.normpath(folder)
             if not full.startswith(base + os.sep):
-                return value
+                return
             target = os.path.join(moved, os.path.relpath(full, base))
-            return target if absolute else os.path.relpath(target, self.paths.run_dir)
+            record["log"] = target if absolute else os.path.relpath(target, self.paths.run_dir)
 
+        self._rewrite_usage(path, moved_log)
+
+    @staticmethod
+    def _rewrite_usage(path: Path, change) -> None:
+        """Rewrite a usage file (if anything changed), `change(record)` editing each
+        record with a `log` in place; other lines are kept as they are."""
+        try:
+            text = path.read_text()
+        except FileNotFoundError:
+            return
         lines = []
-        for line in path.read_text().splitlines():
+        for line in text.splitlines():
             try:
                 record = json.loads(line)
             except ValueError:
                 record = None
             if isinstance(record, dict) and "log" in record:
-                record["log"] = moved_log(record["log"])
+                change(record)
                 line = json.dumps(record)
             lines.append(line + "\n")
-        write_text(path, "".join(lines))
+        if "".join(lines) != text:
+            write_text(path, "".join(lines))
 
     def _command_env(self, iteration: int) -> dict[str, str]:
         """Variables for every command the harness runs (checks, metrics, stop):
-        where to record model usage and logs, and which config to read."""
+        where to record model usage, and which config to read. `$AUTOHELIX_LOG_DIR` is
+        set per call (its call folder's `logs/`)."""
         return {
             USAGE_ENV: str(self.paths.usage(iteration)),
             "AUTOHELIX_CONFIG": str(self.config_file.resolve()),
-            "AUTOHELIX_LOG_DIR": str(self.paths.command_logs(iteration)),
+            "AUTOHELIX_LOG_DIR": None,  # per call: the call folder's private logs/
             "AUTOHELIX_RUN_ID": self.paths.run_id,
             "AUTOHELIX_RUN_DIR": str(self.paths.run_dir),
             "AUTOHELIX_ITERATION": str(iteration),
@@ -1105,18 +1178,27 @@ class Harness:
                "AUTOHELIX_METRICS": str(metrics_path), "AUTOHELIX_PREVIOUS": None}
         observations = self.paths.observe_dir(iteration)
 
+        positions = {id(spec): index for index, spec in enumerate(self.config.stop, start=1)}
+        current: dict = {}  # the running command's call folders
+
         @contextmanager
         def stop_call(_command: str):
             with workspace.call_folder(observations=observations) as folders:
+                current["folders"] = folders
                 yield {"AUTOHELIX_SCRATCH": str(folders["scratch"]),
                        "AUTOHELIX_OBSERVATIONS": str(folders["observations"]),
-                       "PATH": command_path(folders["bin"])}
+                       "AUTOHELIX_LOG_DIR": str(folders["logs"]), "PATH": command_path(folders["bin"])}
+
+        def stop_result(spec, result) -> None:  # stored while its call folder still exists
+            position = positions[id(spec)]
+            self._store_command_output(iteration, current["folders"], spec.command, result,
+                                       lambda: self.history.stop_dir(iteration, position))
 
         stop = workspace.stop_copy()
         try:
             with Status("Checking stop conditions...", console=self.console, spinner="dots"):
                 results = run_stop_checks(self.config, stop.working_dir, project_path=self.project_path, extra_env=env,
-                                          per_command=stop_call)
+                                          per_command=stop_call, on_result=stop_result)
             if changed := stop.changed():
                 raise AutoHelixRunError("stop commands modified accepted files: " + ", ".join(changed[:5]))
         finally:
