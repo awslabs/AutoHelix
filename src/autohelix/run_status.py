@@ -78,3 +78,12 @@ def read_run_status(project: Path, run_id: str | None = None) -> dict | None:
         except (PermissionError, KeyError, TypeError, ValueError):
             pass
     return data
+
+
+def running_iteration(status: dict | None) -> int | None:
+    """The iteration a status says is running (the baseline is 0), else None: the one
+    whose call folders may hold live transcripts (`RunPaths.live_transcript`)."""
+    if not isinstance(status, dict) or status.get("state") != "running":
+        return None
+    n = status.get("iteration")
+    return n if isinstance(n, int) and not isinstance(n, bool) and n >= 0 else None

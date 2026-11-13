@@ -79,16 +79,18 @@ def open_file(root: Path, parts, single_link: bool = False) -> int | None:
     return fd
 
 
-def open_run_log(paths, value) -> int | None:
-    """A read descriptor for a run log named by untrusted metadata (a history
-    record's `calls[].log`, the status file's `log`), or None: only a regular,
-    single-link file below the run's `logs/` folder, or an iteration's agent log or
-    judge/review transcript (`RunPaths.relative_log`, `is_iteration_log`), reached
-    without symlinks."""
-    relative = paths.relative_log(value)
-    if not relative:
+def open_run_log(paths, value, running: int | None = None) -> int | None:
+    """A read descriptor for a log named by untrusted metadata (a history record's or
+    usage record's `log`, the status file's `log`), or None: only a regular,
+    single-link file below the run's `logs/` folder, an iteration's agent log or
+    judge/review transcript (`RunPaths.relative_log`, `is_iteration_log`), or, with
+    `running` (the iteration the run status says is running), a transcript that
+    iteration's call is still writing in its call folder (`RunPaths.live_transcript`),
+    reached without symlinks from the run (or copies) folder down."""
+    found = paths.readable_log(value, running)
+    if found is None:
         return None
-    return open_file(paths.run_dir, Path(relative).parts, single_link=True)
+    return open_file(*found, single_link=True)
 
 
 def copy_dir(root: Path, parts, target: Path) -> bool:

@@ -62,6 +62,7 @@ _ITERATION = re.compile(r"[0-9]{3,}")
 _ATTEMPT = re.compile(r"[0-9]{3,}-[1-9][0-9]*")
 _POSITION = re.compile(r"[1-9][0-9]*")
 _TRANSCRIPT = re.compile(r"(ask|review)(-[0-9]+)?\.log")  # `judge._log_path`'s names
+_CALL_FOLDER = re.compile(r"iter-(0|[1-9][0-9]*)-call-[1-9][0-9]*")  # `RunPaths.call_folder_name`
 
 
 def is_transcript(name: str) -> bool:
@@ -210,6 +211,11 @@ class RunPaths:
         """`path`'s components below the run folder (for descriptor-based reads)."""
         return list(path.relative_to(self.run_dir).parts)
 
+    @staticmethod
+    def call_folder_name(iteration: int, k: int) -> str:
+        """`iter-N-call-K`: the k-th command call folder of an iteration, in the copies folder."""
+        return f"iter-{iteration}-call-{k}"
+
     def copies_under(self, base: Path) -> Path:
         return base / project_key(self.project) / self.run_id
 
@@ -281,6 +287,38 @@ class RunPaths:
         if kind in (self.gate_dir(0, 1).parent.name, self.stop_dir(0, 1).parent.name):
             return bool(_POSITION.fullmatch(name))
         return kind == self.observe_dir(0).name and not name.startswith(".")
+
+    def live_transcript(self, value, running: int | None) -> list[str] | None:
+        """A judge or review transcript a running call is writing, named by untrusted
+        metadata (a usage record's `log` before its command ended): an absolute path
+        `<copies>/iter-N-call-K/logs/<ask|review>(-n).log`, N being the `running`
+        iteration (from the run status). Returns its parts below `copies`, else None;
+        no other name, folder or iteration."""
+        if not self.run_id or running is None or not isinstance(value, str) or not os.path.isabs(value):
+            return None
+        try:
+            copies = str(self.copies)
+        except RuntimeError:
+            return None
+        path = os.path.normpath(value)
+        if not path.startswith(copies + os.sep):
+            return None
+        parts = path[len(copies) + 1:].split(os.sep)
+        if len(parts) != 3 or parts[1] != "logs" or not is_transcript(parts[2]):
+            return None
+        match = _CALL_FOLDER.fullmatch(parts[0])
+        return parts if match and int(match[1]) == running else None
+
+    def readable_log(self, value, running: int | None = None) -> tuple[Path, list[str]] | None:
+        """Where a log named by untrusted metadata may be opened, as (folder, parts below
+        it) for descriptor-based reads: a run log (`relative_log`) below the run folder,
+        or, with `running`, that iteration's live transcript (`live_transcript`) below the
+        copies folder. None for anything else."""
+        if relative := self.relative_log(value):
+            return self.run_dir, list(Path(relative).parts)
+        if parts := self.live_transcript(value, running):
+            return self.copies, parts
+        return None
 
     def read_identity(self) -> dict:
         try:

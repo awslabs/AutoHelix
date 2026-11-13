@@ -41,10 +41,10 @@ A useful loop answers five questions:
 ### Tips
 
 - Keep gates, benchmarks and evaluation criteria outside the editable scope.
-- To see exactly what the agent received, read the prompt kept with each
-  iteration's logs, `.autohelix/runs/<id>/logs/iter-N/call-001-agent/prompt.txt`
-  (the agent copy, which holds it as `.autohelix-iteration/prompt.md`, is gone
-  once the iteration ends), or the built-in template
+- To see exactly what the agent received, read the prompt kept in each
+  iteration's folder, `.autohelix/runs/<id>/iterations/NNN/prompt.md` (the agent
+  copy, which holds it as `.autohelix-iteration/prompt.md`, is gone once the
+  iteration ends), or the built-in template
   (`src/autohelix/templates/default_prompt.md`). See [Prompt](#prompt).
 - AutoHelix already retains iteration evidence and agent memory. When findings
   should also be user-facing and revisable, keep them in an editable,
@@ -118,9 +118,10 @@ for a cooperative agent, and for candidate code that misbehaves by accident:
 - what is checked is exactly what is accepted, and a check can't change it;
 - a gate, entry or judge that edits the files it checks is caught, even if a
   wrapper script restores them;
-- an observe entry's stored output, `$AUTOHELIX_PREVIOUS` and
-  `$AUTOHELIX_OBSERVATIONS` are written or copied by the harness, so what the
-  next call reads can't be rewritten in place;
+- stored output (gates', observe entries' and stop commands', judge and review
+  transcripts included), `$AUTOHELIX_PREVIOUS` and `$AUTOHELIX_OBSERVATIONS` are
+  written or copied by the harness after the command ended, so what the next
+  call reads can't be rewritten in place;
 - reviews read their own copy of exactly the candidate, not files earlier
   commands left behind;
 - `autohelix ask` and `autohelix review` run the harness's own installation,
@@ -138,7 +139,7 @@ escapes without reverting them. For stronger isolation use the
 
 ## Notes
 
-The agent's persistent memory across iterations. Stored in `.autohelix/runs/<id>/notes/` (a link to the latest saved version, `notes.<n>/`) and presented to the agent as `.autohelix-iteration/notes/`.
+The agent's persistent memory across iterations. Stored in `.autohelix/runs/<id>/notes/` (a link to the latest saved version, `.internal/notes/<n>/`; each iteration's `iterations/NNN/notes` links to the version saved with it) and presented to the agent as `.autohelix-iteration/notes/`.
 
 `notes/` is the **sole agent-owned region** and the only thing that round-trips
 between the main project and each iteration's agent copy. Everything else the agent
@@ -153,7 +154,7 @@ Key properties:
 - **Survive rejection** — notes are saved during final cleanup, so even rejected iterations contribute learnings
 - **Copied into agent copies** — the agent sees notes from all previous iterations
 - **Agent-managed** — the agent decides what to write and how to organize notes
-- **Versioned** — each save is a new version (`notes.<n>/`), so a note the agent deletes stays deleted, and the notes as of any iteration remain
+- **Versioned** — each save is a new version (`.internal/notes/<n>/`), so a note the agent deletes stays deleted, and the notes as of any iteration remain
 - **Shared in a group** — runs started with the same `--group` see each other's notes (read-only copies, in `.autohelix-iteration/runs/<id>/notes/`)
 - **Per run** — each `autohelix run` starts with empty notes; `resume` continues a run's notes; `archive` keeps them, `delete` removes them
 
@@ -201,14 +202,15 @@ scope, where to read notes and hints, and where to write notes. Then, about the
 latest iteration:
 
 - **After an accepted iteration:** its gate results and where its observations
-  are (`.autohelix-iteration/observations/iter-K/<name>/`, failed entries
+  are (`.autohelix-iteration/iterations/NNN/observe/<name>/`, failed entries
   marked, and an entry that ran but didn't report a declared metric named with
   how to report it). The copy holds its code.
 - **After a rejection:** the rejected attempt's gate results (passed, failed,
-  or not reached), the failure output, the observations it produced before
-  being rejected, and `.autohelix-iteration/rejected.patch` (for a change over
-  2 MiB, the `git diff` command that shows it instead). The copy is still the
-  last accepted code.
+  or not reached; a failing gate with the folder holding its whole output), the
+  failure output, the observations it produced before being rejected, and
+  `.autohelix-iteration/rejected.patch` (for a change over 2 MiB, the `git diff`
+  command that shows it instead). The copy is still the last accepted code, and
+  the prompt names the folder of the last accepted iteration too.
 - **After discarded changes:** the paths that were outside the scope, frozen
   ones said apart from the ones that aren't editable.
 
@@ -375,7 +377,7 @@ characters.
 
 Editing the template is also how you can keep an evaluation *out of the agent's view*, useful for measuring generalization without the agent optimizing against the eval itself. Two prompt-only levers:
 
-- **Don't list the eval command.** Drop the `observe` (or `gates`) loop from your `prompt_template:` file. The command still runs and its metric still gates and ranks the run; it just isn't named in the prompt. Its output is still stored under `.autohelix-iteration/observations/` in the agent's copy, so keep what it prints minimal.
+- **Don't list the eval command.** Drop the `observe` (or `gates`) loop from your `prompt_template:` file. The command still runs and its metric still gates and ranks the run; it just isn't named in the prompt. Its output is still in the agent's copy under `.autohelix-iteration/iterations/NNN/`: an observe entry's `observe/<name>/` (a review's transcript included), and a *failing* gate's whole `gates/<k>/` folder (`command.txt`, so the gate's command verbatim, stdout, stderr, and an `ask:` gate's judge transcript; passing gates' output is not copied). A gate's command is in every record too (`record.json`, `history.jsonl`), so leaving a gate out of the prompt doesn't hide its command. So keep what it prints minimal, and prefer an observe entry or a gate that says little when it fails.
 - **Fence the agent into its copy.** Add an explicit instruction to only read and write inside `{{ worktree }}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in scope to reverse-engineer.
 
 This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence: in testing, Claude declined to read an out-of-copy eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: copies live outside the project, but the agent runs as you, so one that is determined (or explicitly told to cheat) can still reach the project and anything else on disk by absolute path. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
@@ -383,32 +385,54 @@ This is a **best-effort nudge, not a security boundary.** In practice a cooperat
 ## Runs and run state
 
 `.autohelix/` is gitignored locally; AutoHelix leaves `.gitignore` unchanged.
-`current` points to the selected run. State is scoped to `.autohelix/runs/<id>/`:
+State is scoped to `.autohelix/runs/<id>/`, one folder per iteration; what the
+harness keeps for itself is in `.internal/` folders:
 
 ```
 .autohelix/
-├── current
 ├── runs/<id>/
 │   ├── run.json                # identity (base commit, target branch, config), archived flag
-│   ├── history.jsonl           # schema 1 result/core fields and model calls
-│   ├── notes -> notes.<n>      # agent memory; round-trips (link to the latest version)
-│   ├── notes.<n>/              # the notes as saved after iteration n (all kept)
-│   ├── observations/iter-N/<name>/  # each observe entry's stdout, stderr and captures
+│   ├── history.jsonl           # one record per iteration: the index and the source of truth
 │   ├── hints.md
-│   ├── logs/iter-N/call-*/     # separate directory per actual agent/judge call
-│   ├── output/report.md
-│   ├── output/report.html
-│   ├── copies                  # base folder of this run's candidate copies
-│   └── runtime/status.json        # advisory live status/copy/log
-└── runtime/                   # shared helper scripts and persistent lock files
+│   ├── report.md  report.html  # the run summary; the one-file run page
+│   ├── notes -> .internal/notes/<n>   # agent memory; round-trips (link to the latest version)
+│   ├── iterations/
+│   │   ├── 000/                # the baseline
+│   │   └── 001/ ...            # one folder per iteration (below)
+│   ├── logs/                   # run logs per invocation, report.log, hook audit
+│   └── .internal/              # status.json, usage/, notes versions notes/<n>/,
+│                               # superseded attempts attempts/, report.json, the copies path
+└── .internal/                  # the current run's id, lock files, helper scripts (bin/)
 ```
+
+Every iteration's folder has the same parts; those that don't apply are absent:
+
+```
+iterations/NNN/
+├── record.json                 # its history.jsonl record, pretty-printed (written last)
+├── prompt.md  agent.log        # what the agent was given and did (not at the baseline)
+├── notes -> ../../.internal/notes/<n>   # the notes as saved with it
+├── gates/<k>/                  # gate k of gates: that ran: command.txt, stdout.txt, stderr.txt, ask.log
+├── observe/<name>/             # each observe entry: stdout.txt, stderr.txt, captures, review.log
+├── stop/<k>/                   # stop command k, after an accept: as gates/<k>/
+└── rejected.patch              # a rejected attempt's change (also kept on its ref)
+```
+
+Numbers are three digits, so `ls` and globs sort in order (past 999 the width
+grows and glob order breaks at that boundary); `ls iterations | tail -1` is the
+latest. `record.json` is derived from `history.jsonl`, which stays the source
+of truth (`jq` on it for numbers across iterations; see
+[Stored output](config.md#stored-output) for texts). A killed iteration, or a
+retried baseline, reuses its number: the earlier attempt's folder is moved to
+`.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
 
 The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
 project; see [Candidate Copies](#candidate-copies).
 
 The agent's copy holds no `.autohelix/` (nothing in a copy looks like project
 state). What the harness provides is in `.autohelix-iteration/`, which is never
-part of a candidate (it is left out when the copy is frozen):
+part of a candidate (it is left out when the copy is frozen), laid out like the
+run's folder:
 
 ```
 <copy>/
@@ -418,16 +442,20 @@ part of a candidate (it is left out when the copy is frozen):
     ├── prompt.md  hints.md     this iteration's prompt; hints
     ├── notes/                  this run's notes: the only thing saved back
     ├── history.jsonl           this run's iterations
-    ├── observations/iter-K/  logs/iter-K/
+    ├── iterations/NNN/         the last 5 iterations and the last accepted one: record.json,
+    │                           failing gates' gates/<k>/, observe/, stop/
     ├── rejected.patch          after a rejection: the rejected attempt's change
     ├── commit_summary.txt      written by the agent: the commit's first line
     └── runs/<other-id>/        other runs of the group: run.json, history.jsonl, notes/
 ```
 
-Only `notes/` round-trips: when the copy is frozen it is saved as a new version,
-`runs/<id>/notes.<n>/`, and the `runs/<id>/notes` link switches to it in one
-step, so a note the agent deletes stays deleted and other runs never read a
-half-saved mix. Everything else is reference material. A checks copy gets only
+A copy's `iterations/` leaves out the agent logs, prompts, `notes` links,
+passing gates' output and rejected patches; `history.jsonl` covers older
+iterations. Only `notes/` round-trips: when the copy is frozen it is saved as a
+new version, `runs/<id>/.internal/notes/<n>/`, and the `runs/<id>/notes` link
+switches to it in one step, so a note the agent deletes stays deleted and other
+runs never read a half-saved mix; the iteration's `notes` link keeps pointing at
+that version. Everything else is reference material. A checks copy gets only
 `candidate.diff`; a review's copy `candidate.diff` (and `previous.md` with
 `previous: true`); a stop copy none of it.
 
@@ -506,4 +534,4 @@ the pricing assumptions and accounting limits.
 
 ## Run page
 
-To follow a run live, use [`autohelix view`](cli.md#autohelix-view) in a terminal, or `autohelix view --web` for this page in a browser. When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/runs/<id>/output/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's gates, notes and observe entries (status and metrics; a review's text), the changes from the baseline to the final code, and the run summary when there is one (see [Configuration → Report](config.md#report)). It leaves out agent activity, per-iteration diffs, and stdout, stderr and captured files; use `autohelix view --web` for those. `autohelix report` also rewrites it.
+To follow a run live, use [`autohelix view`](cli.md#autohelix-view) in a terminal, or `autohelix view --web` for this page in a browser. When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/runs/<id>/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's gates, notes and observe entries (status and metrics; a review's text), the changes from the baseline to the final code, and the run summary when there is one (see [Configuration → Report](config.md#report)). It leaves out agent activity, per-iteration diffs, and stdout, stderr and captured files; use `autohelix view --web` for those. `autohelix report` also rewrites it.

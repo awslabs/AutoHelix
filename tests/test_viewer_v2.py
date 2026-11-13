@@ -444,3 +444,131 @@ def test_config_is_parsed_again_only_when_its_file_changes(project, monkeypatch)
     config = project / "autohelix.yaml"
     config.write_text(config.read_text().replace("Make the sort faster", "Make the sort much faster"))
     assert data.state()["title"] == "Make the sort much faster" and len(calls) == 2
+
+
+ASK_LINE = json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Judged: yes"}]}}) + "\n"
+
+
+def _stored(folder, command, stdout="", stderr="", transcripts=()):
+    folder.mkdir(parents=True)
+    (folder / "command.txt").write_text(command + "\n")
+    (folder / "stdout.txt").write_text(stdout)
+    if stderr:
+        (folder / "stderr.txt").write_text(stderr)
+    for name in transcripts:
+        (folder / name).write_text(ASK_LINE)
+
+
+def test_gate_and_stop_output_per_item(project, server):
+    paths = RunPaths(project, "test")
+    _stored(paths.gate_dir(2, 1), "pytest -q", "1 failed\n", "warning\n", transcripts=["ask-2.log", "ask.log"])
+    _stored(paths.stop_dir(1, 1), "jq -e '.speed > 20' $AUTOHELIX_METRICS", "false\n")
+    _stored(paths.stop_dir(1, 2), "autohelix ask -- 'Done?'", "yes\n", transcripts=["ask.log"])
+    paths.history.write_text(paths.history.read_text().replace(
+        '"iteration": 1, "accepted": true,',
+        '"iteration": 1, "accepted": true, "stop": {"command": "autohelix ask -- \'Done?\'", "reason": "yes"},'))
+    gates = get_json(server + "/api/iteration/2")["gates"]
+    stored = gates[0]["stored"]
+    assert stored["folder"] == "gates/1" and stored["command"] == "pytest -q"
+    assert [f["name"] for f in stored["files"]] == ["command.txt", "stdout.txt", "stderr.txt"]
+    assert [t["name"] for t in stored["transcripts"]] == ["ask.log", "ask-2.log"]
+    assert stored["transcripts"][0]["log"] == "iterations/002/gates/1/ask.log"
+    assert any("Judged: yes" in e["text"] for e in stored["transcripts"][0]["events"])
+    assert gates[1]["stored"] is None  # a metric gate runs nothing
+    stops = get_json(server + "/api/iteration/1")["stop"]
+    assert [(s["position"], s["command"], s["stopped"]) for s in stops] == [
+        (1, "jq -e '.speed > 20' $AUTOHELIX_METRICS", False), (2, "autohelix ask -- 'Done?'", True)]
+    assert [t["name"] for t in stops[1]["stored"]["transcripts"]] == ["ask.log"]
+    assert get_json(server + "/api/iteration/2")["stop"] == []
+    status, body, mime = get(server + "/api/output/2/gates/1/stdout.txt")
+    assert (status, body) == (200, b"1 failed\n") and mime.startswith("text/plain")
+    assert get(server + "/api/output/1/stop/1/command.txt")[1] == b"jq -e '.speed > 20' $AUTOHELIX_METRICS\n"
+    assert get(server + "/api/run/test/output/2/gates/1/stderr.txt")[1] == b"warning\n"
+    for route in ("2/gates/1/ask.log", "2/gates/1/record.json", "2/gates/2/stdout.txt", "2/gates/0/stdout.txt",
+                  "2/gates/01/stdout.txt", "2/observe/1/stdout.txt", "2/gates/1/..%2Fstdout.txt",
+                  "1/stop/2/stderr.txt", "7/gates/1/stdout.txt"):
+        assert get(server + f"/api/output/{route}")[0] == 404, route
+
+
+def test_gate_output_refuses_symlinks_and_hard_links(project, server, tmp_path):
+    paths = RunPaths(project, "test")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("SECRET")
+    folder = paths.gate_dir(2, 1)
+    folder.mkdir(parents=True)
+    os.symlink(secret, folder / "stdout.txt")
+    os.link(secret, folder / "stderr.txt")
+    os.link(project / "sort.py", folder / "ask.log")
+    stored = get_json(server + "/api/iteration/2")["gates"][0]["stored"]
+    assert stored["files"] == [] and stored["transcripts"] == [] and stored["command"] is None
+    for name in ("stdout.txt", "stderr.txt"):
+        assert get(server + f"/api/output/2/gates/1/{name}")[0] == 404
+    # A symlinked gates/ folder shows nothing.
+    elsewhere = tmp_path / "elsewhere"
+    _stored(elsewhere / "1", "pytest -q", "SECRET")
+    os.symlink(elsewhere, paths.iteration_dir(1) / "gates")
+    assert get_json(server + "/api/iteration/1")["gates"][0]["stored"] is None
+    assert get(server + "/api/output/1/gates/1/stdout.txt")[0] == 404
+
+
+def test_running_iteration_shows_finished_gates_output(project, server):
+    paths = RunPaths(project, "test")
+    _stored(paths.gate_dir(3, 1), "pytest -q", "3 passed\n")
+    write_json(paths.status, {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "checks",
+                              "phase_started_at": 1, "iteration_started_at": 1})
+    gates = get_json(server + "/api/iteration/3")["gates"]
+    assert [(g["passed"], bool(g["stored"])) for g in gates] == [(None, True), (None, False)]
+
+
+def test_snapshot_has_no_gate_or_stop_output(project):
+    paths = RunPaths(project, "test")
+    _stored(paths.gate_dir(2, 1), "pytest -q", "1 failed\n", transcripts=["ask.log"])
+    _stored(paths.stop_dir(1, 1), "true", "")
+    routes = RunData(project).snapshot()
+    assert routes["/api/iteration/2"]["gates"][0]["stored"] is None
+    assert routes["/api/iteration/1"]["stop"] == [{"position": 1, "command": "true", "stopped": False, "stored": None}]
+
+
+def test_stop_checks_name_what_ran_and_flag_one(project, server):
+    """Labels come from command.txt (`stop:` may have been edited since); with duplicate
+    commands only the first, the one that exited 0, is flagged."""
+    paths = RunPaths(project, "test")
+    (project / "autohelix.yaml").write_text(CONFIG + "stop:\n  - echo edited\n  - echo later\n")
+    _stored(paths.stop_dir(1, 1), "check.sh", "done\n")
+    _stored(paths.stop_dir(1, 2), "check.sh", "")
+    _stored(paths.stop_dir(1, 3), "", "")
+    (paths.stop_dir(1, 3) / "command.txt").unlink()  # unreadable: the config's entry, if any
+    paths.history.write_text(paths.history.read_text().replace(
+        '"iteration": 1, "accepted": true,', '"iteration": 1, "accepted": true, "stop": {"command": "check.sh", "reason": "done"},'))
+    stops = get_json(server + "/api/iteration/1")["stop"]
+    assert [(s["position"], s["command"], s["stopped"]) for s in stops] == [
+        (1, "check.sh", True), (2, "check.sh", False), (3, None, False)]
+    (paths.stop_dir(1, 2) / "command.txt").unlink()
+    assert get_json(server + "/api/iteration/1")["stop"][1]["command"] == "echo later"
+
+
+def test_a_retried_baseline_ignores_the_earlier_attempts_record(project, server):
+    """While the baseline runs again after a recorded failure, the old record (whose folder
+    moved to .internal/attempts/) is not shown with the new attempt's output."""
+    paths = RunPaths(project, "test")
+    records = [json.loads(line) for line in paths.history.read_text().splitlines()]
+    records[0].update(accepted=False, reason="baseline failed: boom", ended_at=100.0,
+                      calls=[{"role": "command", "log": "iterations/000/gates/1/ask.log", "usage": {"id": "old"}}])
+    paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
+    _stored(paths.gate_dir(0, 1), "pytest -q", "running again\n", transcripts=["ask.log"])
+    status = {"state": "running", "pid": os.getpid(), "iteration": 0, "phase": "baseline",
+              "phase_started_at": 200.0, "iteration_started_at": 200.0}
+    write_json(paths.status, status)
+    detail = get_json(server + "/api/iteration/0")
+    assert detail["failure_output"] is None and detail["calls"] == []
+    assert [(g["passed"], bool(g["stored"])) for g in detail["gates"]] == [(None, True), (None, False)]
+    assert get_json(server + "/api/iteration/0/diff")["error"] == "This iteration has no record yet."
+    # A record this attempt wrote (it ended after the attempt started) is current.
+    records[0].update(accepted=True, reason="baseline", ended_at=300.0)
+    paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
+    assert [c["usage"]["id"] for c in get_json(server + "/api/iteration/0")["calls"]] == ["old"]
+    # And once nothing runs, the record is shown whatever its times.
+    write_json(paths.status, {**status, "state": "finished", "stopped_at": 400.0})
+    records[0]["ended_at"] = 100.0
+    paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
+    assert get_json(server + "/api/iteration/0")["gates"][0]["passed"] is True

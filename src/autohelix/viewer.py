@@ -6,10 +6,14 @@
 Two pages share one server: `/` lists the project's runs, `/run/<id>/` shows one
 run. The pages poll a few JSON routes. There are no write routes. Every file read
 is derived from a run id that must name an existing run directory, an iteration
-number, a file name that must match an entry in notes/, or a relative path inside
-one iteration's iterations/NNN/observe/ folder. Run state is opened one component at
-a time from the run folder down, without following symlinks or blocking on FIFOs
-(`_open_dir`, `_open_file`). Git only gets object names from history records that
+number, a file name that must match an entry in notes/, a relative path inside
+one iteration's iterations/NNN/observe/ folder, or one of a gate's or stop command's
+files (`iterations/NNN/gates/<k>/`, `stop/<k>/`: command.txt, stdout.txt,
+stderr.txt). Logs come from records' `log` fields as `open_run_log` admits them
+(run logs, and the running iteration's live ask/review transcripts in its call
+folders). Run state is opened one component at a time from the run (or copies)
+folder down, without following symlinks or blocking on FIFOs (`_open_dir`,
+`_open_file`). Git only gets object names from history records that
 are plain hex, and its diff output is fixed whatever the user's diff settings and
 cut at MAX_TEXT (`RunData._run_diff`). The unprefixed `/api/...` routes serve the
 server's default run.
@@ -40,10 +44,10 @@ from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained
 from autohelix.config import ConfigNotFound, MetricGate, find_config, load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History
-from autohelix.runs import RunPaths, config_relative, git, is_archived, last_activity
+from autohelix.runs import RunPaths, config_relative, git, is_archived, is_transcript, last_activity
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
-from autohelix.run_status import read_run_status
+from autohelix.run_status import read_run_status, running_iteration
 from autohelix.state import read_stored_config_path
 from autohelix.workspace import ITERATION_DIR
 
@@ -74,6 +78,20 @@ STATIC_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-
 # them escaped ("##autohelix ["), so only the command's lines match.
 METRIC_LINE = re.compile(r"^[ \t]*##autohelix\[[^\]\n]*\][ \t]*(?:\n|$)", re.MULTILINE)
 OUTPUT_FILES = ("stdout.txt", "stderr.txt")  # an observe entry's own output, beside its captures
+COMMAND_FILES = ("command.txt", *OUTPUT_FILES)  # a gate's or stop command's stored output
+
+
+def _command_text(root: Path, folder: Path, paths: RunPaths) -> str | None:
+    """A gate's or stop command's command.txt (as run), or None."""
+    data = _read_bytes(root, [*paths.parts(folder), "command.txt"], MAX_TEXT, single_link=True)
+    return data.decode(errors="replace").rstrip("\n") if data is not None else None
+
+
+def _transcript_order(name: str):
+    """ask.log, ask-2.log, ..., ask-10.log; then review's."""
+    stem = name[:-len(".log")]
+    kind, _, number = stem.partition("-")
+    return kind, int(number) if number else 1
 
 
 def _markdown(text: str | None) -> str | None:
@@ -334,12 +352,29 @@ class RunData:
         html = _markdown(_read_text_at(self.root, self.paths.parts(self.paths.report)))
         return {"html": html, **(read_report_info(self.project, self.paths.run_id) or {})} if html else None
 
+    def _record(self, n: int, status: dict | None = None):
+        """Iteration `n`'s history record, or None while it has none for the attempt in
+        progress: when `n` is running again (a baseline retry, after a recorded failed
+        one), a record that ended before the status says this attempt started belongs to
+        the earlier attempt, whose folder was moved to `.internal/attempts/`. A record
+        written by this attempt (accepted, its stop commands still running) is current."""
+        record = next((r for r in self.records() if r.iteration == n), None)
+        if record is None:
+            return None
+        if status is None:
+            status = read_run_status(self.project, self.paths.run_id) or {}
+        started, ended = status.get("iteration_started_at"), _field(record, "ended_at")
+        if (running_iteration(status) == n and isinstance(started, (int, float)) and isinstance(ended, (int, float))
+                and not isinstance(ended, bool) and ended < started):
+            return None
+        return record
+
     def changes(self, n: int) -> str | None:
         """Changes vs baseline: an accepted iteration's code against the run's start, or a
         running one's edits so far. Runs git; the server calls it outside its lock."""
         if not self.paths.run_id:
             return None
-        record = next((r for r in self.records() if r.iteration == n), None)
+        record = self._record(n)
         base = _object(self.paths.read_identity().get("base_commit"))
         if not base:
             return None
@@ -355,10 +390,10 @@ class RunData:
         self._refresh_current()
         if not self.paths.run_id:
             return {"iteration": n, "failure_output": None, "notes": None, "diff": None, "agent": [],
-                    "calls": [], "agent_clipped": False, "gates": [], "observe": [], "summary": None,
+                    "calls": [], "agent_clipped": False, "gates": [], "stop": [], "observe": [], "summary": None,
                     "discarded": [], "attempt": None}
-        records = self.records()
-        record = next((r for r in records if r.iteration == n), None)
+        status = read_run_status(self.project, self.paths.run_id) or {}
+        record = self._record(n, status)
         changes = self.changes(n) if diff else None
         # While an iteration runs, its own notes live in the worktree; a copy in notes/
         # may be left over from an earlier, failed attempt at the same iteration. Once it
@@ -377,18 +412,26 @@ class RunData:
             names.sort(key=lambda name: int(name.rsplit("-", 1)[1]) if "-" in name else 0)
             notes = [(self.root, [*versions, name, note]) for name in reversed(names)] + latest
         calls = record.calls if record else []
-        if record is None:
+        running = running_iteration(status)
+        running = n if running == n else None  # only its call folders may hold live transcripts
+        if record is None or running is not None:
             from autohelix.usage_log import read_usage
 
-            status = read_run_status(self.project, self.paths.run_id) or {}
-            calls = list(status.get("calls", [])) if status.get("iteration") == n else []
-            for usage in read_usage(self.paths.usage(n)):
-                calls.append({"role": "command", "log": usage.get("log"), "usage": usage})
+            if record is None:
+                calls = list(status.get("calls", [])) if status.get("iteration") == n else []
+            # The record's calls, then this iteration's command calls since (stop commands run after it).
+            seen = {call["usage"].get("id") for call in calls if isinstance(call.get("usage"), dict)} - {None}
+            calls = calls + [{"role": "command", "log": usage.get("log"), "usage": usage}
+                             for usage in read_usage(self.paths.usage(n)) if usage.get("id") not in seen]
         phases = []
         for call in calls:
-            log = self.paths.relative_log(call.get("log"))
+            value = call.get("log")
+            log = self.paths.relative_log(value)
+            live = None if log else self.paths.live_transcript(value, running)
             phases.append({"role": call["role"], "usage": call.get("usage", {}), "log": log,
-                           "events": self._events(Path(log)) if logs and log else []})
+                           # A transcript a running call is writing: its path below the copies folder.
+                           "live_log": "/".join(live) if live else None,
+                           "events": self._events(value, running) if logs and (log or live) else []})
         agent_events = [event for call in phases if call["role"] == "agent" for event in call["events"]]
         config = self._config()[0]
         if record is not None:
@@ -408,7 +451,9 @@ class RunData:
             "calls": phases,
             "agent_clipped": any(self.paths.run_dir / call["log"] in self._clipped
                                  for call in phases if call.get("log")),
-            "gates": gates,
+            "gates": [{**gate, "stored": self._command_output(self.paths.gate_dir(n, k), logs, outputs)}
+                      if isinstance(gate, dict) else gate for k, gate in enumerate(gates, start=1)],
+            "stop": self.stop_checks(n, record, config, logs=logs, outputs=outputs),
             "observe": self.observations(n, record, config, outputs=outputs),
             "summary": summary if isinstance(summary, str) and summary.strip() else None,
             "discarded": [p for p in _field(record, "discarded") or [] if isinstance(p, str)],
@@ -418,6 +463,65 @@ class RunData:
                         "rejected_ref": rejected_ref if isinstance(rejected_ref, str) else None}
                        if base and tree else None,
         }
+
+    def _command_output(self, folder: Path, logs: bool = True, outputs: bool = True) -> dict | None:
+        """A gate's or stop command's stored output (`iterations/NNN/gates/<k>/`,
+        `stop/<k>/`), or None if it has no folder (a metric gate, one that never ran) or
+        without `outputs` (report.html): `command` (command.txt), `files` (command.txt,
+        stdout.txt, stderr.txt, as `{"name", "size"}`, served by `/api/output/...`) and
+        `transcripts`, its `ask`/`review` calls' logs (`{"name", "log", "events"}`).
+        Read through descriptors from the run folder down: no symlinks, single-link
+        regular files only."""
+        if not outputs:
+            return None
+        where = self.paths.parts(folder)
+        listing = _listing(self.root, where)
+        if not listing:
+            return None
+        regular = {name: info.st_size for name, info in listing
+                   if stat.S_ISREG(info.st_mode) and info.st_nlink == 1}
+        transcripts = []
+        for name in sorted((name for name in regular if is_transcript(name)), key=_transcript_order):
+            log = "/".join([*where, name])
+            transcripts.append({"name": name, "log": log, "events": self._events(log) if logs else []})
+        return {
+            "folder": "/".join(where[len(self.paths.parts(self.paths.iteration_dir(0))):]),  # gates/2
+            "command": _command_text(self.root, folder, self.paths),
+            "files": [{"name": name, "size": regular[name]} for name in COMMAND_FILES if name in regular],
+            "transcripts": transcripts,
+        }
+
+    def stop_checks(self, n: int, record, config, logs: bool = True, outputs: bool = True) -> list[dict]:
+        """The stop commands that ran after iteration `n` (those with an
+        `iterations/NNN/stop/<k>/` folder), in order: `position` (k), `command` (what ran,
+        its command.txt; the config's entry at k only if that can't be read: `stop:` may
+        have changed since), `stopped` (the first whose command is the one the record says
+        stopped the run: stop commands end at the first that exits 0) and `stored`
+        (`_command_output`)."""
+        listing = _listing(self.root, self.paths.parts(self.paths.stop_dir(n, 1).parent))
+        positions = sorted(int(name) for name, info in listing
+                           if stat.S_ISDIR(info.st_mode) and re.fullmatch(r"[1-9][0-9]{0,8}", name))
+        specs = config.stop if config else []
+        fired = _field(record, "stop")
+        fired = fired.get("command") if isinstance(fired, dict) else None
+        out = []
+        for k in positions:
+            command = _command_text(self.root, self.paths.stop_dir(n, k), self.paths)
+            if command is None and k <= len(specs):
+                command = specs[k - 1].command
+            stopped = fired is not None and command == fired and not any(item["stopped"] for item in out)
+            out.append({"position": k, "command": command, "stopped": stopped,
+                        "stored": self._command_output(self.paths.stop_dir(n, k), logs, outputs)})
+        return out
+
+    def output(self, n: int, kind: str, k: int, name: str) -> tuple[bytes, str] | None:
+        """`/api/output/<n>/<gates|stop>/<k>/<file>`: a gate's or stop command's
+        command.txt, stdout.txt or stderr.txt, always as plain text."""
+        if not self.paths.run_id or name not in COMMAND_FILES or kind not in ("gates", "stop"):
+            return None
+        folder = self.paths.gate_dir(n, k) if kind == "gates" else self.paths.stop_dir(n, k)
+        data = _read_bytes(self.root, [*self.paths.parts(folder), name], MAX_ARTIFACT, single_link=True)
+        return None if data is None else (data, "text/plain; charset=utf-8")
 
     def observations(self, n: int, record, config, outputs: bool = True) -> list[dict]:
         """One section per observe entry: those the record lists (in the order they ran),
@@ -478,7 +582,7 @@ class RunData:
         """`/iteration/<n>/diff`: the attempt's own change, from the commit it started from
         to its frozen tree (kept by the run ref, or `rejected_ref` for a rejected one).
         Runs git; the server calls it outside its lock."""
-        record = next((r for r in self.records() if r.iteration == n), None) if self.paths.run_id else None
+        record = self._record(n) if self.paths.run_id else None
         if record is None:
             return {"diff": None, "error": "This iteration has no record yet."}
         base, tree = _object(_field(record, "base")), _object(_field(record, "tree"))
@@ -625,16 +729,18 @@ class RunData:
         mime = IMAGE_TYPES.get(Path(parts[-1]).suffix.lower(), "text/plain; charset=utf-8")
         return data, mime
 
-    def _events(self, path: Path) -> list[dict]:
-        """Incrementally parse a log, merging streamed text into one event."""
-        relative = self.paths.relative_log(path)
-        if not relative:
+    def _events(self, value, running: int | None = None) -> list[dict]:
+        """Incrementally parse a log named by untrusted metadata (`open_run_log`: a run
+        log, or with `running` that iteration's live transcript), merging streamed text
+        into one event."""
+        found = self.paths.readable_log(value, running)
+        if found is None:
             return []
-        path = self.paths.run_dir / relative
+        path = Path(found[0], *found[1])
         if path not in self._logs:
             # Opened through `open_run_log` on every read: never a symlink, FIFO or
             # hard link planted in run state (an agent can reach run state by absolute path).
-            self._logs[path] = (LogTail(path, opener=lambda: open_run_log(self.paths, relative)),
+            self._logs[path] = (LogTail(path, opener=lambda: open_run_log(self.paths, value, running)),
                                 deque(maxlen=MAX_EVENTS))
         tail, events = self._logs[path]
         try:
@@ -945,6 +1051,9 @@ def make_server(project: Path, port: int = 8765, *, run_id: str | None = None) -
             if note := rd.note(unquote(match[1])):
                 return 200, note
         # Each path component is decoded on its own, so an encoded "/" can't add one.
+        if match := re.fullmatch(r"/output/(\d{1,9})/(gates|stop)/([1-9]\d{0,8})/([a-z]+\.txt)", path):
+            if found := rd.output(int(match[1]), match[2], int(match[3]), match[4]):
+                return 200, *found
         if match := re.fullmatch(r"/artifact/(\d{1,9})/(.+)", path):
             if found := rd.artifact(int(match[1]), [unquote(part) for part in match[2].split("/")]):
                 return 200, *found

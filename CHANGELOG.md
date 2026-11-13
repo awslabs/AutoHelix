@@ -30,7 +30,7 @@ Breaking:
 - `.autohelix/prompt.md` is not read (a run warns while it exists); use
   `prompt_template:`, a path relative to the config file.
 - Observe output is stored by entry name,
-  `observations/iter-N/<name>/` (`stdout.txt`, `stderr.txt`, captures at
+  `iterations/NNN/observe/<name>/` (`stdout.txt`, `stderr.txt`, captures at
   their relative paths), so captures with one basename no longer collide.
 - Prompt template variables are renamed (see below); custom templates need
   updating.
@@ -124,8 +124,10 @@ Hardening:
 - The viewer serves files only from known run folders, opened one path
   component at a time without following symlinks, and passes git only object
   names that are plain hex. Agent logs too, in the web viewer and in the
-  terminal `view`: only regular, single-link files below the run's `logs/`
-  (the terminal `view` followed any path the run's status file named).
+  terminal `view`: only regular, single-link files below the run's `logs/`,
+  an iteration's `agent.log` and `ask*.log`/`review*.log` transcripts, and
+  the running iteration's live transcripts in its call folders (the terminal
+  `view` followed any path the run's status file named).
 
 ### Config files and `autohelix setup`
 
@@ -208,7 +210,7 @@ Added:
   gone (use `group` and `group_runs`).
 - **The agent's copy keeps the harness's material in `.autohelix-iteration/`**
   (was `.autohelix/`): `notes/`, `history.jsonl`, `hints.md`,
-  `commit_summary.txt`, `observations/`, `logs/`, and `prompt.md`, now this
+  `commit_summary.txt`, `iterations/NNN/` (below), and `prompt.md`, now this
   iteration's rendered prompt. Checks copies get only
   `.autohelix-iteration/candidate.diff`. A copy's git lists only this run's
   ref (and its group's), not every `refs/autohelix/*`.
@@ -224,6 +226,19 @@ Added:
   runs only.
 - `examples/nested-autohelix/` is removed (AutoHelix running AutoHelix is
   deferred; an agent driving runs through the CLI is the supported way).
+- **Run state has one folder per iteration** (`run.json` schema 2; earlier
+  runs are refused). `runs/<id>/iterations/NNN/` (three digits, `000` the
+  baseline) holds `record.json` (derived from `history.jsonl`, which stays the
+  source of truth), `prompt.md`, `agent.log`, `gates/<k>/` and `stop/<k>/`
+  (k: the position in `gates:`/`stop:`; `command.txt`, capped `stdout.txt` and
+  `stderr.txt`, kept for passing gates too, and the judge's `ask.log`),
+  `observe/<name>/` (with a review's `review.log`) and `rejected.patch`.
+  `report.md`/`report.html` are at the run's root; the harness's own files
+  are in `runs/<id>/.internal/` and `.autohelix/.internal/`. The agent's copy
+  gets the same `iterations/NNN/` for the last five iterations and the last
+  accepted one (records, failing gates' output, observations; no agent logs).
+  The viewer shows each gate's and stop command's output, and the viewer and
+  `view` follow `ask`/`review` transcripts live while their command runs.
 
 ### Added
 
@@ -241,8 +256,9 @@ Added:
   --group NAME` sets or changes a run's group, `--group ''` clears it, and
   `archive` takes a run out. The dashboard shows the group after the id;
   `dashboard --json` adds `group` and `land`.
-- Notes are saved as versions (`runs/<id>/notes.<n>/`, with `runs/<id>/notes`
-  a link to the latest): a note the agent deletes stays deleted (before, it
+- Notes are saved as versions (`runs/<id>/.internal/notes/<n>/`, with
+  `runs/<id>/notes` a link to the latest and each iteration's `notes` link to
+  its own): a note the agent deletes stays deleted (before, it
   came back next iteration), and every version is kept.
 - Harness git calls retry briefly when another git process holds a lock
   (concurrent runs in one project).

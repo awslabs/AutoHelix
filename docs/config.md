@@ -104,7 +104,8 @@ details, rules and context on the following lines.
 
 **Commands** must exit 0. An entry is a string, or a mapping with `command:`
 and an optional `timeout:` (default 30m). A failing command rejects the
-iteration; its output tail goes to the next agent.
+iteration; its output tail goes into the next agent's prompt, and its whole
+stored output (see [Stored gate output](#stored-gate-output)) into its copy.
 
 ```yaml
 gates:
@@ -186,6 +187,21 @@ numbers and decides.
 > tip's recorded value is biased upward and the loop stalls. Make the benchmark
 > stable (repeats, medians: that is the benchmark's job, not the harness's) and
 > set thresholds above its noise. The same holds, more mildly, for `regress:`.
+
+### Stored gate output
+
+Every command and `ask:` gate that ran keeps its output in
+`.autohelix/runs/<id>/iterations/NNN/gates/<k>/`, `<k>` being its 1-based
+position in `gates:` (`gates/1/` is the first entry): `command.txt` (the
+command as run; for an `ask:` gate the `autohelix ask` it became),
+`stdout.txt`, `stderr.txt` (when not empty) and the judge's transcript
+(`ask.log`; `ask-2.log`, … for further calls). `stdout.txt` and `stderr.txt`
+keep the first 64 KB and the last 1 MB (compile errors are at the top, test
+summaries at the bottom). Passing gates keep theirs too (for flaky tests).
+Metric gates run nothing, so their positions have no folder (their value,
+reference and outcome are in the record), and neither does a gate that never
+ran after an earlier failure. The next agent's copy holds the folders of the
+**failing** gates only; the viewer shows each gate's.
 
 ## Observe
 
@@ -289,17 +305,25 @@ changes the candidate's files rejects the iteration (see
 
 ### Stored output
 
-Each entry's output is stored in `.autohelix/runs/<id>/observations/iter-N/<name>/`:
-`stdout.txt`, `stderr.txt` (when not empty), and each capture at its relative
-path. It is staged in a private folder after the command (and every process it
-started) ended, then replaces that folder, so nothing a command wrote there
-itself survives. Rejected iterations keep their output. The agent sees it in
-its copy under `.autohelix-iteration/observations/`.
+Each entry's output is stored in `.autohelix/runs/<id>/iterations/NNN/observe/<name>/`:
+`stdout.txt` (not capped), `stderr.txt` (when not empty), each capture at its
+relative path, and a review's transcript (`review.log`). It is staged in a
+private folder after the command (and every process it started) ended, then
+replaces that folder, so nothing a command wrote there itself survives.
+Rejected iterations keep their output. The agent's copy holds the folders of
+the last five iterations and of the last accepted one, at the same paths under
+`.autohelix-iteration/iterations/`; its prompt names the exact folders.
+
+Across iterations, put a header before each file so you can tell them apart:
+`tail -n +1 .autohelix/runs/<id>/iterations/*/observe/review/stdout.txt`
+(plain `cat` loses which iteration each came from). For numbers use
+`history.jsonl`, e.g. `jq -c '[.iteration, .accepted, .metrics]'
+.autohelix/runs/<id>/history.jsonl`.
 
 ### Previous output
 
 Every observe command gets `$AUTOHELIX_PREVIOUS`: a copy, made for that call,
-of the entry's own folder from the most recent accepted iteration in which it
+of the entry's own folder (`iterations/NNN/observe/<name>/`) from the most recent accepted iteration in which it
 **succeeded** (the baseline counts). It is unset when there is none (the
 baseline, or a new or renamed entry). Rejected iterations and failed runs of
 the entry never count, so anything built on it moves only with accepted code.
@@ -342,7 +366,7 @@ started is killed. Each gets:
 | `AUTOHELIX_CONFIG` | The config file |
 | `AUTOHELIX_ITERATION` | The iteration number (0 for the baseline) |
 | `AUTOHELIX_RUN_ID`, `AUTOHELIX_RUN_DIR` | The run's id and its `.autohelix/runs/<id>/` folder |
-| `AUTOHELIX_LOG_DIR` | Where judge and review calls save their logs |
+| `AUTOHELIX_LOG_DIR` | A private folder for this command where `autohelix ask` and `review` write their transcripts; after the command ended they are moved to its stored output (`ask*.log`, `review*.log` only) |
 | `AUTOHELIX_USAGE_FILE` | Where model calls record their cost (see [Cost Tracking](#cost-tracking)) |
 | `AUTOHELIX_COMMAND_DEADLINE` | The command's deadline, in Unix seconds |
 | `AUTOHELIX_PREVIOUS` | Observe commands only: see [Previous output](#previous-output) |
@@ -375,13 +399,18 @@ On top of the [command environment](#command-environment), stop commands get:
   `{"speedup": 10.3}`. A target is a one-liner:
   `jq -e '.speedup >= 10' "$AUTOHELIX_METRICS"` (`jq -e` exits 0 when the
   expression is true, 1 when false).
-- `AUTOHELIX_OBSERVATIONS`: a copy of the accepted iteration's
-  `observations/iter-N/` folder (one subfolder per entry), so `grep` or
-  `autohelix ask` can read a tracker's report.
+- `AUTOHELIX_OBSERVATIONS`: a copy, made for that call, of the accepted
+  iteration's `iterations/NNN/observe/` folder (one subfolder per entry; empty
+  if it observed nothing), so `grep` or `autohelix ask` can read a tracker's
+  report.
 
 For a qualitative condition use [`autohelix ask`](cli.md#autohelix-ask), e.g.
 `autohelix ask -- "Is every item in SPEC.md implemented and tested?"`. Its cost
 counts toward the run.
+
+Each stop command that ran keeps its output as a gate does (see
+[Stored gate output](#stored-gate-output)), in `iterations/NNN/stop/<k>/`, `<k>`
+being its position in `stop:`.
 
 Keep stop commands out of `scope.editable`, and don't let them modify files: a
 change is reported as an error (the acceptance stays recorded), and on the
@@ -395,7 +424,7 @@ stops again after the next accepted iteration if the condition still holds);
 raise the target or remove the condition first.
 
 Why a run ended is shown at the end of the run, in `autohelix view` (terminal
-and `--web`), the run summary, and `.autohelix/runs/<id>/runtime/status.json`
+and `--web`), the run summary, and `.autohelix/runs/<id>/.internal/status.json`
 (`stop_reason`).
 
 ## Scope
@@ -505,7 +534,7 @@ read; a run warns while it exists.
 When a run finishes after at least one iteration (a stop condition is met, or
 the iteration, cost or time budget is reached), one more agent call reads the
 run's history, notes, logs and commits and writes a short summary
-to `.autohelix/runs/<id>/output/report.md`: what was achieved, which changes
+to `.autohelix/runs/<id>/report.md`: what was achieved, which changes
 mattered, what didn't work, what to try next, and anything worth checking
 before relying on the results. An interrupted run gets no summary; run
 [`autohelix report`](cli.md#autohelix-report) to write one. Set `report: false`

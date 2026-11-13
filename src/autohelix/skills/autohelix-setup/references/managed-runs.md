@@ -26,7 +26,8 @@ supervision completed.
 Read the id from `.autohelix/.internal/current` (or pass a run id to `view` and `report`), then read `.autohelix/runs/<id>/history.jsonl`, the current backend log
 `.autohelix/runs/<id>/iterations/NNN/agent.log` (NNN: the iteration, three digits), observations under
 `.autohelix/runs/<id>/iterations/NNN/observe/<name>/` (one folder per observe entry, reviews
-included), and persistent `.autohelix/runs/<id>/notes/iter-N.md`.
+included), gate and stop command output under `iterations/NNN/gates/<k>/` and `stop/<k>/` (k: the
+entry's 1-based position in `gates:` / `stop:`), and persistent `.autohelix/runs/<id>/notes/iter-N.md`.
 `autohelix view --json` (or `--once`) prints the run's state and iterations once; a bare
 `autohelix view` is a live terminal view that does not exit, for people. `.autohelix/runs/<id>/.internal/status.json` records
 the run's state and phase, and `.autohelix/runs/<id>/report.html` is saved when it stops. If the view does not present the selected

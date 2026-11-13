@@ -6,7 +6,9 @@
 `dashboard` redraws the run table (run_table.format_runs). `view` shows one
 run's table (run_table.format_run) above the log being written for what the
 run is doing, which its status (runs/<id>/.internal/status.json) says: the
-agent's during an iteration, the summary agent's while the summary is written.
+agent's during an iteration, an `ask`/`review` call's transcript while gate,
+observe or stop commands make one (live from its call folder, then stored), the
+summary agent's while the summary is written.
 """
 
 import time
@@ -21,7 +23,7 @@ from autohelix.display import LiveDisplay
 from autohelix.formatting import format_duration
 from autohelix.replay import LogTail
 from autohelix.safe_open import open_run_log
-from autohelix.run_status import read_run_status
+from autohelix.run_status import read_run_status, running_iteration
 from autohelix.runs import RunPaths
 from autohelix.viewer import ProjectRuns
 
@@ -61,8 +63,9 @@ def _status_line(status: dict | None, now: float | None = None) -> str:
 def log_for(project: Path, status: dict | None, current: Path | None, run_id: str | None = None) -> tuple[Path, str, float] | None:
     """The log to show for this status: (path, panel title, when it started).
 
-    Between the agent and summary phases (checks, merge, …) the panel stays
-    on what it showed; a watcher started then shows the iteration's agent log.
+    Between the agent and summary phases (checks, merge, …) the panel follows
+    the iteration's latest `ask`/`review` call (`transcript_for`), else stays on
+    what it showed; a watcher started then shows the iteration's agent log.
     """
     if not status:
         return None
@@ -80,6 +83,9 @@ def log_for(project: Path, status: dict | None, current: Path | None, run_id: st
     if n is None:
         return None
     label = "Baseline" if n == 0 else f"Iteration {n}"
+    if phase != "agent" and (transcript := transcript_for(paths, status)):
+        # Started with the iteration: a later phase is the same call, a rerun (same call folder) a new one.
+        return Path(transcript[0]), f"{label} · {transcript[1]}", status.get("iteration_started_at", phase_start)
     if n == 0:
         return None  # the baseline only runs commands; the status line covers it
     agent = next((call for call in status.get("calls", []) if call["role"] == "agent"), None)
@@ -89,6 +95,23 @@ def log_for(project: Path, status: dict | None, current: Path | None, run_id: st
     if phase == "agent" or current is None or paths.iteration_dir(n) not in current.parents:
         return agent_log, f"{label} · agent", status.get("iteration_started_at", phase_start)
     return None  # keep the current panel
+
+
+def transcript_for(paths: RunPaths, status: dict | None) -> tuple[str, str] | None:
+    """The running iteration's latest `ask`/`review` call with a log that can be read
+    (`RunPaths.readable_log`: its live transcript in the call folder while the command
+    runs, the stored one after): (the usage record's `log`, its source)."""
+    from autohelix.usage_log import read_usage
+
+    n = running_iteration(status)
+    if n is None:
+        return None
+    for usage in reversed(read_usage(paths.usage(n))):
+        value = usage.get("log")
+        if paths.readable_log(value, n):
+            source = usage.get("source")
+            return value, run_table.clean(source) if isinstance(source, str) and source else "call"
+    return None
 
 
 class LogFollower:
@@ -114,10 +137,11 @@ class LogFollower:
             self.display = LiveDisplay(console=self.console, title=title, border_style="blue", verbose=True)
         if self.tail is None and self.current is not None:
             # The status file names the log; it's run state an agent can write, so the
-            # log is opened only below the run's logs/ (or as an iteration's agent.log),
-            # without symlinks or hard links.
-            paths, log = RunPaths(self.project, self.run_id), self.current
-            self.tail = LogTail(log, self.backend, opener=lambda: open_run_log(paths, log))
+            # log is opened only below the run's logs/ (or as an iteration's agent.log or
+            # judge/review transcript), without symlinks or hard links.
+            # A running call's transcript (in its call folder) only while its iteration runs.
+            paths, log, running = RunPaths(self.project, self.run_id), self.current, running_iteration(status)
+            self.tail = LogTail(log, self.backend, opener=lambda: open_run_log(paths, str(log), running))
         if self.tail is not None:
             try:
                 events = self.tail.read()

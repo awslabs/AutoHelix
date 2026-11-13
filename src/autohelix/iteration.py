@@ -343,7 +343,7 @@ class IterationWorkspace:
         Yields {"scratch": path, "logs": path, "bin": path, <name>: path, ...}. A copy keeps what the command reads from
         run state fixed, whatever the command or the agent writes meanwhile."""
         self._calls += 1
-        folder = ensure_copies(self._run.copies_root) / f"iter-{self.iteration}-call-{self._calls}"
+        folder = ensure_copies(self._run.copies_root) / RunPaths.call_folder_name(self.iteration, self._calls)
         if os.path.lexists(folder):  # left by a crashed process
             remove_copy(folder)
         folder.mkdir(mode=0o700)

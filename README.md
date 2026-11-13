@@ -270,18 +270,18 @@ their replacement; see [Old → new](docs/config.md#old--new).
 ```
 my-project/
 ├── autohelix.yaml       # your config (or autohelix/<name>.yaml, one per loop)
-└── .autohelix/          # runtime state (gitignored)
-    ├── current          # selected run id
+└── .autohelix/          # run state (gitignored)
     ├── runs/<id>/       # one persistent state directory per run
     │   ├── run.json     # identity, starting commit, target branch
-    │   ├── history.jsonl # results and each model call's usage/log
+    │   ├── history.jsonl # one record per iteration: results and each model call's usage/log
     │   ├── notes/       # agent's persistent notes
-    │   ├── observations/ # each observe entry's output, by iteration and name
     │   ├── hints.md     # messages from `autohelix hint`
-    │   ├── logs/        # iter-N/call-*/ prompts and transcripts
-    │   ├── output/      # report.md and report.html
-    │   └── runtime/     # live status and per-run settings
-    └── runtime/         # helper scripts and lock files
+    │   ├── report.md    # the run summary (and report.html, the run page)
+    │   ├── iterations/NNN/ # one folder per iteration (000 is the baseline): record.json,
+    │   │                #   prompt.md, agent.log, gates/<k>/, observe/<name>/, stop/<k>/
+    │   ├── logs/        # run logs per invocation
+    │   └── .internal/   # live status, usage, notes versions, superseded attempts
+    └── .internal/       # selected run id, helper scripts and lock files
 ```
 
 Temporary per-phase candidate copies live outside the project, in
@@ -302,7 +302,7 @@ files. See [CLI reference](docs/cli.md#autohelix-run).
 <summary><b>Report</b></summary>
 
 When a run finishes, an agent reads the run's history, notes, logs and commits and
-writes a short summary to `.autohelix/runs/<id>/output/report.md`. `autohelix report` writes it on
+writes a short summary to `.autohelix/runs/<id>/report.md`. `autohelix report` writes it on
 demand, e.g. after an interrupted run. See [Configuration → Report](docs/config.md#report).
 
 </details>
@@ -325,9 +325,9 @@ zero. See [Concepts → Reviews](docs/concepts.md#reviews) and
 
 `autohelix view` follows a run in the terminal: its status and iterations, with the
 agent's live output below; `autohelix dashboard` lists all runs. `autohelix view --web`
-serves a live page for a run on 127.0.0.1: status, metric chart, iterations with gates,
-notes, diffs, observations (reviews included) and agent activity, and the run summary once it is written. When a run stops, AutoHelix saves the same page as one file,
-`.autohelix/runs/<id>/output/report.html`, to open in a browser or share. See
+serves a live page for a run on 127.0.0.1: status, metric chart, iterations with gates
+(and their output), notes, diffs, observations (reviews included), stop checks and agent activity, and the run summary once it is written. When a run stops, AutoHelix saves the same page as one file,
+`.autohelix/runs/<id>/report.html`, to open in a browser or share. See
 [Concepts → Run page](docs/concepts.md#run-page).
 
 </details>
