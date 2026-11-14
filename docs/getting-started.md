@@ -215,6 +215,9 @@ You'll see a live display of agent activity, followed by gate and observe result
 
 Use `autohelix view` in a second terminal to follow the run: its iterations so far, and the
 agent's live output below them (`autohelix view --web` for the same in a browser).
+`autohelix stop <id>` ends it after the current iteration (`--now`, or Ctrl-C in its
+terminal, at once); scripts can block on `autohelix wait`, which prints each iteration
+and the run's end as JSON.
 
 ### 4. Continue, set aside or start over
 

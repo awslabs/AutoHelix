@@ -31,8 +31,28 @@ entry's 1-based position in `gates:` / `stop:`), and persistent `.autohelix/runs
 `autohelix view --json` (or `--once`) prints the run's state and iterations once; a bare
 `autohelix view` is a live terminal view that does not exit, for people. `.autohelix/runs/<id>/.internal/status.json` records
 the run's state and phase, and `.autohelix/runs/<id>/report.html` is saved when it stops. If the view does not present the selected
-backend's activity use its logs and saved records. Infer active execution from
-the launched process, not from the iteration count or old logs.
+backend's activity use its logs and saved records.
+
+Wait for events with `autohelix wait` instead of polling files or the process.
+Take a cursor before launching (`autohelix wait -p PROJECT --timeout 1s` prints
+a `timeout` event with a `cursor` and exits 2), then repeat `autohelix wait -p
+PROJECT --after CURSOR --timeout 10m`, each time with the latest event's
+`cursor`. Each call blocks until the next event and prints it as one JSON line:
+`started` (a segment), `iteration` (`accepted`, `reason`, `metrics`, `summary`,
+`cost_usd`), `ended` (`state`, `stop_reason`, `error`) or `crashed` (its process
+is gone); a `timeout` event (exit 2) is a heartbeat, so check the launched
+process then. The cursor makes the loop miss and repeat nothing however long you
+inspect between calls. With run ids, an `idle` event says none of them is
+running; a run being resumed is idle until its segment starts, so wait for a
+resume you launch without ids. A crashed run whose process id was reused (or on
+another host) looks running: only the timeout ends that wait. Exit 1 (nothing on stdout) is an error.
+
+To end a run early, when the user asks or evidence shows further iterations
+would be wasted (a broken evaluator or environment; say why), use `autohelix
+stop -p PROJECT ID --why 'one line'`: it ends after its current iteration and
+lands and reports as at any segment end. `--now` also interrupts the current
+iteration (recorded as rejected; no summary), on the run's host only. `wait`
+then reports its `ended` event.
 
 Distinguish an agent's exploratory results from the harness's recorded
 acceptance measurements. A rejected candidate is an experiment outcome; a
@@ -64,8 +84,8 @@ that would make the intervention useful to inspect.
 
 ## Finish the execution and hand off
 
-Observe the process exit and inspect the final saved outcomes before reporting
-completion. Account for background work you launched; do not leave it running
+Observe the run's `ended` (or `crashed`) event and the process exit, and inspect
+the final saved outcomes before reporting completion. Account for background work you launched; do not leave it running
 without explaining its state. Report accepted/rejected attempts, actual
 measurements, retained changes, failures, and useful evidence paths. Execute
 post-run checks only under the entrypoint's existing cheap/authorized policy.

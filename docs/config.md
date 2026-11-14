@@ -427,7 +427,9 @@ raise the target or remove the condition first.
 
 Why a run ended is shown at the end of the run, in `autohelix view` (terminal
 and `--web`), the run summary, and `.autohelix/runs/<id>/.internal/status.json`
-(`stop_reason`).
+(`stop_reason`, `kind: condition`; the other kinds are `budget`, `agent` and
+`request`, from [`autohelix stop`](cli.md#autohelix-stop); see
+[Concepts → Runs and run state](concepts.md#runs-and-run-state)).
 
 ## Scope
 

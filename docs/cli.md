@@ -219,7 +219,7 @@ Every budget counts **this segment**, whatever earlier ones spent:
 | `--cost USD` | once this segment has charged USD: agent calls, reviews, asks, every model call a command reports, the baseline's too (the summary report excepted) |
 | `--time DURATION` | once DURATION of this segment's wall clock has passed, the baseline included |
 
-Whichever comes first ends the segment; a stop condition can end it sooner.
+Whichever comes first ends the segment; a stop condition or [`autohelix stop`](#autohelix-stop) can end it sooner.
 `-n` and `--until` don't go together. Without any budget flag a segment
 runs **1** iteration (one more): a bare `autohelix run` is one checked
 attempt, and a loop is typed (`-n 5`). With only `--cost` or `--time` it has no
@@ -333,7 +333,7 @@ autohelix resume [RUN_ID] [-n MORE | --until N] [--cost USD] [--time DURATION] [
 
 `resume` only continues the same run: its stored config, its own tip, more
 budget. Use it after a budget ran out, an interruption (Ctrl-C, a killed
-process, a reboot, three agent failures), a stop condition, or to change
+process, a reboot, three agent failures), a stop condition or `autohelix stop`, or to change
 `--land` or `--group`. Anything else is a new run: [`run --import
 <id>`](#continuing-from-another-run).
 
@@ -391,6 +391,52 @@ the branch, so land them with `git merge autohelix/<id>`. Before the baseline
 the run hasn't started from its commit yet, so nothing is compared; after it,
 a run that never accepted a change says so ("committed since run k3f9 started;
 it hasn't accepted any changes").
+
+## `autohelix stop`
+
+End a running run from another terminal or a script.
+
+```bash
+autohelix stop RUN_ID... [-p PATH] [--why TEXT] [--now]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--why TEXT` | Why it is stopped: one line (at most 300 characters), shown with the stop reason |
+| `--now` | Also interrupt the current iteration, like Ctrl-C in the run's terminal (same host only) |
+
+Without `--now` the run ends **after its current iteration**, which is never
+interrupted: the segment then ends as when its budget runs out (auto landing,
+the summary if `report:` is on, the run page), with state `finished`. Asked
+during the baseline, it stops after the baseline. A stop condition met by that
+iteration takes precedence. Asking again replaces the earlier request (and its
+`--why`). `autohelix resume RUN_ID` continues the run later, as after a budget.
+
+`--now` sends the run's process SIGTERM, which the run takes as Ctrl-C: the
+iteration in progress is recorded as rejected (`interrupted`), the agent's and
+commands' processes are ended, the run lands as usual, and no summary is
+written; the segment's state is `interrupted`. It works only on the host the run
+is running on, and only when that process is an `autohelix` process. A plain
+`kill PID` (the `pid` in the run's `.internal/status.json`) ends a run the same way (without a stop reason); unlike Ctrl-C it also
+reaches a run a script started in the background, which ignores SIGINT. Ctrl-C
+and SIGTERM wait for an accept that is being recorded to finish.
+
+`stop` refuses runs that aren't running (also one whose process is gone while
+its status still says running) and runs started by an AutoHelix too old to
+support it. It takes several ids and exits 1 if any of them could not be asked.
+It prints what happens next ("Run k3f9 stops after its current iteration
+(4).") and the `autohelix wait` command that reports the outcome.
+
+The request is `.autohelix/runs/<id>/.internal/stop.json`, for the running
+segment only: a request the segment didn't answer is removed when it ends, so it
+never stops a later `resume`. The run checks it before each iteration (first
+right after the baseline). While it is pending, the dashboard shows the run as
+`running (stopping)` (the web page's tooltip says whether `--now` was used and
+why) and `dashboard --json` has it as `stop_requested`. The stop is recorded as
+the segment's stop reason, in `status.json` and `segments.jsonl`: `kind:
+request`, `detail` ("requested by autohelix stop: enough data"), `why`,
+`requested_at`, and `now: true` for `--now` (see
+[Concepts → Runs and run state](concepts.md#runs-and-run-state)).
 
 ## `autohelix land`
 
@@ -469,7 +515,7 @@ autohelix dashboard [-p PATH] --json
 autohelix dashboard [-p PATH] --web [--port 8765] [--open]
 ```
 
-By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C: the id, with its group after it (`20261111-1432-k3f9 (perf)`); the status (with the phase while running), with time and cost so far underneath (the run's total, no cap) and, while a segment with `--time` runs, its time against that cap (`12m5s/1h`, `1h40m/1h30m (time up)` once past it; `view` and the web page's tooltip say "12m5s of 1h (this segment)"); iterations, of the latest segment's cap; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; when the run was last active; and the goal's title (its first line), with the run's notes under it: why it was started (`run --why`) and the run it continues from (`run --import`). The header names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
+By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C: the id, with its group after it (`20261111-1432-k3f9 (perf)`); the status (with the phase while running; `running (stopping)` once [`autohelix stop`](#autohelix-stop) asked it to end), with time and cost so far underneath (the run's total, no cap) and, while a segment with `--time` runs, its time against that cap (`12m5s/1h`, `1h40m/1h30m (time up)` once past it; `view` and the web page's tooltip say "12m5s of 1h (this segment)"); iterations, of the latest segment's cap; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; when the run was last active; and the goal's title (its first line), with the run's notes under it: why it was started (`run --why`) and the run it continues from (`run --import`). The header names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
 
 `--web` serves the same rows as a live page instead (`--port`, default 8765, and `--open` go with it). There the metric's change against the run's own baseline is in the tooltip, and the metric is picked from a menu in the column header. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel). Archived runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view --web`](#autohelix-view) page. It is the same server as `autohelix view --web`, with the same `127.0.0.1`-only binding.
 
@@ -482,13 +528,129 @@ By default the terminal shows one row per run in `.autohelix/runs/`, redrawn eve
   - `id`, `name`, `archived` (true or false), `created_at`, `last_activity`;
   - `group` (`null` outside a group) and `land` (`auto` or `manual`: the run's landing mode);
   - `config_file`, `goal` and `title` (the goal's first line, cut to about 80 characters), read from the config file as it is now in the checkout;
-  - `status`: the last segment's `state` (`running`, `finished`, `interrupted`, `failed`, or `crashed` when its process is gone), `phase`, `iteration`, `iteration_started_at`, `phase_started_at`, `stopped_at`, `stop_reason` (`kind`, `detail`, …), that segment's caps `max_iterations`, `max_cost_usd` and `max_time_seconds` (as in `progress`), and `segment_started_at`, when that segment started (its `--time` counts from there); `null` before the first segment;
+  - `status`: the last segment's `state` (`running`, `finished`, `interrupted`, `failed`, or `crashed` when its process is gone), `phase`, `iteration`, `iteration_started_at`, `phase_started_at`, `stopped_at`, `stop_reason` (`kind`, `detail`, …; see [Concepts → Runs and run state](concepts.md#runs-and-run-state) for the kinds), that segment's caps `max_iterations`, `max_cost_usd` and `max_time_seconds` (as in `progress`), `segment_started_at`, when that segment started (its `--time` counts from there), and `segment`, its number (1, 2, … in the run); `null` before the first segment;
+  - `stop_requested`: while the running segment has been asked to end by [`autohelix stop`](#autohelix-stop), `requested_at`, `why` and `now`; else `null`;
   - `accepted`: the number of accepted iterations;
   - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
   - `progress`: `iterations` attempted, `cost_usd` and `cost_incomplete` (the whole run's), `seconds` (the recorded iterations' wall clock, the baseline's included), and the latest segment's [budget](#budgets), `null` where it had none: `max_iterations` (the last iteration it may run: the previous last iteration + `-n`, or `--until`) and `max_cost_usd` (the run's cost before it + `--cost`) as run totals, "spent before it + its own cap"; `max_seconds`, that segment's own `--time` (not a run total: compare it with the time since `status.segment_started_at`, not with `seconds`). They come from the run's status, never from the config;
   - `target_branch` and `landing`: `commits` the target lacks and whether it can `fast_forward`, or `null` when either side is unavailable;
   - `why` (`run --why`), `archive_why` (`archive --why`) and `import` (`{"run": <id>}` for a run started with `run --import`), each `null` when absent.
   - A run that can't be read has only `id` and `error`.
+
+## `autohelix wait`
+
+Block until something happens in a run, print it as one JSON line, and exit.
+For scripts and supervising agents: no polling, no reading of half-written
+files.
+
+```bash
+autohelix wait [RUN_ID...] [-p PATH] [--after CURSOR] [--timeout DURATION]
+autohelix wait [RUN_ID...] [-p PATH] [--after CURSOR] --follow
+```
+
+| Option | Description |
+|--------|-------------|
+| `RUN_ID...` | Watch these runs (an id or its last part); default: every run of the project, runs started later included |
+| `--after CURSOR` | Continue right after the event that printed this cursor |
+| `--timeout DURATION` | Give up after this long without an event (`30s`, `10m`, `1h30m`): print a `timeout` event and exit 2 |
+| `--follow` | Never exit: print one line per event, in order (not with `--timeout`; no `idle` events) |
+| `--path`, `-p` | Project directory (default: current dir) |
+
+It only reads `.autohelix/` (`history.jsonl`, `segments.jsonl`, `status.json`,
+`run.json`): no lock, nothing written or repaired, so it is safe beside running
+runs, and any number can wait at once.
+
+### The cursor
+
+Every event has a `cursor`. `wait --after CURSOR` returns the next event after
+that one, at once if one is already pending, so a loop of wait, inspect,
+`wait --after` misses nothing and repeats nothing, however long the inspection
+takes. Without `--after`, only what happens from now on counts. To watch a run
+you are about to start, take a cursor first (a short `--timeout` prints one):
+
+```bash
+cursor=$(autohelix wait --timeout 1s | jq -r .cursor)   # now (a timeout event)
+autohelix run perf -n 10 > run.log 2>&1 &
+while :; do
+  event=$(autohelix wait --after "$cursor" --timeout 30m)
+  [ -n "$event" ] || break                     # an error: nothing on stdout
+  cursor=$(jq -r .cursor <<<"$event")
+  jq -c '{event, short, iteration, accepted, reason}' <<<"$event"
+  case $(jq -r .event <<<"$event") in ended|crashed) break ;; esac   # of any run
+done
+```
+
+A cursor records, per run, what has been reported; it doesn't compare times. It
+is opaque text (`1.` and base64): pass it back as printed. A cursor works with
+other run ids or none: it covers every run of the project, so `--after` reports
+only what happened since, whichever runs are watched. A run missing from a
+cursor (started after it) is new: everything it has is pending.
+
+`--follow` turns the same events into a stream, e.g. for a notifier:
+`autohelix wait --follow | ./notify.sh`. It exits quietly when the reader goes
+away.
+
+### Events
+
+The event JSON is a public contract, like [`dashboard --json`](#json-output):
+`schema` is 1, and fields are only ever added. Every event has:
+
+- `schema` (1), `event` (`started`, `iteration`, `ended`, `crashed`, `idle` or
+  `timeout`), `run` and `short` (the run's id and its last part; `null` for
+  `idle` and `timeout`), `time` (when it happened, Unix seconds; for `idle` and
+  `timeout`, when reported), and `cursor`.
+
+Per event:
+
+- **`started`**: a segment (one `run` or `resume` command) started. `segment`
+  (1, 2, … in the run), `start_iteration` (`0` when it begins with the
+  baseline), `resumed` (`segment` > 1). `time` is the segment's start.
+- **`iteration`**: an iteration was recorded (the baseline is iteration 0).
+  `iteration`, `accepted`, `reason` (as recorded: `baseline`, `gate failed:
+  pytest -q`, `interrupted`, …; `null` for most accepted ones), `summary` (the
+  agent's one line), `metrics`, `commit` (`null` when rejected or an accepted
+  no-op), `cost_usd` (the known cost, `null` when none is known),
+  `cost_incomplete` (some of its calls' costs are unknown), `agent_error` (why
+  the agent call failed, else `null`). `time` is when it ended. An accepted
+  iteration is reported once its record is final, after its stop commands.
+- **`ended`**: a segment ended. `segment`, `state` (`finished`, `interrupted`
+  or `failed`), `stop_reason` (an object with `kind` and `detail`, as in
+  `status.json`, or `null`), `error` (a failed segment's error, else `null`),
+  `last_iteration` (the run's last iteration), `iterations` (the records this
+  segment added). `time` is when it ended.
+- **`crashed`**: a segment never ended and its process is gone. `segment`,
+  `last_iteration` (the run's last iteration when it crashed). Reported once
+  per segment. `time` is its last sign of life.
+- **`idle`**: only with run ids, without `--follow`: none of them is running
+  and nothing is pending. `runs`: one `{run, short, state}` per run named,
+  `state` being how its last segment ended (`finished`, `interrupted`,
+  `failed`), `crashed`, `ended` (a run from before segments were recorded),
+  `new` (nothing started yet) or `gone` (deleted while waiting). A run created
+  in the last minute that hasn't started its first segment yet counts as
+  starting, not idle; a run being resumed is idle until its new segment starts,
+  so to watch a `resume` you launch, wait without ids, from a cursor taken
+  before.
+- **`timeout`**: `--timeout` passed without an event. `timeout_seconds`. Its
+  cursor continues where this wait started (the one given, or now): a timeout
+  is a heartbeat, not a gap.
+
+A run's events come in the order they happened: a segment's `started`, its
+iterations, then its `ended` or `crashed`. Across runs the oldest pending event
+comes first, but a record can be written after its `time`, so an event of one
+run may follow a newer one of another run. Only complete lines of
+`history.jsonl` and `segments.jsonl` count; a record rewritten in place (an
+accepted one updated after its stop commands) is not reported again.
+
+### Exit codes and limits
+
+`wait` exits **0** after an event (`idle` included) and **2** after a timeout.
+Errors (an unknown run id) exit **1**; usage errors (a bad option, a cursor
+`wait` didn't print) exit 2, as for every command, but print nothing on stdout,
+while a timeout prints its JSON line there. Ctrl-C exits 130.
+
+A crash is detected only for a process on this host. A run that crashed on
+another host, or whose process id was reused by another process, looks running
+until it is resumed: only `--timeout` ends a wait on it.
 
 ## `autohelix hint`
 
