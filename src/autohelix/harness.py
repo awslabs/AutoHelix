@@ -6,6 +6,7 @@
 import json
 import hashlib
 import itertools
+import math
 import os
 import shutil
 import subprocess
@@ -89,8 +90,8 @@ class Budget:
             raise ValueError("Use either -n (more iterations) or --until (up to an iteration), not both.")
         for flag, value in (("-n", self.iterations), ("--until", self.until), ("--cost", self.cost_usd),
                             ("--time", self.time_seconds)):
-            if value is not None and (isinstance(value, bool) or not value > 0):
-                raise ValueError(f"{flag} must be positive, got {value!r}")
+            if value is not None and (isinstance(value, bool) or not math.isfinite(value) or not value > 0):
+                raise ValueError(f"{flag} must be a positive finite number, got {value!r}")
 
     @property
     def default(self) -> bool:
@@ -1406,7 +1407,7 @@ class Harness:
         except BaseException as error:
             baseline = IterationResult(iteration=0, accepted=False, reason=f"baseline failed: {error}",
                                        base=workspace.base)
-            self._complete_record(baseline, time.time(), time.monotonic(), evaluation)
+            self._complete_record(baseline, started_at, time.monotonic(), evaluation)
             if any(r.iteration == 0 and r.accepted for r in self.history.load()):
                 raise
             self._write_baseline(baseline)
@@ -1629,7 +1630,14 @@ class Harness:
         # Dollars this invocation has charged (known costs): the baseline's, then each iteration's.
         spent = (summarize_costs(self.history.cost_usages).cost_usd or 0) - cost_before
 
+        cost_unknown = False  # some of this invocation's charges are unavailable
+        # With --cost the only bound, an unknown charge means it may never be reached.
+        cost_only = budget.cost_usd is not None and max_iter is None and budget.time_seconds is None
+
         def out_of_budget() -> dict | None:
+            if cost_only and cost_unknown:
+                return {"kind": "budget", "budget": "cost",
+                        "detail": "cost unknown: --cost can't bound this invocation (add -n or --time)"}
             if budget.cost_usd is not None and spent >= budget.cost_usd:
                 return {"kind": "budget", "budget": "cost",
                         "detail": f"cost budget reached ({format_cap(budget.cost_usd)} this invocation)"}
@@ -1646,7 +1654,8 @@ class Harness:
         cost_warning_shown = False
 
         def warn_unknown_cost() -> None:
-            nonlocal cost_warning_shown
+            nonlocal cost_warning_shown, cost_unknown
+            cost_unknown = True
             if budget.cost_usd is not None and not cost_warning_shown:
                 self.console.print("           [yellow]! cost unknown; --cost counts known costs only[/yellow]",
                                    highlight=False)

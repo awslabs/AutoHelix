@@ -65,7 +65,6 @@ def test_config_parses_agent_timeout():
         "goal": "test",
         "gates": ["echo ok"],
         "agent": {"timeout": "1h"},
-        "budget": {"iterations": 10},
     })
     assert cfg.agent.timeout == 3600
 
@@ -76,7 +75,6 @@ def test_config_no_agent_timeout_defaults_none():
     cfg = Config.from_dict({
         "goal": "test",
         "gates": ["echo ok"],
-        "budget": {"iterations": 10},
     })
     assert cfg.agent.timeout is None
 

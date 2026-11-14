@@ -83,7 +83,10 @@ For requested resumption, use `autohelix resume <id>`, never `autohelix run`:
 invocation: `resume -n 5 --cost 3` is 5 more iterations, up to $3 more, and a
 `resume` without budget flags runs 3 more. Prefer `--until N` (stop at
 iteration N in total, safe to repeat) over `-n` (N more iterations) in scripts
-and retries: a retried `-n` would run N again. `resume` exits 3 when there is no run to
+and retries: a retried `-n` would run N again. `--until` makes retries safe for
+iterations only: `--cost` and `--time` start fresh on each invocation, so track
+the total yourself (`progress.cost_usd` in `autohelix dashboard --json`) and
+pass only the remainder. `resume` exits 3 when there is no run to
 resume. A failed actual main-agent call consumes its number; resume at the next
 iteration. Do not archive or delete runs, reset accepted code, or extend the
 agreed effort without authorization.

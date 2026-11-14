@@ -29,6 +29,13 @@ function fmtNumber(v) {
   return Math.abs(v) >= 100 ? v.toFixed(1) : Number(v.toPrecision(4)).toString();
 }
 
+// A dollar cap as formatting.format_cap writes it: cents, else up to four significant digits.
+function fmtCap(v) {
+  if (Math.abs(v * 100 - Math.round(v * 100)) < 1e-9) return `$${v.toFixed(2)}`;
+  const decimals = Math.min(12, Math.max(2, 3 - Math.floor(Math.log10(v))));
+  return `$${v.toFixed(decimals).replace(/0+$/, '').replace(/\.$/, '')}`;
+}
+
 function fmtDuration(seconds) {
   if (!seconds && seconds !== 0) return '—';
   const s = Math.round(seconds);
@@ -858,7 +865,7 @@ function renderConfig() {
   const s = state.status || {};
   const budget = [
     s.max_iterations && `to iteration ${s.max_iterations}`,
-    s.max_cost_usd && `$${s.max_cost_usd.toFixed(2)} total`,
+    s.max_cost_usd && `${fmtCap(s.max_cost_usd)} total`,
     s.max_time_seconds && `${fmtDuration(s.max_time_seconds)} total`,
   ].filter(Boolean).join(' · ');
   const parts = [

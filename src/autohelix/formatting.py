@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from collections.abc import Iterable
@@ -55,8 +56,12 @@ def format_cost(cost: float | None, precision: int = 2) -> str:
 
 
 def format_cap(cost: float) -> str:
-    """A dollar cap as given: cents (`$5.00`), or the digits it has (`$0.015`)."""
-    return f"${cost:.2f}" if abs(cost * 100 - round(cost * 100)) < 1e-9 else f"${cost:.4g}"
+    """A dollar cap as given: cents (`$5.00`), else up to four significant digits, in
+    plain decimals (`$0.015`, `$0.000000001`)."""
+    if abs(cost * 100 - round(cost * 100)) < 1e-9:
+        return f"${cost:.2f}"
+    decimals = min(12, max(2, 3 - math.floor(math.log10(cost))))
+    return "$" + f"{cost:.{decimals}f}".rstrip("0").rstrip(".")
 
 
 def format_total_cost(usages: Iterable[dict]) -> str:

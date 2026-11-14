@@ -63,6 +63,7 @@ def test_header_omits_empty_lines_and_names_the_project():
     (Budget(cost_usd=5), 5, "no iteration cap · $5.00 more"),
     (Budget(time_seconds=5400), 0, "no iteration cap · 1h30m"),
     (Budget(cost_usd=0.015), 0, "no iteration cap · $0.015"),
+    (Budget(cost_usd=1e-9), 0, "no iteration cap · $0.000000001"),
 ])
 def test_header_budget_says_what_this_invocation_may_do(budget, done, text):
     assert budget_text(budget, done) == text

@@ -28,7 +28,8 @@ Breaking:
   and `resume` take `-n N`, `--until N`, `--cost USD` and `--time DURATION`,
   each counting that invocation (`resume -n 10 --cost 5`: 10 more iterations,
   up to $5 more). Without a budget flag, 3 iterations; with only `--cost` or
-  `--time`, no iteration cap. Status and `--json` record the caps as run totals
+  `--time`, no iteration cap. Cost and time are checked before each iteration
+  starts as well as after it. Status and `--json` record the caps as run totals
   (spent before + this invocation's cap).
 - Metric gate thresholds are percent strings (`regress: 5%`); a bare number
   is an error. Durations everywhere: a bare number (or a string of digits) is
@@ -209,8 +210,6 @@ Added:
   it). `view` shows the run's iteration table above the agent's live output,
   so `autohelix watch` is removed: use `autohelix view`. `--once` prints one
   snapshot as text (it replaces `--print`); `--json` is unchanged.
-- `budget.time` is also checked before an iteration starts, so a resumed run
-  past its time budget starts no new iteration.
 - `dashboard --json`: `lifecycle` is replaced by `archived` (schema 1 was not
   in a release yet; it is on `main`).
 - `.autohelix/` is excluded through `.git/info/exclude` instead of a

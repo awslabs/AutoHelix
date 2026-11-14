@@ -64,7 +64,9 @@ function outcome(run) {
 const WORDS = { finished: 'finished', interrupted: 'interrupted', failed: 'failed', crashed: 'stopped unexpectedly',
                 idle: 'not started', archived: 'archived', running: 'running', error: 'unreadable' };
 
-const fmtMoney = (v) => `$${Number.isInteger(v) ? v : v.toFixed(2)}`;
+// A dollar cap as formatting.format_cap writes it: cents, else up to four significant digits.
+const fmtMoney = (v) => Math.abs(v * 100 - Math.round(v * 100)) < 1e-9 ? `$${v.toFixed(2)}`
+  : `$${v.toFixed(Math.min(12, Math.max(2, 3 - Math.floor(Math.log10(v))))).replace(/0+$/, '').replace(/\.$/, '')}`;
 
 // The iteration under way while running, otherwise the last one finished.
 function currentIteration(run) {

@@ -20,7 +20,7 @@ from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFou
 from autohelix.harness import DEFAULT_ITERATIONS, Budget, Harness
 from autohelix.history import History
 from autohelix.run_status import read_run_status
-from autohelix.runs import (NoRunToResume, RunPaths, RunLock, archive as archive_run, check_group,
+from autohelix.runs import (NoRunToResume, RunPaths, planned_run, RunLock, archive as archive_run, check_group,
                             delete as delete_run, load_run_config, land as land_run, project_runs, resolve_run,
                             run_tip, short_id, valid_name)
 from autohelix import run_table
@@ -365,11 +365,21 @@ def _duration_option(ctx, param, value: str | None) -> int | None:
         raise click.BadParameter(f"{value!r} is not a duration ({e}); e.g. 90m, 2h, 1h30m") from e
 
 
-def _budget_options(command):
-    """The budget flags `run` and `resume` share: how long this invocation goes on."""
-    for option in reversed([
+def _budget_options(more: str):
+    """The budget flags `run` and `resume` share: how long this invocation goes on
+    (`more`: "" for a new run, " more" on resume)."""
+    def decorate(command):
+        for option in reversed(_budget_option_list(more)):
+            command = option(command)
+        return command
+    return decorate
+
+
+def _budget_option_list(more: str) -> list:
+    return [
         click.option("--iterations", "-n", type=click.IntRange(min=1), metavar="N",
-                     help=f"Run N more iterations (default {DEFAULT_ITERATIONS}, only when no budget flag is given)."),
+                     help=f"Run up to N{more} iterations (default {DEFAULT_ITERATIONS}, only when no budget "
+                          "flag is given)."),
         click.option("--until", type=click.IntRange(min=1), metavar="N",
                      help="Run up to iteration N in total (safe to repeat; for scripts)."),
         click.option("--cost", "cost_usd", type=click.FloatRange(min=0, min_open=True), metavar="USD",
@@ -378,9 +388,7 @@ def _budget_options(command):
         click.option("--time", "time_seconds", callback=_duration_option, metavar="DURATION",
                      help="Stop starting iterations after DURATION of this invocation's wall clock "
                           "(e.g. 2h, 90m; baseline included)."),
-    ]):
-        command = option(command)
-    return command
+    ]
 
 
 def _budget(iterations: int | None, until: int | None, cost_usd: float | None,
@@ -396,13 +404,24 @@ def _interrupted_note(harness: Harness) -> str | None:
     resume given no budget flag: `3 more (default); the interrupted invocation had 8 left: -n 8`."""
     status = read_run_status(harness.project_path, harness.paths.run_id) or {}
     cap = status.get("max_iterations")
-    if status.get("state") not in ("interrupted", "crashed") or type(cap) is not int:
+    # A stop reason: it had ended for its own reason (a budget, a condition) before that.
+    if status.get("state") not in ("interrupted", "crashed") or type(cap) is not int or status.get("stop_reason"):
         return None
     left = cap - harness.history.get_last_iteration()
     if left <= 0 or left == DEFAULT_ITERATIONS:
         return None
     return (f"{DEFAULT_ITERATIONS} more (default); the interrupted invocation had {left} left: "
             f"-n {left}")
+
+
+def _last_iteration(project: Path, config: Path | None, run_id: str | None) -> int:
+    """The last iteration of the run `resume` would continue, read before anything is
+    written; -1 when there is none to read (`_start` then refuses as usual)."""
+    try:
+        planned = planned_run(project, config, run_id=run_id, create=False)
+    except (RuntimeError, ValueError):
+        return -1
+    return History(project, planned.run_id).get_last_iteration() if planned else -1
 
 
 def _segment(harness: Harness, budget: Budget, report: bool) -> None:
@@ -417,7 +436,7 @@ def _segment(harness: Harness, budget: Budget, report: bool) -> None:
 @main.command()
 @click.argument("config_name", metavar="[CONFIG]", required=False)
 @_segment_options
-@_budget_options
+@_budget_options("")
 @click.option("--group", help="Share notes and code with the project's other runs of this group "
                               "(landing defaults to manual).")
 def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None,
@@ -452,7 +471,7 @@ def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land
 @main.command()
 @click.argument("run_id", required=False)
 @_segment_options
-@_budget_options
+@_budget_options(" more")
 @click.option("--group", help="Set or change the run's group from its next iteration; '' clears it.")
 def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None,
            iterations: int | None, until: int | None, cost_usd: float | None, time_seconds: int | None,
@@ -479,6 +498,9 @@ def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_m
     config = None
     if not selected:
         config = _segment_config(project, None, "resume")
+    if budget.until is not None and (done := _last_iteration(project, config, selected)) >= budget.until:
+        click.echo(f"Already at iteration {done}; --until {budget.until} runs nothing.")
+        return
     harness = _start(project, config, verbose=verbose, run_id=selected, create=False, land_mode=land_mode,
                      group=group)
     if budget.default and (note := _interrupted_note(harness)):
@@ -747,8 +769,9 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
          open_browser: bool):
     """One run, live in the terminal: RUN_ID (or its last part), else the current run.
 
-    On top, the run's status, budget (its latest invocation's), latest accepted metrics, landing state
-    and one row per iteration; below, the live output of the agent, a review
+    On top, the run's state, its config file, time and cost so far, iterations
+    (of its latest invocation's cap), landing, why it stopped, its goal and latest
+    accepted metrics; then one row per iteration; below, the live output of the agent, a review
     or the summary agent. Keeps waiting when the run stops; Ctrl-C stops watching
     (not the run). Safe to run alongside `autohelix run`; it only reads
     .autohelix/.

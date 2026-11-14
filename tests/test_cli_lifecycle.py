@@ -341,6 +341,7 @@ def test_time_counts_the_baseline_and_is_checked_before_an_iteration(project, mo
 def test_resume_after_an_interrupted_invocation_says_what_was_left(project, state):
     paths = begun(project, "-n", "1")
     data = status(paths)  # as if `run -n 9` had stopped after iteration 1 (a dead PID: crashed)
+    del data["stop_reason"]  # it didn't end for its own reason
     data.update(state="running" if state == "crashed" else state, max_iterations=9, pid=2 ** 22 + 12345,
                 host=socket.gethostname())
     paths.status.write_text(json.dumps(data))
@@ -359,3 +360,47 @@ def test_no_interrupted_note_with_a_budget_flag_or_after_a_finished_invocation(p
     paths.status.write_text(json.dumps(data))
     result = cli(project, "resume", "-n", "1", "--no-report")
     assert result.exit_code == 0 and "interrupted invocation" not in result.output
+
+
+def test_non_finite_budgets_are_usage_errors(project):
+    for args in (["--cost", "inf"], ["--cost", "1e400"], ["--cost", "nan"]):
+        result = cli(project, "run", *args)
+        assert result.exit_code == 2 and "positive finite number" in result.output, (args, result.output)
+    assert not RunPaths(project).run_id
+
+
+def test_cost_alone_with_an_unknown_cost_stops_before_the_next_iteration(project):
+    """With --cost the only bound, a charge it can't see could make it run forever."""
+    configure(project, agent={"backend": "mock", "settings": {
+        "change_file": "code.py", "change_content": "# iteration {iteration}"}})  # no cost reported
+    paths = begun(project, "--cost", "1")
+    assert iterations(paths) == [0, 1]
+    assert status(paths)["stop_reason"] == {
+        "kind": "budget", "budget": "cost",
+        "detail": "cost unknown: --cost can't bound this invocation (add -n or --time)"}
+    paths = begun(project, "--cost", "1", "-n", "2")  # another bound: it goes on, counting known costs
+    assert iterations(paths) == [0, 1, 2]
+
+
+def test_until_already_reached_runs_nothing(project):
+    paths = begun(project, "-n", "2")
+    before = paths.status.read_bytes(), sorted(p.name for p in paths.run_dir.rglob("*"))
+    result = cli(project, "resume", "--until", "2")
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "Already at iteration 2; --until 2 runs nothing."
+    assert (paths.status.read_bytes(), sorted(p.name for p in paths.run_dir.rglob("*"))) == before
+
+
+def test_no_interrupted_note_after_a_stop(project):
+    paths = begun(project, "-n", "1")
+    data = status(paths)
+    data.update(state="interrupted", max_iterations=9,
+                stop_reason={"kind": "condition", "detail": "stop condition met at iteration 1: done"})
+    paths.status.write_text(json.dumps(data))
+    result = cli(project, "resume", "--no-report")
+    assert result.exit_code == 0 and "interrupted invocation" not in result.output
+
+
+def test_n_help_says_more_only_on_resume(project):
+    assert "Run up to N iterations" in cli(project, "run", "--help").output
+    assert "Run up to N more iterations" in cli(project, "resume", "--help").output

@@ -220,7 +220,9 @@ iteration cap. Cost and time are checked before each iteration and after it,
 never during one, so an invocation can overshoot by one iteration's worth: for
 a hard limit on one iteration use [`agent.timeout`](config.md#agent). Costs that
 are unavailable don't count (`--cost` warns and tracks only the known ones): keep
-`-n` or `--time` alongside.
+`-n` or `--time` alongside. With `--cost` the only bound, an unknown cost stops
+the invocation before its next iteration ("cost unknown: --cost can't bound this
+invocation (add -n or --time)").
 
 ```bash
 autohelix run perf -n 10 --cost 20      # at most 10 iterations and $20
@@ -304,8 +306,10 @@ Budgets are this invocation's ([Budgets](#budgets)): `resume -n 10 --cost 5`
 runs 10 more iterations, up to $5 more, however much the run spent before.
 After an interrupted invocation (Ctrl-C, a killed process, a reboot), a
 `resume` without budget flags says what that one had left: "3 more (default);
-the interrupted invocation had 8 left: -n 8". `--until` with a number already reached runs an empty
-segment: it lands what is unlanded and saves `report.html`, but writes no new summary. A run stopped by a
+the interrupted invocation had 8 left: -n 8" (not when that invocation had already stopped for a
+reason of its own). `--until` with a number already reached says so ("Already at iteration 5;
+--until 3 runs nothing.") and exits 0 without starting a segment: nothing is written, landed or
+reported. A run stopped by a
 [stop condition](config.md#stop) is paused, not ended: `resume` continues it,
 and the condition is checked again after the next accepted iteration.
 

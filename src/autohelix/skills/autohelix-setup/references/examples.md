@@ -18,7 +18,7 @@ clear:
 
 - "Use AutoHelix to make the solver faster. Prepare a config template for review."
 - "Use AutoHelix to improve this API guide. Prepare the loop and start a pilot
-  using my configured backend and budget."
+  using my configured backend."
 - "Use AutoHelix to make the solver faster. Prepare, run, and supervise three
   iterations, with four minutes per agent call and fifteen minutes for the
   loop. Use my configured agent and model, keep existing evaluations fixed,
