@@ -84,7 +84,7 @@ def test_a_request_during_the_baseline_stops_after_the_baseline(project):
     # The gate's own output: what the request said to its caller.
     gate_out = (paths.iteration_dir(0) / "gates" / "1" / "stdout.txt").read_text()
     assert f"Run {short_id(paths.run_id)} stops after the baseline." in gate_out
-    assert f"autohelix wait {short_id(paths.run_id)} reports when it has ended." in gate_out
+    assert f"Follow it with: autohelix wait --follow {short_id(paths.run_id)}" in gate_out
     # A resume continues as usual: nothing is left of the request (the gate asks only at 0).
     result = cli(project, "resume", "-n", "2", "--no-report")
     assert result.exit_code == 0, result.output
@@ -229,7 +229,7 @@ def test_stop_writes_a_request_for_the_running_segment(project, running):
     result = cli(project, "stop", short, "--why", "done for today")
     assert result.exit_code == 0, result.output
     assert result.output.splitlines() == [f"Run {short} stops after its current iteration (3).",
-                                          f"autohelix wait {short} reports when it has ended."]
+                                          f"Follow it with: autohelix wait --follow {short}"]
     request = json.loads(running.stop_request.read_text())
     assert {k: request[k] for k in ("why", "now", "segment", "host", "pid")} == {
         "why": "done for today", "now": False, "segment": 2, "host": socket.gethostname(), "pid": os.getpid()}
@@ -296,7 +296,7 @@ def test_stop_handles_every_id_and_fails_if_any_failed(project, running):
     assert result.exit_code == 1
     assert "No run 'zzzz'" in result.output
     assert f"Run {short} stops after its current iteration (3)." in result.output
-    assert f"autohelix wait {short} reports when it has ended." in result.output
+    assert f"Follow it with: autohelix wait --follow {short}" in result.output
     assert running.stop_request.exists()
 
 
@@ -487,8 +487,12 @@ def test_a_segment_takes_sigterm_as_ctrl_c_and_restores_it(project, monkeypatch)
         raise AssertionError("not reached")
 
     monkeypatch.setattr(harness, "run_iteration", terminated)
-    assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
-    harness.run(Budget(iterations=3), report=False)
+    # Another test in this worker (`ask`/`review`'s CLI) may have left its own handler.
+    previous = signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    try:
+        harness.run(Budget(iterations=3), report=False)
+        assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+    finally:
+        signal.signal(signal.SIGTERM, previous)
     [segment] = read_segments(harness.paths.segments)
     assert segment["state"] == "interrupted" and segment["stop_reason"] is None
-    assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL

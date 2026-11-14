@@ -34,6 +34,7 @@ from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
                             claim_copies, config_relative, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
+                            WHY_LIMIT,
                             imported_run, is_live, target_ahead, target_ahead_refusal,
                             write_json, write_text)
 from autohelix.iteration import IterationWorkspace
@@ -1832,7 +1833,7 @@ class Harness:
         request = read_stop_request(self.paths, self._segment)
         if request is None or (now and request.get("now") is not True):
             return None
-        why = clean(request["why"], 200) if isinstance(request.get("why"), str) and request["why"].strip() else None
+        why = clean(request["why"], WHY_LIMIT) if isinstance(request.get("why"), str) and request["why"].strip() else None
         requested_at = request.get("requested_at")
         detail = "requested by autohelix stop" + " --now" * now + (f": {why}" if why else "")
         return {"kind": "request", **({"now": True} if now else {}), "detail": detail, "why": why,

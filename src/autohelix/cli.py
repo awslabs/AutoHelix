@@ -878,8 +878,7 @@ def stop(run_ids: tuple[str, ...], path: str, why: str | None, now: bool):
         click.echo(message)
         asked.append(short)
     if asked:
-        ended = "it has ended" if len(asked) == 1 else "they have ended"
-        click.echo(f"autohelix wait {' '.join(asked)} reports when {ended}.")
+        click.echo(f"Follow it with: autohelix wait --follow {' '.join(asked)}")
     if failed:
         raise SystemExit(1)
 

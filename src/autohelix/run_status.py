@@ -180,7 +180,7 @@ def running_iteration(status: dict | None) -> int | None:
 
 def write_stop_request(paths: RunPaths, *, segment: int, why: str | None, now: bool) -> dict:
     """Ask a running segment (`segment`, its status's number) to stop after its current
-    iteration; with `now` the requester also interrupts it (SIGINT). Replaces an earlier
+    iteration; with `now` the requester also interrupts it (SIGTERM). Replaces an earlier
     request. Raises OSError."""
     request = {"requested_at": time.time(), "why": why, "now": now, "segment": segment,
                "host": socket.gethostname(), "pid": os.getpid()}

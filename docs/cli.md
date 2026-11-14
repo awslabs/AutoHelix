@@ -425,7 +425,7 @@ and SIGTERM wait for an accept that is being recorded to finish.
 its status still says running) and runs started by an AutoHelix too old to
 support it. It takes several ids and exits 1 if any of them could not be asked.
 It prints what happens next ("Run k3f9 stops after its current iteration
-(4).") and the `autohelix wait` command that reports the outcome.
+(4).") and the `autohelix wait --follow` command that shows its events up to `ended`.
 
 The request is `.autohelix/runs/<id>/.internal/stop.json`, for the running
 segment only: a request the segment didn't answer is removed when it ends, so it
