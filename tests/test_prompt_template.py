@@ -100,10 +100,11 @@ class TestBuildPromptVariables:
         assert set(variables) == {
             "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable",
             "frozen", "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted", "recent_iterations", "time_limit", "group",
-            "group_runs"}
+            "group_runs", "imported"}
         assert variables["title"] == "Title line."
         assert variables["notes_path"] == str(tmp_path / ".autohelix-iteration" / "notes" / "iter-1.md")
         assert variables["last"] is None and variables["discarded"] == [] and variables["rejected_patch"] == ""
+        assert variables["imported"] is None
 
     def test_hints_empty_when_no_file(self, tmp_path):
         (tmp_path / ".autohelix").mkdir()

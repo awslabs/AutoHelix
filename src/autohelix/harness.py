@@ -32,6 +32,7 @@ from autohelix.history import History, IterationResult, record_seconds
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
                             claim_copies, config_relative, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
+                            imported_run, target_ahead, target_ahead_refusal,
                             write_json, write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
@@ -200,7 +201,8 @@ class Harness:
     def __init__(self, project_path: Path, verbose: bool = False, heartbeat_seconds: int = 30,
                  config_file: Path | None = None, *, new: bool = False,
                  run_id: str | None = None, name: str | None = None,
-                 land_mode: str | None = None, create: bool = True, group: str | None = None):
+                 land_mode: str | None = None, create: bool = True, group: str | None = None,
+                 import_run: str | None = None, why: str | None = None):
         """Own one run: `run_id`, a new one (`new`, as `autohelix run`), or the config's
         most recently active run (as `autohelix resume`; created if there is none,
         unless `create` is false).
@@ -209,7 +211,13 @@ class Harness:
         else auto, or manual with a `group`) and its `group`. On resume `land_mode`
         and `group` change the stored ones (`group=''` clears it) once the segment
         starts; otherwise the run keeps its own. A new run is named after the config
-        file (`name` replaces that, for library callers and tests)."""
+        file (`name` replaces that, for library callers and tests).
+
+        A new run may import another (`import_run`, a full id: `run --import`): every
+        agent copy shows that run's state read-only, and the baseline's observe entries
+        get its last outputs as `$AUTOHELIX_PREVIOUS`. `why` is the new run's note
+        (`run --why`). A resume refuses, before writing anything, when its target branch
+        moved past its tip and it lands automatically (`runs.target_ahead`)."""
         # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send
         # every git call (ours, and the agent's, checks' and judges') to another repository.
         # The CLI does the same in `cli.main`; this covers the Harness as a library.
@@ -235,8 +243,15 @@ class Harness:
         # run to own, read-only (no run to resume, a run without its ref), the config (for
         # an existing run, its stored copy, which the file must still match), and for a new
         # run its name, a clean tree and readiness. select_run decides again under its lock.
+        if import_run and not new:
+            raise ValueError("import_run applies to a new run")
         planned = planned_run(self.project_path, config_file, new=new, run_id=run_id, create=create)
         creating = planned is None
+        if import_run:
+            source = RunPaths(self.project_path, import_run).read_identity()["config_path"]
+            if source != (used := config_relative(self.project_path, config_file)):
+                self.console.print(f"[yellow]Run {short_id(import_run)} used {source}; this run uses {used}.[/yellow]",
+                                   highlight=False)
         if creating:
             self.config, self._raw_config = load_config(self.project_path, config_file=config_file)
         else:
@@ -255,6 +270,11 @@ class Harness:
         if creating:
             name = new_run_name(config_file, name)
             self._new_run_ready()
+        else:  # a run continues its own tip: refused before anything is written
+            data = planned.read_identity()
+            if (land_mode or data.get("land") or self.config.land or "auto") == "auto" and (
+                    count := target_ahead(planned, data)):
+                raise RuntimeError(target_ahead_refusal(planned, data, count))
         # The first writes: the local excludes, before .autohelix/ exists.
         ensure_runtime_ignored(self.project_path)
         try:  # best effort: only runtime state must be ignored
@@ -269,6 +289,7 @@ class Harness:
             # A group lands manually unless --land says otherwise: the config's `land:` is
             # the default for runs on their own (auto landing in a group diverges the rest).
             land_mode=land_mode or ("manual" if group else self.config.land or "auto"),
+            imported=import_run, why=why,
         )
         if self.paths.run_id != (planned and planned.run_id):
             try:  # a new run (or, raced, another than planned): from now on, its stored copy
@@ -570,13 +591,15 @@ class Harness:
             self.console.print(f"[yellow]Warning:[/yellow] {text}", highlight=False)
             self.log.warn(text)
 
-    def build_prompt(self, iteration: int, worktree_dir: Path, members=(), rejected_diff: str = "") -> str:
+    def build_prompt(self, iteration: int, worktree_dir: Path, members=(), rejected_diff: str = "",
+                     imported=None) -> str:
         """Build the prompt for the agent using the template; `members` are the other
-        runs of the group, as `group_members` returns them."""
+        runs of the group, as `group_members` returns them, `imported` the run this one
+        imports (`runs.imported_run`), if any."""
         template = load_template(self.config)
         variables = build_prompt_variables(
             self.config, self.history, iteration, worktree_dir,
-            group=self.run_info.get("group"), members=members, rejected_diff=rejected_diff,
+            group=self.run_info.get("group"), members=members, rejected_diff=rejected_diff, imported=imported,
         )
         return render_template(template, variables)
 
@@ -809,7 +832,7 @@ class Harness:
             self.console.print(f"  Working dir: {agent_copy.working_dir}")
         self.run_status.note(worktree=str(agent_copy.working_dir))
         prompt = self.build_prompt(iteration, agent_copy.working_dir, workspace.members,
-                                   rejected_diff=workspace.rejected_diff)
+                                   rejected_diff=workspace.rejected_diff, imported=workspace.imported)
         workspace.write_prompt(prompt)
         if self.verbose:
             self.console.print(Panel(prompt.strip(), title="[bold]Agent Prompt[/bold]", border_style="dim"))
@@ -1025,7 +1048,8 @@ class Harness:
                  command_env: dict, records, *, verify, progress, notes: list[str]) -> None:
         """Observe entries in order (see `_evaluate`), each with its own call folder and,
         as `$AUTOHELIX_PREVIOUS`, a copy of its output from the last accepted iteration
-        in which it succeeded.
+        in which it succeeded; at the baseline of a run that imports another, from that
+        run's (`run --import`), by entry name.
 
         An entry's output (stdout.txt, stderr.txt, captures) is staged in its call
         folder after the command (and its process group) ended, then replaces
@@ -1037,9 +1061,20 @@ class Harness:
         where = "baseline" if baseline else f"iter {iteration}"
         gates = [(index, gate) for index, gate in enumerate(self.config.gates) if isinstance(gate, MetricGate)]
         declared = self.config.metric_names()
+        source, before = self.history, iteration
+        if baseline:  # the baseline has no outputs of its own before it
+            imported = imported_run(self.paths, self.run_info)
+            source = History(self.project_path, imported[0].run_id) if imported else None
+            before = sys.maxsize
         for entry in self.config.observe:
             self.run_status.note(entry=entry.name)  # the viewer marks the running entry
-            previous = self.history.previous_observations(entry.name, iteration)
+            try:
+                previous = source.previous_observations(entry.name, before) if source else None
+            except Exception as e:  # noqa: BLE001 - another run's history never stops this one
+                if source is self.history:
+                    raise
+                self.log.warn(f"No $AUTOHELIX_PREVIOUS for {entry.name} from the imported run: {e}")
+                previous = None
             with workspace.call_folder(previous=previous) as folders:
                 env = {**command_env, "AUTOHELIX_SCRATCH": str(folders["scratch"]),
                        "AUTOHELIX_PREVIOUS": str(folders["previous"]) if "previous" in folders else None,

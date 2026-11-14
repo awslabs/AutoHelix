@@ -139,7 +139,7 @@ retry. AutoHelix leaves that file unchanged.
 Start a new run of the optimization loop.
 
 ```bash
-autohelix run [CONFIG] [-n N | --until N] [--cost USD] [--time DURATION] [-p PATH] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
+autohelix run [CONFIG] [-n N | --until N] [--cost USD] [--time DURATION] [-p PATH] [--group NAME] [--import RUN_ID] [--why TEXT] [--land auto|manual] [--verbose] [--no-report]
 ```
 
 `CONFIG` names a config in `autohelix/` (`perf` for `autohelix/perf.yaml`);
@@ -160,6 +160,8 @@ commands use: iteration copies are made from the commit.
 | `--path`, `-p` | Project directory (default: current dir) |
 | `--group NAME` | Make the run part of a [group](#groups): it sees the other runs of the group (their notes, history and code), and lands manually by default |
 | `--land auto\|manual` | Land accepted code at the end of each segment, or retain it only on the run ref until `autohelix land`. Stored with the run. Default: `manual` with `--group`, else `land:` in the config, else `auto` |
+| `--import RUN_ID` | [Continue from another run](#continuing-from-another-run): its notes and history, read-only, in every iteration, and its last observe outputs at the baseline |
+| `--why TEXT` | Why this run is started: one line (at most 300 characters), stored in `run.json` and shown on the dashboard |
 | `--verbose` | Show agent command details, file paths, heartbeats |
 | `--no-report` | Don't write the run summary when the run finishes |
 
@@ -257,6 +259,43 @@ and every other would diverge from it for good. `resume --group NAME` moves a
 run into a group (from its next iteration) and `resume --group ''` takes it
 out; archiving a run takes it out of its group, and resuming it brings it back.
 
+### Continuing from another run
+
+`autohelix run [CONFIG] --import RUN_ID` (an id or its last part) starts a new
+run that continues from another one of the project: **code from your checkout,
+state from that run.** The config is chosen as for any `run` (a warning names
+both files when it isn't the one the imported run used: a different config is
+legitimate), the code is your checkout's HEAD (the usual clean-tree rule), and
+the run has its own notes (empty, numbered from its iteration 1), budgets,
+baseline and metric reference. What it adds:
+
+- every iteration's copy shows the imported run's `run.json`, `history.jsonl`
+  and `notes/` read-only in `.autohelix-iteration/runs/<id>/`, and its code's
+  ref, `autohelix/<id>`; the prompt says so ("This run continues from k3f9:
+  …"). They are copied at the start of each iteration, as for a
+  [group](#groups); a deleted imported run is just left out;
+- at the baseline, each observe entry gets as `$AUTOHELIX_PREVIOUS` that run's
+  last successful output of the entry with the same name
+  ([Previous output](config.md#previous-output)), so a tracker continues from it.
+
+`run.json` records `"import": {"run": "<id>"}`. The imported run may be
+archived or still running. It isn't a group membership: `--group` still
+decides which runs share notes and code, and an imported run that is also in
+the group is shown once, as imported. Typical uses:
+
+```bash
+# The run landed, you committed more on main: keep going with what it learned.
+autohelix run perf --import k3f9
+# Apply an edited config (resume refuses a changed one).
+autohelix run perf --import k3f9
+# Fork from an old run's code: check it out first (or an iteration's commit).
+git checkout autohelix/20261111-1432-perf-k3f9 && autohelix run perf --import k3f9
+```
+
+Each continuation is a new run with a new baseline (its code differs), at the
+cost of a chain of runs on the dashboard, where each shows what it continues
+from.
+
 ### Run ids
 
 A run's id is the local date and time it started, its name if it has one, and
@@ -272,6 +311,12 @@ Continue a run.
 ```bash
 autohelix resume [RUN_ID] [-n MORE | --until N] [--cost USD] [--time DURATION] [-p PATH] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
 ```
+
+`resume` only continues the same run: its stored config, its own tip, more
+budget. Use it after a budget ran out, an interruption (Ctrl-C, a killed
+process, a reboot, three agent failures), a stop condition, or to change
+`--land` or `--group`. Anything else is a new run: [`run --import
+<id>`](#continuing-from-another-run).
 
 | Option | Description |
 |--------|-------------|
@@ -310,8 +355,20 @@ the interrupted invocation had 8 left: -n 8" (not when that invocation had alrea
 reason of its own). `--until` with a number already reached says so ("Already at iteration 5;
 --until 3 runs nothing.") and exits 0 without starting a segment: nothing is written, landed or
 reported. A run stopped by a
-[stop condition](config.md#stop) is paused, not ended: `resume` continues it,
-and the condition is checked again after the next accepted iteration.
+[stop condition](config.md#stop) is paused, not ended: `resume` continues it
+and says so ("Run k3f9 stopped because score reached 0.9; it stops again after
+the next accepted iteration if that still holds"): the condition is checked
+again after the next accepted iteration.
+
+When the target branch has moved past the run's tip (the run landed and you
+committed more), the run doesn't take those commits. With auto landing,
+`resume` refuses before writing anything: "main has 2 commits past run k3f9's
+tip (committed after it landed). A run continues its own code: start a new run
+that continues from it, `autohelix run perf --import k3f9`, or continue without
+landing: `autohelix resume k3f9 --land manual`." With manual landing it says
+so and continues from the run's own tip; its accepted commits then diverge from
+the branch, so land them with `git merge autohelix/<id>`. Before the baseline
+the run hasn't started from its commit yet, so nothing is compared.
 
 ## `autohelix land`
 
@@ -329,7 +386,7 @@ explicitly; AutoHelix never rewinds user commits.
 ## `autohelix archive`
 
 ```bash
-autohelix archive RUN_ID... [-p PATH] [--undo]
+autohelix archive RUN_ID... [-p PATH] [--undo] [--why TEXT]
 ```
 
 Sets runs aside: they are hidden from the [dashboard](#autohelix-dashboard)
@@ -338,6 +395,9 @@ commits stay; `autohelix resume RUN_ID` resumes one and brings it back, and
 `--undo` brings it back without running it. A running run can't be archived.
 Use it for runs that are done or didn't work out, and for runs you merged some
 other way (squash, cherry-pick): those keep looking unlanded to git.
+`--why TEXT` records why (one line, at most 300 characters) in each run's
+`run.json` as `archive_why`, shown on the web dashboard and in `--json`;
+`--undo` keeps the note, and a later `archive --why` replaces it.
 
 ## `autohelix delete`
 
@@ -387,7 +447,7 @@ autohelix dashboard [-p PATH] --json
 autohelix dashboard [-p PATH] --web [--port 8765] [--open]
 ```
 
-By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C: the id, with its group after it (`20261111-1432-k3f9 (perf)`); the status (with the phase while running), with time and cost so far underneath; iterations, of the latest invocation's cap; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; when the run was last active; and the goal's title (its first line). The header names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
+By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C: the id, with its group after it (`20261111-1432-k3f9 (perf)`); the status (with the phase while running), with time and cost so far underneath; iterations, of the latest invocation's cap; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; when the run was last active; and the goal's title (its first line), with the run's notes under it: why it was started (`run --why`) and the run it continues from (`run --import`). The header names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
 
 `--web` serves the same rows as a live page instead (`--port`, default 8765, and `--open` go with it). There the metric's change against the run's own baseline is in the tooltip, and the metric is picked from a menu in the column header. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel). Archived runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view --web`](#autohelix-view) page. It is the same server as `autohelix view --web`, with the same `127.0.0.1`-only binding.
 
@@ -404,7 +464,8 @@ By default the terminal shows one row per run in `.autohelix/runs/`, redrawn eve
   - `accepted`: the number of accepted iterations;
   - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
   - `progress`: `iterations` attempted, `cost_usd` and `cost_incomplete` (the whole run's), `seconds` (the recorded iterations' wall clock, the baseline's included), and the latest invocation's [budget](#budgets) as run totals, "spent before it + its own cap", `null` where it had none: `max_iterations` (the last iteration it may run: the previous last iteration + `-n`, or `--until`), `max_cost_usd` (the run's cost before it + `--cost`) and `max_seconds` (`seconds` before it + `--time`). They come from the run's status, never from the config;
-  - `target_branch` and `landing`: `commits` the target lacks and whether it can `fast_forward`, or `null` when either side is unavailable.
+  - `target_branch` and `landing`: `commits` the target lacks and whether it can `fast_forward`, or `null` when either side is unavailable;
+  - `why` (`run --why`), `archive_why` (`archive --why`) and `import` (`{"run": <id>}` for a run started with `run --import`), each `null` when absent.
   - A run that can't be read has only `id` and `error`.
 
 ## `autohelix hint`

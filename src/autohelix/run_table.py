@@ -102,6 +102,19 @@ def _config_file(run: dict) -> str:
     return file + flag if file else ""
 
 
+def _notes(run: dict) -> str:
+    """Why the run was started, what it continues from, why it was archived (run.json's
+    notes, `run --why`, `--import`, `archive --why`), as the web pages show them."""
+    source = (run.get("import") or {}).get("run")
+    return " · ".join(filter(None, [run.get("why") and f"Why: {run['why']}",
+                                    source and f"continues from {source}",
+                                    run.get("archive_why") and f"archived: {run['archive_why']}"]))
+
+
+def _cut(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 def _landing(run: dict) -> str:
     landing = run["landing"]  # None without a target branch or tip
     if not landing:
@@ -163,7 +176,7 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
                     + ([_metric(run, metric)] if metric else [])
                     + [_landing(run), "now" if _live(run) else _ago(run["last_activity"], now),
                        run.get("title") or ""])
-        rows.append(["  " + _config_file(run), _spent(run, now)] + [""] * (len(head) - 2))
+        rows.append(["  " + _config_file(run), _spent(run, now)] + [""] * (len(head) - 3) + [_cut(_notes(run), 100)])
     return "\n".join(list(map(clean, lines)) + [""] + _table(rows, right={2, 3} if metric else {2})) + "\n"
 
 
@@ -184,6 +197,8 @@ def format_run(data: dict, now: float | None = None) -> str:
     title = run.get("title") or (run["goal"].splitlines()[0] if run["goal"] else None)
     if title:
         lines.append(f"Goal: {title}")
+    if notes := _notes(run):
+        lines.append(notes)
     metrics = run["metrics"]
     if metrics and metrics["iteration"] > 0:
         parts = [" ".join(filter(None, [f"{v['name']} {_number(v['value'])}",

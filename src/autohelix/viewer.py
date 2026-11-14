@@ -348,7 +348,16 @@ class RunData:
                 "incomplete": total_cost.incomplete,
             },
             "report": self._report(),
+            **self._run_notes(),
         }
+
+    def _run_notes(self) -> dict:
+        """`run_notes` of the run's run.json; all None when it can't be read."""
+        try:
+            data = self.paths.read_identity() if self.paths.run_id else {}
+        except RuntimeError:
+            data = {}
+        return run_notes(data)
 
     def _report(self) -> dict | None:
         if not self.paths.run_id:
@@ -843,6 +852,19 @@ RUN_ID = r"[a-z0-9][a-z0-9-]{0,50}"
 JSON_SCHEMA = 1
 
 
+def run_notes(data: dict) -> dict:
+    """What run.json says about why a run exists (untrusted: strings or None): `why`
+    (`run --why`), `archive_why` (`archive --why`) and `import`, `{"run": id}` for a
+    run started with `run --import`."""
+    def text(value):
+        return value if isinstance(value, str) and value else None
+
+    source = data.get("import")
+    source = text(source.get("run")) if isinstance(source, dict) else None
+    return {"why": text(data.get("why")), "archive_why": text(data.get("archive_why")),
+            "import": {"run": source} if source else None}
+
+
 class ProjectRuns:
     """Reads every run in a project's .autohelix/runs/ for the dashboard."""
 
@@ -990,6 +1012,7 @@ class ProjectRuns:
             "group": data.get("group"),
             # Recorded at creation; older runs follow the config (else auto).
             "land": data.get("land") or config.get("land") or "auto",
+            **run_notes(data),
         }
 
 

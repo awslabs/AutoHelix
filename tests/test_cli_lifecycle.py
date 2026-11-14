@@ -61,8 +61,8 @@ def test_run_warns_but_starts_beside_a_live_run(project):
 
 
 def test_resume_continues_the_most_recently_active_run(project):
-    first = started(project)
-    second = started(project)
+    first = started(project, "--land", "manual")  # auto: second's landing would put main past first's tip
+    second = started(project, "--land", "manual")
     result = cli(project, "resume", short_id(first.run_id), "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     assert f"Resuming {short_id(first.run_id)}: 1 iteration" in result.output
@@ -91,8 +91,8 @@ def test_resume_with_nothing_to_resume_exits_3(project):
 
 
 def test_bare_resume_skips_archived_runs_and_prefers_a_baseline(project):
-    older = started(project)
-    archived = started(project)
+    older = started(project, "--land", "manual")
+    archived = started(project, "--land", "manual")
     assert cli(project, "archive", short_id(archived.run_id)).exit_code == 0
     Harness(project, new=True).close()  # the most recent run never got going
     result = cli(project, "resume", "-n", "1", "--no-report")
@@ -174,17 +174,16 @@ def test_a_run_refuses_another_config(project):
 
 
 def test_a_stop_condition_pauses_the_run(project):
-    configure(project, stop=["test -f STOP && echo asked to stop"])
+    configure(project, stop=['test -f "$AUTOHELIX_PROJECT/STOP" && echo asked to stop'])
     paths = started(project)
-    (project / "STOP").write_text("")
-    git(project, "add", "STOP")
-    git(project, "commit", "-qm", "stop")
+    (project / "STOP").write_text("")  # untracked: stop commands run in a copy of the run's tip
     result = cli(project, "resume", "-n", "2", "--no-report")
     assert result.exit_code == 0, result.output
     assert iterations(paths) == [0, 1, 2]  # one more iteration, then the condition stops it
     (project / "STOP").unlink()
-    git(project, "commit", "-qam", "go on")
-    assert cli(project, "resume", "-n", "1", "--no-report").exit_code == 0
+    result = cli(project, "resume", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert "stopped because asked to stop; it stops again" in " ".join(result.output.split())
     assert iterations(paths) == [0, 1, 2, 3]
 
 

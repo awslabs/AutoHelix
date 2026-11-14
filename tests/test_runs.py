@@ -31,7 +31,7 @@ def configure(project, **values):
 
 
 def test_identity_selection_new_and_explicit_config(project):
-    first = Harness(project, name="first")
+    first = Harness(project, name="first", land_mode="manual")  # later commits on main: auto would refuse
     first.run(Budget(until=1), report=False)
     run_id = first.paths.run_id
     second = Harness(project)
@@ -437,18 +437,20 @@ def test_prebaseline_retry_still_requires_clean_checkout(project):
     assert not retry.history.load()
 
 
-def test_resume_picks_up_user_commits_and_land_divergence_is_safe(project):
+def test_resume_keeps_its_own_tip_past_user_commits_and_land_divergence_is_safe(project):
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
     paths = harness.paths
     with RunLock(paths.lock):
         land(paths, harness.run_info, harness.run_state.expected_tip)
+    tip = harness.run_state.expected_tip
     (project / "user.txt").write_text("user")
     git(project, "add", ".")
     git(project, "commit", "-qm", "user work")
-    user = git(project, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(RuntimeError, match="has 1 commit past run .*'s tip"):
+        Harness(project, land_mode="auto")  # refused before anything is written
     resumed = Harness(project, land_mode="manual")
-    assert resumed.run_state.expected_tip == user
+    assert resumed.run_state.expected_tip == tip  # a run continues its own code
     resumed.run(Budget(until=2), report=False)
     (project / "code.py").write_text("divergence")
     git(project, "add", ".")
@@ -545,24 +547,24 @@ def test_report_owns_run_and_restores_ref_before_removal(project, monkeypatch):
     assert not harness.paths.copies.exists()
 
 
-def test_archived_noop_retains_user_commit_tip(project, monkeypatch):
+def test_archived_noop_retains_its_own_tip(project, monkeypatch):
     from autohelix.runs import run_tip
 
     harness = Harness(project)
     harness.run(Budget(until=1), report=False)
+    run_tip_before = harness.run_state.expected_tip
     (project / "code.py").write_text("user commit after land\n")
     git(project, "add", "code.py")
     git(project, "commit", "-qm", "user work")
-    user_tip = git(project, "rev-parse", "HEAD").stdout.strip()
-    resumed = Harness(project)
+    resumed = Harness(project, land_mode="manual")
     monkeypatch.setattr(resumed, "run_agent", lambda *a, **k: AgentRunResult(success=True))
     resumed.run(Budget(until=2), report=False)
     assert resumed.history.load()[-1].commit is None
     archive(resumed.paths)
-    assert run_tip(resumed.paths) == user_tip
+    assert run_tip(resumed.paths) == run_tip_before  # its own tip, not the user's commit
     # Readers must not chase subsequent movement of the user's target branch.
     git(project, "reset", "--hard", harness.run_info["base_commit"])
-    assert run_tip(resumed.paths) == user_tip
+    assert run_tip(resumed.paths) == run_tip_before
 
 
 def test_viewer_calls_containment_and_current_alias(project):

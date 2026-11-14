@@ -20,7 +20,7 @@ from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFou
 from autohelix.harness import DEFAULT_ITERATIONS, Budget, Harness
 from autohelix.history import History
 from autohelix.run_status import read_run_status
-from autohelix.runs import (NoRunToResume, RunPaths, planned_run, RunLock, archive as archive_run, check_group,
+from autohelix.runs import (NoRunToResume, RunPaths, planned_run, RunLock, archive as archive_run, check_group, check_why,
                             delete as delete_run, load_run_config, land as land_run, project_runs, resolve_run,
                             run_tip, short_id, valid_name)
 from autohelix import run_table
@@ -291,6 +291,13 @@ def _group(value: str | None) -> str | None:
         raise click.BadParameter(str(error), param_hint="--group") from error
 
 
+def _why(value: str | None) -> str | None:
+    try:
+        return None if value is None else check_why(value)
+    except RuntimeError as error:
+        raise click.BadParameter(str(error), param_hint="--why") from error
+
+
 def _git_project(path: str) -> Path:
     """The project directory, refused before anything (.autohelix/ included) is
     created there unless it is in a git checkout with a commit to start from."""
@@ -414,6 +421,19 @@ def _interrupted_note(harness: Harness) -> str | None:
             f"-n {left}")
 
 
+def _stopped_note(harness: Harness) -> str | None:
+    """After a stop condition ended the last invocation: resume continues, and says when
+    it stops again (stop conditions are checked after each accepted iteration)."""
+    stop = (read_run_status(harness.project_path, harness.paths.run_id) or {}).get("stop_reason")
+    if not isinstance(stop, dict) or stop.get("kind") != "condition":
+        return None
+    from autohelix.formatting import clean
+
+    reason = clean(stop.get("reason") or stop.get("command") or "a stop condition held", 200)
+    return (f"Run {short_id(harness.paths.run_id)} stopped because {reason}; it stops again after the next "
+            "accepted iteration if that still holds.")
+
+
 def _last_iteration(project: Path, config: Path | None, run_id: str | None) -> int:
     """The last iteration of the run `resume` would continue, read before anything is
     written; -1 when there is none to read (`_start` then refuses as usual)."""
@@ -439,9 +459,13 @@ def _segment(harness: Harness, budget: Budget, report: bool) -> None:
 @_budget_options("")
 @click.option("--group", help="Share notes and code with the project's other runs of this group "
                               "(landing defaults to manual).")
+@click.option("--import", "import_run", metavar="RUN_ID",
+              help="Continue from another run: its notes and history (read-only) in every iteration, its last "
+                   "observe outputs at the baseline. Code still comes from your checkout.")
+@click.option("--why", help="Why this run is started (one line, shown on the dashboard).")
 def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None,
         iterations: int | None, until: int | None, cost_usd: float | None, time_seconds: int | None,
-        group: str | None):
+        group: str | None, import_run: str | None, why: str | None):
     """Start a new run of the optimization loop.
 
     Always a new run, with its own notes and history; to continue one, use
@@ -458,13 +482,22 @@ def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land
     runs of that group: their notes and history, and their code (each run's
     ref, refs/autohelix/<id>). Start several, compare them on the dashboard, land the
     winner and archive the rest.
+
+    With --import RUN_ID (or its last part), the new run continues from that
+    one: its agents see its run.json, history and notes (read-only, in
+    .autohelix-iteration/runs/<id>/) and its code's ref, and the baseline's
+    observe entries get its last outputs as $AUTOHELIX_PREVIOUS. Your notes,
+    budgets, metric reference and group are this run's own. To fork from the
+    run's code, `git checkout autohelix/<id>` first.
     """
     budget = _budget(iterations, until, cost_usd, time_seconds)
     group = _group(group)
+    why = _why(why)
     project = _git_project(path)
+    imported = _run_id(project, import_run)
     config = _segment_config(project, config_name, "run")
     harness = _start(project, config, verbose=verbose, new=True, land_mode=land_mode,
-                     group=group or None)
+                     group=group or None, import_run=imported, why=why)
     _segment(harness, budget, not no_report)
 
 
@@ -505,6 +538,8 @@ def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_m
                      group=group)
     if budget.default and (note := _interrupted_note(harness)):
         click.echo(click.style(note, fg="yellow"))
+    if note := _stopped_note(harness):
+        click.echo(click.style(note, fg="yellow"))
     _segment(harness, budget, not no_report)
 
 
@@ -529,18 +564,22 @@ def land(run_id: str | None, path: str, into: str | None):
 @main.command()
 @click.argument("run_ids", nargs=-1, required=True)
 @click.option("--path", "-p", type=click.Path(exists=True), default=".")
-@click.option("--undo", is_flag=True, help="Bring archived runs back.")
-def archive(run_ids: tuple[str, ...], path: str, undo: bool):
+@click.option("--undo", is_flag=True, help="Bring archived runs back (their archive note stays).")
+@click.option("--why", help="Why they are archived (one line, kept with each run; replaces an earlier note).")
+def archive(run_ids: tuple[str, ...], path: str, undo: bool, why: str | None):
     """Set runs aside: hidden from the run list and skipped by a bare resume.
 
     Their history, notes and commits stay; `autohelix resume RUN_ID` (or
     --undo) brings one back.
     """
+    if undo and why is not None:
+        raise click.UsageError("--why goes with archiving, not --undo.")
+    why = _why(why)
     project = Path(path)
     for value in run_ids:
         paths = RunPaths(project, _run_id(project, value))
         try:
-            archive_run(paths, undo=undo)
+            archive_run(paths, undo=undo, why=why)
         except RuntimeError as e:
             raise click.ClickException(str(e)) from e
         click.echo(f"{'Unarchived' if undo else 'Archived'} {short_id(paths.run_id)}.")

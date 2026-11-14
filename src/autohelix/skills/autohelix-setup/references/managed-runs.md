@@ -79,7 +79,13 @@ records suffice.
 An invocation ending is a checkpoint, not proof that an open-ended experiment
 is finished. Explain why this execution ended and what remains uncertain.
 For requested resumption, use `autohelix resume <id>`, never `autohelix run`:
-`run` always starts a new run with fresh notes. Budgets count each
+`run` always starts a new run with fresh notes. `resume` only continues the
+same run (its stored config, its own tip): to apply an edited config, to keep
+going after the target branch moved past the run (it landed and the user
+committed more), or to fork from an old run (`git checkout autohelix/<id>`
+first), start a new run that continues from it, `autohelix run <config> --import
+<id>`: it sees that run's notes and history read-only and continues its
+observations at the baseline. Budgets count each
 invocation: `resume -n 5 --cost 3` is 5 more iterations, up to $3 more, and a
 `resume` without budget flags runs 3 more. Prefer `--until N` (stop at
 iteration N in total, safe to repeat) over `-n` (N more iterations) in scripts
@@ -89,7 +95,9 @@ the total yourself (`progress.cost_usd` in `autohelix dashboard --json`) and
 pass only the remainder. `resume` exits 3 when there is no run to
 resume. A failed actual main-agent call consumes its number; resume at the next
 iteration. Do not archive or delete runs, reset accepted code, or extend the
-agreed effort without authorization.
+agreed effort without authorization. Record why you start or archive a run, one
+line each, so the dashboard explains it: `autohelix run a --why "baseline for the
+cache idea"`, `autohelix archive <id> --why "lost to k3f9 on speed"`.
 A run that finishes writes its summary to `.autohelix/runs/<id>/report.md`; after an
 interrupted run, `autohelix report` writes one when requested.
 

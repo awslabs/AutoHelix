@@ -158,6 +158,7 @@ Key properties:
 - **Versioned** — each save is a new version (`.internal/notes/<n>/`), so a note the agent deletes stays deleted, and the notes as of any iteration remain
 - **Shared in a group** — runs started with the same `--group` see each other's notes (read-only copies, in `.autohelix-iteration/runs/<id>/notes/`)
 - **Per run** — each `autohelix run` starts with empty notes; `resume` continues a run's notes; `archive` keeps them, `delete` removes them
+- **Imported read-only** — a run started with `run --import <id>` sees that run's notes and history in `.autohelix-iteration/runs/<id>/`; its own notes still start empty, numbered from its iteration 1
 
 Notes are the primary mechanism for the agent to build on previous attempts. They're more effective than full session context because the agent curates what's worth remembering.
 
@@ -364,6 +365,7 @@ The variables a template gets are a stable, documented contract:
 | `last` | The latest iteration (the baseline before iteration 1), or none: `{iteration, accepted, reason, summary, failure_output, gates: [{text, kind, status}], observe: [{name, ok, error, missing, path}]}`; `status` is `passed`, `failed` or `pending`, `missing` the declared metrics an entry ran without reporting, and `path` the entry's folder in the copy |
 | `time_limit` | `agent.timeout` as a compact duration (`15m`), or empty |
 | `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group |
+| `imported` | The run this one continues from (`run --import`), or none: `{id, short, path}`, `path` being its state in the copy (`.autohelix-iteration/runs/<id>/`, read-only); its code is at `autohelix/<id>`. Not listed in `group_runs`, even when it is in the group |
 
 A custom template is a copy: it won't pick up future changes to the built-in
 one. Remove `prompt_template:` to return to it. A run warns when a custom
@@ -469,7 +471,11 @@ when it starts, and every segment, `view`, `dashboard`, `report` and the judges
 when the config file's parsed config differs from it (comments and formatting
 don't count; the prompt template's text does): `autohelix run <config> --import
 <id>` applies the new config in a new run, or restore the file to continue. A
-deleted config file isn't a change. The config file and its `prompt_template:`
+deleted config file isn't a change. `run --import <id>` starts a new run (code
+from your checkout, its own config, budgets, baseline and notes) whose agents
+also see the imported run's `run.json`, `history.jsonl` and notes read-only, and
+whose baseline observe entries continue from that run's outputs
+(`$AUTOHELIX_PREVIOUS`); `run.json` records it as `import: {run: <id>}`. The config file and its `prompt_template:`
 file are always frozen, so the agent can't change its own protocol. Scripts the
 config calls (`bench.py`, gate scripts) are code: they move with the run's
 commits; list them under `scope.frozen` if they must not change. A run has no other state: whether it is running comes from its
@@ -481,8 +487,13 @@ the checked tree, with the previous accepted tip as its parent; it leaves the
 user's branch and staged files alone. No-op accepts retain the same tip.
 
 Resuming repairs an interrupted final record and recovers accepted commits whose
-record was not finished. Other history corruption is refused. User commits on
-the target can be picked up when they descend from the run tip. Auto landing
+record was not finished. Other history corruption is refused. **`resume` only
+continues the same run**: its stored config, its own tip, more budget. When the
+target branch has moved past the run's tip (you committed after it landed), an
+auto-landing `resume` refuses before writing anything and names the ways on: a
+new run that continues from it, `autohelix run <config> --import <id>` (your
+checkout's code, that run's notes and history), or `resume <id> --land manual`,
+which continues from the run's own tip without your commits. Auto landing
 fast-forwards the target at segment end before report; manual mode retains code
 on the run ref until `autohelix land`. Divergence, a branch being rebased or checked
 out elsewhere, and dirty files that would be overwritten require user resolution.

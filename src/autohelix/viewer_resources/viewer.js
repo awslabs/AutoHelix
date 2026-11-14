@@ -1016,6 +1016,12 @@ async function getJSON(url) {
   return res.json();
 }
 
+// "Why: … · continues from k3f9 · archived: …" from run.json's notes (shown as text).
+function runNotes(run) {
+  return [run.why && `Why: ${run.why}`, run.import?.run && `continues from ${run.import.run}`,
+    run.archive_why && `archived: ${run.archive_why}`].filter(Boolean).join(' · ');
+}
+
 function render() {
   const names = metricNames();
   if (!names.includes(metric)) metric = names[0] || null;
@@ -1032,6 +1038,10 @@ function render() {
   const goal = (state.goal || '').trim();
   const [first, ...rest] = goal.split('\n');
   setText('goal', state.title && first.trim() === state.title ? rest.join('\n').trim() : goal);
+  // Why the run exists (run --why), what it continues from (run --import), why it was archived.
+  const why = runNotes(state);
+  setText('why', why);
+  show('why', !!why);
   renderStatus();
   renderConfig();
   renderReport();

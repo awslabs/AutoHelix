@@ -93,6 +93,7 @@ def build_prompt_variables(
     group: str | None = None,
     members=(),
     rejected_diff: str = "",
+    imported=None,
 ) -> dict[str, Any]:
     """The variables a prompt template gets: a stable, documented contract
     (`VARIABLES`; agent-written text in them is cleaned of control characters).
@@ -132,6 +133,11 @@ def build_prompt_variables(
     - `time_limit`: `agent.timeout` as a compact duration ("15m"), or "".
     - `group`: the run's group, or ""; `group_runs`: one line per other run of the
       group (`describe_member`; `members` as `runs.group_members` returns them).
+    - `imported`: the run this one continues from (`run --import`; `imported` as
+      `runs.imported_run` returns it), if its state is in the copy, else None:
+      `{"id", "short", "path"}`; `path` is its state in the copy,
+      `.autohelix-iteration/runs/<id>/` (run.json, history.jsonl, notes/; read-only);
+      its code is at `autohelix/<id>`.
     """
     from autohelix.config import MetricGate
     from autohelix.iteration_time import format_duration
@@ -167,11 +173,24 @@ def build_prompt_variables(
         "time_limit": format_duration(config.agent.timeout) if config.agent.timeout is not None else "",
         "group": group or "",
         "group_runs": [describe_member(paths, data) for paths, data in members],
+        "imported": _describe_imported(imported, state),
     }
     hints = history.paths.hints
     if hints.exists() and hints.stat().st_size > 0:
         variables["hints"] = f"{ITERATION_DIR}/hints.md"
     return variables
+
+
+def _describe_imported(imported, state: Path) -> dict[str, Any] | None:
+    """The imported run (`(paths, data)`, or None) as the prompt names it, if its state
+    made it into the copy (`state` is its `.autohelix-iteration/`)."""
+    from autohelix.runs import short_id
+
+    if imported is None:
+        return None
+    run_id = imported[0].run_id
+    path = _in_copy(state, "runs", run_id)
+    return {"id": run_id, "short": short_id(run_id), "path": path} if path else None
 
 
 def _describe_entry(entry) -> dict[str, Any]:
@@ -238,7 +257,7 @@ def _describe_accepted(history, iteration: int, state: Path) -> dict[str, Any] |
 VARIABLES = frozenset({
     "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable", "frozen",
     "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted",
-    "recent_iterations", "time_limit", "group", "group_runs",
+    "recent_iterations", "time_limit", "group", "group_runs", "imported",
 })
 
 

@@ -169,7 +169,7 @@ def assert_untouched(project):
 
 
 def test_resume_id_keeps_its_config_beside_a_root_one(folder_project):
-    result = cli(folder_project, "run", "-n", "1", "--no-report")
+    result = cli(folder_project, "run", "-n", "1", "--no-report", "--land", "manual")
     assert result.exit_code == 0, result.output
     run_id = RunPaths(folder_project).run_id
     write(folder_project / "autohelix.yaml", "goal: ''\nagent: {backend: mock}\n")  # invalid if it were read
@@ -187,7 +187,7 @@ def test_resume_id_keeps_its_config_beside_a_root_one(folder_project):
 
 
 def test_a_run_whose_config_is_gone_continues_with_its_stored_copy(folder_project):
-    result = cli(folder_project, "run", "-n", "1", "--no-report")
+    result = cli(folder_project, "run", "-n", "1", "--no-report", "--land", "manual")
     assert result.exit_code == 0, result.output
     run_id = RunPaths(folder_project).run_id
     git(folder_project, "mv", "autohelix/perf.yaml", "autohelix/fast.yaml")  # the only config, found by a lookup

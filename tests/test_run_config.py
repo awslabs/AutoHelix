@@ -38,10 +38,12 @@ def cli(project, *args):
 
 @pytest.fixture
 def started(project):
-    """The shared project with a commented config, and one finished run of it."""
+    """The shared project with a commented config, and one finished run of it (landing
+    manually: the tests commit config edits on the branch, which an auto-landing resume
+    refuses as commits past the run's tip)."""
     (project / "autohelix.yaml").write_text(CONFIG)
     commit(project, "config")
-    result = cli(project, "run", "-n", "1", "--no-report")
+    result = cli(project, "run", "-n", "1", "--no-report", "--land", "manual")
     assert result.exit_code == 0, result.output
     return RunPaths(project)
 
@@ -192,7 +194,7 @@ def test_a_deleted_template_continues_but_other_keys_are_compared(project):
     (project / "prompt.md").write_text("Do it: {{ goal }}\n")
     (project / "autohelix.yaml").write_text(CONFIG + "prompt_template: prompt.md\n")
     commit(project, "template")
-    assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
+    assert cli(project, "run", "-n", "1", "--no-report", "--land", "manual").exit_code == 0
     paths = RunPaths(project)
     git(project, "rm", "-q", "prompt.md")
     commit(project, "drop template")
