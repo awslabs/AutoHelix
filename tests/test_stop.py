@@ -84,7 +84,7 @@ def test_a_request_during_the_baseline_stops_after_the_baseline(project):
     # The gate's own output: what the request said to its caller.
     gate_out = (paths.iteration_dir(0) / "gates" / "1" / "stdout.txt").read_text()
     assert f"Run {short_id(paths.run_id)} stops after the baseline." in gate_out
-    assert f"Follow it with: autohelix wait --follow {short_id(paths.run_id)}" in gate_out
+    assert f"See when it has ended: autohelix wait {short_id(paths.run_id)} (repeat until it prints ended or idle)" in gate_out
     # A resume continues as usual: nothing is left of the request (the gate asks only at 0).
     result = cli(project, "resume", "-n", "2", "--no-report")
     assert result.exit_code == 0, result.output
@@ -229,7 +229,7 @@ def test_stop_writes_a_request_for_the_running_segment(project, running):
     result = cli(project, "stop", short, "--why", "done for today")
     assert result.exit_code == 0, result.output
     assert result.output.splitlines() == [f"Run {short} stops after its current iteration (3).",
-                                          f"Follow it with: autohelix wait --follow {short}"]
+                                          f"See when it has ended: autohelix wait {short} (repeat until it prints ended or idle)"]
     request = json.loads(running.stop_request.read_text())
     assert {k: request[k] for k in ("why", "now", "segment", "host", "pid")} == {
         "why": "done for today", "now": False, "segment": 2, "host": socket.gethostname(), "pid": os.getpid()}
@@ -296,7 +296,7 @@ def test_stop_handles_every_id_and_fails_if_any_failed(project, running):
     assert result.exit_code == 1
     assert "No run 'zzzz'" in result.output
     assert f"Run {short} stops after its current iteration (3)." in result.output
-    assert f"Follow it with: autohelix wait --follow {short}" in result.output
+    assert f"See when it has ended: autohelix wait {short} (repeat until it prints ended or idle)" in result.output
     assert running.stop_request.exists()
 
 
@@ -344,6 +344,18 @@ def test_stop_now_writes_the_request_then_sends_sigterm(project, running, monkey
     assert (pid, sig) == (os.getpid(), signal.SIGTERM)
     assert request["now"] is True and request["why"] == "wrong direction" and request["segment"] == 2
     assert f"Interrupting run {short} (iteration 3)." in result.output
+
+
+def test_a_second_now_sends_nothing(project, running, monkeypatch):
+    sent = []
+    monkeypatch.setattr(cli_module, "_process_command", lambda pid: "/venv/bin/python /venv/bin/autohelix run")
+    real_kill = os.kill
+    monkeypatch.setattr(os, "kill", lambda pid, sig: real_kill(pid, 0) if sig == 0 else sent.append(sig))
+    write_stop_request(running, segment=2, why=None, now=True)
+    short = short_id(running.run_id)
+    result = cli(project, "stop", short, "--now")
+    assert result.exit_code == 0, result.output
+    assert sent == [] and f"Run {short} is already being interrupted." in result.output
 
 
 def test_a_failed_interrupt_says_it_still_stops_after_its_iteration(project, running, monkeypatch):
@@ -496,3 +508,26 @@ def test_a_segment_takes_sigterm_as_ctrl_c_and_restores_it(project, monkeypatch)
         signal.signal(signal.SIGTERM, previous)
     [segment] = read_segments(harness.paths.segments)
     assert segment["state"] == "interrupted" and segment["stop_reason"] is None
+
+
+def test_an_interrupt_during_the_landing_waits_for_it(project, monkeypatch):
+    import autohelix.harness as harness_module
+
+    real_land = harness_module.land
+
+    def land(*args, **kwargs):
+        signal.raise_signal(signal.SIGTERM)  # `stop --now` (or a second Ctrl-C) as the ending lands
+        return real_land(*args, **kwargs)
+
+    monkeypatch.setattr(harness_module, "land", land)
+    before = main_tip(project)
+    harness = Harness(project, new=True)
+    previous = signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            harness.run(Budget(iterations=1), report=False)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert main_tip(project) != before  # landed first, then interrupted
+    [segment] = read_segments(harness.paths.segments)
+    assert segment["state"] == "interrupted" and segment["stop_reason"]["kind"] == "budget"

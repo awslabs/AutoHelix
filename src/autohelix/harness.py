@@ -1610,33 +1610,36 @@ class Harness:
             return
         self._land_attempted = True
         target = self.run_info.get("target_branch")
-        try:
-            if target and self._segment_target_tip is not None and self._target_tip() != self._segment_target_tip:
+        # An interrupt (Ctrl-C, `stop --now`, a second one) waits for the landing: once
+        # attempted, the finally does not retry it.
+        with critical_section():
+            try:
+                if target and self._segment_target_tip is not None and self._target_tip() != self._segment_target_tip:
+                    if self.land_mode == "auto":
+                        raise AutoHelixRunError(
+                            f"Target {target} changed during this segment; leaving user commits untouched. "
+                            f"Review them, then use autohelix land {short_id(self.paths.run_id)} explicitly.")
+                    message = (f"Target {target} changed during this segment. Review those commits "
+                               f"before autohelix land {short_id(self.paths.run_id)}.")
+                    self.console.print(f"[yellow]{message}[/yellow]", highlight=False)
+                    self.log.warn(message)
                 if self.land_mode == "auto":
-                    raise AutoHelixRunError(
-                        f"Target {target} changed during this segment; leaving user commits untouched. "
-                        f"Review them, then use autohelix land {short_id(self.paths.run_id)} explicitly.")
-                message = (f"Target {target} changed during this segment. Review those commits "
-                           f"before autohelix land {short_id(self.paths.run_id)}.")
-                self.console.print(f"[yellow]{message}[/yellow]", highlight=False)
-                self.log.warn(message)
-            if self.land_mode == "auto":
-                before = self._target_tip()
-                land(self.paths, self.run_info, self.run_state.expected_tip)
-                count = self._commits_between(before, self.run_state.expected_tip)
-                if count:
-                    self.console.print(Text(f"  Landed {count} commit{'s' * (count != 1)} on {target}."),
-                                       highlight=False)
+                    before = self._target_tip()
+                    land(self.paths, self.run_info, self.run_state.expected_tip)
+                    count = self._commits_between(before, self.run_state.expected_tip)
+                    if count:
+                        self.console.print(Text(f"  Landed {count} commit{'s' * (count != 1)} on {target}."),
+                                           highlight=False)
+                    else:
+                        self.console.print(Text("  Nothing landed: no accepted changes."), highlight=False)
+                elif count := self._unlanded():
+                    self.console.print(Text(f"  {count} unlanded commit{'s' * (count != 1)} on "
+                                            f"autohelix/{self.paths.run_id} (manual landing)."), highlight=False)
                 else:
-                    self.console.print(Text("  Nothing landed: no accepted changes."), highlight=False)
-            elif count := self._unlanded():
-                self.console.print(Text(f"  {count} unlanded commit{'s' * (count != 1)} on "
-                                        f"autohelix/{self.paths.run_id} (manual landing)."), highlight=False)
-            else:
-                self.console.print(Text("  Nothing to land: no accepted changes."), highlight=False)
-        except Exception as e:
-            self.console.print(f"[yellow]{e}[/yellow]", highlight=False)
-            self.log.warn(f"auto-land: {e}")
+                    self.console.print(Text("  Nothing to land: no accepted changes."), highlight=False)
+            except Exception as e:
+                self.console.print(f"[yellow]{e}[/yellow]", highlight=False)
+                self.log.warn(f"auto-land: {e}")
 
     def _commits_between(self, old: str | None, new: str) -> int:
         """Commits `new` has that `old` lacks (all of them without `old`)."""
@@ -1815,8 +1818,8 @@ class Harness:
                                highlight=False)
             self.log.info(f"run stopped — {stop_reason['detail']}")
         except KeyboardInterrupt:
-            self.run_status.stop("interrupted")
             by = " by autohelix stop --now" if self._note_interrupt_request() else ""
+            self.run_status.stop("interrupted")  # after the note: readers see the reason with the state
             self.console.print()
             self.console.print(f"  [yellow]Interrupted{by} at iteration {iteration}. Progress saved.[/yellow]",
                                highlight=False)

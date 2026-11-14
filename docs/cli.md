@@ -423,9 +423,13 @@ and SIGTERM wait for an accept that is being recorded to finish.
 
 `stop` refuses runs that aren't running (also one whose process is gone while
 its status still says running) and runs started by an AutoHelix too old to
-support it. It takes several ids and exits 1 if any of them could not be asked.
-It prints what happens next ("Run k3f9 stops after its current iteration
-(4).") and the `autohelix wait --follow` command that shows its events up to `ended`.
+support it. It takes several ids and exits 1 if any of them was refused or, with
+`--now`, could not be signalled (its request stands: it still stops after its
+iteration). It prints what happens next ("Run k3f9 stops after its current
+iteration (4).") and the `autohelix wait` command that says when it has ended
+(repeat it until it prints `ended` or `idle`). A second `--now` while the first
+is being handled sends nothing ("already being interrupted"). An interrupt
+during the ending waits for the landing to finish.
 
 The request is `.autohelix/runs/<id>/.internal/stop.json`, for the running
 segment only: a request the segment didn't answer is removed when it ends, so it
@@ -619,8 +623,8 @@ Per event:
   `last_iteration` (the run's last iteration), `iterations` (the records this
   segment added). `time` is when it ended.
 - **`crashed`**: a segment never ended and its process is gone. `segment`,
-  `last_iteration` (the run's last iteration when it crashed). Reported once
-  per segment. `time` is its last sign of life.
+  `last_iteration` (the run's last iteration when it crashed; `null` if it had
+  none, e.g. during its first baseline). Reported once per segment. `time` is its last sign of life.
 - **`idle`**: only with run ids, without `--follow`: none of them is running
   and nothing is pending. `runs`: one `{run, short, state}` per run named,
   `state` being how its last segment ended (`finished`, `interrupted`,

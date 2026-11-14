@@ -35,8 +35,8 @@ Per event:
   `last_iteration` (the run's last iteration), `iterations` (records this segment
   added). `time`: when it ended.
 - `crashed`: a segment never ended and its process is gone. `segment`,
-  `last_iteration` (the run's last iteration when it crashed). Reported once per
-  segment. `time`: the last sign of life (its status's last update, or the run's
+  `last_iteration` (the run's last iteration when it crashed; null if
+  it had none). Reported once per segment. `time`: the last sign of life (its status's last update, or the run's
   last event before it). Only a process on this host can be checked: a run that
   crashed on another host, or whose process id was reused, looks running until it
   is resumed; only `--timeout` ends a wait on it.

@@ -792,7 +792,7 @@ def _stop_run(project: Path, value: str, why: str | None, now: bool) -> tuple[st
     import signal
     import socket
 
-    from autohelix.run_status import write_stop_request
+    from autohelix.run_status import read_stop_request, write_stop_request
     from autohelix.runs import is_live
 
     run_id = resolve_run(project, value)
@@ -816,6 +816,10 @@ def _stop_run(project: Path, value: str, why: str | None, now: bool) -> tuple[st
                                "stops after its current iteration.")
         if type(pid) is not int or pid <= 1 or "autohelix" not in _process_command(pid):
             raise RuntimeError(f"Run {short}'s process ({pid}) is not an autohelix process; not interrupted.")
+    earlier = read_stop_request(paths, status["segment"])
+    if now and earlier and earlier.get("now") is True:
+        # A second SIGTERM would cut short the first one's cleanup (its grace before SIGKILL).
+        return short, f"Run {short} is already being interrupted."
     try:
         write_stop_request(paths, segment=status["segment"], why=why, now=now)
     except OSError as error:
@@ -878,7 +882,7 @@ def stop(run_ids: tuple[str, ...], path: str, why: str | None, now: bool):
         click.echo(message)
         asked.append(short)
     if asked:
-        click.echo(f"Follow it with: autohelix wait --follow {' '.join(asked)}")
+        click.echo(f"See when it has ended: autohelix wait {' '.join(asked)} (repeat until it prints ended or idle)")
     if failed:
         raise SystemExit(1)
 
