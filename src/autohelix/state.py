@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Persistent `.autohelix/` state management: git exclusions, active config.
+"""Persistent `.autohelix/` state management: git exclusions, the run's stored config.
 
 Utilities for the state that lives across runs under a project's `.autohelix/`
 directory — as opposed to per-run scaffolding (runs/, .internal/, etc.),
@@ -106,11 +106,10 @@ def _require_runtime_ignored(project_path: Path) -> None:
 
 
 def read_stored_config_path(project_path: Path, run_id: str | None = None) -> Path | None:
-    """The selected run's config as recorded, None without a run. The file may be
-    gone; callers must not put another config in its place."""
+    """The selected run's stored config (`runs/<id>/config.yaml`), None without a run.
+    A run started by an older AutoHelix has none; callers must not put another config
+    (its source file's current text) in its place."""
     from autohelix.runs import RunPaths
 
     paths = RunPaths(project_path, run_id)
-    if not paths.run_id:
-        return None
-    return project_path / paths.read_identity()["config_path"]
+    return paths.config if paths.run_id else None

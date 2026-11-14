@@ -399,9 +399,9 @@ class TestMetricGateReference:
         records = [_record(0, {"s": 10}), _record(1, {"s": 12}), _record(2, {"s": 15}, commit=None)]
         assert metric_reference(records, "s") == 12
 
-    def test_walks_back_to_a_record_with_the_metric(self):
+    def test_no_fallback_when_the_tip_record_lacks_the_metric(self):
         records = [_record(0, {"s": 10, "t": 1}), _record(1, {"s": 12, "t": 2}), _record(2, {"s": 13})]
-        assert metric_reference(records, "t") == 2
+        assert metric_reference(records, "t") is None
         assert metric_reference(records, "u") is None
 
 
@@ -447,9 +447,10 @@ class TestMetricGateFailure:
             assert "not a finite number" in metric_gate_failure(self.regress(5), "higher", value, 100)
             assert "not a finite number" in metric_gate_failure(self.improve(0), "lower", value, 100)
 
-    def test_non_finite_references_are_skipped(self):
-        records = [_record(0, {"s": 10}), _record(1, {"s": float("inf")}), _record(2, {"s": float("nan")})]
-        assert metric_reference(records, "s") == 10
+    def test_non_finite_references_are_none(self):
+        assert metric_reference([_record(0, {"s": float("inf")})], "s") is None
+        records = [_record(0, {"s": 10}), _record(1, {"s": float("nan")})]
+        assert metric_reference(records, "s") is None
 
     def test_missing_value_fails_and_missing_reference_passes(self):
         assert "was not measured" in metric_gate_failure(self.regress(5), "higher", None, 100)

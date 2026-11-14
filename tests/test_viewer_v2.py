@@ -48,6 +48,7 @@ def project(tmp_path, run_paths):
     git(tmp_path, "config", "user.name", "T")
     (tmp_path / ".gitignore").write_text(".autohelix/\n")
     (tmp_path / "autohelix.yaml").write_text(CONFIG)
+    run_paths.config.write_text(CONFIG)  # the run's stored copy, which the viewer reads
     (tmp_path / "sort.py").write_text("def sort(xs):\n    return sorted(xs)\n")
     git(tmp_path, "add", "-A")
     git(tmp_path, "commit", "-qm", "start")
@@ -217,7 +218,7 @@ def test_attempt_diff_never_passes_options_to_git(project, server):
 
 
 def test_review_fallback_without_a_readable_config(project):
-    (project / "autohelix.yaml").write_text("goal: [unclosed\n")
+    RunPaths(project, "test").config.write_text("goal: [unclosed\n")
     sections = RunData(project, run_id="test").iteration(1)["observe"]
     # Without the config, an entry whose folder holds only stdout.txt reads as a review.
     assert [(s["name"], s["review"]) for s in sections] == [("bench", False), ("review", True)]
@@ -394,7 +395,7 @@ def test_terminal_cells_carry_no_control_characters(project):
     rows[2]["gates"][0]["text"] = "pytest\x1b]0;title\x07 -q"
     rows[1]["observe"][1]["error"] = "exited\r\n2"
     paths.history.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    (project / "autohelix.yaml").write_text(CONFIG.replace("goal: |\n  Make the sort faster\n",
+    RunPaths(project, "test").config.write_text(CONFIG.replace("goal: |\n  Make the sort faster\n",
                                                            'goal: "Make \\e[2J it faster"\n#'))
     runs = ProjectRuns(project)
     for text in (run_table.format_run(runs.run("test")), run_table.format_runs(runs.runs())):
@@ -441,7 +442,7 @@ def test_config_is_parsed_again_only_when_its_file_changes(project, monkeypatch)
     data.state()
     data.iteration(1)
     assert len(calls) == 1
-    config = project / "autohelix.yaml"
+    config = RunPaths(project, "test").config
     config.write_text(config.read_text().replace("Make the sort faster", "Make the sort much faster"))
     assert data.state()["title"] == "Make the sort much faster" and len(calls) == 2
 
@@ -533,7 +534,7 @@ def test_stop_checks_name_what_ran_and_flag_one(project, server):
     """Labels come from command.txt (`stop:` may have been edited since); with duplicate
     commands only the first, the one that exited 0, is flagged."""
     paths = RunPaths(project, "test")
-    (project / "autohelix.yaml").write_text(CONFIG + "stop:\n  - echo edited\n  - echo later\n")
+    RunPaths(project, "test").config.write_text(CONFIG + "stop:\n  - echo edited\n  - echo later\n")
     _stored(paths.stop_dir(1, 1), "check.sh", "done\n")
     _stored(paths.stop_dir(1, 2), "check.sh", "")
     _stored(paths.stop_dir(1, 3), "", "")

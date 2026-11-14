@@ -23,8 +23,8 @@ def test_no_report_when_disabled_or_nothing_ran(integration_project):  # noqa: F
     config = integration_project / "autohelix.yaml"
     config.write_text(config.read_text() + "report: false\n")
     subprocess.run(["git", "commit", "-qam", "report off"], cwd=integration_project)
-    Harness(integration_project).run(max_iterations=2)
-    assert not report.exists()
+    Harness(integration_project, new=True).run(max_iterations=1)  # a run keeps its config: a new one
+    assert not RunPaths(integration_project).report.exists()
 
 
 def test_no_report_after_interrupt(integration_project, monkeypatch):  # noqa: F811

@@ -167,9 +167,8 @@ observe:
 - **The reference** is the value measured on the run's tip commit: by the
   accepted iteration that created it, or by the baseline. An accepted no-op (no
   new commit) doesn't re-measure it, so the bar can't drift without a code
-  change. If the tip's record lacks the metric (a gate added on resume), the
-  most recent accepted commit, or the baseline, that has it is used; if no
-  record has it at all, the gate passes.
+  change. A run keeps its config, so every gate is there from the baseline;
+  if the tip's record has no value for the metric, the gate passes.
 - **Near zero:** percentages are of the reference's absolute value. With a
   reference of 0, `regress:` means "no worse than 0" and `improve:` means "any
   strict improvement". For counts (`missing` going 1 → 0) use `improve: 0%`,
@@ -363,7 +362,7 @@ started is killed. Each gets:
 | `AUTOHELIX_BASE` | The commit the candidate is built on (the last accepted tip) |
 | `AUTOHELIX_PROJECT` | The project directory (in your checkout) |
 | `AUTOHELIX_SCRATCH` | A private, empty folder for this command, removed after it |
-| `AUTOHELIX_CONFIG` | The config file |
+| `AUTOHELIX_CONFIG` | The run's config, as stored when it started (`.autohelix/runs/<id>/config.yaml`) |
 | `AUTOHELIX_ITERATION` | The iteration number (0 for the baseline) |
 | `AUTOHELIX_RUN_ID`, `AUTOHELIX_RUN_DIR` | The run's id and its `.autohelix/runs/<id>/` folder |
 | `AUTOHELIX_LOG_DIR` | A private folder for this command where `autohelix ask` and `review` write their transcripts; after the command ended they are moved to its stored output (`ask*.log`, `review*.log` only) |
@@ -445,6 +444,10 @@ changes to tests/x.py were discarded: outside the editable scope", or "...:
 frozen" for frozen paths). A rejected attempt whose changes were all discarded
 keeps no tree and gives the next agent no `rejected.patch`.
 
+The config file and its `prompt_template:` file are always frozen (the run keeps
+the config it started with: [CLI → Config files](cli.md#config-files)). Scripts
+the config calls are code: list them under `frozen:` if they must not change.
+
 With no scope, the agent may edit the tests and benchmarks that gate it; a run
 whose config has gate or observe commands but no scope warns at start. Patterns
 that match no file are warnings.
@@ -500,7 +503,8 @@ iteration use `agent.timeout`.
 
 Both are also checked before starting an iteration, including after the
 baseline and when resuming a run: a run past its budget stops at once
-(`resume -n` extends only the iteration budget; raise `cost` or `time` here).
+(`resume -n` extends only the iteration budget; `cost` and `time` are part of
+the run's stored config, which `resume` keeps).
 
 ## Run identity and landing
 
@@ -524,7 +528,9 @@ name or `land`.
 
 `prompt_template:` is optional: a [Jinja2](https://jinja.palletsprojects.com/)
 file that replaces the built-in agent prompt, as a path relative to the config
-file (so it is versioned with it). Most configs need only `goal:`. The
+file (so it is versioned with it). A run stores the template's text with its
+config when it starts, so editing the template changes later runs, not this
+one. Most configs need only `goal:`. The
 variables a template gets are a documented contract; see
 [Concepts → Prompt](concepts.md#prompt). `.autohelix/prompt.md` is no longer
 read; a run warns while it exists.

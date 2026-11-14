@@ -279,8 +279,8 @@ def header_lines(config, run_id: str, label: str, max_iterations: int, width: in
     scope = []
     if config.editable:
         scope.append("editable: " + ", ".join(config.editable))
-    if config.frozen:
-        scope.append("frozen: " + ", ".join(config.frozen))
+    if frozen := config.frozen_patterns():
+        scope.append("frozen: " + ", ".join(frozen))
     budget = [f"{max_iterations} iteration{'s' * (max_iterations != 1)}"]
     if config.max_cost_usd is not None:
         cost = config.max_cost_usd

@@ -293,6 +293,8 @@ Temporary per-phase candidate copies live outside the project, in
 
 Each `autohelix run` starts a new run; `autohelix resume [<id>] [-n MORE]` continues
 one, `autohelix archive <id>` sets one aside and `autohelix delete <id>` removes it.
+A run keeps the config it started with (stored with the run); to apply an edited config,
+start a new run.
 Use `--land manual` to keep validated commits on the run's `refs/autohelix/<id>` until
 `autohelix land`. By default, accepted changes land on the starting branch when a run
 segment (one invocation) ends. A resumed run can coexist with unrelated dirty checkout

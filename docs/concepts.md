@@ -391,7 +391,8 @@ harness keeps for itself is in `.internal/` folders:
 ```
 .autohelix/
 ├── runs/<id>/
-│   ├── run.json                # identity (base commit, target branch, config), archived flag
+│   ├── run.json                # identity (base commit, target branch, config file), archived flag
+│   ├── config.yaml             # the run's config, stored when it started (the stored copy inlines the template)
 │   ├── history.jsonl           # one record per iteration: the index and the source of truth
 │   ├── hints.md
 │   ├── report.md  report.html  # the run summary; the one-file run page
@@ -461,7 +462,16 @@ that version. Everything else is reference material. A checks copy gets only
 
 A run is a line of work: `autohelix run` starts one, `autohelix resume` continues
 one (by default the config's most recently active), `archive` sets one aside and
-`delete` removes it. A run has no other state: whether it is running comes from its
+`delete` removes it. **A run keeps its config**: it stores it as `config.yaml`
+when it starts, and every segment, `view`, `dashboard`, `report` and the judges
+(`$AUTOHELIX_CONFIG`) use that copy. `resume` refuses before spending anything
+when the config file's parsed contents differ from it (comments and formatting
+don't count; the prompt template's text does): `autohelix run <config> --import
+<id>` applies the new config in a new run, or restore the file to continue. A
+deleted config file isn't a change. The config file and its `prompt_template:`
+file are always frozen, so the agent can't change its own protocol. Scripts the
+config calls (`bench.py`, gate scripts) are code: they move with the run's
+commits; list them under `scope.frozen` if they must not change. A run has no other state: whether it is running comes from its
 lock, how its last segment ended from `status.json`, and whether it has landed from
 git. One invocation of `run` or `resume`, called a **segment**,
 holds a process lock through validation, final landing and report. Agent commits

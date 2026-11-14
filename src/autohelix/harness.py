@@ -22,13 +22,13 @@ from rich.table import Table
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import MetricGate, find_config, load_config, run_command
+from autohelix.config import ConfigError, MetricGate, config_changes, find_config, inlined, load_config, run_command
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay, Transcript, clean, header_lines
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
-                            claim_copies, config_gone, config_relative, critical_section, new_run_name,
-                            iteration_folder, planned_run, remove_copies, require_clean, short_id, unlanded,
+                            claim_copies, config_relative, critical_section, new_run_name,
+                            iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
                             write_json, write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
@@ -171,36 +171,41 @@ class Harness:
         for key in SCRUBBED_GIT_ENV:
             os.environ.pop(key, None)
         self.project_path = Path(project_path).resolve()
-        # Always an explicit file: run.json and $AUTOHELIX_CONFIG name it. A run keeps its own.
+        # `config_file` is the source file, as run.json names it (naming, messages); the run
+        # loads its stored copy (`RunPaths.config`), which judges and the report read too.
         if run_id:
-            identity = RunPaths(self.project_path, run_id).read_identity()
-            stored = identity["config_path"]
+            stored = RunPaths(self.project_path, run_id).read_identity()["config_path"]
             if config_file is None:
                 config_file = self.project_path / stored
-                if not config_file.exists():
-                    raise FileNotFoundError(config_gone(self.project_path, run_id, stored,
-                                                        identity.get("base_commit")))
             elif config_relative(self.project_path, Path(config_file)) != stored:
                 raise RuntimeError(f"Run {short_id(run_id)} was started with {stored}, not "
                                    f"{config_relative(self.project_path, Path(config_file))}; a run keeps its config.")
         elif config_file is None:
             config_file = find_config(self.project_path)
         self.config_file = config_file = Path(config_file)
-        # Every refusal comes before the first write (the excludes, then .autohelix/): the
-        # run to own, read-only (no run to resume, a run without its ref), the config,
-        # and for a new run its name, a clean tree and readiness. select_run decides
-        # again under its lock.
-        creating = planned_run(self.project_path, config_file, new=new, run_id=run_id, create=create) is None
-        self.config, self._raw_config = load_config(self.project_path, config_file=config_file)
         self.verbose = verbose
         self.heartbeat_seconds = heartbeat_seconds
         self.console = Console()
+        # Every refusal comes before the first write (the excludes, then .autohelix/): the
+        # run to own, read-only (no run to resume, a run without its ref), the config (for
+        # an existing run, its stored copy, which the file must still match), and for a new
+        # run its name, a clean tree and readiness. select_run decides again under its lock.
+        planned = planned_run(self.project_path, config_file, new=new, run_id=run_id, create=create)
+        creating = planned is None
+        if creating:
+            self.config, self._raw_config = load_config(self.project_path, config_file=config_file)
+        else:
+            self.config, self._raw_config = self._run_config(planned)
         errors = [issue for issue in self.config.validate(self._raw_config) if issue.level == "error"]
         if errors:
             for error in errors:
                 self.console.print(f"[red]Error:[/red] {error.message}")
-            raise SystemExit(f"Config validation failed. Edit {config_relative(self.project_path, config_file)} "
-                             "and try again.")
+            if creating:
+                raise SystemExit(f"Config validation failed. Edit {config_relative(self.project_path, config_file)} "
+                                 "and try again.")
+            short = short_id(planned.run_id)
+            raise SystemExit(f"Run {short}'s stored config is no longer valid; continue it in a new run: "
+                             f"`{run_command(config_relative(self.project_path, config_file))} --import {short}`.")
         self._preflight_done = False
         if creating:
             name = new_run_name(config_file, name)
@@ -219,6 +224,12 @@ class Harness:
             # the default for runs on their own (auto landing in a group diverges the rest).
             land_mode=land_mode or ("manual" if group else self.config.land or "auto"),
         )
+        if self.paths.run_id != (planned and planned.run_id):
+            try:  # a new run (or, raced, another than planned): from now on, its stored copy
+                self.config, self._raw_config = self._run_config(self.paths)
+            except BaseException:
+                self._ownership.close()
+                raise
         # Stored on resume when the segment starts (`_run`): the mode and group asked for.
         self._identity_changes: dict = {}
         if land_mode and self.run_info.get("land") != land_mode:
@@ -268,6 +279,31 @@ class Harness:
         except BaseException:
             self.close()
             raise
+
+    def _run_config(self, paths: RunPaths):
+        """A run's stored config (`load_run_config`). Refuses, before anything is spent,
+        when the file it came from parses differently now (comments and formatting don't
+        count: `config_changes`); a deleted file continues from the stored copy."""
+        data = paths.read_identity()
+        config, raw = load_run_config(paths, data)
+        source = self.project_path / data["config_path"]
+        if not source.is_file():
+            self.console.print(f"[dim]{data['config_path']} is gone; run {short_id(paths.run_id)} continues "
+                               "with the config it stored when it started.[/dim]", highlight=False)
+            return config, raw
+        try:
+            keys = config_changes(raw, inlined(source, project=self.project_path))
+            changed = f"changed: {', '.join(keys)}" if keys else None
+        except ConfigError as e:
+            changed = f"it no longer reads: {e}"
+        if changed:
+            short = short_id(paths.run_id)
+            raise RuntimeError(
+                f"{data['config_path']} changed since run {short} started ({changed}); the run keeps the "
+                f"config it started with. To apply the new config, start a new run that continues from "
+                f"this one: `{run_command(data['config_path'])} --import {short}`. To continue this run, "
+                "restore the file.")
+        return config, raw
 
     def _metric_label(self, name: str) -> str:
         """Format metric name with direction arrow."""
@@ -779,7 +815,7 @@ class Harness:
         """Freeze the candidate: out-of-scope changes never reach the tree. The viewer
         shows the pin from "preparing checks" on (viewer.FROZEN_PHASES); a failed agent's
         attempt is frozen only to be kept (`checking=False`), never checked."""
-        workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen)),
+        workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen_patterns())),
                          pinned=(lambda: self.run_status.phase("preparing checks")) if checking else None)
         self.run_status.note(worktree=None)
         reverted = self._discarded(workspace)
@@ -800,7 +836,7 @@ class Harness:
         result.base = workspace.base
         result.tree = workspace.tree if workspace.iteration else None
         result.discarded = self._discarded(workspace)
-        result.discarded_frozen = [path for path in result.discarded if path_in_scope(path, self.config.frozen)]
+        result.discarded_frozen = [path for path in result.discarded if path_in_scope(path, self.config.frozen_patterns())]
 
     def _gate_text(self, command: str) -> str:
         """A gate command's display text (`ask: <question>` for ask entries)."""
@@ -1158,7 +1194,7 @@ class Harness:
         set per call (its call folder's `logs/`)."""
         return {
             USAGE_ENV: str(self.paths.usage(iteration)),
-            "AUTOHELIX_CONFIG": str(self.config_file.resolve()),
+            "AUTOHELIX_CONFIG": str(self.paths.config),  # the run's stored copy
             "AUTOHELIX_LOG_DIR": None,  # per call: the call folder's private logs/
             "AUTOHELIX_RUN_ID": self.paths.run_id,
             "AUTOHELIX_RUN_DIR": str(self.paths.run_dir),
@@ -1344,8 +1380,7 @@ class Harness:
 
                 self.run_status.phase("report")
                 self.console.print()
-                write_report(self.config, self.project_path, self.console, self.config_file,
-                             run_id=self.paths.run_id, _owned=True)
+                write_report(self.config, self.project_path, self.console, run_id=self.paths.run_id, _owned=True)
         except KeyboardInterrupt:
             outcome = "interrupted"
             raise

@@ -20,7 +20,7 @@ from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFou
 from autohelix.harness import Harness
 from autohelix.history import History
 from autohelix.runs import (NoRunToResume, RunPaths, RunLock, archive as archive_run, check_group,
-                            config_gone, delete as delete_run, land as land_run, project_runs, resolve_run,
+                            delete as delete_run, load_run_config, land as land_run, project_runs, resolve_run,
                             run_tip, short_id, valid_name)
 from autohelix import run_table
 from autohelix.skill import SKILL_NAME, skill
@@ -349,7 +349,7 @@ def _start(project: Path, config: Path | None, **selection) -> Harness:
     except NoRunToResume as e:
         click.echo(f"Error: {e}", err=True)
         raise SystemExit(3)
-    except (RuntimeError, FileNotFoundError, ConfigError) as e:  # FileNotFoundError: a run's stored config is gone
+    except (RuntimeError, FileNotFoundError, ConfigError) as e:
         raise click.ClickException(str(e)) from e
 
 
@@ -399,9 +399,11 @@ def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land
 def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None, iterations: int | None, until: int | None, group: str | None):
     """Continue a run: RUN_ID (or its last part), else the latest run of the config a bare `run` would use.
 
-    A run uses the config it started with; without RUN_ID, the config is the
-    one a bare `autohelix run` reads, and its latest is the most recently
-    active run for that config that isn't
+    A run uses the config it stored when it started. If the file has changed
+    since (comments and formatting aside), resume refuses: `autohelix run
+    --import <id>` applies the new config in a new run; a deleted file is fine.
+    Without RUN_ID, the config is the one a bare `autohelix run` reads, and its
+    latest is the most recently active run for that config that isn't
     archived, preferring runs that captured their baseline. Without -n or --until it runs to
     budget.iterations; cost and time budgets stay run totals from the config.
     The run keeps its landing mode and group unless --land or --group changes
@@ -741,7 +743,7 @@ def _view_live(project_path: Path, run_id: str | None) -> None:
                       highlight=False)
         raise SystemExit(1)
     try:
-        # The run's own config, even when its file is gone (then none); the lookup only without a run.
+        # The run's stored config (an old run has none); the lookup only without a run.
         config, _ = load_config(project_path, config_file=read_stored_config_path(project_path, run_id))
         backend = config.agent.backend
     except Exception:  # noqa: BLE001 - the log parser can tell backends apart on its own
@@ -824,7 +826,7 @@ def report(run_id: str | None, path: str):
     One agent call reads the run's history, notes, reviews, logs and commits, and writes
     the selected run's report.md. `run` and `resume` do this automatically when a run
     finishes; use this after an interrupted run or to regenerate it. It reads the config
-    the run started with.
+    the run stored when it started.
     """
     from rich.console import Console
 
@@ -837,19 +839,13 @@ def report(run_id: str | None, path: str):
     if not paths.run_id or History(project_path, run_id).get_last_iteration() == 0:
         console.print("[yellow]No iterations run yet. Nothing to report.[/yellow]")
         raise SystemExit(1)
-    config_path = read_stored_config_path(project_path, run_id)
     try:
-        config, _ = load_config(project_path, config_file=config_path)
-    except FileNotFoundError:
-        data = paths.read_identity()
-        console.print(f"[red]Error:[/red] {config_gone(project_path, paths.run_id, data['config_path'], data.get('base_commit'))}",
-                      highlight=False)
-        raise SystemExit(1)
-    except ConfigError as e:
+        config, _ = load_run_config(paths)
+    except (RuntimeError, ConfigError) as e:
         console.print(f"[red]Error:[/red] {e}", highlight=False)
         raise SystemExit(1)
 
-    if not write_report(config, project_path, console, config_path, run_id=run_id):
+    if not write_report(config, project_path, console, run_id=run_id):
         raise SystemExit(1)
     from autohelix.viewer import write_static
 

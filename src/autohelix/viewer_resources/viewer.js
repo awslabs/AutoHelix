@@ -839,13 +839,13 @@ function observeLabel(o) {
 
 function renderConfig() {
   const c = state.config;
-  if (c?.missing) { // the run's own file is gone; never another in its place
+  if (c?.missing) { // a run started by an older AutoHelix: never its source file instead
     $('config').hidden = false;
     const summary = $('config-summary');
     summary.title = '';
     summary.dataset.key = 'missing';
     summary.replaceChildren(el('b', { textContent: 'Config' }),
-      el('span', { className: 'config-file', textContent: `${c.file} is gone` }));
+      el('span', { className: 'config-file', textContent: `${c.file}: not stored with this run` }));
     const pre = $('config-text');
     pre.dataset.text = '';
     pre.replaceChildren();

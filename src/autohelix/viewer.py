@@ -256,9 +256,10 @@ class RunData:
             return self.history.load()
 
     def _config(self):
-        """The run's stored config, parsed again only when its file changes. A run whose
-        file is gone shows it missing, never another; with no run, the project's config
-        if the lookup finds one, else none (None, None)."""
+        """The run's stored config (`runs/<id>/config.yaml`), parsed again only when it
+        changes. A run without one (started by an older AutoHelix) shows it missing, never
+        its source file; with no run, the project's config if the lookup finds one, else
+        none (None, None)."""
         if self.paths.run_id:
             path = read_stored_config_path(self.project, self.paths.run_id)
         else:
@@ -284,7 +285,13 @@ class RunData:
         if path is None:
             return None
         cached = self._configs.get(path)
-        summary = {"file": config_relative(self.project, path), "text": cached[2] if cached else _read_user_file(path)}
+        file = config_relative(self.project, path)
+        if self.paths.run_id and path == self.paths.config:
+            try:  # the file it was stored from, as the run's other pages name it
+                file = self.paths.read_identity()["config_path"]
+            except (RuntimeError, KeyError):
+                pass
+        summary = {"file": file, "text": cached[2] if cached else _read_user_file(path)}
         if not path.exists():
             summary["missing"] = True
         if config:
@@ -890,10 +897,11 @@ class ProjectRuns:
             return {}
         return dict(line.split("\t", 1) for line in out.splitlines() if "\t" in line)
 
-    def _config(self, relative: str | None) -> dict:
+    def _config(self, paths: RunPaths, relative: str | None) -> dict:
+        """A summary of the run's stored config; `file` is the one it was stored from."""
         if not relative:
             return {}
-        path = Path(relative) if Path(relative).is_absolute() else self.project / relative
+        path = paths.config
         try:
             mtime = path.stat().st_mtime
         except OSError:
@@ -946,8 +954,7 @@ class ProjectRuns:
         status = read_run_status(self.project, run_id)
         history = self._histories.setdefault(run_id, History(self.project, run_id))
         records = history.load()
-        # Read from the checkout's current file (phase 2: the segment's config snapshot).
-        config = self._config(data.get("config_path"))
+        config = self._config(paths, data.get("config_path"))
 
         attempts = [r for r in records if r.iteration > 0]
         cost = summarize_costs([usage for r in records for usage in r.cost_usages])
@@ -961,7 +968,7 @@ class ProjectRuns:
             "created_at": data.get("created_at"),
             "last_activity": last_activity(paths, data, status or {}),
             "config_file": config.get("file"),
-            # The run's own file, gone (never replaced by another) or no longer valid.
+            # The run's stored config, missing (an old run's: never its source file instead) or invalid.
             "config_missing": bool(config.get("missing")),
             "config_invalid": bool(config.get("invalid")),
             "goal": config.get("goal"),

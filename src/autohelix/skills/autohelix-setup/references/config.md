@@ -253,8 +253,11 @@ absolute all-inclusive financial cap.
 
 Commit the config and any scripts it uses, then start with `autohelix run
 [NAME] --path PROJECT -n 3` (`NAME` for `autohelix/NAME.yaml`, none for
-`autohelix.yaml`): always a new run, of three iterations. A run keeps the config file it started with
-(edit that file to change it). Continue one with `autohelix resume [RUN_ID]
+`autohelix.yaml`): always a new run, of three iterations. A run keeps the config it started with
+(stored in `.autohelix/runs/<id>/config.yaml`, the prompt template inlined). `resume` refuses when
+the file's parsed config has changed since (comment edits don't count): apply an edited config with a
+new run, `autohelix run [NAME] --import <id>`, or restore the file. The config and template files are
+always frozen; freeze scripts the config calls under `scope.frozen` if they must not change. Continue one with `autohelix resume [RUN_ID]
 --path PROJECT`: `--until N` runs up to iteration N (a total; repeating it is
 harmless), `-n 3` runs three more. Either overrides only `budget.iterations`;
 cost and time stay run totals. A bare `resume` reads the config a bare `run`

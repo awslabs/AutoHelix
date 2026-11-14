@@ -107,8 +107,6 @@ def test_group_and_landing_mode_are_stored_kept_and_changed(project):
     assert "group" not in data and data["land"] == "auto"
 
     configure(project, land="manual")  # the config's land: is the default for new runs only
-    result = cli(project, "resume", short_id(run_id), "-n", "1", "--no-report")
-    assert result.exit_code == 0 and identity(grouped)["land"] == "auto" and "  Landed " in result.output
     fresh, _ = started(project)
     assert identity(fresh)["land"] == "manual"
     explicit, _ = started(project, "--group", "perf", "--land", "auto")
@@ -125,11 +123,11 @@ def test_config_land_keeps_unset_apart_from_auto():
 
 
 def test_legacy_runs_without_a_recorded_mode_follow_the_config(project):
+    configure(project, land="manual")
     paths, _ = started(project, "--land", "manual")
     data = identity(paths)
     del data["land"]
     paths.identity.write_text(json.dumps(data))
-    configure(project, land="manual")
     harness = Harness(project, run_id=paths.run_id)
     assert harness.land_mode == "manual"
     harness.close()

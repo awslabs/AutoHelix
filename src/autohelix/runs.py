@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from autohelix.config import project_configs, run_command
+from autohelix.config import load_config, run_command, stored_config_text
 
 SCHEMA = 2
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
@@ -81,7 +81,7 @@ class RunPaths:
     Without an explicit id, observers follow current. The root remains useful
     for project setup, but observers must not treat it as a run without an id.
 
-    A run's folder holds what people read (run.json, history.jsonl, hints.md,
+    A run's folder holds what people read (run.json, config.yaml, history.jsonl, hints.md,
     report.md/.html, the `notes` link, `iterations/NNN/`, `logs/`); everything the
     harness keeps for itself is in its `.internal/`, and the project's own
     (the current-run pointer, locks, helper scripts) in `.autohelix/.internal/`.
@@ -123,6 +123,8 @@ class RunPaths:
     def run_dir(self): return self.runs / self.run_id if self.run_id else self.root
     @property
     def identity(self): return self.run_dir / "run.json"
+    @property
+    def config(self): return self.run_dir / "config.yaml"  # the run's config, stored when it started
     @property
     def history(self): return self.run_dir / "history.jsonl"
     @property
@@ -738,13 +740,20 @@ def no_run_to_resume(config_path: str) -> str:
     return f"No run to resume for {config_path}; start one with `{run_command(config_path)}`."
 
 
-def config_gone(project: Path, run_id: str, config_path: str, base_commit: str | None = None) -> str:
-    """A run keeps the config it started with: never another in its place."""
-    configs = project_configs(project)
-    others = f" (configs: {', '.join(configs)})" if configs else ""
-    commit = base_commit[:12] if base_commit else "<commit>"
-    return (f"Run {short_id(run_id)} was started with {config_path}, which is gone; restore it "
-            f"(`git checkout {commit} -- {config_path}`), or start a new run of another config{others}.")
+def not_stored(paths: RunPaths, data: dict) -> str:
+    """For a run started before runs stored their config: it can only be continued by a new run."""
+    short = short_id(paths.run_id)
+    return (f"Run {short} has no stored config (it was started by an older AutoHelix); continue it in a new "
+            f"run: `{run_command(data['config_path'])} --import {short}`.")
+
+
+def load_run_config(paths: RunPaths, data: dict | None = None):
+    """The run's own config (`load_config` of its stored copy; the file it came from,
+    as run.json names it, is the `source`). RuntimeError (`not_stored`) without one."""
+    data = data if data is not None else paths.read_identity()
+    if not paths.config.is_file():
+        raise RuntimeError(not_stored(paths, data))
+    return load_config(paths.project, paths.config, source=paths.project / data["config_path"])
 
 
 def new_run_name(config: Path, name: str | None) -> str | None:
@@ -803,7 +812,8 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
     `run_id` resumes that run; `new` creates one (`autohelix run`); otherwise the
     config's most recently active run that isn't archived resumes, preferring
     runs with a baseline (`autohelix resume`), else one is created unless
-    `create` is false. A new run records `group` (if any) and `land_mode`.
+    `create` is false. A new run stores its config (`RunPaths.config`, from `config`)
+    and records `group` (if any) and `land_mode`.
     Returns notices, `(level, text)`, for the caller to print. `ready` runs the
     caller's readiness checks (a clean tree included) before a new run is allocated;
     raising refuses the start without leaving an identity, ref or pointer. Callers
@@ -833,6 +843,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
         # Refused first starts must not leave an identity, owned ref or pointer.
         if ready is not None:
             ready()
+        stored = stored_config_text(config)
         base = git(project, "rev-parse", "HEAD").stdout.strip()
         target = git(project, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip().removeprefix("refs/heads/") or None
         notices = _new_run_notices(project, config_path, target, group)
@@ -865,6 +876,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
                     "ref": paths.ref, **({"group": group} if group else {}),
                     **({"land": land_mode} if land_mode else {})}
             try:
+                write_text(paths.config, stored)  # first: a readable run (run.json) has its config
                 write_json(paths.identity, data)
             except BaseException:
                 lock.close()

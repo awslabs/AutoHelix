@@ -34,6 +34,7 @@ def project(tmp_path, run_paths):
               speed: higher
     """)
     (tmp_path / "autohelix.yaml").write_text(config)
+    run_paths.config.write_text(config)  # the run's stored copy
     run_paths.notes.mkdir()
     git(tmp_path, "init", "-q")
     git(tmp_path, "config", "user.email", "test@example.com")
@@ -98,11 +99,27 @@ class TestReportCommand:
         assert "autohelix.yaml" in result.output
 
     def test_timeout_is_capped(self, runner, project):
-        config = project / "autohelix.yaml"
+        config = RunPaths(project).config
         config.write_text(config.read_text() + "agent:\n  timeout: 10h\n")
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok")) as create:
             runner.invoke(main, ["report", "-p", str(project)])
         assert create.call_args[0][0].timeout == 15 * 60
+
+    def test_reads_the_stored_config_and_refuses_without_one(self, runner, project):
+        (project / "autohelix.yaml").write_text("goal: edited\nagent:\n  backend: codex\n")
+        with patch("autohelix.agents.create_agent", return_value=self._agent("ok")) as create:
+            result = runner.invoke(main, ["report", "-p", str(project)])
+        assert result.exit_code == 0, result.output
+        assert create.call_args[0][0].backend == "claude"
+        assert "Make it faster" in self._agent_prompt(create)
+        RunPaths(project).config.unlink()
+        result = runner.invoke(main, ["report", "-p", str(project)])
+        assert result.exit_code == 1
+        assert "no stored config" in result.output and "autohelix run --import test" in result.output
+
+    @staticmethod
+    def _agent_prompt(create):
+        return create.return_value.run.call_args.kwargs["prompt"]
 
     def test_keeps_old_report_when_agent_writes_nothing(self, runner, project):
         report = RunPaths(project).report
@@ -116,7 +133,7 @@ class TestReportCommand:
 class TestBuildReportPrompt:
     def _prompt(self, project):
         config, _ = load_config(project)
-        return build_report_prompt(config, project, project / "autohelix.yaml", Path("/tmp/draft.md"))
+        return build_report_prompt(config, project, Path("/tmp/draft.md"))
 
     def test_goal_coverage_and_output(self, project):
         prompt = self._prompt(project)
@@ -127,7 +144,7 @@ class TestBuildReportPrompt:
 
     def test_points_at_files_and_baseline(self, project):
         prompt = self._prompt(project)
-        for path in ("history.jsonl", "notes/", "agent.log", "autohelix.yaml"):
+        for path in ("history.jsonl", "notes/", "agent.log", "config.yaml"):
             assert path in prompt
         assert f"`{RunPaths(project).read_identity()['base_commit']}`" in prompt
 

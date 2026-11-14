@@ -480,9 +480,13 @@ def test_view_json_and_once(measured_project):
     missing = _cli("view", "missing-zzzz", "-p", project, "--json")
     assert missing.exit_code == 1 and "missing-zzzz" in missing.output
 
-    # The table reads the run's config as the file is now.
+    # The table reads the run's stored config, not the file as it is now.
     config = project / "autohelix.yaml"
     config.write_text(config.read_text().replace("Test the integration", '" "'))
+    printed = _cli("view", first, "-p", project, "--once")
+    assert printed.exit_code == 0 and "Goal: Test the integration" in printed.output
+    stored = RunPaths(project, first).config
+    stored.write_text(stored.read_text().replace("Test the integration", '" "'))
     printed = _cli("view", first, "-p", project, "--once")
     assert printed.exit_code == 0 and "Goal:" not in printed.output
 

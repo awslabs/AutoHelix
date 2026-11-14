@@ -407,24 +407,11 @@ gates:
         assert history.load()[-1].reason == "Iteration 1 agent failed: Mock failure"
         assert [result.iteration for result in history.load()] == [0, 1]
 
-        config_path = integration_project / "autohelix.yaml"
-        config_path.write_text(config_path.read_text().replace(
-            "    should_fail: true",
-            '    change_file: hello.py\n    change_content: "# recovered"',
-        ))
-        subprocess.run(
-            ["git", "add", "autohelix.yaml"],
-            cwd=integration_project,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", "Recover agent"],
-            cwd=integration_project,
-            check=True,
-            capture_output=True,
-        )
-
-        Harness(integration_project, verbose=False).run(max_iterations=2)
+        # The run keeps its config: the agent recovers in-process instead.
+        harness = Harness(integration_project, verbose=False)
+        harness.agent.config.settings.update(should_fail=False, change_file="hello.py",
+                                             change_content="# recovered")
+        harness.run(max_iterations=2)
         results = history.load()
         assert [result.iteration for result in results] == [0, 1, 2]
         assert not results[1].accepted

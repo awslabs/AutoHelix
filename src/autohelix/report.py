@@ -42,7 +42,7 @@ def read_report_info(project: Path, run_id: str | None = None) -> dict | None:
         return None
 
 
-def build_report_prompt(config: Config, project: Path, config_path: Path, draft: Path, run_id: str | None = None) -> str:
+def build_report_prompt(config: Config, project: Path, draft: Path, run_id: str | None = None) -> str:
     paths = RunPaths(project, run_id)
     if not paths.run_id:
         raise RuntimeError("No current run; start a run first.")
@@ -87,7 +87,7 @@ keeps the tree).
 iteration, a baseline retry), laid out like iterations/NNN/.
 - logs/: the harness's own logs: run-<time>.log per run or resume, hook_audit.log, report.log.
 {git}
-- {config_path}: the run's config.
+- config.yaml: the run's config, as stored when it started (a prompt_template's text inlined).
 
 ## Instructions
 {INSTRUCTIONS}
@@ -97,7 +97,7 @@ Only read. Don't run tests, benchmarks or experiments, and don't edit any file o
 """
 
 
-def write_report(config: Config, project: Path, console, config_path: Path, *, run_id: str | None = None, _owned: bool = False) -> bool:
+def write_report(config: Config, project: Path, console, *, run_id: str | None = None, _owned: bool = False) -> bool:
     """Run the report agent; replace the saved report only if it wrote a new one."""
     from rich.live import Live
 
@@ -109,8 +109,7 @@ def write_report(config: Config, project: Path, console, config_path: Path, *, r
         raise RuntimeError("No current run; start a run first.")
     if not _owned:
         with RunLock(paths.lock):
-            return write_report(config, project, console, config_path,
-                                run_id=paths.run_id, _owned=True)
+            return write_report(config, project, console, run_id=paths.run_id, _owned=True)
     draft = paths.report_draft
     draft.parent.mkdir(parents=True, exist_ok=True)
     draft.unlink(missing_ok=True)
@@ -142,7 +141,7 @@ def write_report(config: Config, project: Path, console, config_path: Path, *, r
         with Live(display, console=console, refresh_per_second=10, transient=True):
             result = agent.run(
                 worktree_path=copy.working_dir,
-                prompt=build_report_prompt(config, project, config_path, draft, paths.run_id),
+                prompt=build_report_prompt(config, project, draft, paths.run_id),
                 iteration=0, log_path=log_path, event_callback=on_event,
             )
             display.flush()

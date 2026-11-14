@@ -479,17 +479,13 @@ def test_an_accepted_no_op_counts_as_previous(project):
     assert _first_lines(project, 3) == ["iter=3", "prev=iter=2"]
 
 
-def test_previous_after_resume_and_for_an_entry_added_on_resume(project):
+def test_previous_after_resume(project):
     _configure(project, observe=[{"name": "tracker", "command": TRACKER}])
     Harness(project, verbose=False, land_mode="manual").run(max_iterations=1, report=False)
-    config = yaml.safe_load((project / "autohelix.yaml").read_text())
-    config["observe"].append({"name": "fresh", "command": TRACKER})
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))  # uncommitted: after the baseline
     Harness(project, verbose=False).run(max_iterations=2, report=False)  # resume: iteration 2
     records = History(project).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True), (2, True)]
     assert _first_lines(project, 2) == ["iter=2", "prev=iter=1"]
-    assert _first_lines(project, 2, "fresh") == ["iter=2", "prev=none"]
 
 
 def test_baseline_retry_clears_observations_and_has_no_previous(project, tmp_path, log):

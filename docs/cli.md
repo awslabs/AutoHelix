@@ -113,9 +113,17 @@ gates. `.autohelix/` is the runs' state, kept out of git.
   `autohelix/`, else stops with the list of configs.
 - Runs are named after the config file, so runs of `autohelix/perf.yaml` are
   named like `20261112-1400-perf-0mws`; `autohelix.yaml` gives runs no name.
-- A run keeps the config file it started with: `resume <id>` uses it, and
-  `view`, `dashboard` and `report` read it. To change a run's config, edit
-  that file.
+- A run has exactly one config: it stores the file's text when it starts
+  (`.autohelix/runs/<id>/config.yaml`), and `resume`, `view`, `dashboard`,
+  `report` and the judges use that copy. `resume` refuses when the file's
+  parsed config has changed since (comment and formatting edits don't count):
+  apply an edited config with a new run, `autohelix run perf --import <id>`,
+  or restore the file to continue. A deleted file is fine: the run continues
+  with its stored copy.
+- The config file and its `prompt_template:` file are always frozen, whatever
+  `scope:` says. Scripts the config calls (`bench.py`, gate scripts) are code:
+  they move with the run's commits; list them under `scope.frozen` if they
+  must not change.
 
 There is no `--config` option, and nothing to initialize: the first
 `autohelix run` creates `.autohelix/` and adds `.autohelix/` and
@@ -233,8 +241,15 @@ autohelix resume [RUN_ID] [-n MORE | --until N] [-p PATH] [--group NAME] [--land
 | `--land auto\|manual` | Change the run's landing mode (stored; default: keep it) |
 | `--group NAME` | Put the run in group NAME from its next iteration (stored); `--group ''` takes it out of its group |
 
-Other options as for `run`. A run always uses the config file it started with;
-to change it, edit that file. Without `RUN_ID`, the config is the one a bare
+Other options as for `run`. A run always uses the config it stored when it
+started ([Config files](#config-files)). Before spending anything, `resume`
+compares it with the config file: when the file's parsed config differs (a
+value, a key, or the prompt template's text; comments and formatting don't
+count), it refuses and names both ways out: `autohelix run <config> --import
+<id>` applies the new config in a new run, or restore the file to continue
+this one. A deleted file isn't a change: the run continues with its copy. A
+run started before runs stored their config can't be resumed: continue it
+with `run --import <id>`. Without `RUN_ID`, the config is the one a bare
 `autohelix run` would use (with several configs and no `autohelix.yaml`,
 `resume` stops: name a run), and `resume` continues that config's most
 recently active run that isn't [archived](#autohelix-archive), preferring runs
@@ -244,8 +259,8 @@ says so rather than picking an older one. With no run to resume it exits
 with status 3.
 
 `-n` and `--until` override `budget.iterations` only. Cost and time budgets
-stay run totals from the config: a run that reached `budget.cost` stops at once
-until you raise it there. `--until` with a number already reached runs an empty
+stay run totals from the run's config: a run that reached `budget.cost` stops
+at once. `--until` with a number already reached runs an empty
 segment: it lands what is unlanded and saves `report.html`, but writes no new summary. A run stopped by a
 [stop condition](config.md#stop) is paused, not ended: `resume` continues it,
 and the condition is checked again after the next accepted iteration.
@@ -381,7 +396,7 @@ stop:
   - autohelix ask -- "Is every item in SPEC.md implemented and tested?"
 ```
 
-- **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run), else the config a bare `autohelix run` in the current directory would use (none, or several: the defaults): backend, command, model and effort only, never `agent.settings` or `extra_args`.
+- **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run: the run's stored config), else the config a bare `autohelix run` in the current directory would use (none, or several: the defaults): backend, command, model and effort only, never `agent.settings` or `extra_args`.
 - **Candidate contents are checked before and after every judge call.** Tracked and nonignored files, modes, symlinks and submodule contents must remain unchanged; runtime feedback/log outputs are allowed. A stop judge after acceptance cannot change accepted code: its edits are discarded and its verdict ignored, with error and usage recorded. Backend restrictions remain best effort.
 - **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox; it still reads an `AGENTS.md` in the directory. OpenCode can't be used as a judge yet: it has no read-only mode.
 - **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `budget.cost`, and its transcript is saved with the output of the command that ran it: `.autohelix/runs/<id>/iterations/NNN/gates/<k>/ask.log` for an `ask:` gate (`stop/<k>/` for a stop command, `observe/<name>/` for an observe entry; `ask-2.log`, … for further calls). While the command runs it is written to the command's private `$AUTOHELIX_LOG_DIR`. Outside a run, the cost is printed to stderr.
@@ -467,4 +482,4 @@ Write (or rewrite) the run summary.
 autohelix report [RUN_ID] [-p PATH]
 ```
 
-`autohelix run` and `resume` write the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. It uses the config file the run started with. One agent call reads the run's history, notes, logs and commits and writes `.autohelix/runs/<id>/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
+`autohelix run` and `resume` write the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. It uses the config the run stored when it started. One agent call reads the run's history, notes, logs and commits and writes `.autohelix/runs/<id>/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).

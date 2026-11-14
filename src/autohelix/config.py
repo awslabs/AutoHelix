@@ -5,6 +5,8 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+import glob as globmod
+import json
 import math
 import re
 import shlex
@@ -160,14 +162,23 @@ class Config:
     max_time_seconds: int | None = None
     report: bool = True  # write a summary (report.md) when a run finishes
     land: str | None = None  # the landing mode of new runs; unset: auto (manual with --group)
-    # A Jinja file replacing the built-in agent prompt, resolved against the config file's folder.
+    # A Jinja file replacing the built-in agent prompt, resolved against the config file's folder;
+    # `prompt_template_text` is its text when the config is a run's stored copy (which inlines it).
     prompt_template: Path | None = None
+    prompt_template_text: str | None = None
+    # The config file and its template, project-relative (glob characters escaped): always
+    # frozen, whatever `scope:` says (the agent can't edit its own protocol).
+    protected: list[str] = field(default_factory=list)
     _parse_errors: list[str] = field(default_factory=list, repr=False)
 
     @property
     def title(self) -> str:
         """The goal's first line, cut to about 80 characters (`goal_title`)."""
         return goal_title(self.goal)
+
+    def frozen_patterns(self) -> list[str]:
+        """What the harness freezes: `scope.frozen`, then the config and template files."""
+        return self.frozen + [path for path in self.protected if path not in self.frozen]
 
     def gate_commands(self) -> list[CommandSpec]:
         return [gate for gate in self.gates if isinstance(gate, CommandSpec)]
@@ -263,7 +274,8 @@ class Config:
             if self.agent.require_notes.max_retries < 1:
                 error("agent.require_notes.max_retries must be >= 1")
 
-        if self.prompt_template is not None and not self.prompt_template.is_file():
+        if (self.prompt_template is not None and self.prompt_template_text is None
+                and not self.prompt_template.is_file()):
             error(f"prompt_template not found: {self.prompt_template}")
         return issues
 
@@ -711,17 +723,7 @@ def find_config(project: Path, name: str | None = None) -> Path:
     raise ConfigNotFound(f"No config found in {project}{found}.", configs)
 
 
-def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Config, dict[str, Any]]:
-    """Load configuration from `config_file`, else the project's config (`find_config`).
-
-    Returns:
-        A tuple of (Config, raw_data) where raw_data is the parsed YAML dict.
-        The raw_data is used for unknown-key validation.
-    """
-    config_path = Path(config_file) if config_file else find_config(project_path)
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config not found: {config_path}")
-
+def _parse(config_path: Path, project_path: Path) -> dict[str, Any]:
     try:
         shown = config_path.resolve().relative_to(Path(project_path).resolve())
     except ValueError:
@@ -733,11 +735,124 @@ def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Co
             raise ConfigError(f"Cannot parse {shown}: {e}") from None
     if not isinstance(data, dict):
         raise ConfigError(f"{shown} must be a YAML mapping")
+    return data
+
+
+def _template_path(config_path: Path, file: str) -> Path:
+    return (config_path.resolve().parent / Path(file).expanduser()).resolve()
+
+
+def load_config(project_path: Path, config_file: Path | None = None, *,
+                source: Path | None = None) -> tuple[Config, dict[str, Any]]:
+    """Load configuration from `config_file`, else the project's config (`find_config`).
+
+    `prompt_template:` is a path, resolved next to the config file, or a run's stored
+    form `{file, text}` (`stored_config_text`): the text is the template. For a run's
+    stored copy, `source` is the file it was made from: `file` resolves next to it, and
+    it is the config file `Config.protected` freezes.
+
+    Returns:
+        A tuple of (Config, raw_data) where raw_data is the parsed YAML dict.
+        The raw_data is used for unknown-key validation.
+    """
+    config_path = Path(config_file) if config_file else find_config(project_path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config not found: {config_path}")
+    data = _parse(config_path, project_path)
 
     config = Config.from_dict(data)
+    origin = Path(source) if source else config_path
     template = data.get("prompt_template")
-    if isinstance(template, str) and template.strip():
-        config.prompt_template = (config_path.resolve().parent / Path(template).expanduser()).resolve()
+    if isinstance(template, dict):
+        for key in template:
+            if key not in ("file", "text"):
+                config._parse_errors.append(f"Unknown key prompt_template.{key} (known: file, text)")
+        file, text = template.get("file"), template.get("text")
+        if isinstance(file, str) and file.strip() and isinstance(text, str):
+            config.prompt_template = _template_path(origin, file)
+            config.prompt_template_text = text
+        else:
+            config._parse_errors.append("a stored prompt_template needs file: (its path) and text: (its contents)")
+    elif isinstance(template, str) and template.strip():
+        config.prompt_template = _template_path(origin, template)
     elif template is not None:
         config._parse_errors.append("prompt_template must be a path to a template file")
+    project = Path(project_path).resolve()
+    for path in (origin.resolve(), config.prompt_template):
+        if path is not None and path.is_relative_to(project):
+            config.protected.append(globmod.escape(path.relative_to(project).as_posix()))
     return config, data
+
+
+STORED_NOTE = "# stored when the run started"
+
+
+def inlined(config_path: Path, data: dict[str, Any] | None = None, *,
+            project: Path | None = None) -> dict[str, Any]:
+    """The config in `config_path` (parsed: `data`) as a run stores it: a `prompt_template:`
+    path becomes `{file, text}` with the template's current text. Raises ConfigError
+    when the file or its template can't be read (naming it relative to `project`)."""
+    if data is None:
+        data = _parse(config_path, project or config_path.parent)
+    template = data.get("prompt_template")
+    if not isinstance(template, str) or not template.strip():
+        return data
+    try:
+        text = _template_path(config_path, template).read_text()
+    except (OSError, UnicodeDecodeError) as e:
+        raise ConfigError(f"Cannot read prompt_template {template}: {e}") from None
+    return {**data, "prompt_template": {"file": template, "text": text}}
+
+
+class _StoredDumper(yaml.SafeDumper):
+    """Multi-line strings as literal blocks where YAML allows it (the dump fallback)."""
+
+
+_StoredDumper.add_representer(str, lambda dumper, value: dumper.represent_scalar(
+    "tag:yaml.org,2002:str", value, style="|" if "\n" in value else None))
+
+
+def _template_block(file: str, text: str) -> str:
+    """`prompt_template:` in its stored form, as YAML lines: `text` a literal block with
+    the chomping its trailing newlines need, and an indentation indicator when its
+    first line starts with spaces. `stored_config_text` checks the result parses back."""
+    plain = yaml.safe_load(f"k: {file}") == {"k": file} if file.strip() == file and file else False
+    chomp = "+" if text.endswith("\n\n") else "" if text.endswith("\n") else "-"
+    first = next((line for line in text.split("\n") if line.strip()), "")
+    indicator = "2" if first.startswith(" ") else ""
+    body = text if text.endswith("\n") else text + "\n"
+    lines = "".join(("    " + line if line else "") + "\n" for line in body.split("\n")[:-1])
+    return (f"prompt_template:  {STORED_NOTE}\n"
+            + f"  file: {file if plain else json.dumps(file)}\n  text: |{indicator}{chomp}\n{lines}")
+
+
+def stored_config_text(config_path: Path) -> str:
+    """What a run stores as `runs/<id>/config.yaml`: the config file's text verbatim
+    (comments kept), with a `prompt_template: x.md` line replaced by the stored form
+    `{file, text}`. When that line can't be replaced textually (flow style, a value
+    on the next line), a YAML dump of the stored form. Raises ConfigError as `inlined`."""
+    text = config_path.read_text()
+    data = _parse(config_path, config_path.parent)
+    stored = inlined(config_path, data)
+    if stored is data:
+        return text
+    lines = text.splitlines(keepends=True)
+    found = [i for i, line in enumerate(lines) if re.match(r"prompt_template\s*:", line)]
+    if len(found) == 1:
+        i = found[0]
+        template = stored["prompt_template"]
+        candidate = ("".join(lines[:i]) + _template_block(template["file"], template["text"])
+                     + "".join(lines[i + 1:]))
+        try:
+            if yaml.safe_load(candidate) == stored:
+                return candidate
+        except yaml.YAMLError:
+            pass
+    return (f"{STORED_NOTE} from {config_path.name} (its prompt_template inlined)\n"
+            + yaml.dump(stored, Dumper=_StoredDumper, sort_keys=False, allow_unicode=True))
+
+
+def config_changes(stored: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    """The top-level keys whose parsed values differ (comments and formatting don't
+    count; an empty key is the same as none)."""
+    return [key for key in dict.fromkeys([*stored, *current]) if stored.get(key) != current.get(key)]

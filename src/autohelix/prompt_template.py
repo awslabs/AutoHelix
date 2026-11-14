@@ -35,8 +35,12 @@ def _create_env() -> Environment:
 
 
 def load_template(config) -> str:
-    """The agent prompt template: the config's `prompt_template:` file, else the built-in
-    one (so new features reach every project). `.autohelix/prompt.md` is no longer read."""
+    """The agent prompt template: the config's `prompt_template:` (a run's stored text,
+    else the file), else the built-in one (so new features reach every project).
+    `.autohelix/prompt.md` is no longer read."""
+    text = getattr(config, "prompt_template_text", None)
+    if text is not None:
+        return text
     path = getattr(config, "prompt_template", None)
     if path is None:
         return DEFAULT_TEMPLATE
@@ -101,7 +105,8 @@ def build_prompt_variables(
       gate's text says what it compares ("speed: at most 5% worse than ...").
     - `observe`: every observe entry, `{"name", "kind": "command"|"review", "command"
       (command entries) or "prompt" (review entries, on one line), "metric_labels"}`.
-    - `stop`: the stop commands; `editable`, `frozen`: the scope patterns.
+    - `stop`: the stop commands; `editable`, `frozen`: the scope patterns (`frozen` with
+      the config and template files, always frozen).
     - `notes_path`: where this iteration's notes go (in the copy).
     - `hints`: the copy's hints file (`.autohelix-iteration/hints.md`) if there are
       hints, else "".
@@ -149,7 +154,7 @@ def build_prompt_variables(
         "observe": [_describe_entry(entry) for entry in config.observe],
         "stop": [c.command for c in config.stop],
         "editable": config.editable,
-        "frozen": config.frozen,
+        "frozen": config.frozen_patterns(),
         "notes_path": str(state / "notes" / f"iter-{iteration}.md"),
         "hints": "",
         "rejected_patch": f"{ITERATION_DIR}/rejected.patch" if (state / "rejected.patch").is_file() else "",
