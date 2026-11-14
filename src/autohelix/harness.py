@@ -231,8 +231,8 @@ class Harness:
         most recently active run (as `autohelix resume`; created if there is none,
         unless `create` is false).
 
-        A new run records its landing mode (`land_mode`, else the config's `land:`,
-        else auto, or manual with a `group`) and its `group`. On resume `land_mode`
+        A new run records its landing mode (`land_mode`, else manual with a
+        `group`, else auto) and its `group`. On resume `land_mode`
         and `group` change the stored ones (`group=''` clears it) once the segment
         starts; otherwise the run keeps its own. A new run is named after the config
         file (`name` replaces that, for library callers and tests).
@@ -298,7 +298,7 @@ class Harness:
             self._new_run_ready()
         else:  # a run continues its own tip: refused before anything is written
             data = planned.read_identity()
-            if (land_mode or data.get("land") or self.config.land or "auto") == "auto" and (
+            if (land_mode or data.get("land") or "auto") == "auto" and (
                     count := target_ahead(planned, data)):
                 if is_live(planned):  # said first: the advice (`--land manual`) would lead straight to it
                     raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
@@ -314,9 +314,9 @@ class Harness:
             self.project_path, config_file,
             new=new, run_id=run_id, name=name,
             create=create, ready=None if creating else self._new_run_ready, group=group or None,
-            # A group lands manually unless --land says otherwise: the config's `land:` is
-            # the default for runs on their own (auto landing in a group diverges the rest).
-            land_mode=land_mode or ("manual" if group else self.config.land or "auto"),
+            # A group lands manually unless --land says otherwise (auto landing in a group
+            # diverges the rest); a run on its own lands automatically.
+            land_mode=land_mode or ("manual" if group else "auto"),
             imported=import_run, why=why,
         )
         if self.paths.run_id != (planned and planned.run_id):
@@ -335,8 +335,7 @@ class Harness:
             short = short_id(self.paths.run_id)
             notices.append(("info", f"{short} joins group {group} from its next iteration." if group
                             else f"{short} leaves group {self.run_info['group']}."))
-        # Runs from before landing modes were recorded follow the config, as they did.
-        self.land_mode = land_mode or self.run_info.get("land") or self.config.land or "auto"
+        self.land_mode = land_mode or self.run_info.get("land") or "auto"
         for level, text in notices:
             self.console.print(f"[yellow]{text}[/yellow]" if level == "warn" else f"[dim]{text}[/dim]", highlight=False)
         try:
@@ -1491,7 +1490,7 @@ class Harness:
         recording live status in .internal/status.json.
 
         When the loop finishes normally (not interrupted) after running at least one
-        iteration, writes the run summary unless `report: false` or `report=False`.
+        iteration, writes the run summary unless `report=False` (`--no-report`).
         However a started run stops, it then saves report.html. SIGTERM ends it as
         Ctrl-C does (`_terminate_interrupts`).
         """
@@ -1511,7 +1510,7 @@ class Harness:
                 self.run_state.data = self.run_info
                 self.run_state.expected_tip = tip
             self._land_attempted = False
-            if self._run(budget or Budget()) and report and self.config.report:
+            if self._run(budget or Budget()) and report:
                 from autohelix.report import write_report
 
                 self.run_status.phase("report")

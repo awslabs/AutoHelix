@@ -500,7 +500,6 @@ class TestBudgetEnforcement:
 
         (integration_project / "autohelix.yaml").write_text("""
 goal: Test calculated Codex cost
-report: false
 agent:
   backend: codex
   model: gpt-6.1-sol
@@ -525,8 +524,8 @@ gates:
         monkeypatch.setattr("autohelix.agents.codex.run_process", fake_run_process)
         # Codex execution is mocked, so preflight must not require a local CLI.
         monkeypatch.setattr("autohelix.checks.shutil.which", lambda command: "/mock/codex")
-        Harness(integration_project).run(Budget(until=1))
-        Harness(integration_project).run(Budget(until=2))
+        Harness(integration_project).run(Budget(until=1), report=False)
+        Harness(integration_project).run(Budget(until=2), report=False)
         iterations = [r for r in History(integration_project).load() if r.iteration > 0]
         assert len(iterations) == 2
         assert all(r.accepted for r in iterations)
@@ -537,7 +536,7 @@ gates:
         # --cost counts this segment only: the $0.02 already spent doesn't, the
         # estimates of its own two iterations do ($0.01, then $0.02 >= $0.015).
         harness = Harness(integration_project)
-        harness.run(Budget(cost_usd=0.015))
+        harness.run(Budget(cost_usd=0.015), report=False)
         assert calls == 4
         status = json.loads(harness.paths.status.read_text())
         assert status["stop_reason"]["detail"] == "cost budget reached ($0.015 this segment)"

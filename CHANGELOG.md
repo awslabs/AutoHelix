@@ -35,6 +35,11 @@ Breaking:
   before + this segment's cap) and the `--time` cap as the segment's own, with
   `segment_started_at`; while the segment runs, the dashboard shows its time
   against the cap ("12m5s/1h", "(time up)" once past it).
+- **`land:` and `report:` moved to the command line** (errors naming the
+  flags): the config says what one iteration does, the launch how it runs and
+  is delivered. `run --land manual` (stored with the run; `resume --land`
+  changes it) replaces `land: manual`; new runs land `auto`, or `manual` with
+  `--group`. `run --no-report` (also `resume`) replaces `report: false`.
 - Metric gate thresholds are percent strings (`regress: 5%`); a bare number
   is an error. Durations everywhere: a bare number (or a string of digits) is
   seconds, strings like `90s`, `30m`, `2h30m`.
@@ -242,10 +247,9 @@ Added:
   unlanded commits. State from earlier versions is refused: move or delete
   `.autohelix/` first. There is no migration.
 - **Your branch moves only when a run lands.** Accepted iterations are commits
-  on a hidden ref, `refs/autohelix/<id>` (`git log autohelix/<id>`). With
-  `land: auto` (the default) your branch is fast-forwarded at the end of each
-  `autohelix run`; with `land: manual` (or `run --land manual`) use
-  `autohelix land`. You can keep working in your checkout while a run goes.
+  on a hidden ref, `refs/autohelix/<id>` (`git log autohelix/<id>`). By
+  default your branch is fast-forwarded at the end of each `autohelix run`;
+  with `run --land manual` use `autohelix land`. You can keep working in your checkout while a run goes.
 - **Every phase runs in a fresh private copy outside the project**, under
   `~/.cache/autohelix/copies/` (override with `AUTOHELIX_COPIES_ROOT`). Checks
   run on exactly the code that would be accepted; a check, review or
@@ -285,9 +289,8 @@ Added:
   config file), and change its `.autohelix/` paths to `.autohelix-iteration/`;
   a run warns while `.autohelix/prompt.md` exists.
 - The landing mode is recorded per run when it starts (`--land`; else
-  `manual` with `--group`; else the config's `land:`; else `auto`) and kept on resume;
-  `resume --land` changes it. `land:` in the config is the default for new
-  runs only.
+  `manual` with `--group`; else `auto`) and kept on resume; `resume --land`
+  changes it.
 - `examples/nested-autohelix/` is removed (AutoHelix running AutoHelix is
   deferred; an agent driving runs through the CLI is the supported way).
 - **Run state has one folder per iteration** (`run.json` schema 2; earlier

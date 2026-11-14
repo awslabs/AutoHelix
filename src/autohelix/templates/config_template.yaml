@@ -49,3 +49,5 @@ scope:
 
 # How long to run is not set here: `autohelix run -n 10 --cost 20 --time 2h`
 # (iterations, dollars, wall clock; each optional, 1 iteration by default).
+# Nor how it lands: `--land manual` keeps accepted code off your branch until
+# `autohelix land` (default: fast-forward it when the command ends).

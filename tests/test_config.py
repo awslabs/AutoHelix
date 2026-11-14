@@ -236,6 +236,10 @@ class TestOldKeys:
          "`budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`"),
         ({"budget": None}, "`budget:` moved to the command line"),
         ({"budget": {"iteration_time": "1h"}}, "`agent.timeout` limits one iteration"),
+        ({"land": "manual"}, "`land:` moved to the command line: `autohelix run --land manual` (also `resume`"),
+        ({"land": "auto"}, "`land:` moved to the command line"),
+        ({"report": False}, "`report:` moved to the command line: `autohelix run --no-report` (also `resume`)"),
+        ({"report": True}, "`report:` moved to the command line"),
         ({"observe": [{"name": "b", "command": "x", "values": {"s": "higher"}}]}, "`values:` is now `metrics:`"),
         ({"observe": [{"name": "b", "command": "x", "capture_stdout": False}]},
          "`capture_stdout:` is gone: stdout is always saved"),
@@ -452,8 +456,7 @@ class TestConfigValidate:
         assert Config.from_dict(data).validate(data) == []
 
     def test_known_top_level_keys(self):
-        assert KNOWN_TOP_LEVEL_KEYS == {"goal", "agent", "prompt_template", "scope", "gates", "observe", "stop",
-                                        "land", "report"}
+        assert KNOWN_TOP_LEVEL_KEYS == {"goal", "agent", "prompt_template", "scope", "gates", "observe", "stop"}
 
     def test_empty_goal(self):
         config = Config.from_dict({"goal": ""})

@@ -25,9 +25,7 @@ goal: |
   Make sort_list faster in sort.py.
   Keep the public API; don't add dependencies.
 
-# land: auto              # new runs: auto (land at segment end) or manual
 # prompt_template: prompts/agent.md   # rare: replaces the built-in agent prompt
-# report: false           # don't write a summary when a run finishes
 
 agent:
   backend: claude         # claude (default), codex, opencode, mock
@@ -68,10 +66,12 @@ stop:                     # end the run early once one exits 0
   - jq -e '.speed >= 5000' "$AUTOHELIX_METRICS"
 ```
 
-How long a run goes on is not in the config: `autohelix run -n 10 --cost 20
---time 2h` (see [Budget](#budget)).
+How a launch goes is not in the config either: how long (`autohelix run -n 10
+--cost 20 --time 2h`, see [Budget](#budget)), how it lands (`--land manual`, see
+[Run identity and landing](#run-identity-and-landing)) and whether it writes a
+summary (`--no-report`, see [Report](#report)).
 
-Top-level keys: `goal`, `land`, `prompt_template`, `report`, `agent`,
+Top-level keys: `goal`, `prompt_template`, `agent`,
 `scope`, `gates`, `observe` and `stop`. An unknown key is a warning
 (a possible typo); a key of the old format is an error that names its
 replacement (see [Old → new](#old--new)). `autohelix run` lists every error and
@@ -506,16 +506,16 @@ like `20261111-1432-perf-k3f9`, and `autohelix.yaml` gives them no name (see
 [CLI → Config files](cli.md#config-files)). The name doesn't select an
 existing run.
 
-`land` is optional: `auto` fast-forwards accepted code to the starting branch
-when a run segment ends, while `manual` keeps it on the run ref until
-`autohelix land`. It is the default for new runs only: each run records its
-mode when it starts (`--land`; else `manual` for a run started with `--group`,
-whatever `land:` says; else `land:`; else `auto`) and keeps it;
-`resume --land` changes it.
+How a run lands is chosen on the command line, not in the config: `--land
+auto` fast-forwards accepted code to the starting branch when a run segment
+ends, while `--land manual` keeps it on the run ref until `autohelix land`.
+Each run records its mode when it starts (`--land`; else `manual` for a run
+started with `--group`; else `auto`) and keeps it; `resume --land` changes it.
+A `land:` key is an error naming the flag.
 
 A bare `autohelix resume` picks the most recently active run of the config a
 bare `autohelix run` would use, or name one; neither depends on the run's
-name or `land`.
+name or landing mode.
 
 ## Prompt template
 
@@ -536,8 +536,8 @@ run's history, notes, logs and commits and writes a short summary
 to `.autohelix/runs/<id>/report.md`: what was achieved, which changes
 mattered, what didn't work, what to try next, and anything worth checking
 before relying on the results. An interrupted run gets no summary; run
-[`autohelix report`](cli.md#autohelix-report) to write one. Set `report: false`
-to skip it. The call uses the same agent backend and model as the run, with a
+[`autohelix report`](cli.md#autohelix-report) to write one. Pass `--no-report`
+to `run` or `resume` to skip it (a `report:` key is an error naming the flag). The call uses the same agent backend and model as the run, with a
 timeout of `agent.timeout` capped at 15 minutes. Its time and cost are shown
 next to the summary in `autohelix view` and `report.html`; the cost is not
 counted against `--cost`.
@@ -560,6 +560,8 @@ replacement; there are no aliases and no migration.
 | `agent.type` | `agent.backend` | `` `agent.type` is now `agent.backend` `` |
 | `agent.timeout_seconds` | `agent.timeout` (a duration) | `` `agent.timeout_seconds` is now `agent.timeout` (a duration such as 30m) `` |
 | `budget:` (`iterations`, `cost`, `time`) | the `run`/`resume` flags `-n`, `--cost`, `--time`, per segment (see [CLI → Budgets](cli.md#budgets)) | `` `budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`; ...) `` |
+| `land:` | `run --land auto\|manual` (also `resume`), stored with the run; default `auto`, `manual` with `--group` | `` `land:` moved to the command line: `autohelix run --land manual` (also `resume`; ...) `` |
+| `report:` | `run --no-report` (also `resume`) | `` `report:` moved to the command line: `autohelix run --no-report` (also `resume`) `` |
 | `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | as `budget:` |
 | `agent.settings.model` | `agent.model` | `` `agent.settings.model` is now `agent.model` `` |
 | a bare number as the threshold (`max_regression_pct: 5` was one; `regress: 5` now) | `regress: 5%` | `write the percentage with %, e.g. 5%, got 5` |

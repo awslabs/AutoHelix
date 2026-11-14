@@ -35,14 +35,14 @@ observe:
 Launched with `autohelix run -n 3` (budgets are command-line flags, not config).
 
 Top-level keys, in the skill's preferred order for generated configs: `goal`,
-`scope`, `gates`, `observe`, `stop`, `agent`, `land`, `report`,
-`prompt_template`. This order is a presentation convention; config parsing
+`scope`, `gates`, `observe`, `stop`, `agent`, `prompt_template`. This order is a presentation convention; config parsing
 accepts any top-level order. The order of entries within `gates`, `observe`,
 and `stop` affects execution. Keys of the first config format
 (`constraints`, `metrics`, `observables`, `acceptance`, `reviewer`,
-`agent.type`, `agent.timeout_seconds`, `budget`) are errors that name their
-replacement; when editing an existing config, convert them (a `budget:` block
-becomes the launch command's `-n`, `--cost`, `--time`).
+`agent.type`, `agent.timeout_seconds`, `budget`, `land`, `report`) are errors
+that name their replacement; when editing an existing config, convert them (a
+`budget:` block becomes the launch command's `-n`, `--cost`, `--time`;
+`land: manual` becomes `--land manual`; `report: false` becomes `--no-report`).
 
 ## Config files
 

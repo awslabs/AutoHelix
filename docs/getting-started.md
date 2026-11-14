@@ -108,9 +108,9 @@ when the proposal fits your goal. You can also ask for a proposal only, or for
 files to be saved without committing.
 
 The skill uses a consistent top-level order for generated configs: `goal`,
-`scope`, `gates`, `observe`, `stop`, `agent`, `land`, `report`,
-`prompt_template`, omitting unused fields. This is a presentation convention;
-existing configs can use any top-level order.
+`scope`, `gates`, `observe`, `stop`, `agent`, `prompt_template`, omitting
+unused fields. This is a presentation convention; existing configs can use any
+top-level order.
 
 After agreement, the agent writes the setup files, validates the config without
 executing evaluators, and commits only the agreed setup changes. It can also run

@@ -36,12 +36,12 @@ def snapshot(*roots):
 
 
 def test_import_shows_the_runs_state_and_continues_its_observations(project, monkeypatch):
-    configure(project, observe=[TRACKER], agent=MOCK, land="manual")
-    parent, _ = started(project)
-    stranger, _ = started(project)  # neither imported nor in a group: nothing of it in the copy
-    configure(project, observe=[TRACKER, OTHER], agent=MOCK, land="manual")  # the config moved on
+    configure(project, observe=[TRACKER], agent=MOCK)
+    parent, _ = started(project, "--land", "manual")
+    stranger, _ = started(project, "--land", "manual")  # neither imported nor in a group: nothing of it in the copy
+    configure(project, observe=[TRACKER, OTHER], agent=MOCK)  # the config moved on
     before = snapshot(parent.run_dir)
-    child = Harness(project, new=True, import_run=parent.run_id)
+    child = Harness(project, new=True, import_run=parent.run_id, land_mode="manual")
     seen = {}
     watch_agent(child, monkeypatch, seen)
     notes = []
@@ -130,9 +130,9 @@ def test_a_deleted_imported_run_doesnt_stop_the_run(project, monkeypatch):
 def test_a_tracker_continues_from_the_import_until_it_succeeds_in_the_run(project):
     log = {"name": "log", "command": '[ "$AUTOHELIX_ITERATION" = 0 ] && exit 1; echo "run $AUTOHELIX_RUN_ID"; '
                                      'echo "previous $(head -1 "${AUTOHELIX_PREVIOUS:-/dev/null}/stdout.txt" 2>/dev/null)"'}
-    configure(project, observe=[log], agent=MOCK, land="manual")
-    parent, _ = started(project)
-    child, _ = started(project, "--import", short_id(parent.run_id), "-n", "2")
+    configure(project, observe=[log], agent=MOCK)
+    parent, _ = started(project, "--land", "manual")
+    child, _ = started(project, "--land", "manual", "--import", short_id(parent.run_id), "-n", "2")
     assert not child.observe_entry(0, "log").joinpath("stdout.txt").read_text()  # failed at the baseline
     assert f"previous run {parent.run_id}" in stdout(child, 1, "log")  # so iteration 1 continues the import
     assert f"previous run {child.run_id}" in stdout(child, 2, "log")

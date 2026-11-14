@@ -43,7 +43,6 @@ def project_layout(tmp_path, request):
         "    change_file: main.py\n"
         "    change_content: '# Modified in iteration {iteration}'\n"
         "gates: ['true']\n"
-        "report: false\n"
     )
     git(source, "add", "-A")
     git(source, "commit", "-m", "Initial commit")

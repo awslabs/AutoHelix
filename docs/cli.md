@@ -161,7 +161,7 @@ commands use: iteration copies are made from the commit. Do it before the first
 | `--time DURATION` | Start no iteration after DURATION of this segment's wall clock (`90m`, `2h`) |
 | `--path`, `-p` | Project directory (default: current dir) |
 | `--group NAME` | Make the run part of a [group](#groups): it sees the other runs of the group (their notes, history and code), and lands manually by default |
-| `--land auto\|manual` | Land accepted code at the end of each segment, or retain it only on the run ref until `autohelix land`. Stored with the run. Default: `manual` with `--group`, else `land:` in the config, else `auto` |
+| `--land auto\|manual` | Land accepted code at the end of each segment, or retain it only on the run ref until `autohelix land`. Stored with the run. Default: `manual` with `--group`, else `auto` |
 | `--import RUN_ID` | [Continue from another run](#continuing-from-another-run): its notes and history, read-only, in every iteration, and its last observe outputs at the baseline |
 | `--why TEXT` | Why this run is started: one line (at most 300 characters), stored in `run.json` and shown on the dashboard |
 | `--verbose` | Show agent command details, file paths, heartbeats |
@@ -352,7 +352,7 @@ value, a key, or the prompt template's text; comments and formatting don't
 count), it refuses and names both ways out: `autohelix run <config> --import
 <id>` applies the new config in a new run, or restore the file to continue
 this one. Empty values (`gates: []`, a key left out) count the same; a default
-written out (`report: true`) or another spelling (`10m` for `600`) is a change,
+written out (`agent: {backend: claude}`) or another spelling (`10m` for `600`) is a change,
 named in the message. A deleted file, or a deleted prompt template, isn't a
 change: the run continues with its copy (other keys are still compared). The
 stored copy is read-only. A
@@ -407,7 +407,7 @@ autohelix stop RUN_ID... [-p PATH] [--why TEXT] [--now]
 
 Without `--now` the run ends **after its current iteration**, which is never
 interrupted: the segment then ends as when its budget runs out (auto landing,
-the summary if `report:` is on, the run page), with state `finished`. Asked
+the summary unless `--no-report`, the run page), with state `finished`. Asked
 during the baseline, it stops after the baseline. A stop condition met by that
 iteration takes precedence. Asking again replaces the earlier request (and its
 `--why`). `autohelix resume RUN_ID` continues the run later, as after a budget.
