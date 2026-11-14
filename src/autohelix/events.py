@@ -224,7 +224,19 @@ class RunSource:
         return True
 
     def refresh(self, force_segments: bool = False) -> None:
+        """Reread what changed, in the reverse of the harness's write order: the status
+        (a phase past an accepted record's rewrite is written after it), then the
+        segment log (an end record after the segment's last history record), then the
+        history, so what is read later is at least as new as what was read first."""
         paths = self.paths
+        if self._changed("status", paths.status):
+            try:
+                status = json.loads(paths.status.read_text())
+            except (OSError, ValueError):
+                status = {}
+            self.status = status if isinstance(status, dict) else {}
+        if self._changed("segments", paths.segments) or force_segments:
+            self.segments = _segments(_complete_lines(paths.segments))
         if self._changed("history", paths.history):
             records = []
             for record in _complete_lines(paths.history):
@@ -232,14 +244,6 @@ class RunSource:
                 if type(n) is int and n >= 0 and type(record.get("accepted")) is bool:
                     records.append(record)
             self.records = records
-        if self._changed("segments", paths.segments) or force_segments:
-            self.segments = _segments(_complete_lines(paths.segments))
-        if self._changed("status", paths.status):
-            try:
-                status = json.loads(paths.status.read_text())
-            except (OSError, ValueError):
-                status = {}
-            self.status = status if isinstance(status, dict) else {}
         if not self._identity_read:  # until run.json is there (a run being created)
             try:
                 created = json.loads(paths.identity.read_text()).get("created_at")
