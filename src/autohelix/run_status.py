@@ -105,14 +105,17 @@ class SegmentLog:
             pass  # never break a run over it
 
 
-def _segment_records(path: Path) -> list[dict]:
-    """The log's records (objects with an int `segment`), damaged lines skipped."""
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return []
+def _segment_records(path: Path | None, data: bytes | None = None, terminated: bool = False) -> list[dict]:
+    """The log's records (objects with an int `segment`), damaged lines skipped: from
+    `data` if given, else read from `path`; with `terminated`, only newline-terminated
+    lines (an unterminated last line may still be being written)."""
+    if data is None:
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return []
     records = []
-    for line in data.splitlines():
+    for line in data.split(b"\n")[:-1] if terminated else data.splitlines():
         try:
             record = json.loads(line)
         except ValueError:  # UnicodeDecodeError included
@@ -122,13 +125,15 @@ def _segment_records(path: Path) -> list[dict]:
     return records
 
 
-def read_segments(path: Path) -> list[dict]:
+def read_segments(path: Path | None, *, data: bytes | None = None, terminated: bool = False) -> list[dict]:
     """The segments in the log, oldest first: each start record with its end record's
     fields merged in (`ended_at`, `state`, `stop_reason`, `last_iteration`,
     `iterations`, `error`), and `open` true when it has none (still running, or its
-    process died). Lines that aren't records (damaged, undecodable) are skipped."""
+    process died). Lines that aren't records (damaged, undecodable) are skipped. The
+    log is read from `path`, or given as `data`; `terminated` ignores an unterminated
+    last line (`autohelix wait`, which reads while the harness appends)."""
     segments: dict[int, dict] = {}
-    for record in _segment_records(path):
+    for record in _segment_records(path, data, terminated):
         n = record["segment"]
         fields = {k: v for k, v in record.items() if k != "event"}
         if record.get("event") == "start":

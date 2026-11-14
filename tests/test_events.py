@@ -194,19 +194,31 @@ def test_a_fresh_wait_starts_from_now_for_every_run(tmp_path):
 
 
 def test_cursors_round_trip_and_bad_ones_are_refused(tmp_path):
-    marks = {"20261114-1000-a-aaaa": Marks(3, 1234, 2, 1, 1), "20261114-1000-b-bbbb": Marks()}
-    assert decode_cursor(encode_cursor(marks)) == {"20261114-1000-a-aaaa": Marks(3, 1234, 2, 1, 1)}
+    marks = {"20261114-1000-a-aaaa": Marks(3, 1234, 2, 1, 1), "20261114-1000-b-bbbb": Marks(),
+             "20261114-1000-c-cccc": Marks(5, 77, 1, 1)}
+    assert decode_cursor(encode_cursor(marks)) == {"20261114-1000-a-aaaa": Marks(3, 1234, 2, 1, 1),
+                                                   "20261114-1000-c-cccc": Marks(5, 77, 1, 1)}
     good = encode_cursor(marks)
     for bad in ["", "nonsense", "2." + good[2:], "1.", "1.!!!", good[:-3], "1." + "A" * 40]:
         with pytest.raises(ValueError, match="not a cursor"):
             decode_cursor(bad)
     import base64
     import zlib
-    for payload in [b"[]", b'{"r": []}', b'{"r": {"x/y": [1,2,3,4,5]}}', b'{"r": {"a": [1, 2]}}',
+    for payload in [b"[]", b'{"r": []}', b'{"r": {"x/y": [1,2,3,4,5]}}', b'{"r": {"a": [1, 2, 3, 4, 5, 6]}}',
                     b'{"r": {"a": [1, 2, 3, 4, true]}}']:
         cursor = "1." + base64.urlsafe_b64encode(zlib.compress(payload)).decode().rstrip("=")
         with pytest.raises(ValueError, match="not a cursor"):
             decode_cursor(cursor)
+
+
+def test_every_cursor_printed_is_accepted(monkeypatch):
+    from autohelix import events
+
+    many = {f"20261114-1000-r-{i:04d}": Marks(300, 999_999, 9, 9, 9) for i in range(2000)}
+    assert decode_cursor(encode_cursor(many)) == many
+    monkeypatch.setattr(events, "CURSOR_CAP", 1000)
+    with pytest.raises(RuntimeError, match="Too many runs"):
+        encode_cursor(many)
 
 
 def test_a_new_run_after_wait_began_is_watched_without_ids(tmp_path):
@@ -313,6 +325,32 @@ def test_an_accepted_record_waits_for_its_stop_commands(tmp_path):
         assert (event["iteration"], event["cost_usd"], event["time"]) == (1, 0.75, T0 + 3)
 
 
+def test_an_accepted_record_seen_before_its_phase_is_held(tmp_path):
+    """The status read says "checks", then the harness accepts (phase, append) before the
+    history read: the record is held until the phase moves past acceptance."""
+    paths = make_run(tmp_path, "20261114-1000-a-aaaa")
+    start(paths, 1, T0)
+    record(paths, 0, T0 + 1)
+    status(paths, iteration=1, phase="checks")
+    watcher = Watcher(tmp_path)
+    record(paths, 1, T0 + 2, commit="c1")
+    assert watcher.poll() is None
+    status(paths, iteration=1, phase="report")
+    assert brief(drain(watcher)) == [("iteration", "aaaa", 1)]
+
+
+def test_a_record_is_never_held_once_its_segment_ended(tmp_path):
+    """Interrupted in the stop check: the end record follows the final history write."""
+    paths = make_run(tmp_path, "20261114-1000-a-aaaa")
+    start(paths, 1, T0)
+    record(paths, 1, T0 + 2, commit="c1")
+    status(paths, iteration=1, phase="stop check")
+    watcher = Watcher(tmp_path, after=EMPTY)
+    assert brief(drain(watcher)) == [("started", "aaaa", 1)]
+    end(paths, 1, T0 + 3, state="interrupted")
+    assert brief(drain(watcher)) == [("iteration", "aaaa", 1), ("ended", "aaaa", 1)]
+
+
 def test_a_provisional_record_of_a_dead_process_is_reported(tmp_path):
     paths = make_run(tmp_path, "20261114-1000-a-aaaa")
     pid = dead_pid()
@@ -364,15 +402,75 @@ def test_a_live_segment_is_no_crash_and_an_ending_one_is_no_crash(tmp_path, monk
     from autohelix import events
 
     monkeypatch.setattr(events, "process_gone", lambda pid, host: True)
-    original = events.RunSource.refresh
+    original = events.RunSource._read_segments
 
-    def refresh(self, force_segments=False):
-        if force_segments and not paths.segments.read_text().count('"end"'):
+    def read_segments(self, force=False):
+        if force and not paths.segments.read_text().count('"end"'):
             end(paths, 1, T0 + 5)
-        original(self, force_segments)
+        original(self, force)
 
-    monkeypatch.setattr(events.RunSource, "refresh", refresh)
+    monkeypatch.setattr(events.RunSource, "_read_segments", read_segments)
     assert brief(drain(watcher)) == [("ended", "aaaa", 1)]
+
+
+def test_idle_never_takes_a_run_that_just_ended_for_a_crash(tmp_path, monkeypatch):
+    """Its end record written and the process gone after the last look: idle looks again."""
+    from autohelix import events
+
+    paths = make_run(tmp_path, "20261114-1000-a-aaaa")
+    start(paths, 1, T0)
+    watcher = Watcher(tmp_path, run_ids=[paths.run_id])
+    assert watcher.poll() is None
+    end(paths, 1, T0 + 5)
+    monkeypatch.setattr(events, "process_gone", lambda pid, host: True)
+    assert watcher.idle()["event"] == "ended"
+    assert watcher.idle()["runs"][0]["state"] == "finished"
+
+
+def test_a_crash_reported_late_has_its_own_last_iteration(tmp_path):
+    paths = make_run(tmp_path, "20261114-1000-a-aaaa")
+    start(paths, 1, T0, pid=dead_pid())
+    record(paths, 0, T0 + 2)
+    start(paths, 2, T0 + 10, start_iteration=1)
+    for n in (1, 2, 3):
+        record(paths, n, T0 + 10 + n)
+    [crash] = [e for e in drain(Watcher(tmp_path, after=EMPTY)) if e["event"] == "crashed"]
+    assert (crash["segment"], crash["last_iteration"], crash["time"]) == (1, 0, T0 + 2)
+
+
+def test_planted_files_read_as_missing(tmp_path):
+    """Candidate code can't make wait block (a FIFO) or eat memory (a link to a device)."""
+    paths = finished_run(tmp_path)
+    good = paths.history.read_text()
+    paths.history.unlink()
+    os.mkfifo(paths.history)
+    paths.segments.unlink()
+    os.symlink("/dev/zero", paths.segments)
+    paths.status.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink("/dev/zero", paths.status)
+    events = drain(Watcher(tmp_path, after=EMPTY))
+    assert events == []
+    paths.history.unlink()
+    paths.history.write_text(good)
+    assert [e["event"] for e in drain(Watcher(tmp_path, after=EMPTY))] == ["iteration", "iteration"]
+
+
+def test_an_appended_history_is_read_on_and_a_replaced_one_again(tmp_path):
+    paths = make_run(tmp_path, "20261114-1000-a-aaaa")
+    record(paths, 0, T0)
+    watcher = Watcher(tmp_path, after=EMPTY)
+    assert brief(drain(watcher)) == [("iteration", "aaaa", 0)]
+    record(paths, 1, T0 + 2)
+    assert brief(drain(watcher)) == [("iteration", "aaaa", 1)]
+    # Replaced by a longer file whose earlier lines differ (a reused inode looks the same).
+    lines = paths.history.read_text().splitlines()
+    replaced = [json.loads(line) for line in lines]
+    replaced[1]["summary"] = "x" * 50
+    replaced.append({**replaced[1], "iteration": 2, "started_at": T0 + 3, "ended_at": T0 + 4})
+    with open(paths.history, "r+") as stream:  # same inode, grown
+        stream.write("".join(json.dumps(r) + "\n" for r in replaced))
+    [event] = drain(watcher)
+    assert (event["iteration"], event["summary"]) == (2, "x" * 50)
 
 
 # --- idle and timeout ---------------------------------------------------------------------
@@ -480,7 +578,11 @@ def test_wait_follow_prints_every_event_and_exits_quietly_on_ctrl_c(tmp_path):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         env={**os.environ, "PYTHONPATH": str(source)})
     try:
-        lines = [json.loads(process.stdout.readline()) for _ in range(4)]
+        import queue
+
+        lines_read = queue.Queue()
+        threading.Thread(target=lambda: [lines_read.put(line) for line in process.stdout], daemon=True).start()
+        lines = [json.loads(lines_read.get(timeout=30)) for _ in range(4)]
         assert [e["event"] for e in lines] == ["started", "iteration", "iteration", "ended"]
         process.send_signal(signal.SIGINT)
         _, stderr = process.communicate(timeout=30)
@@ -494,18 +596,17 @@ def test_wait_follow_prints_every_event_and_exits_quietly_on_ctrl_c(tmp_path):
 
 
 def test_a_real_run_reports_its_whole_sequence(project):
-    cursor = json.loads(cli(project, "--timeout", "1s").output)["cursor"]  # before the run
+    cursor = Watcher(project).cursor  # before the run
     result = CliRunner().invoke(main, ["run", "-n", "2", "--no-report", "-p", str(project)])
     assert result.exit_code == 0, result.output
     run_id = RunPaths(project).run_id
     events = []
-    while True:
+    while not events or events[-1]["event"] != "ended":
         result = cli(project, "--after", cursor, "--timeout", "1s")
-        if result.exit_code == 2:
-            break
         assert result.exit_code == 0, result.output
         events.append(json.loads(result.output))
         cursor = events[-1]["cursor"]
+    assert Watcher(project, after=cursor).poll() is None
     assert [(e["event"], e.get("iteration")) for e in events] == [
         ("started", None), ("iteration", 0), ("iteration", 1), ("iteration", 2), ("ended", None)]
     assert all(e["run"] == run_id for e in events)
@@ -543,4 +644,9 @@ def test_wait_follows_a_live_run(project):
     assert not failures and not thread.is_alive()
     assert [(e["event"], e.get("iteration")) for e in events] == [
         ("started", None), ("iteration", 0), ("iteration", 1), ("iteration", 2), ("ended", None)]
-    assert all(e["accepted"] for e in events if e["event"] == "iteration")
+    paths = RunPaths(project)
+    for event in events:
+        if event["event"] == "iteration":  # reported in final form: after the stop commands
+            final = json.loads(paths.record(event["iteration"]).read_text())
+            assert event["accepted"]
+            assert (event["time"], event["cost_usd"]) == (final["ended_at"], final["cost"]["cost_usd"])
