@@ -32,14 +32,14 @@ entry's 1-based position in `gates:` / `stop:`), and persistent `.autohelix/runs
 `autohelix view` is a live terminal view that does not exit, for people. `.autohelix/runs/<id>/.internal/status.json` records
 the run's state and phase, and `.autohelix/runs/<id>/report.html` is saved when it stops. If the view does not present the selected
 backend's activity use its logs and saved records. Infer active execution from
-the launched process, not from the configured iteration count or old logs.
+the launched process, not from the iteration count or old logs.
 
 Distinguish an agent's exploratory results from the harness's recorded
 acceptance measurements. A rejected candidate is an experiment outcome; a
 failed agent or evaluator may indicate an infrastructure problem. Explain the
 evidence before deciding what to do next. Keep the agreed scope, evaluators,
-acceptance rules, and budgets fixed while running unless the user authorizes
-a change. The supervisor observes and steers; iteration agents make candidate
+acceptance rules, and the agreed budget (the launch command's `-n`/`--until`,
+`--cost`, `--time`) fixed while running unless the user authorizes a change. The supervisor observes and steers; iteration agents make candidate
 changes.
 
 ## Give useful hints
@@ -79,9 +79,11 @@ records suffice.
 An invocation ending is a checkpoint, not proof that an open-ended experiment
 is finished. Explain why this execution ended and what remains uncertain.
 For requested resumption, use `autohelix resume <id>`, never `autohelix run`:
-`run` always starts a new run with fresh notes and a fresh budget. Prefer
-`--until N` (stop at iteration N, safe to repeat) over `-n` (N more
-iterations) in scripts and retries. `resume` exits 3 when there is no run to
+`run` always starts a new run with fresh notes. Budgets count each
+invocation: `resume -n 5 --cost 3` is 5 more iterations, up to $3 more, and a
+`resume` without budget flags runs 3 more. Prefer `--until N` (stop at
+iteration N in total, safe to repeat) over `-n` (N more iterations) in scripts
+and retries: a retried `-n` would run N again. `resume` exits 3 when there is no run to
 resume. A failed actual main-agent call consumes its number; resume at the next
 iteration. Do not archive or delete runs, reset accepted code, or extend the
 agreed effort without authorization.
@@ -90,7 +92,7 @@ interrupted run, `autohelix report` writes one when requested.
 
 ## Orchestrate several runs
 
-To compare approaches (models, prompts, budgets, or the same setup several
+To compare approaches (models, prompts, or the same setup several
 times), write one config per approach (`autohelix/a.yaml`, `autohelix/b.yaml`;
 runs are named after the file; repeats of one setup share a config), commit
 them, and start K runs of one group, each in its own background session:

@@ -24,6 +24,12 @@ Breaking:
   - `agent.timeout_seconds` and `budget.iteration_time` → `agent.timeout`, a
     hard kill that also gives time-left hints where the backend supports them
     (a Codex without hook support warns and runs without them).
+- **`budget:` moved to the command line** (an error naming the flags): `run`
+  and `resume` take `-n N`, `--until N`, `--cost USD` and `--time DURATION`,
+  each counting that invocation (`resume -n 10 --cost 5`: 10 more iterations,
+  up to $5 more). Without a budget flag, 3 iterations; with only `--cost` or
+  `--time`, no iteration cap. Status and `--json` record the caps as run totals
+  (spent before + this invocation's cap).
 - Metric gate thresholds are percent strings (`regress: 5%`); a bare number
   is an error. Durations everywhere: a bare number (or a string of digits) is
   seconds, strings like `90s`, `30m`, `2h30m`.

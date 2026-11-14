@@ -12,7 +12,7 @@ import yaml
 
 from autohelix.checks import run_observe_entry
 from autohelix.config import Config, ObserveEntry, capture_problem
-from autohelix.harness import Harness
+from autohelix.harness import Budget, Harness
 from autohelix.history import History
 from autohelix.iteration import IterationWorkspace
 from autohelix.runs import RunPaths
@@ -53,7 +53,7 @@ def _configure(project, **sections) -> None:
 
 
 def _run(project, n: int) -> list:
-    Harness(project, verbose=False).run(max_iterations=n, report=False)
+    Harness(project, verbose=False).run(Budget(until=n), report=False)
     return History(project).load()
 
 
@@ -337,7 +337,7 @@ def test_scratch_is_fresh_private_and_removed_after_each_command(project, log):
                stop=[f"{gone} && {check} && exit 1"])
     harness = Harness(project, verbose=False)
     copies = harness.run_state.copies_root
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     records = History(project).load()
     assert [r.accepted for r in records] == [True, True]
     assert all(g["passed"] for r in records for g in r.gates)
@@ -368,7 +368,7 @@ def test_candidate_base_and_project(project, log):
     _configure(project, gates=[record], observe=[{"name": "bench", "command": record}])
     base = _git(project, "rev-parse", "HEAD")
     harness = Harness(project, verbose=False)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     commit = History(project).load()[1].commit
     assert commit
     a_tree, t_tree = _git(project, "rev-parse", f"{base}^{{tree}}"), _git(project, "rev-parse", f"{commit}^{{tree}}")
@@ -409,7 +409,7 @@ def test_failed_command_entry_at_the_baseline_is_a_setup_error(project):
     _configure(project, observe=[{"name": "bench", "command": "echo '##autohelix[speed=3]'; exit 1",
                                   "metrics": {"speed": "higher"}}])
     with pytest.raises(RuntimeError, match=r"observe entry `bench` failed \(exited 1\) and reported no `speed`"):
-        Harness(project, verbose=False).run(max_iterations=1, report=False)
+        Harness(project, verbose=False).run(Budget(until=1), report=False)
     [record] = History(project).load()
     assert not record.accepted and record.observe[0]["error"] == "exited 1"
 
@@ -481,8 +481,8 @@ def test_an_accepted_no_op_counts_as_previous(project):
 
 def test_previous_after_resume(project):
     _configure(project, observe=[{"name": "tracker", "command": TRACKER}])
-    Harness(project, verbose=False, land_mode="manual").run(max_iterations=1, report=False)
-    Harness(project, verbose=False).run(max_iterations=2, report=False)  # resume: iteration 2
+    Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
+    Harness(project, verbose=False).run(Budget(until=2), report=False)  # resume: iteration 2
     records = History(project).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True), (2, True)]
     assert _first_lines(project, 2) == ["iter=2", "prev=iter=1"]
@@ -496,13 +496,13 @@ def test_baseline_retry_clears_observations_and_has_no_previous(project, tmp_pat
                                      f'[ -e {marker} ] && echo "##autohelix[speed=1]"; true'),
                          "metrics": {"speed": "higher"}}])
     with pytest.raises(RuntimeError, match="Baseline setup error: observe entry `bench`"):
-        Harness(project, verbose=False).run(max_iterations=1, report=False)
+        Harness(project, verbose=False).run(Budget(until=1), report=False)
     observations = _observe(project, 0)
     assert sorted(p.name for p in observations.iterdir()) == ["bench", "ghost"]
     marker.touch()
     harness = Harness(project, verbose=False)  # resumes the run: a baseline retry
     harness.config.gates = []  # this attempt plants nothing: what's left is the first attempt's
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     records = History(project).load()
     assert [(r.iteration, r.accepted) for r in records][:2] == [(0, True), (1, True)]
     assert sorted(p.name for p in observations.iterdir()) == ["bench"]

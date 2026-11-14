@@ -35,8 +35,9 @@ A useful loop answers five questions:
 3. **What must remain true?** Encode non-negotiable requirements as gates.
 4. **What should carry forward?** Decide which metrics, artifacts, reviews,
    results, and lessons later iterations need: those are `observe:` entries.
-5. **When should the loop stop?** Set an iteration, time, or cost budget that
-   matches the intended scope, and a `stop:` condition if "done" is checkable.
+5. **When should the loop stop?** Give an iteration, time, or cost budget that
+   matches the intended scope on the command line (`autohelix run -n 30 --cost
+   20`), and a `stop:` condition in the config if "done" is checkable.
 
 ### Tips
 
@@ -317,9 +318,9 @@ observe:
 
 stop:
   - jq -e '.missing == 0' "$AUTOHELIX_METRICS"
-
-budget: {iterations: 30, cost: 20}
 ```
+
+Run it with `autohelix run -n 30 --cost 20`.
 
 `metrics: {missing: lower}` adds `missing` to the review's answer schema; the
 command prints it as `##autohelix[missing=3]`, so it is a number like any
@@ -514,7 +515,7 @@ Available token usage and cost are captured from agent backends:
 - **Persisted**: stored in `.autohelix/runs/<id>/history.jsonl` for later analysis
 
 Each iteration's cost includes its optimization agent and the model calls its
-commands report (`ask`, `review`). Run totals and `budget.cost` also include the
+commands report (`ask`, `review`). Run totals and `--cost` also include the
 baseline's. History's `calls` list records each agent and command call with
 its role, usage and log path; baseline calls and failed calls count too.
 Failed main-agent calls consume their iteration number and resume at the next one;
@@ -538,7 +539,7 @@ represent subscription or Bedrock bills. Backend-supplied amounts may also be
 estimates.
 
 Missing costs are unavailable, and totals with missing costs are incomplete.
-`budget.cost` uses the recorded amounts, including Codex estimates, and warns
+`--cost` uses the recorded amounts, including Codex estimates, and warns
 if some costs are unavailable. See [Cost Tracking](config.md#cost-tracking) for
 the pricing assumptions and accounting limits.
 

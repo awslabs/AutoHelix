@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from autohelix.agents import AgentRunResult
-from autohelix.harness import AutoHelixRunError, Harness
+from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.runs import RunLock, RunPaths, delete, git, land, short_id
 from autohelix.usage_log import append_usage
 from autohelix.viewer import RunData
@@ -101,7 +101,7 @@ def test_postaccept_stop_sees_accepted_head_and_clean_index(project):
     original_head = git(project, "rev-parse", "HEAD").stdout
     original_branch = git(project, "symbolic-ref", "HEAD").stdout
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=3, report=False)
+    harness.run(Budget(until=3), report=False)
     records = harness.history.load()
     assert [record.iteration for record in records] == [0, 1]
     accepted = records[1]
@@ -141,7 +141,7 @@ def test_dirty_first_start_allocates_no_run(project):
     with pytest.raises(RuntimeError, match="Uncommitted"):
         harness = Harness(project)
         try:
-            harness.run(max_iterations=1, report=False)
+            harness.run(Budget(until=1), report=False)
         finally:
             harness.close()
     assert not RunPaths(project).current.exists()
@@ -190,7 +190,7 @@ def test_auto_landing_never_rewinds_target_changed_during_segment(project, monke
         return run_agent(*args)
 
     monkeypatch.setattr(harness, "run_agent", agent)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert harness.history.load()[-1].accepted
     assert git(project, "rev-parse", "HEAD").stdout.strip() == observed[0]
     assert (project / "user.txt").read_text() == "legitimate concurrent user commit"
@@ -198,9 +198,9 @@ def test_auto_landing_never_rewinds_target_changed_during_segment(project, monke
 
 def test_selection_waits_briefly_and_real_new_runs_allocate_distinct_ids(project):
     script = (
-        "from pathlib import Path; from autohelix.harness import Harness; "
+        "from pathlib import Path; from autohelix.harness import Budget, Harness; "
         "h=Harness(Path('.'),new=True,land_mode='manual'); "
-        "h.run(max_iterations=1,report=False); print('RESULT='+h.paths.run_id)"
+        "h.run(Budget(until=1),report=False); print('RESULT='+h.paths.run_id)"
     )
     lease = RunLock(RunPaths(project).selection_lock)
     processes = [subprocess.Popen([sys.executable, "-c", script], cwd=project,
@@ -222,7 +222,7 @@ def test_reusing_deleted_id_does_not_recover_older_run_commits(project, monkeypa
 
     monkeypatch.setattr(runs.secrets, "choice", lambda _: "a")
     first = Harness(project)
-    first.run(max_iterations=1, report=False)
+    first.run(Budget(until=1), report=False)
     assert short_id(first.paths.run_id) == "aaaa"
     delete(first.paths, force=True)
     second = Harness(project, new=True)

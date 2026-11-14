@@ -9,7 +9,7 @@ from click.testing import CliRunner
 
 from autohelix.cli import main
 from autohelix.config import config_changes, inlined, load_config, stored_config_text
-from autohelix.harness import Harness
+from autohelix.harness import Budget, Harness
 from autohelix.history import History
 from autohelix.prompt_template import load_template
 from autohelix.runs import RunPaths, git, short_id
@@ -243,7 +243,7 @@ def test_a_deleted_config_continues_from_the_stored_copy(started):
     git(started.project, "commit", "-qm", "drop config")
     harness = Harness(started.project, run_id=started.run_id)
     assert harness.config.goal == "Make a checked change"
-    harness.run(max_iterations=2, report=False)
+    harness.run(Budget(until=2), report=False)
     assert History(started.project, started.run_id).get_last_iteration() == 2
 
 
@@ -283,7 +283,7 @@ def test_judges_read_the_stored_copy(project, tmp_path):
     (project / "autohelix.yaml").write_text(CONFIG + f'gates:\n  - cat "$AUTOHELIX_CONFIG" > {seen}\n')
     commit(project, "config")
     harness = Harness(project)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert seen.read_text() == harness.paths.config.read_text() == (project / "autohelix.yaml").read_text()
     assert harness.config_file == project / "autohelix.yaml"  # the source, for names and messages
 
@@ -297,7 +297,7 @@ def test_an_agent_edit_to_the_config_or_template_is_reverted(project, target):
     (project / "autohelix.yaml").write_text(CONFIG.replace("code.py", target) + "prompt_template: prompt.md\n")
     commit(project, "config")
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     record = History(project, harness.paths.run_id).load()[1]
     assert record.discarded == record.discarded_frozen == [target]
     assert "Frozen: autohelix.yaml, prompt.md" in harness.paths.prompt(1).read_text()

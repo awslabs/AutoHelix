@@ -286,7 +286,8 @@ def test_the_template_is_a_valid_v2_config_once_it_has_a_goal(project):
     assert [i for i in config.validate(raw) if i.level == "error"] == []
     assert not [i for i in config.validate(raw) if "Unknown config key" in i.message]
     assert config.title == "Make main.py faster."
-    assert config.editable == ["src/"] and config.max_iterations == 5
+    assert config.editable == ["src/"]
+    assert "budget" not in raw
 
 
 def test_run_finds_the_named_config(project, monkeypatch):
@@ -301,7 +302,7 @@ def test_run_finds_the_named_config(project, monkeypatch):
         def __init__(self, project_path, config_file=None, **selection):
             seen["config"] = config_file
 
-        def run(self, max_iterations=None, report=True):
+        def run(self, budget=None, report=True):
             pass
 
     monkeypatch.setattr("autohelix.cli.Harness", Harness)

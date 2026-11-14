@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from autohelix import workspace
 from autohelix.cli import main
 from autohelix.config import Config
-from autohelix.harness import Harness
+from autohelix.harness import Budget, Harness
 from autohelix.runs import RunLock, RunPaths, archive, git, short_id
 from tests.test_runs import configure
 
@@ -56,13 +56,13 @@ def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, mon
               agent={"backend": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
                                                   "notes_content": "tried {iteration}"}})
     first = Harness(project, new=True, group="g")
-    first.run(max_iterations=1, report=False)
+    first.run(Budget(until=1), report=False)
     stranger = Harness(project, new=True, land_mode="manual")
-    stranger.run(max_iterations=1, report=False)
+    stranger.run(Budget(until=1), report=False)
     second = Harness(project, new=True, group="g")
     seen = {}
     watch_agent(second, monkeypatch, seen)
-    second.run(max_iterations=1, report=False)
+    second.run(Budget(until=1), report=False)
 
     one = first.paths.run_id
     assert seen["runs"] == [one]
@@ -84,7 +84,7 @@ def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, mon
     third = Harness(project, run_id=second.paths.run_id)
     seen.clear()
     watch_agent(third, monkeypatch, seen)
-    third.run(max_iterations=2, report=False)
+    third.run(Budget(until=2), report=False)
     assert seen["runs"] == [] and f"refs/autohelix/{one}" not in seen["refs"]
     assert "Other runs in group" not in seen["prompt"]
 
@@ -199,7 +199,7 @@ def test_freeze_never_hashes_harness_material_into_the_users_objects(project, mo
         return real(cwd, prompt, iteration)
 
     monkeypatch.setattr(harness, "run_agent", agent)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert harness.history.load()[-1].accepted
     objects = git(project, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)").stdout.split()
     for text in (unique["hint"] + "\n", unique["scratch"]):

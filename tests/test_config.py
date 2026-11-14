@@ -170,22 +170,13 @@ class TestConfigFromDict:
         assert Config.from_dict({"goal": "x", "scope": {"editable": ["src/"]}}).frozen == []
         assert Config.from_dict({"goal": "x", "scope": {"frozen": "tests/"}}).frozen == ["tests/"]
 
-    def test_budget(self):
-        config = Config.from_dict({"goal": "x", "budget": {"iterations": 50}})
-        assert config.max_iterations == 50
-
-    def test_default_budget(self):
-        config = Config.from_dict({"goal": "x"})
-        assert config.max_iterations == 5
-
-    @pytest.mark.parametrize("key", ["scope", "budget", "gates", "observe", "stop", "agent"])
+    @pytest.mark.parametrize("key", ["scope", "gates", "observe", "stop", "agent"])
     def test_present_but_empty_key_does_not_crash(self, key):
         # A blank/commented body is None in YAML; it behaves like the key being absent.
         config = Config.from_dict({"goal": "x", key: None})
         assert config.goal == "x"
         assert config.editable == [] and config.frozen == []
         assert config.gates == [] and config.observe == []
-        assert config.max_iterations == 5
         assert not errors({"goal": "x", key: None})
 
     def test_agent_keys(self):
@@ -241,7 +232,10 @@ class TestOldKeys:
         ({"agent": {"type": "claude"}}, "`agent.type` is now `agent.backend`"),
         ({"agent": {"timeout_seconds": 60}}, "`agent.timeout_seconds` is now `agent.timeout`"),
         ({"agent": {"settings": {"model": "m"}}}, "`agent.settings.model` is now `agent.model`"),
-        ({"budget": {"iteration_time": "1h"}}, "`budget.iteration_time` is now `agent.timeout`"),
+        ({"budget": {"iterations": 3}},
+         "`budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`"),
+        ({"budget": None}, "`budget:` moved to the command line"),
+        ({"budget": {"iteration_time": "1h"}}, "`agent.timeout` limits one iteration"),
         ({"observe": [{"name": "b", "command": "x", "values": {"s": "higher"}}]}, "`values:` is now `metrics:`"),
         ({"observe": [{"name": "b", "command": "x", "capture_stdout": False}]},
          "`capture_stdout:` is gone: stdout is always saved"),
@@ -348,11 +342,6 @@ class TestEntryErrors:
         notes = Config.from_dict({"goal": "g", "agent": {"require_notes": {"min_chars": 10}}}).agent.require_notes
         assert (notes.min_chars, notes.max_retries) == (10, 3)
 
-    @pytest.mark.parametrize("value", [0, -1, True, "abc", 2.5, "3"])
-    def test_iterations_must_be_a_positive_integer(self, value):
-        found = errors({"goal": "g", "budget": {"iterations": value}})
-        assert any("budget.iterations must be a positive integer" in e for e in found), found
-
     def test_unknown_agent_key_is_an_error(self):
         assert any("Unknown key agent.colour" in e for e in errors({"goal": "g", "agent": {"colour": "blue"}}))
 
@@ -360,7 +349,6 @@ class TestEntryErrors:
 class TestDurations:
     @pytest.mark.parametrize("where, data", [
         ("agent.timeout", {"agent": {"timeout": "{}"}}),
-        ("budget.time", {"budget": {"time": "{}"}}),
     ])
     def test_durations_everywhere(self, where, data):
         def make(value):
@@ -369,7 +357,7 @@ class TestDurations:
 
         for value, seconds in ((90, 90), ("90s", 90), ("30m", 1800), ("2h30m", 9000)):
             config = Config.from_dict({"goal": "g", **make(value)})
-            assert (config.agent.timeout if where == "agent.timeout" else config.max_time_seconds) == seconds
+            assert config.agent.timeout == seconds
         for value in ("soon", 0, -5, True, 1e300, "31d", "721h", 30 * 86400 + 1):
             assert any(where in e for e in errors({"goal": "g", **make(value)})), value
         assert not errors({"goal": "g", **make(30 * 86400)})
@@ -460,12 +448,12 @@ class TestMetricGateFailure:
 class TestConfigValidate:
     def test_valid_config_no_issues(self):
         data = {"goal": "optimize sorting", "gates": ["pytest", {"metric": "speed", "regress": "5%"}],
-                "observe": [BENCH], "stop": ["true"], "budget": {"iterations": 3}}
+                "observe": [BENCH], "stop": ["true"]}
         assert Config.from_dict(data).validate(data) == []
 
     def test_known_top_level_keys(self):
         assert KNOWN_TOP_LEVEL_KEYS == {"goal", "agent", "prompt_template", "scope", "gates", "observe", "stop",
-                                        "budget", "land", "report"}
+                                        "land", "report"}
 
     def test_empty_goal(self):
         config = Config.from_dict({"goal": ""})
@@ -646,161 +634,6 @@ class TestParseDuration:
 
     def test_leading_zeros(self):
         assert parse_duration("01h") == 3600
-
-
-class TestBudgetConfig:
-    def test_cost_parsed(self):
-        config = Config.from_dict({"goal": "x", "budget": {"cost": 5.0}})
-        assert config.max_cost_usd == 5.0
-
-    def test_time_parsed(self):
-        config = Config.from_dict({"goal": "x", "budget": {"time": "1h"}})
-        assert config.max_time_seconds == 3600
-
-    def test_all_three(self):
-        config = Config.from_dict({
-            "goal": "x",
-            "budget": {"iterations": 10, "cost": 2.5, "time": "30m"},
-        })
-        assert config.max_iterations == 10
-        assert config.max_cost_usd == 2.5
-        assert config.max_time_seconds == 1800
-
-    def test_cost_default_none(self):
-        config = Config.from_dict({"goal": "x"})
-        assert config.max_cost_usd is None
-
-    def test_time_default_none(self):
-        config = Config.from_dict({"goal": "x"})
-        assert config.max_time_seconds is None
-
-    def test_negative_cost_error(self):
-        config = Config.from_dict({
-            "goal": "optimize",
-            "gates": ["pytest"],
-            "budget": {"cost": -1},
-        })
-        issues = config.validate()
-        errors = [i for i in issues if i.level == "error"]
-        assert any("budget.cost" in i.message for i in errors)
-
-    def test_zero_cost_error(self):
-        config = Config.from_dict({
-            "goal": "optimize",
-            "gates": ["pytest"],
-            "budget": {"cost": 0},
-        })
-        issues = config.validate()
-        errors = [i for i in issues if i.level == "error"]
-        assert any("budget.cost" in i.message for i in errors)
-
-    def test_invalid_time_string_error(self):
-        config = Config.from_dict({
-            "goal": "optimize",
-            "gates": ["pytest"],
-            "budget": {"time": "abc"},
-        })
-        issues = config.validate()
-        errors = [i for i in issues if i.level == "error"]
-        assert any("budget.time" in i.message for i in errors)
-
-    def test_time_integer_treated_as_seconds(self):
-        config = Config.from_dict({"goal": "x", "budget": {"time": 120}})
-        assert config.max_time_seconds == 120
-
-    def test_invalid_cost_string_error(self):
-        config = Config.from_dict({
-            "goal": "optimize",
-            "gates": ["pytest"],
-            "budget": {"cost": "not_a_number"},
-        })
-        issues = config.validate()
-        errors = [i for i in issues if i.level == "error"]
-        assert any("budget.cost" in i.message for i in errors)
-
-    def test_cost_string_numeric(self):
-        config = Config.from_dict({"goal": "x", "budget": {"cost": "5.00"}})
-        assert config.max_cost_usd == 5.0
-
-    def test_cost_bool_true_error(self):
-        config = Config.from_dict({
-            "goal": "optimize",
-            "gates": ["pytest"],
-            "budget": {"cost": True},
-        })
-        issues = config.validate()
-        errors = [i for i in issues if i.level == "error"]
-        assert any("budget.cost" in i.message for i in errors)
-
-    def test_cost_bool_false_error(self):
-        config = Config.from_dict({
-            "goal": "optimize",
-            "gates": ["pytest"],
-            "budget": {"cost": False},
-        })
-        issues = config.validate()
-        errors = [i for i in issues if i.level == "error"]
-        assert any("budget.cost" in i.message for i in errors)
-
-    def test_cost_none_stays_none(self):
-        config = Config.from_dict({"goal": "x", "budget": {"cost": None}})
-        assert config.max_cost_usd is None
-
-    def test_negative_zero_cost_error(self):
-        config = Config.from_dict({
-            "goal": "optimize",
-            "gates": ["pytest"],
-            "budget": {"cost": -0.0},
-        })
-        issues = config.validate()
-        errors = [i for i in issues if i.level == "error"]
-        assert any("budget.cost" in i.message or "cost" in i.message for i in errors)
-
-    def test_time_zero_seconds_error(self):
-        config = Config.from_dict({
-            "goal": "optimize",
-            "gates": ["pytest"],
-            "budget": {"time": "0s"},
-        })
-        issues = config.validate()
-        errors = [i for i in issues if i.level == "error"]
-        assert any("budget.time" in i.message or "time" in i.message for i in errors)
-
-    def test_empty_budget_block(self):
-        config = Config.from_dict({"goal": "x", "budget": {}})
-        assert config.max_iterations == 5
-        assert config.max_cost_usd is None
-        assert config.max_time_seconds is None
-
-    def test_invalid_cost_string_has_specific_error(self):
-        config = Config.from_dict({
-            "goal": "optimize",
-            "gates": ["pytest"],
-            "budget": {"cost": "not_a_number"},
-        })
-        issues = config.validate()
-        errors = [i for i in issues if i.level == "error"]
-        assert any("not_a_number" in i.message for i in errors)
-
-    def test_time_bool_true_error(self):
-        config = Config.from_dict({
-            "goal": "optimize",
-            "gates": ["pytest"],
-            "budget": {"time": True},
-        })
-        issues = config.validate()
-        errors = [i for i in issues if i.level == "error"]
-        assert any("budget.time" in i.message or "time" in i.message for i in errors)
-
-    def test_cost_bool_has_specific_error(self):
-        config = Config.from_dict({
-            "goal": "optimize",
-            "gates": ["pytest"],
-            "budget": {"cost": True},
-        })
-        issues = config.validate()
-        errors = [i for i in issues if i.level == "error"]
-        assert any("bool" in i.message for i in errors)
 
 
 def test_ask_gate_accepts_unquoted_yes_and_no_keys():

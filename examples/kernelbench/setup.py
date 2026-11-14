@@ -228,7 +228,7 @@ def setup(task_name: str, output_dir: Path) -> bool:
     print(f"  Problem: {problem_name}")
     print()
     print(f"  cd {output_dir}")
-    print(f"  autohelix run")
+    print(f"  autohelix run -n {defaults['iterations']}")
     print()
     print("  Requires: GPU with PyTorch CUDA support")
     return True

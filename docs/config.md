@@ -66,15 +66,13 @@ observe:                  # feedback for the next agent, numbers for the harness
 
 stop:                     # end the run early once one exits 0
   - jq -e '.speed >= 5000' "$AUTOHELIX_METRICS"
-
-budget:
-  iterations: 10
-  # cost: 20              # dollars
-  # time: 2h              # total wall-clock
 ```
 
+How long a run goes on is not in the config: `autohelix run -n 10 --cost 20
+--time 2h` (see [Budget](#budget)).
+
 Top-level keys: `goal`, `land`, `prompt_template`, `report`, `agent`,
-`scope`, `gates`, `observe`, `stop` and `budget`. An unknown key is a warning
+`scope`, `gates`, `observe` and `stop`. An unknown key is a warning
 (a possible typo); a key of the old format is an error that names its
 replacement (see [Old → new](#old--new)). `autohelix run` lists every error and
 starts nothing until they are fixed.
@@ -84,7 +82,8 @@ as a list of one.
 
 ### Durations
 
-Every time value (`agent.timeout`, an entry's `timeout:`, `budget.time`) is a
+Every time value (`agent.timeout`, an entry's `timeout:`, and `--time` on the
+command line) is a
 duration: a bare number is seconds (`90`), a string uses `h`, `m` and `s`
 (`90s`, `30m`, `2h30m`). It must be positive and at most 30 days.
 
@@ -415,7 +414,7 @@ Keep stop commands out of `scope.editable`, and don't let them modify files: a
 change is reported as an error (the acceptance stays recorded), and on the
 baseline it stops the run. The agent's prompt lists them.
 
-Stop conditions only end a run early: budgets still apply. If the baseline
+Stop conditions only end a run early: the command line's budget still applies. If the baseline
 already meets one, no iterations run. If you interrupt a run while its stop
 commands are running, the iteration is kept but not checked; the next accepted
 iteration is. A stop pauses the run: `autohelix resume` continues it (and it
@@ -487,24 +486,12 @@ hints), OpenCode through a plugin. Every backend can run
 
 ## Budget
 
-Caps how far a run goes. Combine any of:
-
-- `iterations`: maximum number of iterations, a positive integer (default 5).
-- `cost`: cumulative cost threshold in USD: the main agent, plus model calls
-  the harness's commands report (`ask` gates, reviews), including the
-  baseline's. Uses backend-reported amounts for Claude Code and OpenCode, and
-  calculated API-equivalent estimates for Codex.
-- `time`: maximum total wall-clock, a duration (`90m`, `2h`).
-
-`cost` and `time` are **checked between iterations, never mid-iteration**: the
-loop stops once the cumulative total crosses the limit, so a run can overshoot
-by up to one iteration's worth of cost or time. For a hard cutoff within an
-iteration use `agent.timeout`.
-
-Both are also checked before starting an iteration, including after the
-baseline and when resuming a run: a run past its budget stops at once
-(`resume -n` extends only the iteration budget; `cost` and `time` are part of
-the run's stored config, which `resume` keeps).
+The config says what one iteration does; how long a run goes on is up to each
+`autohelix run` or `resume`: `-n N` (N iterations, or N more), `--until N` (up
+to iteration N), `--cost USD` (up to USD spent by this invocation) and `--time
+DURATION` (this invocation's wall clock), whichever comes first. Without any of
+them, 3 iterations. See [CLI → Budgets](cli.md#budgets). A `budget:` key is an
+error naming the flags.
 
 ## Run identity and landing
 
@@ -547,7 +534,7 @@ before relying on the results. An interrupted run gets no summary; run
 to skip it. The call uses the same agent backend and model as the run, with a
 timeout of `agent.timeout` capped at 15 minutes. Its time and cost are shown
 next to the summary in `autohelix view` and `report.html`; the cost is not
-counted against `budget.cost`.
+counted against `--cost`.
 
 ## Old → new
 
@@ -566,7 +553,8 @@ replacement; there are no aliases and no migration.
 | `reviewer.model`, `reviewer.timeout_seconds` | `agent:` and `timeout:` on the review entry | |
 | `agent.type` | `agent.backend` | `` `agent.type` is now `agent.backend` `` |
 | `agent.timeout_seconds` | `agent.timeout` (a duration) | `` `agent.timeout_seconds` is now `agent.timeout` (a duration such as 30m) `` |
-| `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | `` `budget.iteration_time` is now `agent.timeout` `` |
+| `budget:` (`iterations`, `cost`, `time`) | the `run`/`resume` flags `-n`, `--cost`, `--time`, per invocation (see [CLI → Budgets](cli.md#budgets)) | `` `budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`; ...) `` |
+| `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | as `budget:` |
 | `agent.settings.model` | `agent.model` | `` `agent.settings.model` is now `agent.model` `` |
 | a bare number as the threshold (`max_regression_pct: 5` was one; `regress: 5` now) | `regress: 5%` | `write the percentage with %, e.g. 5%, got 5` |
 | `timeout:` in seconds | durations everywhere (a bare number, or a string of digits like `"90"`, is still seconds) | |
@@ -596,9 +584,6 @@ observe:
 
 scope:
   editable: [sort.py]
-
-budget:
-  iterations: 10
 ```
 
 ### ML Training Recipe
@@ -642,9 +627,6 @@ observe:
 
 scope:
   editable: [src/utils.py]
-
-budget:
-  iterations: 5
 ```
 
 ### Metric Gates and Reviews
@@ -681,9 +663,6 @@ observe:
 
 scope:
   editable: [kernel.py]
-
-budget:
-  iterations: 20
 ```
 
 ### Working Through a List
@@ -714,9 +693,10 @@ observe:
 
 stop:
   - jq -e '.missing == 0' "$AUTOHELIX_METRICS"
-
-budget: {iterations: 30, cost: 20}
 ```
+
+Run it with a cap: `autohelix run -n 30 --cost 20` (30 iterations or $20,
+whichever comes first; the stop condition can end it sooner).
 
 ### Minimal Config
 
@@ -750,7 +730,7 @@ Available token usage and cost are captured from agent backends and shown:
 Iteration costs include the optimization agent and model calls made by the
 commands the harness runs (`ask:` gates and `review:` entries, or
 `autohelix ask` and `autohelix review` anywhere in `gates:`, `observe:` or
-`stop:`). Run totals and `budget.cost` also include the baseline's commands;
+`stop:`). Run totals and `--cost` also include the baseline's commands;
 report generation remains separate. History's `calls` list records each
 attempted agent call and command model call with its role, usage and log path.
 Records from earlier versions may list `reviewer` calls; they count the same way.
@@ -802,7 +782,7 @@ locally even when usage is unavailable.
 
 Missing, invalid, or interrupted usage remains **unavailable**, not zero.
 Mixed totals are labeled **incomplete**. If an iteration or resumed history has
-unavailable cost, `budget.cost` warns and tracks only the known amounts; retain
-an iteration or time limit as well. The budget uses the saved estimate and is
-checked between iterations, so it is an approximate stopping threshold, not a
-guaranteed spending cap.
+unavailable cost, `--cost` warns and tracks only the known amounts; give
+`-n` or `--time` as well. It uses the saved estimate and is checked between
+iterations, so it is an approximate stopping threshold, not a guaranteed
+spending cap.

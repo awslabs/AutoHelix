@@ -255,11 +255,6 @@ agent:
   backend: claude
   model: claude-opus-4-8
   timeout: 30m
-
-budget:
-  iterations: 10
-  cost: 30
-  time: 4h
 ```
 
 </details>
@@ -343,8 +338,8 @@ serves a live page for a run on 127.0.0.1: status, metric chart, iterations with
 
 Two time controls:
 
-- **`budget.time`** — caps *total* wall-clock for the whole run. Checked before each
-  iteration starts; doesn't interrupt one in progress.
+- **`--time DURATION`** (on `run` / `resume`) — caps that invocation's wall clock.
+  Checked before each iteration starts; doesn't interrupt one in progress.
 - **`agent.timeout`** — per-iteration deadline, a hard kill. Where the backend supports
   it, a hook injects a countdown into the agent's context after each tool call, so it can
   wrap up and write notes before the deadline hits.

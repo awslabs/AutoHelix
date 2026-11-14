@@ -202,7 +202,7 @@ def test_autohelix_template_splits_correctness_from_timing():
     assert len(config.observe) == 1
     assert config.observe[0].command == "python eval_solution.py"
     assert config.observe[0].timeout == 1234
-    assert config.max_iterations == 7
+    assert "budget" not in raw
     assert config.agent.timeout is None
     assert config.agent.backend == "claude"
     assert config.agent.model == "us.anthropic.claude-opus-4-8"

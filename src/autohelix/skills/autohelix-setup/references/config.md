@@ -30,19 +30,19 @@ observe:
       runtime_ms: lower
     capture:
       - results/report.json
-
-budget:
-  iterations: 3
 ```
 
+Launched with `autohelix run -n 3` (budgets are command-line flags, not config).
+
 Top-level keys, in the skill's preferred order for generated configs: `goal`,
-`scope`, `gates`, `observe`, `stop`, `agent`, `budget`, `land`, `report`,
+`scope`, `gates`, `observe`, `stop`, `agent`, `land`, `report`,
 `prompt_template`. This order is a presentation convention; config parsing
 accepts any top-level order. The order of entries within `gates`, `observe`,
 and `stop` affects execution. Keys of the first config format
 (`constraints`, `metrics`, `observables`, `acceptance`, `reviewer`,
-`agent.type`, `agent.timeout_seconds`, `budget.iteration_time`) are errors that
-name their replacement; when editing an existing config, convert them.
+`agent.type`, `agent.timeout_seconds`, `budget`) are errors that name their
+replacement; when editing an existing config, convert them (a `budget:` block
+becomes the launch command's `-n`, `--cost`, `--time`).
 
 ## Config files
 
@@ -206,50 +206,41 @@ copy of the accepted iteration's observations (one folder per entry name);
 `autohelix ask -- "<yes/no question>"` (an agent judgment: exit 0 = yes, 1 = no,
 2 = no valid answer; cost counted toward the run). Use one when the user states
 when the run is done; keep the command and any criteria files outside
-`scope.editable`. Budgets still apply.
+`scope.editable`. The command line's budget still applies.
 
 ## Budgets and run state
 
-Omitting `budget.iterations` defaults to five attempts, including when `budget`
-is omitted, empty, or YAML `null`. Optional `cost` and `time` may be omitted or
-set to `null`, which means no configured cap from that field. Other limits, such
-as `agent.timeout` or a command timeout, may still apply. Time values accept
-seconds or durations such as `30m`.
+Budgets are flags of `autohelix run` and `autohelix resume`, never config (a
+`budget:` key is an error naming the flags). Each counts **one invocation**:
 
-A preparation-only template can leave those choices open:
+- `-n N`: N iterations (on `resume`, N more). `--until N`: up to iteration N in
+  total, the one flag that counts a total (repeating it is harmless; prefer it
+  in scripts and retries). Not both.
+- `--cost USD`: stop once this invocation has charged USD more.
+- `--time DURATION`: start no iteration after DURATION (`30m`, `2h`) of this
+  invocation's wall clock, the baseline included.
 
-```yaml
-budget:
-  # iterations: 5  # Omitted uses the runtime default five, not unlimited.
-  cost: null       # No configured dollar cap; choose only with reliable reporting.
-  time: null       # No configured loop-time cap.
-```
-
-Proposed values can stay in comments until selected; retain any stated/existing
-budgets. `iterations` must be a positive integer when set; never `null`.
-
-`budget.time` measures elapsed time in the iteration loop, including its gates
-and observe entries; initial preflight and baseline work happen before that
-timer. Total time/cost budgets are checked between iterations, so they can
-overshoot rather than interrupt an iteration. Prior recorded usage counts on
-resume, and both are checked before starting another iteration: an
-already-exhausted cost or time budget starts no new attempt.
+Without any of them an invocation runs three iterations; with only `--cost` or
+`--time` it has no iteration cap. Cost and time are checked between
+iterations, so they can overshoot rather than interrupt one. `resume -n 10
+--cost 5` is 10 more iterations, up to $5 more, whatever earlier invocations
+spent. Other limits, such as `agent.timeout` or a command timeout, still apply.
 
 `agent.timeout` limits the main-agent call and provides remaining-time feedback,
 not a deadline for the whole evaluation cycle. Gate and observe commands have
 per-command timeouts.
 
-`budget.cost` compares the accumulated cost of the optimization agent and of
-model calls the harness's commands report (`ask` gates, reviews), including the
-baseline's, with the requested dollar limit. History keeps each actual model
-call in the `calls` list, including its role, usage and relative log path.
-Claude Code and OpenCode can report dollar costs; Codex can provide calculated
-API-equivalent estimates. Only rely on this optional budget when usable dollar
-usage is recorded for the selected backend/configuration; missing cost is not
-evidence of free usage. Report generation, model calls made by external
-commands that don't record usage, and the user's supervising/setup agent are
-separate. These boundaries make the budget a run-control threshold, not an
-absolute all-inclusive financial cap.
+`--cost` compares what the invocation's optimization agent and the model calls
+the harness's commands report (`ask` gates, reviews) cost, the baseline's
+included, with the dollar limit. History keeps each actual model call in the
+`calls` list, including its role, usage and relative log path. Claude Code and
+OpenCode can report dollar costs; Codex can provide calculated API-equivalent
+estimates. Only rely on `--cost` when usable dollar usage is recorded for the
+selected backend/configuration; missing cost is not evidence of free usage
+(`--cost` counts known costs only, and warns). Report generation, model calls
+made by external commands that don't record usage, and the user's
+supervising/setup agent are separate. These boundaries make it a run-control
+threshold, not an absolute all-inclusive financial cap.
 
 Commit the config and any scripts it uses, then start with `autohelix run
 [NAME] --path PROJECT -n 3` (`NAME` for `autohelix/NAME.yaml`, none for
@@ -258,9 +249,7 @@ Commit the config and any scripts it uses, then start with `autohelix run
 the file's parsed config has changed since (comment edits don't count): apply an edited config with a
 new run, `autohelix run [NAME] --import <id>`, or restore the file. The config and template files are
 always frozen; freeze scripts the config calls under `scope.frozen` if they must not change. Continue one with `autohelix resume [RUN_ID]
---path PROJECT`: `--until N` runs up to iteration N (a total; repeating it is
-harmless), `-n 3` runs three more. Either overrides only `budget.iterations`;
-cost and time stay run totals. A bare `resume` reads the config a bare `run`
+--path PROJECT` and its own budget flags. A bare `resume` reads the config a bare `run`
 would; with several configs, name the run.
 
 `autohelix archive RUN_ID` hides a run and stops a bare `resume` from picking
@@ -297,9 +286,11 @@ For the YAML at the start of this reference, the explanation could be:
    preferred, and preserves `results/report.json` as evidence for the next
    agent. No metric gate is active, so passing tests can accept a slower
    candidate.
-5. **Budget:** Three attempts are configured. Total-time, per-agent-time, and
-   dollar limits are unset. Choose applicable limits before a requested launch;
-   dollar limits depend on reliable backend reporting and do not cover all calls.
+5. **Launch:** `autohelix run -n 3`: three attempts, enough to see whether the
+   benchmark moves. No `--cost` or `--time`: the tests and benchmark are cheap,
+   and there is no per-agent time limit. Add `--cost` only with reliable backend
+   reporting (it doesn't cover all calls); `autohelix resume <id> -n 5` gives
+   more later.
 
 This example does not override the default Claude backend or configure a
 review. Explain the actual backend/model choices and omitted defaults in the
@@ -308,5 +299,5 @@ user's configuration, and flag choices still open.
 Follow the entrypoint's agreement workflow before saving, validating, and
 committing the setup. The final handoff names the saved config and commit,
 reports validation and execution results (including verification not performed),
-and gives commands to verify and launch later. Link the config; the proposal
+and gives commands to verify, then the complete launch command with its budget. Link the config; the proposal
 already contains the complete YAML and rationale.

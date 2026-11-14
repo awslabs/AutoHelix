@@ -72,7 +72,7 @@ class ConfigIssue:
 DEFAULT_CHECK_TIMEOUT = 1800
 
 KNOWN_TOP_LEVEL_KEYS = {
-    "goal", "agent", "prompt_template", "scope", "gates", "observe", "stop", "budget", "land", "report",
+    "goal", "agent", "prompt_template", "scope", "gates", "observe", "stop", "land", "report",
 }
 
 # Keys of the first config format: each is an error naming its replacement.
@@ -85,6 +85,8 @@ RENAMED_TOP_LEVEL_KEYS = {
                    "(was max_regression_pct) or `improve: N%`"),
     "reviewer": "`reviewer:` is now an `observe:` entry with `name:` and `review: <prompt>`",
     "name": "`name:` is gone: runs are named after the config file; use autohelix/<name>.yaml",
+    "budget": ("`budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` "
+               "(also `resume`; `agent.timeout` limits one iteration)"),
 }
 
 ENTRY_AGENT_KEYS = ("backend", "model", "reasoning_effort", "timeout", "command")
@@ -158,9 +160,6 @@ class Config:
     agent: AgentConfig = field(default_factory=AgentConfig)
     editable: list[str] = field(default_factory=list)
     frozen: list[str] = field(default_factory=list)
-    max_iterations: int = 5
-    max_cost_usd: float | None = None
-    max_time_seconds: int | None = None
     report: bool = True  # write a summary (report.md) when a run finishes
     land: str | None = None  # the landing mode of new runs; unset: auto (manual with --group)
     # A Jinja file replacing the built-in agent prompt, resolved against the config file's folder;
@@ -313,40 +312,6 @@ class Config:
             if key not in ("editable", "frozen"):
                 errors.append(f"Unknown key scope.{key} (known: editable, frozen)")
 
-        budget = data.get("budget") or {}
-        if not isinstance(budget, dict):
-            errors.append("budget must be a mapping")
-            budget = {}
-        for key in budget:
-            if key == "iteration_time":
-                errors.append("`budget.iteration_time` is now `agent.timeout`")
-            elif key not in ("iterations", "cost", "time"):
-                errors.append(f"Unknown key budget.{key} (known: iterations, cost, time)")
-        max_iterations = budget.get("iterations", 5)
-        if max_iterations is None:
-            max_iterations = 5
-        elif type(max_iterations) is not int or max_iterations < 1:
-            errors.append(f"budget.iterations must be a positive integer, got {max_iterations!r}")
-            max_iterations = 5
-
-        max_cost_usd = None
-        raw_cost = budget.get("cost")
-        if raw_cost is not None:
-            if isinstance(raw_cost, bool):
-                errors.append(f"budget.cost: expected a number, got bool ({raw_cost})")
-            else:
-                try:
-                    max_cost_usd = float(raw_cost)
-                except (TypeError, ValueError):
-                    errors.append(f"budget.cost: '{raw_cost}' is not a valid number")
-                else:
-                    if not max_cost_usd > 0:
-                        errors.append("budget.cost must be a positive number")
-
-        max_time_seconds = None
-        if budget.get("time") is not None:
-            max_time_seconds = _duration(budget["time"], "budget.time", errors)
-
         goal = data.get("goal", "")
         return cls(
             goal=goal if isinstance(goal, str) else "" if goal is None else str(goal),
@@ -356,9 +321,6 @@ class Config:
             agent=agent,
             editable=editable,
             frozen=frozen,
-            max_iterations=max_iterations,
-            max_cost_usd=max_cost_usd,
-            max_time_seconds=max_time_seconds,
             report=data.get("report") is not False,
             land=data.get("land"),
             _parse_errors=errors,

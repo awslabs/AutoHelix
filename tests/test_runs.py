@@ -15,7 +15,7 @@ import yaml
 from autohelix.agents import AgentRunResult
 from autohelix.judge import DirectoryGuard
 from autohelix.cli import main
-from autohelix.harness import AutoHelixRunError, Harness
+from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.runs import RunLock, RunPaths, archive, delete, git, land, repair_history, short_id
 from click.testing import CliRunner
@@ -32,7 +32,7 @@ def configure(project, **values):
 
 def test_identity_selection_new_and_explicit_config(project):
     first = Harness(project, name="first")
-    first.run(max_iterations=1, report=False)
+    first.run(Budget(until=1), report=False)
     run_id = first.paths.run_id
     second = Harness(project)
     assert second.paths.run_id == run_id
@@ -71,7 +71,7 @@ def test_suffixes_are_unique_across_run_folders_and_refs(project, monkeypatch):
 def test_accept_moves_only_run_ref_and_dirty_resume_preserves_index(project):
     harness = Harness(project, land_mode="manual")
     base = git(project, "rev-parse", "HEAD").stdout.strip()
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert git(project, "rev-parse", "HEAD").stdout.strip() == base
     assert git(project, "rev-parse", harness.paths.ref).stdout.strip() != base
     (project / "user.txt").write_text("staged user work")
@@ -79,7 +79,7 @@ def test_accept_moves_only_run_ref_and_dirty_resume_preserves_index(project):
     (project / "code.py").write_text("dirty overlapping user edit")
     before = git(project, "diff", "--cached").stdout
     resumed = Harness(project, land_mode="manual")
-    resumed.run(max_iterations=2, report=False)
+    resumed.run(Budget(until=2), report=False)
     assert resumed.paths.run_id == harness.paths.run_id
     assert (project / "code.py").read_text() == "dirty overlapping user edit"
     assert git(project, "diff", "--cached").stdout == before
@@ -307,7 +307,7 @@ def test_nested_ask_mutation_cannot_be_swallowed(project, slot):
     git(project, "add", ".")
     git(project, "commit", "-qm", "judge config")
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     record = harness.history.load()[-1]
     assert record.accepted == (slot == "stop")
     assert record.stop is None
@@ -326,14 +326,14 @@ def test_baseline_judge_mutation_fails_and_cost_survives(project):
     git(project, "commit", "-qm", "baseline judge")
     harness = Harness(project, land_mode="manual")
     with pytest.raises(AutoHelixRunError, match="Baseline command modified candidate files"):
-        harness.run(max_iterations=1, report=False)
+        harness.run(Budget(until=1), report=False)
     [baseline] = harness.history.load()
     assert not baseline.accepted and baseline.iteration == 0
     assert baseline.cost.cost_usd == 0.1
     assert (project / "code.py").read_text() == "print('baseline')\n"
     retry = Harness(project, land_mode="manual")
     with pytest.raises(AutoHelixRunError, match="Baseline command modified candidate files"):
-        retry.run(max_iterations=1, report=False)
+        retry.run(Budget(until=1), report=False)
     assert retry.history.load()[0].cost.cost_usd == pytest.approx(0.2)
 
 
@@ -404,7 +404,7 @@ def test_judge_violation_stays_recorded_after_wrapper_restores_files(project):
     git(project, "add", ".")
     git(project, "commit", "-qm", "restoring wrapper")
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     record = harness.history.load()[-1]
     assert not record.accepted
     assert "judge call changed the files it judged" in record.reason
@@ -433,13 +433,13 @@ def test_prebaseline_retry_still_requires_clean_checkout(project):
     retry = Harness(project)
     assert retry.paths.run_id == run_id
     with pytest.raises(RuntimeError, match="Uncommitted"):
-        retry.run(max_iterations=1, report=False)
+        retry.run(Budget(until=1), report=False)
     assert not retry.history.load()
 
 
 def test_resume_picks_up_user_commits_and_land_divergence_is_safe(project):
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     paths = harness.paths
     with RunLock(paths.lock):
         land(paths, harness.run_info, harness.run_state.expected_tip)
@@ -449,7 +449,7 @@ def test_resume_picks_up_user_commits_and_land_divergence_is_safe(project):
     user = git(project, "rev-parse", "HEAD").stdout.strip()
     resumed = Harness(project, land_mode="manual")
     assert resumed.run_state.expected_tip == user
-    resumed.run(max_iterations=2, report=False)
+    resumed.run(Budget(until=2), report=False)
     (project / "code.py").write_text("divergence")
     git(project, "add", ".")
     git(project, "commit", "-qm", "diverged")
@@ -469,7 +469,7 @@ def test_auto_land_before_report_and_after_abort(project, monkeypatch):
         return True
 
     monkeypatch.setattr("autohelix.report.write_report", report)
-    harness.run(max_iterations=1)
+    harness.run(Budget(until=1))
     assert seen == [harness.run_state.expected_tip]
     resumed = Harness(project)
     real = resumed.run_iteration
@@ -480,7 +480,7 @@ def test_auto_land_before_report_and_after_abort(project, monkeypatch):
 
     monkeypatch.setattr(resumed, "run_iteration", abort_after_accept)
     with pytest.raises(AutoHelixRunError, match="later infrastructure"):
-        resumed.run(max_iterations=2, report=False)
+        resumed.run(Budget(until=2), report=False)
     assert git(project, "rev-parse", "HEAD").stdout.strip() == resumed.run_state.expected_tip
 
 
@@ -505,12 +505,12 @@ def test_delete_symbolic_ref_does_not_delete_user_branch(project):
 
 def test_same_harness_failed_restart_does_not_land_old_tip(project):
     harness = Harness(project)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     git(project, "reset", "--hard", harness.run_info["base_commit"])
     (project / ".gitignore").write_text("!.*\n")
     before = git(project, "rev-parse", "HEAD").stdout.strip()
     with pytest.raises(RuntimeError, match="gitignore"):
-        harness.run(max_iterations=2, report=False)
+        harness.run(Budget(until=2), report=False)
     assert git(project, "rev-parse", "HEAD").stdout.strip() == before
 
 
@@ -532,7 +532,7 @@ def test_report_owns_run_and_restores_ref_before_removal(project, monkeypatch):
     harness = Harness(project, land_mode="manual")
     with pytest.raises(RuntimeError, match="is running"):
         write_report(harness.config, project, Console(), run_id=harness.paths.run_id)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     expected = harness.run_state.expected_tip
 
     def run(**kwargs):
@@ -549,14 +549,14 @@ def test_archived_noop_retains_user_commit_tip(project, monkeypatch):
     from autohelix.runs import run_tip
 
     harness = Harness(project)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     (project / "code.py").write_text("user commit after land\n")
     git(project, "add", "code.py")
     git(project, "commit", "-qm", "user work")
     user_tip = git(project, "rev-parse", "HEAD").stdout.strip()
     resumed = Harness(project)
     monkeypatch.setattr(resumed, "run_agent", lambda *a, **k: AgentRunResult(success=True))
-    resumed.run(max_iterations=2, report=False)
+    resumed.run(Budget(until=2), report=False)
     assert resumed.history.load()[-1].commit is None
     archive(resumed.paths)
     assert run_tip(resumed.paths) == user_tip
@@ -570,7 +570,7 @@ def test_viewer_calls_containment_and_current_alias(project):
 
     data = RunData(project, run_id="current")
     harness = Harness(project)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert data.state()["run_id"] == harness.paths.run_id
     outside = project / "private.log"
     outside.write_text(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "private"}]}}) + "\n")
@@ -579,7 +579,7 @@ def test_viewer_calls_containment_and_current_alias(project):
     assert data._events(outside) == []
     assert data._events(linked) == []
     second = Harness(project, new=True)
-    second.run(max_iterations=1, report=False)
+    second.run(Budget(until=1), report=False)
     assert data.state()["run_id"] == second.paths.run_id
     assert [call["role"] for call in data.iteration(1)["calls"]] == ["agent"]
     row = json.loads(second.paths.history.read_text().splitlines()[-1])
@@ -614,7 +614,7 @@ def test_mutating_baseline_check_is_a_setup_error_before_agent_spend(project, mo
     try:
         with pytest.raises(AutoHelixRunError, match=r"Baseline command modified candidate files: "
                                                     r"echo formatted >> code.py \(code.py\)"):
-            harness.run(max_iterations=1, report=False)
+            harness.run(Budget(until=1), report=False)
         [baseline] = harness.history.load()
         assert not baseline.accepted
         assert (project / "code.py").read_text() == "print('baseline')\n"
@@ -625,7 +625,7 @@ def test_mutating_baseline_check_is_a_setup_error_before_agent_spend(project, mo
 def test_failing_baseline_constraint_does_not_block_the_run(project):
     configure(project, gates=['[ "$AUTOHELIX_ITERATION" != 0 ]'])
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert [(r.iteration, r.accepted) for r in harness.history.load()] == [(0, True), (1, True)]
     harness.close()
 
@@ -721,7 +721,7 @@ def test_target_behind_after_baseline_warns_only_for_auto_landing(project):
     from autohelix.runs import reconcile
 
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     base = harness.run_info["base_commit"]
     warning = reconcile(harness.paths, harness.run_info, harness.history, "auto")[1]
     assert "is behind" in warning and "auto landing" in warning
@@ -758,7 +758,7 @@ def test_manual_mode_warns_when_target_moves_during_segment(project, monkeypatch
         return real(cwd, prompt, iteration)
 
     monkeypatch.setattr(harness, "run_agent", agent)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert any(f"Target {target} changed during this segment" in line for line in printed)
 
 
@@ -782,10 +782,9 @@ def test_ask_from_an_agent_without_log_dir_records_absolute_log(tmp_path, monkey
 
 
 
-def test_old_reviewer_call_costs_still_count_toward_the_budget_on_resume(project):
-    configure(project, budget={"cost": 0.55, "iterations": 5})
+def test_old_reviewer_call_costs_count_in_the_run_total(project):
     first = Harness(project)
-    first.run(max_iterations=1, report=False)
+    first.run(Budget(until=1), report=False)
     run_id = first.paths.run_id
     # A record written when a built-in reviewer still ran: its call stays in the history.
     record = first.history.load()[-1]
@@ -793,6 +792,9 @@ def test_old_reviewer_call_costs_still_count_toward_the_budget_on_resume(project
     first.history.update(record)
     assert first.history.load()[-1].cost.cost_usd == pytest.approx(0.6)
     resumed = Harness(project, run_id=run_id)
-    resumed.run(report=False)
-    assert [r.iteration for r in resumed.history.load()] == [0, 1]  # 0.6 >= 0.55: nothing more runs
-    assert json.loads(resumed.paths.status.read_text())["stop_reason"]["budget"] == "cost"
+    resumed.run(Budget(until=2, cost_usd=0.55), report=False)
+    # --cost is this invocation's: the earlier $0.60 doesn't stop it, and the cap's run
+    # total counts it.
+    assert [r.iteration for r in resumed.history.load()] == [0, 1, 2]
+    status = json.loads(resumed.paths.status.read_text())
+    assert status["max_cost_usd"] == pytest.approx(1.15) and status["stop_reason"]["budget"] == "iterations"

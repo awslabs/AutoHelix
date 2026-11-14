@@ -12,6 +12,3 @@ observe:
 
 scope:
   editable: [sort.py]
-
-budget:
-  iterations: 2

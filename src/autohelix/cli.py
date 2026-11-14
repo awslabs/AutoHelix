@@ -17,8 +17,9 @@ from click.core import ParameterSource
 
 from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFound, find_config, load_config,
                               project_configs, run_command)
-from autohelix.harness import Harness
+from autohelix.harness import DEFAULT_ITERATIONS, Budget, Harness
 from autohelix.history import History
+from autohelix.run_status import read_run_status
 from autohelix.runs import (NoRunToResume, RunPaths, RunLock, archive as archive_run, check_group,
                             delete as delete_run, load_run_config, land as land_run, project_runs, resolve_run,
                             run_tip, short_id, valid_name)
@@ -353,9 +354,60 @@ def _start(project: Path, config: Path | None, **selection) -> Harness:
         raise click.ClickException(str(e)) from e
 
 
-def _segment(harness: Harness, iterations: int | None, report: bool) -> None:
+def _duration_option(ctx, param, value: str | None) -> int | None:
+    if value is None:
+        return None
+    from autohelix.config import parse_duration
+
     try:
-        harness.run(max_iterations=iterations, report=report)
+        return parse_duration(value)
+    except (ValueError, OverflowError) as e:
+        raise click.BadParameter(f"{value!r} is not a duration ({e}); e.g. 90m, 2h, 1h30m") from e
+
+
+def _budget_options(command):
+    """The budget flags `run` and `resume` share: how long this invocation goes on."""
+    for option in reversed([
+        click.option("--iterations", "-n", type=click.IntRange(min=1), metavar="N",
+                     help=f"Run N more iterations (default {DEFAULT_ITERATIONS}, only when no budget flag is given)."),
+        click.option("--until", type=click.IntRange(min=1), metavar="N",
+                     help="Run up to iteration N in total (safe to repeat; for scripts)."),
+        click.option("--cost", "cost_usd", type=click.FloatRange(min=0, min_open=True), metavar="USD",
+                     help="Stop once this invocation has spent USD more (every call it charges, baseline "
+                          "included; known costs only)."),
+        click.option("--time", "time_seconds", callback=_duration_option, metavar="DURATION",
+                     help="Stop starting iterations after DURATION of this invocation's wall clock "
+                          "(e.g. 2h, 90m; baseline included)."),
+    ]):
+        command = option(command)
+    return command
+
+
+def _budget(iterations: int | None, until: int | None, cost_usd: float | None,
+            time_seconds: int | None) -> Budget:
+    try:
+        return Budget(iterations=iterations, until=until, cost_usd=cost_usd, time_seconds=time_seconds)
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+
+
+def _interrupted_note(harness: Harness) -> str | None:
+    """After an interrupted invocation (Ctrl-C, killed, reboot), what it had left, for a
+    resume given no budget flag: `3 more (default); the interrupted invocation had 8 left: -n 8`."""
+    status = read_run_status(harness.project_path, harness.paths.run_id) or {}
+    cap = status.get("max_iterations")
+    if status.get("state") not in ("interrupted", "crashed") or type(cap) is not int:
+        return None
+    left = cap - harness.history.get_last_iteration()
+    if left <= 0 or left == DEFAULT_ITERATIONS:
+        return None
+    return (f"{DEFAULT_ITERATIONS} more (default); the interrupted invocation had {left} left: "
+            f"-n {left}")
+
+
+def _segment(harness: Harness, budget: Budget, report: bool) -> None:
+    try:
+        harness.run(budget, report=report)
     except RuntimeError as e:
         if getattr(e, "autohelix_reported", False):  # printed first, above landing and the run page
             raise SystemExit(1) from e
@@ -365,38 +417,46 @@ def _segment(harness: Harness, iterations: int | None, report: bool) -> None:
 @main.command()
 @click.argument("config_name", metavar="[CONFIG]", required=False)
 @_segment_options
-@click.option("--iterations", "-n", type=click.IntRange(min=1), help="Iterations to run (default: budget.iterations)")
+@_budget_options
 @click.option("--group", help="Share notes and code with the project's other runs of this group "
                               "(landing defaults to manual).")
 def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None,
-        iterations: int | None, group: str | None):
+        iterations: int | None, until: int | None, cost_usd: float | None, time_seconds: int | None,
+        group: str | None):
     """Start a new run of the optimization loop.
 
-    Always a new run, with its own budget, notes and history; to continue one,
-    use `autohelix resume`. CONFIG names a config in autohelix/ (`perf` for
+    Always a new run, with its own notes and history; to continue one, use
+    `autohelix resume`. CONFIG names a config in autohelix/ (`perf` for
     autohelix/perf.yaml); without it, the run reads autohelix.yaml, else the
     only config in autohelix/.
+
+    The config says what one iteration does; the budget flags say how long this
+    invocation goes on: -n N iterations (or --until N), --cost USD, --time
+    DURATION, whichever comes first. Without any of them, 3 iterations; with
+    only --cost or --time, no iteration cap.
 
     With --group NAME, each iteration's agent also sees the other non-archived
     runs of that group: their notes and history, and their code (each run's
     ref, refs/autohelix/<id>). Start several, compare them on the dashboard, land the
     winner and archive the rest.
     """
+    budget = _budget(iterations, until, cost_usd, time_seconds)
     group = _group(group)
     project = _git_project(path)
     config = _segment_config(project, config_name, "run")
     harness = _start(project, config, verbose=verbose, new=True, land_mode=land_mode,
                      group=group or None)
-    _segment(harness, iterations, not no_report)
+    _segment(harness, budget, not no_report)
 
 
 @main.command()
 @click.argument("run_id", required=False)
 @_segment_options
-@click.option("--iterations", "-n", type=click.IntRange(min=1), help="How many more iterations to run.")
-@click.option("--until", type=click.IntRange(min=1), help="Run up to iteration N (repeatable; for scripts).")
+@_budget_options
 @click.option("--group", help="Set or change the run's group from its next iteration; '' clears it.")
-def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None, iterations: int | None, until: int | None, group: str | None):
+def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None,
+           iterations: int | None, until: int | None, cost_usd: float | None, time_seconds: int | None,
+           group: str | None):
     """Continue a run: RUN_ID (or its last part), else the latest run of the config a bare `run` would use.
 
     A run uses the config it stored when it started. If the file has changed
@@ -404,13 +464,15 @@ def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_m
     --import <id>` applies the new config in a new run; a deleted file is fine.
     Without RUN_ID, the config is the one a bare `autohelix run` reads, and its
     latest is the most recently active run for that config that isn't
-    archived, preferring runs that captured their baseline. Without -n or --until it runs to
-    budget.iterations; cost and time budgets stay run totals from the config.
-    The run keeps its landing mode and group unless --land or --group changes
-    them. Exits 3 when there is no run to resume.
+    archived, preferring runs that captured their baseline.
+
+    Budgets count this invocation: `resume -n 10 --cost 5` runs 10 more
+    iterations, up to $5 more, whatever earlier invocations spent; --until N
+    runs up to iteration N in total. Without a budget flag, 3 more. The run
+    keeps its landing mode and group unless --land or --group changes them.
+    Exits 3 when there is no run to resume.
     """
-    if iterations and until:
-        raise click.UsageError("Use either -n (more iterations) or --until (up to an iteration), not both.")
+    budget = _budget(iterations, until, cost_usd, time_seconds)
     group = _group(group)
     project = _git_project(path)
     selected = _run_id(project, run_id)
@@ -419,9 +481,9 @@ def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_m
         config = _segment_config(project, None, "resume")
     harness = _start(project, config, verbose=verbose, run_id=selected, create=False, land_mode=land_mode,
                      group=group)
-    if iterations:
-        until = harness.history.get_last_iteration() + iterations
-    _segment(harness, until, not no_report)
+    if budget.default and (note := _interrupted_note(harness)):
+        click.echo(click.style(note, fg="yellow"))
+    _segment(harness, budget, not no_report)
 
 
 @main.command()
@@ -685,7 +747,7 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
          open_browser: bool):
     """One run, live in the terminal: RUN_ID (or its last part), else the current run.
 
-    On top, the run's status, budgets, latest accepted metrics, landing state
+    On top, the run's status, budget (its latest invocation's), latest accepted metrics, landing state
     and one row per iteration; below, the live output of the agent, a review
     or the summary agent. Keeps waiting when the run stops; Ctrl-C stops watching
     (not the run). Safe to run alongside `autohelix run`; it only reads
@@ -761,7 +823,7 @@ def dashboard(path: Path, once: bool, as_json: bool, web: bool, port: int | None
               metric: str | None):
     """This project's runs, live in the terminal.
 
-    One row per run with its status, iterations of the budget, latest
+    One row per run with its status, iterations (of its latest invocation's cap), latest
     accepted metrics, landing state and last activity; archived runs are
     counted, not listed. Redrawn every 5 seconds until Ctrl-C.
 

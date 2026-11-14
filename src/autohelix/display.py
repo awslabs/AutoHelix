@@ -259,9 +259,32 @@ def _line(width: int, *parts: tuple[str, str]) -> Text:
     return line
 
 
-def header_lines(config, run_id: str, label: str, max_iterations: int, width: int = 100) -> list[Text]:
+def budget_text(budget, done: int) -> str:
+    """The budget in effect for an invocation after iteration `done` (a `harness.Budget`):
+    `3 more iterations (to 8) · $5.00 more · 1h`, `no iteration cap · $5.00 more`; a new
+    run says `3 iterations · $5.00`."""
+    from autohelix.formatting import format_cap
+    from autohelix.iteration_time import format_duration
+
+    more = " more" if done else ""
+    last = budget.last_iteration(done)
+    if last is None:
+        parts = ["no iteration cap"]
+    else:
+        n = max(last - done, 0)
+        notes = ["default"] * budget.default + [f"to {last}"] * bool(done)
+        parts = [f"{n}{more} iteration{'s' * (n != 1)}" + (f" ({', '.join(notes)})" if notes else "")]
+    if budget.cost_usd is not None:
+        parts.append(format_cap(budget.cost_usd) + more)
+    if budget.time_seconds is not None:
+        parts.append(format_duration(budget.time_seconds))
+    return " · ".join(parts)
+
+
+def header_lines(config, run_id: str, label: str, budget, done: int = 0, width: int = 100) -> list[Text]:
     """`AutoHelix · run <short> · <label>` (the run's name, else the project's), then Goal, Agent, Gates, Observe, Scope and
-    Budget lines (each only if it has something to say), each cut to `width`."""
+    Budget lines (each only if it has something to say), each cut to `width`. `budget` is
+    the invocation's (`budget_text`), `done` the run's last iteration before it."""
     from autohelix.iteration_time import format_duration
     from autohelix.runs import short_id
 
@@ -281,14 +304,8 @@ def header_lines(config, run_id: str, label: str, max_iterations: int, width: in
         scope.append("editable: " + ", ".join(config.editable))
     if frozen := config.frozen_names():
         scope.append("frozen: " + ", ".join(frozen))
-    budget = [f"{max_iterations} iteration{'s' * (max_iterations != 1)}"]
-    if config.max_cost_usd is not None:
-        cost = config.max_cost_usd
-        budget.append(f"${cost:.0f}" if cost == int(cost) else f"${cost:.2f}")
-    if config.max_time_seconds is not None:
-        budget.append(format_duration(config.max_time_seconds))
     rows = [("Goal", config.title), ("Agent", agent), ("Gates", " · ".join(g.text for g in config.gates)),
-            ("Observe", " · ".join(observe)), ("Scope", " · ".join(scope)), ("Budget", " · ".join(budget))]
+            ("Observe", " · ".join(observe)), ("Scope", " · ".join(scope)), ("Budget", budget_text(budget, done))]
     lines = [title]
     for label, value in rows:
         if value:

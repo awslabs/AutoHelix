@@ -5,6 +5,7 @@
 
 import json
 import hashlib
+import itertools
 import os
 import shutil
 import subprocess
@@ -26,7 +27,7 @@ from autohelix.config import (ConfigError, MetricGate, config_changes, find_conf
                               parse_config, run_command, template_path)
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay, Transcript, clean, header_lines
-from autohelix.history import History, IterationResult
+from autohelix.history import History, IterationResult, record_seconds
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
                             claim_copies, config_relative, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
@@ -37,7 +38,7 @@ from autohelix.checks import (metric_gate_failure, metric_reference, preflight_c
                               run_observe_entry, run_stop_checks, scope_warning)
 from autohelix.run_status import RunStatus
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
-from autohelix.formatting import format_cost, format_total_cost
+from autohelix.formatting import format_cap, format_cost, format_total_cost
 from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
                                        uses_old_layout)
 from autohelix.run_log import RunLog
@@ -61,6 +62,48 @@ class AutoHelixRunError(RuntimeError):
 # A failed or timed-out agent call is a rejected iteration and the loop goes on; this
 # many in a row (within a segment) stop the run: the agent is unlikely to recover.
 MAX_CONSECUTIVE_AGENT_FAILURES = 3
+
+# Iterations an invocation runs when no budget flag is given (`run`/`resume` without
+# -n, --until, --cost or --time).
+DEFAULT_ITERATIONS = 3
+
+
+@dataclass(frozen=True)
+class Budget:
+    """How long one invocation (`run`, `resume`) goes on: the config says what an
+    iteration does, the command line how long.
+
+    `iterations` more iterations, or up to iteration `until` in total (the one figure
+    that counts a total: safe to repeat); up to `cost_usd` more dollars charged by this
+    invocation (agent calls, reviews, asks, the baseline: known costs only) and
+    `time_seconds` of its wall clock, baseline included. With nothing set,
+    `DEFAULT_ITERATIONS` more; with only cost or time, no iteration cap."""
+
+    iterations: int | None = None
+    until: int | None = None
+    cost_usd: float | None = None
+    time_seconds: int | None = None
+
+    def __post_init__(self):
+        if self.iterations is not None and self.until is not None:
+            raise ValueError("Use either -n (more iterations) or --until (up to an iteration), not both.")
+        for flag, value in (("-n", self.iterations), ("--until", self.until), ("--cost", self.cost_usd),
+                            ("--time", self.time_seconds)):
+            if value is not None and (isinstance(value, bool) or not value > 0):
+                raise ValueError(f"{flag} must be positive, got {value!r}")
+
+    @property
+    def default(self) -> bool:
+        """No figure given: `DEFAULT_ITERATIONS` more."""
+        return self == Budget()
+
+    def last_iteration(self, done: int) -> int | None:
+        """The last iteration this invocation may run after iteration `done`; None: no cap."""
+        if self.until is not None:
+            return self.until
+        if self.iterations is not None:
+            return done + self.iterations
+        return None if self.cost_usd is not None or self.time_seconds is not None else done + DEFAULT_ITERATIONS
 
 
 @dataclass
@@ -377,12 +420,11 @@ class Harness:
             item["reason"] = failure
         return failure
 
-    def _print_header(self, max_iter: int, start_iter: int = 1) -> None:
+    def _print_header(self, budget: Budget, start_iter: int = 1) -> None:
         """The run's header (`display.header_lines`); on resume, the rows so far."""
         self.console.print()
         for line in header_lines(self.config, self.paths.run_id, self.run_info.get("name") or self.project_path.name,
-                                 max_iter,
-                                 self.console.width or 100):
+                                 budget, start_iter - 1, self.console.width or 100):
             self.console.print(line, highlight=False)
         self.console.print()
         if start_iter > 1:  # resuming: the rows so far, for context
@@ -1290,6 +1332,7 @@ class Harness:
         """Evaluate A in a checks copy and check stop commands.
 
         Returns the stop condition the baseline already meets, if any."""
+        started_at = time.time()  # the record's span: `history.record_seconds`
         workspace = self._baseline_workspace()
         evaluation = self._new_evaluation()
         try:
@@ -1357,7 +1400,7 @@ class Harness:
                         f"Stop command failed on the baseline: {errors[0].command} "
                         "(expected exit 0 to stop or 1 to continue)"
                     )
-            self._complete_record(baseline, time.time(), time.monotonic(), evaluation)
+            self._complete_record(baseline, started_at, time.monotonic(), evaluation)
             self._write_baseline(baseline)
             return baseline.stop
         except BaseException as error:
@@ -1371,8 +1414,9 @@ class Harness:
         finally:
             workspace.close()
 
-    def run(self, max_iterations: int | None = None, report: bool = True) -> None:
-        """Run the optimization loop, recording live status in .internal/status.json.
+    def run(self, budget: Budget | None = None, report: bool = True) -> None:
+        """Run the optimization loop for `budget` (default: `DEFAULT_ITERATIONS` more),
+        recording live status in .internal/status.json.
 
         When the loop finishes normally (not interrupted) after running at least one
         iteration, writes the run summary unless `report: false` or `report=False`.
@@ -1389,7 +1433,7 @@ class Harness:
                 self.run_state.data = self.run_info
                 self.run_state.expected_tip = tip
             self._land_attempted = False
-            if self._run(max_iterations) and report and self.config.report:
+            if self._run(budget or Budget()) and report and self.config.report:
                 from autohelix.report import write_report
 
                 self.run_status.phase("report")
@@ -1511,10 +1555,11 @@ class Harness:
         except Exception as e:  # noqa: BLE001 - never hide the run's own outcome
             self.console.print(f"[yellow]Could not save report.html: {e}[/yellow]")
 
-    def _run(self, max_iterations: int | None = None) -> bool:
+    def _run(self, budget: Budget) -> bool:
         """Returns True if the loop ran at least one iteration and was not interrupted."""
-        max_iter = max_iterations or self.config.max_iterations
+        invocation_start = time.monotonic()  # --time counts from here, baseline included
         start_iter = self.history.get_last_iteration() + 1
+        max_iter = budget.last_iteration(start_iter - 1)
 
         # Again at each segment: the ignore rules may have changed since this Harness was
         # created (a long-lived programmatic one).
@@ -1533,7 +1578,7 @@ class Harness:
             ensure_editable_files_ready(self.repo, self.project_path, self.config.editable)
 
         # Show header
-        self._print_header(max_iter, start_iter)
+        self._print_header(budget, start_iter)
         remove_copies(self.run_state.copies_root, self.log.warn)  # left by a segment that crashed
         if not self.repo.attr_source:
             self._warn(ATTR_SOURCE_LIMITATION)
@@ -1558,7 +1603,13 @@ class Harness:
         if needs_baseline and not self._preflight_done and not self._preflight():
             return False
 
-        self.run_status.start(max_iterations=max_iter, run_id=self.paths.run_id)
+        # Status records the caps as run totals: spent before this invocation plus its own.
+        cost_before = summarize_costs(self.history.cost_usages).cost_usd or 0
+        seconds_before = sum(record_seconds(r) for r in self.history.load())
+        self.run_status.start(
+            max_iterations=max_iter, run_id=self.paths.run_id,
+            max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
+            max_time_seconds=None if budget.time_seconds is None else round(seconds_before) + budget.time_seconds)
         self._segment_started = True
         self._segment_target_tip = self._target_tip()
         flags = [self.run_info.pop("archived", None), self.run_info.pop("lifecycle", None)]
@@ -1575,53 +1626,52 @@ class Harness:
         if start_iter == 1 and needs_baseline:
             baseline_stop = self._capture_baseline()
 
-        # Load cumulative cost and time from history so budgets persist across resume
-        prior_cost = summarize_costs(self.history.cost_usages)
-        cumulative_cost = prior_cost.cost_usd or 0
-        prior_elapsed_seconds = 0.0
-        if start_iter > 1:
-            prior = self.history.load()
-            prior_iterations = [r for r in prior if r.iteration > 0]
-            # Prefer wall_clock_ms (total iteration time) over duration_ms (agent-only time)
-            prior_elapsed_seconds = sum(
-                r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0))
-                for r in prior_iterations
-            ) / 1000.0
-        loop_start = time.monotonic()  # monotonic counts from boot: never subtract prior time from it
+        # Dollars this invocation has charged (known costs): the baseline's, then each iteration's.
+        spent = (summarize_costs(self.history.cost_usages).cost_usd or 0) - cost_before
+
+        def out_of_budget() -> dict | None:
+            if budget.cost_usd is not None and spent >= budget.cost_usd:
+                return {"kind": "budget", "budget": "cost",
+                        "detail": f"cost budget reached ({format_cap(budget.cost_usd)} this invocation)"}
+            if budget.time_seconds is not None and time.monotonic() - invocation_start >= budget.time_seconds:
+                return {"kind": "budget", "budget": "time",
+                        "detail": f"time budget reached ({_format_time(budget.time_seconds)} this invocation)"}
+            return None
 
         config_name = config_relative(self.project_path, self.config_file)
-        self.log.info(f"run started — config: {config_name}, max_iter: {max_iter}, resuming from iter {start_iter}")
+        self.log.info(f"run started — config: {config_name}, max_iter: {max_iter or 'none'}, "
+                      f"resuming from iter {start_iter}")
 
         ran = False
         cost_warning_shown = False
-        if self.config.max_cost_usd is not None:
-            cost_warning_shown = prior_cost.incomplete
-            if cost_warning_shown:
-                self.console.print(
-                    "[yellow]Warning: prior agent or command calls have unavailable cost.\n"
-                    "budget.cost can only track known costs.[/yellow]"
-                )
+
+        def warn_unknown_cost() -> None:
+            nonlocal cost_warning_shown
+            if budget.cost_usd is not None and not cost_warning_shown:
+                self.console.print("           [yellow]! cost unknown; --cost counts known costs only[/yellow]",
+                                   highlight=False)
+                cost_warning_shown = True
+
+        if start_iter == 1 and needs_baseline:
+            baseline = next((r for r in self.history.load() if r.iteration == 0 and r.accepted), None)
+            if baseline is not None and baseline.cost.incomplete:
+                warn_unknown_cost()
 
         # Why the loop ended; budgets are checked after stop conditions.
         stop_reason: dict | None = None
         if baseline_stop:
             stop_reason = self._condition_stop(baseline_stop, 0)
-        cost_reached = {"kind": "budget", "budget": "cost",
-                        "detail": f"cost budget reached ({format_cost(self.config.max_cost_usd)})"}
-        time_reached = {"kind": "budget", "budget": "time",
-                        "detail": f"time budget reached ({_format_time(self.config.max_time_seconds or 0)})"}
         iteration = start_iter
         agent_failures = 0  # consecutive failed agent calls in this segment
         try:
-            for iteration in range(start_iter, max_iter + 1):
+            for iteration in itertools.count(start_iter):
                 if stop_reason:
                     break
-                if self.config.max_cost_usd is not None and cumulative_cost >= self.config.max_cost_usd:
-                    stop_reason = cost_reached
+                if stop_reason := out_of_budget():
                     break
-                if (self.config.max_time_seconds is not None
-                        and prior_elapsed_seconds + time.monotonic() - loop_start >= self.config.max_time_seconds):
-                    stop_reason = time_reached
+                if max_iter is not None and iteration > max_iter:
+                    stop_reason = {"kind": "budget", "budget": "iterations",
+                                   "detail": f"iteration budget reached ({max_iter})"}
                     break
                 result = self.run_iteration(iteration)
                 ran = True
@@ -1636,31 +1686,9 @@ class Harness:
                                    "detail": f"the agent failed {agent_failures} times in a row: "
                                              f"{clean(result.agent_error, 200)}"}
                     break
-
-                # Check cost budget
-                if (
-                    self.config.max_cost_usd is not None
-                    and result.cost.incomplete
-                    and not cost_warning_shown
-                ):
-                    self.console.print(
-                        "           [yellow]! cost unknown; budget.cost counts known costs only[/yellow]", highlight=False,
-                    )
-                    cost_warning_shown = True
-                cumulative_cost += result.cost.cost_usd or 0
-                if self.config.max_cost_usd is not None and cumulative_cost >= self.config.max_cost_usd:
-                    stop_reason = cost_reached
-                    break
-
-                # Check time budget
-                elapsed = prior_elapsed_seconds + time.monotonic() - loop_start
-                if self.config.max_time_seconds is not None and elapsed >= self.config.max_time_seconds:
-                    stop_reason = time_reached
-                    break
-            else:
-                stop_reason = stop_reason or {
-                    "kind": "budget", "budget": "iterations",
-                    "detail": f"iteration budget reached ({max_iter})"}
+                if result.cost.incomplete:
+                    warn_unknown_cost()
+                spent += result.cost.cost_usd or 0
             self.run_status.note(stop_reason=stop_reason)
             self.console.print()
             self.console.print(Text(f"  Stopped: {clean(stop_reason['detail'])}", no_wrap=True, overflow="ellipsis"),

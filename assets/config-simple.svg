@@ -34,8 +34,4 @@
   <!-- scope -->
   <text x="24" y="230" class="code" xml:space="preserve"><tspan class="key">scope</tspan><tspan class="punct">:</tspan></text>
   <text x="38" y="248" class="code" xml:space="preserve"><tspan class="key">editable</tspan><tspan class="punct">:</tspan><tspan class="val"> [sort.py]</tspan></text>
-
-  <!-- budget -->
-  <text x="24" y="278" class="code" xml:space="preserve"><tspan class="key">budget</tspan><tspan class="punct">:</tspan></text>
-  <text x="38" y="296" class="code" xml:space="preserve"><tspan class="key">iterations</tspan><tspan class="punct">:</tspan><tspan class="val"> 2</tspan></text>
 </svg>

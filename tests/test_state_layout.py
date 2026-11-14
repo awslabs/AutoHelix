@@ -7,7 +7,7 @@ import shutil
 
 import pytest
 
-from autohelix.harness import Harness
+from autohelix.harness import Budget, Harness
 from autohelix.history import History, IterationResult
 from autohelix.runs import SCHEMA, RunPaths, write_json
 
@@ -126,7 +126,7 @@ def test_a_baseline_retry_points_kept_calls_at_the_moved_attempt(project):
 def test_an_iteration_folder_holds_its_record_prompt_agent_log_and_notes(project):
     harness = Harness(project, land_mode="manual")
     try:
-        harness.run(max_iterations=1, report=False)
+        harness.run(Budget(until=1), report=False)
         paths = harness.paths
         assert _record_file(paths, 0) == _history_lines(paths)[0]
         assert _record_file(paths, 1) == _history_lines(paths)[1]
@@ -222,7 +222,7 @@ def test_gate_folders_by_position_with_their_output_and_transcripts(project):
     ], observe=[{"name": "bench", "command": "echo '##autohelix[speed=1]'", "metrics": {"speed": "higher"}}])
     harness = Harness(project, land_mode="manual")
     try:
-        harness.run(max_iterations=1, report=False)
+        harness.run(Budget(until=1), report=False)
         paths = harness.paths
     finally:
         harness.close()
@@ -260,7 +260,7 @@ def test_stored_gate_output_replaces_what_commands_planted(project, tmp_path):
     ])
     harness = Harness(project, land_mode="manual")
     try:
-        harness.run(max_iterations=1, report=False)
+        harness.run(Budget(until=1), report=False)
         paths = harness.paths
     finally:
         harness.close()
@@ -276,7 +276,7 @@ def test_a_transcript_that_was_not_stored_leaves_no_log(project):
     _configure(project, gates=['autohelix ask "Done?"; rm -f "$AUTOHELIX_LOG_DIR/ask.log"', {"ask": "Done?"}])
     harness = Harness(project, land_mode="manual")
     try:
-        harness.run(max_iterations=1, report=False)
+        harness.run(Budget(until=1), report=False)
         paths = harness.paths
     finally:
         harness.close()
@@ -289,7 +289,7 @@ def test_stop_folders_by_position(project):
                               '[ "$AUTOHELIX_ITERATION" = 0 ] && exit 1; autohelix ask "Stop?"'])
     harness = Harness(project, land_mode="manual")
     try:
-        harness.run(max_iterations=3, report=False)
+        harness.run(Budget(until=3), report=False)
         paths = harness.paths
     finally:
         harness.close()
@@ -342,7 +342,7 @@ def test_review_transcripts_join_the_observe_entry(project):
     _configure(project, observe=[{"name": "review", "review": "Is it tidy?"}])
     harness = Harness(project, land_mode="manual")
     try:
-        harness.run(max_iterations=2, report=False)
+        harness.run(Budget(until=2), report=False)
         paths = harness.paths
     finally:
         harness.close()
@@ -386,7 +386,7 @@ def test_a_baseline_retry_keeps_its_transcripts_with_the_moved_attempt(project, 
         {"name": "bench", "command": f'[ -e {marker} ] && echo "##autohelix[speed=1]"; true',
          "metrics": {"speed": "higher"}}])
     with pytest.raises(RuntimeError, match="Baseline setup error"):
-        Harness(project).run(max_iterations=1, report=False)
+        Harness(project).run(Budget(until=1), report=False)
     marker.touch()
     harness = Harness(project, land_mode="manual")  # resumes the run: a baseline retry
     try:
@@ -418,7 +418,7 @@ def test_a_planted_fifo_where_output_goes_is_replaced(project, planted):
                observe=[{"name": "bench", "command": "echo bench"}], stop=["echo stop; exit 1"])
     harness = Harness(project, land_mode="manual")
     try:
-        harness.run(max_iterations=1, report=False)
+        harness.run(Budget(until=1), report=False)
         paths = harness.paths
     finally:
         harness.close()
@@ -438,7 +438,7 @@ def test_a_storage_failure_never_loses_a_gate_or_stop_outcome(project, monkeypat
                stop=['[ "$AUTOHELIX_ITERATION" = 2 ]'])
     harness = Harness(project, land_mode="manual")
     try:
-        harness.run(max_iterations=1, report=False)
+        harness.run(Budget(until=1), report=False)
         paths = harness.paths
     finally:
         harness.close()
@@ -615,7 +615,7 @@ def test_an_agent_copy_holds_a_bounded_number_of_iterations(project):
     harness = Harness(project, land_mode="manual")
     _wrap_agent(harness, act)
     try:
-        harness.run(max_iterations=9, report=False)
+        harness.run(Budget(until=9), report=False)
     finally:
         harness.close()
     assert seen[1][0] == ["000"]
@@ -641,7 +641,7 @@ def test_a_rejected_attempt_keeps_its_patch_in_its_folder(project):
     harness = Harness(project, land_mode="manual")
     _wrap_agent(harness, act)
     try:
-        harness.run(max_iterations=2, report=False)
+        harness.run(Budget(until=2), report=False)
         paths = harness.paths
     finally:
         harness.close()
@@ -656,7 +656,7 @@ def test_no_iteration_patch_for_a_no_op(project):
     _configure(project, agent={"backend": "mock", "settings": {"should_fail": True}})
     harness = Harness(project, land_mode="manual")
     try:
-        harness.run(max_iterations=1, report=False)  # fails before changing anything: no tree kept
+        harness.run(Budget(until=1), report=False)  # fails before changing anything: no tree kept
         paths = harness.paths
     finally:
         harness.close()
@@ -670,7 +670,7 @@ def test_no_iteration_patch_for_an_over_limit_change(project, monkeypatch):
     _configure(project, gates=['[ "$AUTOHELIX_ITERATION" = 0 ]'])
     harness = Harness(project, land_mode="manual")
     try:
-        harness.run(max_iterations=1, report=False)
+        harness.run(Budget(until=1), report=False)
         paths = harness.paths
     finally:
         harness.close()
@@ -691,7 +691,7 @@ def test_the_iteration_patch_replaces_what_was_planted(project, tmp_path):
 
     _wrap_agent(harness, act)
     try:
-        harness.run(max_iterations=1, report=False)
+        harness.run(Budget(until=1), report=False)
         paths = harness.paths
     finally:
         harness.close()
@@ -710,7 +710,7 @@ def test_a_patch_write_failure_never_masks_the_outcome(project, monkeypatch):
     _configure(project, gates=['[ "$AUTOHELIX_ITERATION" = 0 ]'])
     harness = Harness(project, land_mode="manual")
     try:
-        harness.run(max_iterations=1, report=False)
+        harness.run(Budget(until=1), report=False)
         paths = harness.paths
     finally:
         harness.close()

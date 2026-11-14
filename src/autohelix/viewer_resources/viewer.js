@@ -853,22 +853,20 @@ function renderConfig() {
   }
   $('config').hidden = !c?.text;
   if (!c?.text) return;
-  // `run -n N` overrides the file for that run; the harness records what it used.
-  const runLimit = state.status?.max_iterations;
-  const iterations = runLimit && runLimit !== c.max_iterations
-    ? `${runLimit} iterations (run -n ${runLimit}; file says ${c.max_iterations})`
-    : c.max_iterations && `${c.max_iterations} iterations`;
+  // Budgets are not config: the latest invocation's flags, as its status records them
+  // (run totals: what was spent before it plus its own cap).
+  const s = state.status || {};
   const budget = [
-    iterations,
-    c.max_cost_usd && `$${c.max_cost_usd}`,
-    c.max_time_seconds && fmtDuration(c.max_time_seconds),
-  ].filter(Boolean).join(', ');
+    s.max_iterations && `to iteration ${s.max_iterations}`,
+    s.max_cost_usd && `$${s.max_cost_usd.toFixed(2)} total`,
+    s.max_time_seconds && `${fmtDuration(s.max_time_seconds)} total`,
+  ].filter(Boolean).join(' · ');
   const parts = [
     c.agent && ['Agent', c.agent],
     c.gates?.length && ['Gates', c.gates.join(' · '), c.gates.join('\n')],
     c.observe?.length && ['Observe', c.observe.map(observeLabel).join(' · ')],
     c.scope?.length && ['Editable', c.scope.join(', ')],
-    budget && ['Budget', budget],
+    budget && ['Budget', budget, `${budget}: the latest run/resume's -n/--until, --cost and --time, as run totals`],
   ].filter(Boolean);
   const summary = $('config-summary');
   summary.title = `Show the full ${c.file}`;

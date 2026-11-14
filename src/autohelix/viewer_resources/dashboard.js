@@ -73,7 +73,7 @@ function currentIteration(run) {
 }
 
 // Line 1: the state, with the phase while running or how long ago it stopped.
-// Line 2: time and cost so far. Stop reason and budgets are in the tooltip.
+// Line 2: time and cost so far. Stop reason and budgets (the latest invocation's) are in the tooltip.
 function statusCell(run) {
   const kind = outcome(run);
   const s = run.status;
@@ -96,8 +96,9 @@ function statusCell(run) {
     const cost = p.cost_usd;
     spent = [seconds ? fmtDuration(seconds) : null,
       typeof cost === 'number' ? `$${cost.toFixed(2)}${p.cost_incomplete ? '+' : ''}` : null].filter(Boolean).join(' · ');
-    if (p.max_seconds) notes.push(`Time budget ${fmtLimit(p.max_seconds)}`);
-    if (p.max_cost_usd) notes.push(`Cost budget ${fmtMoney(p.max_cost_usd)}`);
+    // The latest run/resume's --time and --cost, as run totals (spent before it + its cap).
+    if (p.max_seconds) notes.push(`Time budget ${fmtLimit(p.max_seconds)} (run total)`);
+    if (p.max_cost_usd) notes.push(`Cost budget ${fmtMoney(p.max_cost_usd)} (run total)`);
     if (p.cost_incomplete) notes.push('Some call costs are unavailable');
   }
   return el('td', { title: notes.join('\n') },

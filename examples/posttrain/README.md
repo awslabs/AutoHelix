@@ -93,5 +93,5 @@ Then commit a clean tree and start the loop:
 
 ```bash
 git init && git add -A && git commit -m "Initial baseline"   # autohelix requires a git repo
-autohelix run
+autohelix run -n 20 --time 10h   # 20 iterations; none starts after 10 hours
 ```

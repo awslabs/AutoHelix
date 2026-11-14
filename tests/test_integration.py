@@ -15,7 +15,7 @@ import pytest
 
 from autohelix.agents import AgentRunResult
 from autohelix.config import Config, load_config
-from autohelix.harness import AutoHelixRunError, Harness
+from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.runs import RunPaths
 
@@ -67,7 +67,7 @@ class TestMockAgentIntegration:
     def test_single_iteration_accepted(self, integration_project):
         """A single iteration should complete and be accepted."""
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=1)
+        harness.run(Budget(until=1))
 
         history = History(integration_project)
         results = history.load()
@@ -81,7 +81,7 @@ class TestMockAgentIntegration:
     def test_multiple_iterations(self, integration_project):
         """Multiple iterations should all complete."""
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=3)
+        harness.run(Budget(until=3))
 
         history = History(integration_project)
         results = history.load()
@@ -113,7 +113,7 @@ class TestMockAgentIntegration:
             ),
         )
 
-        harness.run(max_iterations=1)  # no error: a failed agent call is a rejection
+        harness.run(Budget(until=1))  # no error: a failed agent call is a rejection
 
         results = History(integration_project).load()
         assert [result.iteration for result in results] == [0, 1]
@@ -157,7 +157,7 @@ observe:
             RuntimeError,
             match="Baseline setup error: observe entry `bench` exited 0 but reported no `score`",
         ):
-            harness.run(max_iterations=1)
+            harness.run(Budget(until=1))
 
         records = History(integration_project).load()
         assert len(records) == 1 and records[0].iteration == 0 and not records[0].accepted
@@ -192,7 +192,7 @@ observe:
     command: python bench.py
     metrics: {speed: higher}
 """, files=[("bench.py", self.BENCH)])
-        Harness(integration_project, verbose=False).run(max_iterations=2, report=False)
+        Harness(integration_project, verbose=False).run(Budget(until=2), report=False)
         records = History(integration_project).load()
         assert [(r.iteration, r.accepted, r.metrics.get("speed")) for r in records] == [
             (0, True, 100), (1, True, 97), (2, True, 94)]
@@ -213,7 +213,7 @@ observe:
     command: python bench.py
     metrics: {speed: higher}
 """, files=[("bench.py", self.BENCH)])
-        Harness(integration_project, verbose=False).run(max_iterations=1, report=False)
+        Harness(integration_project, verbose=False).run(Budget(until=1), report=False)
         [_, record] = History(integration_project).load()
         assert not record.accepted
         assert record.reason == "metric gate: speed 97 does not improve on 100"
@@ -233,9 +233,9 @@ agent:
         harness = Harness(integration_project, verbose=False)
         if gated:
             with pytest.raises(RuntimeError, match="reported no `missing`"):
-                harness.run(max_iterations=1, report=False)
+                harness.run(Budget(until=1), report=False)
         else:
-            harness.run(max_iterations=1, report=False)
+            harness.run(Budget(until=1), report=False)
             assert [r.accepted for r in History(integration_project).load()] == [True, True]
 
     def test_constraint_failure_rejects(self, integration_project):
@@ -265,7 +265,7 @@ gates:
         subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=1)
+        harness.run(Budget(until=1))
 
         history = History(integration_project)
         results = history.load()
@@ -300,7 +300,7 @@ gates:
         subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=1)
+        harness.run(Budget(until=1))
 
         history = History(integration_project)
         results = history.load()
@@ -332,7 +332,7 @@ scope:
         subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=1)
+        harness.run(Budget(until=1))
 
         history = History(integration_project)
         results = history.load()
@@ -371,7 +371,7 @@ scope:
         subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=1)
+        harness.run(Budget(until=1))
 
         history = History(integration_project)
         results = history.load()
@@ -401,7 +401,7 @@ gates:
         subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=1)
+        harness.run(Budget(until=1))
 
         history = History(integration_project)
         assert history.load()[-1].reason == "Iteration 1 agent failed: Mock failure"
@@ -411,7 +411,7 @@ gates:
         harness = Harness(integration_project, verbose=False)
         harness.agent.config.settings.update(should_fail=False, change_file="hello.py",
                                              change_content="# recovered")
-        harness.run(max_iterations=2)
+        harness.run(Budget(until=2))
         results = history.load()
         assert [result.iteration for result in results] == [0, 1, 2]
         assert not results[1].accepted
@@ -478,7 +478,7 @@ gates:
             pytest.skip("Claude not available")
 
         harness = Harness(real_agent_project, verbose=True)
-        harness.run(max_iterations=1)
+        harness.run(Budget(until=1))
 
         history = History(real_agent_project)
         results = history.load()
@@ -504,9 +504,6 @@ report: false
 agent:
   backend: codex
   model: gpt-6.1-sol
-budget:
-  iterations: 5
-  cost: 0.015
 gates:
   - "true"
 """)
@@ -528,8 +525,8 @@ gates:
         monkeypatch.setattr("autohelix.agents.codex.run_process", fake_run_process)
         # Codex execution is mocked, so preflight must not require a local CLI.
         monkeypatch.setattr("autohelix.checks.shutil.which", lambda command: "/mock/codex")
-        Harness(integration_project).run(max_iterations=1)
-        Harness(integration_project).run(max_iterations=5)
+        Harness(integration_project).run(Budget(until=1))
+        Harness(integration_project).run(Budget(until=2))
         iterations = [r for r in History(integration_project).load() if r.iteration > 0]
         assert len(iterations) == 2
         assert all(r.accepted for r in iterations)
@@ -537,10 +534,14 @@ gates:
         assert all(r.usage["cost_source"] == "calculated" for r in iterations)
         assert all(r.usage["cost_rates"]["output"] == 10 for r in iterations)
         assert "$0.02" in capsys.readouterr().out
-        # The saved cost already exceeds the cap: no new agent invocation.
-        Harness(integration_project).run(max_iterations=5)
-        assert calls == 2
-        assert len([r for r in History(integration_project).load() if r.iteration > 0]) == 2
+        # --cost counts this invocation only: the $0.02 already spent doesn't, the
+        # estimates of its own two iterations do ($0.01, then $0.02 >= $0.015).
+        harness = Harness(integration_project)
+        harness.run(Budget(cost_usd=0.015))
+        assert calls == 4
+        status = json.loads(harness.paths.status.read_text())
+        assert status["stop_reason"]["detail"] == "cost budget reached ($0.015 this invocation)"
+        assert status["max_cost_usd"] == pytest.approx(0.035) and status["max_iterations"] is None
 
     def test_cost_budget_stops_loop(self, integration_project):
         """Loop should stop when cumulative cost exceeds the budget."""
@@ -553,10 +554,6 @@ agent:
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
-
-budget:
-  iterations: 10
-  cost: 0.10
 
 gates:
   - "true"
@@ -575,7 +572,7 @@ gates:
             return result
 
         harness.run_iteration = patched_run_iteration
-        harness.run(max_iterations=10)
+        harness.run(Budget(until=10, cost_usd=0.10))
 
         history = History(integration_project)
         results = history.load()
@@ -594,10 +591,6 @@ agent:
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
-
-budget:
-  iterations: 10
-  time: 5s
 
 gates:
   - "true"
@@ -618,7 +611,7 @@ gates:
         monkeypatch.setattr(time_mod, "monotonic", fake_monotonic)
 
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=10)
+        harness.run(Budget(until=10, time_seconds=5))
 
         history = History(integration_project)
         results = history.load()
@@ -630,7 +623,7 @@ gates:
     def test_iteration_budget_still_works(self, integration_project):
         """Existing iteration limit behavior should be unchanged."""
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=2)
+        harness.run(Budget(until=2))
 
         history = History(integration_project)
         results = history.load()
@@ -648,11 +641,6 @@ agent:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
-budget:
-  iterations: 100
-  cost: 0.10
-  time: 1h
-
 gates:
   - "true"
 """)
@@ -669,7 +657,7 @@ gates:
             return result
 
         harness.run_iteration = patched_run_iteration
-        harness.run()
+        harness.run(Budget(iterations=100, cost_usd=0.10, time_seconds=3600))
 
         history = History(integration_project)
         results = history.load()
@@ -689,10 +677,6 @@ agent:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
-budget:
-  iterations: 10
-  cost: 0.10
-
 gates:
   - "true"
 """)
@@ -709,7 +693,7 @@ gates:
             return result
 
         harness.run_iteration = patched_run_iteration
-        harness.run(max_iterations=10)
+        harness.run(Budget(until=10, cost_usd=0.10))
 
         history = History(integration_project)
         results = history.load()
@@ -726,10 +710,6 @@ agent:
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
-
-budget:
-  iterations: 3
-  cost: 1.00
 
 gates:
   - "true"
@@ -748,7 +728,7 @@ gates:
             return result
 
         harness.run_iteration = patched_run_iteration
-        harness.run(max_iterations=3)
+        harness.run(Budget(until=3, cost_usd=1.0))
 
         history = History(integration_project)
         results = history.load()
@@ -756,11 +736,12 @@ gates:
         # All 3 iterations should complete (cost never reaches $1)
         assert len(iterations) == 3
         output = capsys.readouterr().out
-        assert "budget.cost counts known costs only" in output
+        assert "--cost counts known costs only" in output
         assert "cost unavailable" in output
 
-    def test_cost_budget_persists_across_resume(self, integration_project):
-        """Cumulative cost should carry over when resuming from a previous run."""
+    def test_cost_budget_is_per_invocation(self, integration_project):
+        """A resumed run gets the full --cost again, whatever it spent before; status
+        records the cap as a run total (spent before + --cost)."""
         import json
 
         (integration_project / "autohelix.yaml").write_text("""
@@ -771,10 +752,6 @@ agent:
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
-
-budget:
-  iterations: 10
-  cost: 0.15
 
 gates:
   - "true"
@@ -792,7 +769,7 @@ gates:
             return result
 
         harness1.run_iteration = patched_run_iteration1
-        harness1.run(max_iterations=2)
+        harness1.run(Budget(until=2, cost_usd=0.15))
 
         history = History(integration_project)
         results1 = history.load()
@@ -813,7 +790,7 @@ gates:
             updated.append(json.dumps(entry))
         history_path.write_text("\n".join(updated) + "\n")
 
-        # Second run (resume): should start at iter 3, with $0.10 already spent
+        # Second run (resume): starts at iter 3; the $0.10 already spent doesn't count
         harness2 = Harness(integration_project, verbose=False)
         original_run_iteration2 = harness2.run_iteration
 
@@ -823,87 +800,56 @@ gates:
             return result
 
         harness2.run_iteration = patched_run_iteration2
-        harness2.run(max_iterations=10)
+        harness2.run(Budget(until=10, cost_usd=0.15))
 
         results2 = history.load()
         iters2 = [r for r in results2 if r.iteration > 0]
-        # $0.10 from prior + $0.05 from iter 3 = $0.15, meets budget -> stops after 1 more
-        assert len(iters2) == 3
+        # $0.05 each: iterations 3, 4 and 5 reach $0.15 this invocation
+        assert len(iters2) == 5
+        status = json.loads(RunPaths(integration_project).status.read_text())
+        assert status["max_cost_usd"] == pytest.approx(0.25)
+        assert status["stop_reason"]["detail"] == "cost budget reached ($0.15 this invocation)"
 
-    def test_time_budget_persists_across_resume(self, integration_project, monkeypatch):
-        """Cumulative wall-clock time (from duration_ms) should carry over on resume."""
+    def test_time_budget_is_per_invocation(self, integration_project):
+        """--time counts this invocation's wall clock only; status records the cap as
+        the seconds recorded before (wall_clock_ms, else duration_ms) + --time."""
         import json
-        import time as time_mod
 
-        (integration_project / "autohelix.yaml").write_text("""
-goal: Test time resume
+        from autohelix.history import record_seconds
 
-agent:
-  backend: mock
-  settings:
-    change_file: hello.py
-    change_content: "# iteration {iteration}"
-
-budget:
-  iterations: 10
-  time: 35s  # 28s used: room to resume (checked before each iteration)
-
-gates:
-  - "true"
-""")
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
-
-        # First run: 2 iterations
         harness1 = Harness(integration_project, verbose=False)
-        harness1.run(max_iterations=2)
+        harness1.run(Budget(until=2))
 
-        history = History(integration_project)
-        results1 = history.load()
-        iters1 = [r for r in results1 if r.iteration > 0]
-        assert len(iters1) == 2
-
-        # Patch history to show each iteration took 14 seconds (28s total)
+        # 14s + 5s recorded before: the first by wall_clock_ms, the second by duration_ms only.
         history_path = RunPaths(integration_project).history
-        lines = history_path.read_text().splitlines()
         updated = []
-        for line in lines:
+        for line in history_path.read_text().splitlines():
             entry = json.loads(line)
-            if entry.get("iteration", 0) > 0:
-                for call in entry["calls"]:
-                    if call["role"] == "agent":
-                        call["usage"]["duration_ms"] = 14000
+            for call in entry["calls"]:
+                if call["role"] == "agent":
+                    call["usage"]["duration_ms"] = 5000
+                    if entry["iteration"] == 1:
+                        call["usage"]["wall_clock_ms"] = 14000
+                    else:
                         call["usage"].pop("wall_clock_ms", None)
             updated.append(json.dumps(entry))
         history_path.write_text("\n".join(updated) + "\n")
+        records = History(integration_project).load()
+        assert [record_seconds(r) for r in records if r.iteration > 0] == [14, 5]
+        before = sum(record_seconds(r) for r in records)
 
-        # Mock monotonic so each call advances 3s, ensuring the time check
-        # fires after a small number of iterations
-        call_count = 0
-        real_monotonic = time_mod.monotonic
-
-        def fake_monotonic():
-            nonlocal call_count
-            call_count += 1
-            return real_monotonic() + (call_count * 3)
-
-        monkeypatch.setattr(time_mod, "monotonic", fake_monotonic)
-
-        # Second run (resume): 28s from prior history + advancing fake clock
+        # 40s of --time is plenty for two mock iterations, whatever ran before.
         harness2 = Harness(integration_project, verbose=False)
-        harness2.run(max_iterations=10)
-
-        results2 = history.load()
-        iters2 = [r for r in results2 if r.iteration > 0]
-        # With 28s prior time offset and fake clock advancing, the loop
-        # should stop well before 10 more iterations
-        assert len(iters2) < 12
-        assert len(iters2) > 2  # at least ran the 2 prior + some new
+        harness2.run(Budget(until=4, time_seconds=40))
+        assert [r.iteration for r in History(integration_project).load() if r.iteration > 0] == [1, 2, 3, 4]
+        status = json.loads(RunPaths(integration_project).status.read_text())
+        assert status["max_time_seconds"] == round(before) + 40
+        assert status["max_iterations"] == 4 and status["max_cost_usd"] is None
 
     def test_wall_clock_ms_recorded(self, integration_project):
         """Each iteration should record wall_clock_ms in usage."""
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=1)
+        harness.run(Budget(until=1))
 
         history = History(integration_project)
         results = history.load()
@@ -912,70 +858,8 @@ gates:
         assert "wall_clock_ms" in iterations[0].usage
         assert iterations[0].usage["wall_clock_ms"] > 0
 
-    def test_time_resume_uses_wall_clock_ms(self, integration_project, monkeypatch):
-        """Resume should prefer wall_clock_ms over duration_ms for time tracking."""
-        import json
-        import time as time_mod
-
-        (integration_project / "autohelix.yaml").write_text("""
-goal: Test wall_clock resume
-agent:
-  backend: mock
-  settings:
-    change_file: hello.py
-    change_content: "# iteration {iteration}"
-budget:
-  iterations: 10
-  time: 35s  # 28s used: room to resume (checked before each iteration)
-gates:
-  - "true"
-""")
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
-
-        # First run: 2 iterations
-        harness1 = Harness(integration_project, verbose=False)
-        harness1.run(max_iterations=2)
-
-        history = History(integration_project)
-
-        # Patch history: duration_ms=5000 (5s agent time) but wall_clock_ms=14000 (14s total)
-        history_path = RunPaths(integration_project).history
-        lines = history_path.read_text().splitlines()
-        updated = []
-        for line in lines:
-            entry = json.loads(line)
-            if entry.get("iteration", 0) > 0:
-                for call in entry["calls"]:
-                    if call["role"] == "agent":
-                        call["usage"]["duration_ms"] = 5000
-                        call["usage"]["wall_clock_ms"] = 14000
-            updated.append(json.dumps(entry))
-        history_path.write_text("\n".join(updated) + "\n")
-
-        # Mock monotonic to advance slowly — the prior 28s from wall_clock_ms
-        # should push us past the 30s budget quickly
-        call_count = 0
-        real_monotonic = time_mod.monotonic
-
-        def fake_monotonic():
-            nonlocal call_count
-            call_count += 1
-            return real_monotonic() + (call_count * 2)
-
-        monkeypatch.setattr(time_mod, "monotonic", fake_monotonic)
-
-        harness2 = Harness(integration_project, verbose=False)
-        harness2.run(max_iterations=10)
-
-        results2 = history.load()
-        iters2 = [r for r in results2 if r.iteration > 0]
-        # With 28s prior (from wall_clock_ms) + advancing clock, should stop quickly
-        assert len(iters2) < 7
-        assert len(iters2) > 2
-
-    def test_no_budget_runs_to_max_iterations(self, integration_project):
-        """With no cost/time budget, loop runs to max_iterations."""
+    def test_iteration_cap_alone(self, integration_project):
+        """With no cost/time budget, the loop runs to the iteration cap."""
         (integration_project / "autohelix.yaml").write_text("""
 goal: Test no budget
 agent:
@@ -983,8 +867,6 @@ agent:
   settings:
     change_file: hello.py
     change_content: "# iteration {iteration}"
-budget:
-  iterations: 3
 gates:
   - "true"
 """)
@@ -992,7 +874,7 @@ gates:
         subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
-        harness.run(max_iterations=3)
+        harness.run(Budget(until=3))
 
         history = History(integration_project)
         results = history.load()
@@ -1010,10 +892,6 @@ agent:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
-budget:
-  iterations: 10
-  cost: 0.30
-
 gates:
   - "true"
 """)
@@ -1030,7 +908,7 @@ gates:
             return result
 
         harness.run_iteration = patched_run_iteration
-        harness.run(max_iterations=10)
+        harness.run(Budget(until=10, cost_usd=0.30))
 
         history = History(integration_project)
         results = history.load()
@@ -1051,10 +929,6 @@ agent:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
-budget:
-  iterations: 10
-  time: 1h
-
 gates:
   - "true"
 """)
@@ -1063,7 +937,7 @@ gates:
 
         # First run
         harness1 = Harness(integration_project, verbose=False)
-        harness1.run(max_iterations=2)
+        harness1.run(Budget(until=2))
 
         history = History(integration_project)
 
@@ -1082,7 +956,7 @@ gates:
 
         # Second run (resume) — should not treat the zero entries as large offsets
         harness2 = Harness(integration_project, verbose=False)
-        harness2.run(max_iterations=5)
+        harness2.run(Budget(until=5, time_seconds=3600))
 
         results2 = history.load()
         iters2 = [r for r in results2 if r.iteration > 0]
@@ -1106,10 +980,6 @@ agent:
     change_file: mock_change.txt
     change_content: "fail"
 
-budget:
-  iterations: 10
-  cost: 0.10
-
 gates:
   - ./check.sh
 """)
@@ -1126,7 +996,7 @@ gates:
             return result
 
         harness.run_iteration = patched_run_iteration
-        harness.run()
+        harness.run(Budget(cost_usd=0.10))  # --cost alone: no iteration cap
 
         history = History(integration_project)
         results = history.load()

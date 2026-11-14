@@ -12,6 +12,3 @@ observe:
 
 scope:
   editable: [post.md]
-
-budget:
-  iterations: 3

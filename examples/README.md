@@ -2,8 +2,8 @@
 
 These examples show some of the ways an AutoHelix loop can be structured. They
 are starting points, not an exhaustive list of supported use cases: the goal,
-agent prompt, editable scope, evaluation, feedback, and budget can all be
-customized.
+agent prompt, editable scope, evaluation and feedback can all be customized,
+and how long to run is a command-line flag (`autohelix run -n 10 --cost 20`).
 
 Each example highlights one possible combination of those pieces, from local
 code optimization to research and GPU post-training. Adapt
@@ -50,7 +50,7 @@ into a clean standalone git repository:
 python examples/setup_example.py --list
 python examples/setup_example.py sorting --dir /tmp/autohelix-sorting
 cd /tmp/autohelix-sorting
-autohelix run
+autohelix run -n 2
 ```
 
 AlgoTune and KernelBench use their own setup commands:

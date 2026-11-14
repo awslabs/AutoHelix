@@ -43,7 +43,7 @@ from autohelix.agents import AgentEventKind
 from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained, open_dir as _open_dir, open_file as _open_file, open_run_log
 from autohelix.config import ConfigNotFound, MetricGate, find_config, load_config
 from autohelix.costs import summarize_costs
-from autohelix.history import History
+from autohelix.history import History, record_seconds
 from autohelix.runs import RunPaths, config_relative, git, is_archived, is_transcript, last_activity
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
@@ -301,9 +301,6 @@ class RunData:
                 observe=[{"name": entry.name, "review": entry.review is not None, "metrics": entry.metrics}
                          for entry in config.observe],
                 scope=config.editable,
-                max_iterations=config.max_iterations,
-                max_cost_usd=config.max_cost_usd,
-                max_time_seconds=config.max_time_seconds,
             )
         return summary
 
@@ -913,9 +910,7 @@ class ProjectRuns:
             config = load_config(self.project, config_file=path)[0]
             summary = {"file": relative, "goal": (config.goal.strip() or None) if isinstance(config.goal, str) else None,
                        "title": (config.title or None) if isinstance(config.goal, str) else None,
-                       "directions": config.metric_directions(),
-                       "max_iterations": config.max_iterations, "max_cost_usd": config.max_cost_usd,
-                       "max_time_seconds": config.max_time_seconds, "land": config.land}
+                       "directions": config.metric_directions(), "land": config.land}
         except Exception:
             summary = {"file": relative, "invalid": True}
         self._configs[path] = (mtime, summary)
@@ -958,6 +953,7 @@ class ProjectRuns:
 
         attempts = [r for r in records if r.iteration > 0]
         cost = summarize_costs([usage for r in records for usage in r.cost_usages])
+        budget = status or {}
         tip = refs.get(paths.ref) or data.get("abandoned_tip")
         target = data.get("target_branch")
         target_tip = refs.get(f"refs/heads/{target}") if target else None
@@ -975,19 +971,19 @@ class ProjectRuns:
             "title": config.get("title"),  # the goal's first line, cut (Config.title)
             "status": status and {k: status.get(k) for k in (
                 "state", "phase", "iteration", "iteration_started_at", "phase_started_at", "stopped_at",
-                "stop_reason", "max_iterations")},
+                "stop_reason", "max_iterations", "max_cost_usd", "max_time_seconds")},
             "accepted": sum(1 for r in attempts if r.accepted),
             "metrics": self._metrics(records, config.get("directions") or {}),
-            # Budgets are run totals across segments; `run -n` overrides the file for a segment.
+            # The caps of the latest invocation (`run`/`resume` flags), from its status, as
+            # run totals: spent before it plus its own budget; None where it had none.
             "progress": {
                 "iterations": max((r.iteration for r in attempts), default=0),
-                "max_iterations": (status or {}).get("max_iterations") or config.get("max_iterations"),
+                "max_iterations": budget.get("max_iterations"),
                 "cost_usd": cost.cost_usd, "cost_incomplete": cost.incomplete,
-                "max_cost_usd": config.get("max_cost_usd"),
-                # As the time budget counts it: iteration wall-clock, not the baseline.
-                "seconds": sum(r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0)) or 0
-                               for r in attempts) / 1000,
-                "max_seconds": config.get("max_time_seconds"),
+                "max_cost_usd": budget.get("max_cost_usd"),
+                # Wall clock of the recorded iterations, the baseline's included (as --time counts).
+                "seconds": sum(record_seconds(r) for r in records),
+                "max_seconds": budget.get("max_time_seconds"),
             },
             "target_branch": target,
             "landing": self._landing(target_tip, tip),

@@ -9,8 +9,8 @@ import pytest
 from click.testing import CliRunner
 
 from autohelix.cli import main
-from autohelix.harness import Harness
-from autohelix.history import History
+from autohelix.harness import Budget, Harness
+from autohelix.history import History, record_seconds
 from autohelix.runs import (PROJECT_RECORD, RunLock, RunPaths, copies_base, git, project_key, short_id,
                             sweep_copies)
 from tests.test_runs import configure
@@ -173,19 +173,6 @@ def test_a_run_refuses_another_config(project):
         Harness(project, run_id=paths.run_id, config_file=other)  # the API only: the CLI has no -c
 
 
-def test_the_time_budget_is_checked_before_an_iteration(project):
-    configure(project, budget={"time": "1s"})
-    paths = started(project)
-    records = [json.loads(line) for line in paths.history.read_text().splitlines()]
-    for record in records:
-        if record["iteration"]:
-            record["calls"][0]["usage"]["wall_clock_ms"] = 5000
-    paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
-    result = cli(project, "resume", "-n", "1", "--no-report")
-    assert result.exit_code == 0, result.output
-    assert "time budget reached" in result.output and iterations(paths) == [0, 1]
-
-
 def test_a_stop_condition_pauses_the_run(project):
     configure(project, stop=["test -f STOP && echo asked to stop"])
     paths = started(project)
@@ -259,12 +246,116 @@ def test_delete_refuses_a_live_run(project):
     assert result.exit_code == 1 and "is running" in result.output and paths.run_dir.exists()
 
 
-def test_the_time_budget_counts_prior_time_longer_than_the_uptime(project, monkeypatch):
-    configure(project, budget={"time": "1h"})
+# --- budgets: command-line flags, per invocation ----------------------------------------
+
+
+def status(paths):
+    return json.loads(paths.status.read_text())
+
+
+def begun(project, *args):
+    """`autohelix run` with these budget flags only; returns the new run's paths."""
+    result = cli(project, "run", "--no-report", *args)
+    assert result.exit_code == 0, result.output
+    return RunPaths(project)
+
+
+def test_budget_flags_are_validated(project):
+    for args, message in ((["-n", "2", "--until", "3"], "not both"), (["--cost", "0"], "--cost"),
+                          (["--cost", "-1"], "--cost"), (["--time", "soon"], "not a duration"),
+                          (["--time", "0"], "not a duration"), (["-n", "0"], "-n")):
+        result = cli(project, "run", *args)
+        assert result.exit_code == 2 and message in result.output, (args, result.output)
+    assert not RunPaths(project).run_id  # refused before a run exists
+
+
+def test_without_a_budget_flag_three_iterations(project):
+    result = cli(project, "run", "--no-report")
+    assert result.exit_code == 0, result.output
+    paths = RunPaths(project)
+    assert "Budget   3 iterations (default)" in result.output
+    assert iterations(paths) == [0, 1, 2, 3] and status(paths)["max_iterations"] == 3
+    result = cli(project, "resume", "--no-report")
+    assert "Budget   3 more iterations (default, to 6)" in result.output
+    assert iterations(paths) == [0, 1, 2, 3, 4, 5, 6]
+    assert "iteration budget reached (6)" in result.output
+
+
+def test_until_on_run_and_resume(project):
+    paths = begun(project, "--until", "2")
+    assert iterations(paths) == [0, 1, 2]
+    for _ in range(2):  # a total: the second one runs nothing
+        result = cli(project, "resume", "--until", "3", "--no-report")
+        assert result.exit_code == 0, result.output
+    assert iterations(paths) == [0, 1, 2, 3] and status(paths)["max_iterations"] == 3
+
+
+def test_cost_alone_has_no_iteration_cap_and_counts_this_invocation(project):
+    """The mock charges $0.10 an iteration: `--cost 0.35` runs four (past the default
+    three), and a resume gets its whole --cost again."""
+    paths = begun(project, "--cost", "0.35")
+    assert iterations(paths) == [0, 1, 2, 3, 4]
+    assert status(paths)["max_iterations"] is None
+    assert status(paths)["max_cost_usd"] == pytest.approx(0.35)
+    assert status(paths)["stop_reason"]["detail"] == "cost budget reached ($0.35 this invocation)"
+    result = cli(project, "resume", "--cost", "0.15", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert "Budget   no iteration cap · $0.15 more" in result.output
+    assert iterations(paths) == [0, 1, 2, 3, 4, 5, 6]  # $0.40 before doesn't count
+    assert status(paths)["max_cost_usd"] == pytest.approx(0.55)  # spent before + --cost
+
+
+def test_time_counts_this_invocation_only(project):
+    """Two hours recorded before don't stop a `--time 1h` resume; the cap's run total adds them."""
     paths = started(project)
     records = [json.loads(line) for line in paths.history.read_text().splitlines()]
     records[-1]["calls"][0]["usage"]["wall_clock_ms"] = 2 * 3600 * 1000
     paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
-    monkeypatch.setattr(time, "monotonic", lambda: 60.0)  # booted a minute ago
+    before = sum(record_seconds(r) for r in History(project, paths.run_id).load())
+    result = cli(project, "resume", "-n", "1", "--time", "1h", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert "Budget   1 more iteration (to 2) · 1h" in result.output
+    assert iterations(paths) == [0, 1, 2]
+    assert status(paths)["max_time_seconds"] == round(before) + 3600 and before > 7200
+
+
+def test_time_counts_the_baseline_and_is_checked_before_an_iteration(project, monkeypatch):
+    """A clock that jumps 10s at the baseline and at each iteration: with --time 15s,
+    the baseline and one iteration fit, and no second iteration starts."""
+    jump = [0.0]
+    real = time.monotonic
+    monkeypatch.setattr(time, "monotonic", lambda: real() + jump[0])
+    harness = Harness(project, new=True)
+    for name in ("_capture_baseline", "run_iteration"):
+        def later(*args, _original=getattr(harness, name)):
+            result = _original(*args)
+            jump[0] += 10
+            return result
+        monkeypatch.setattr(harness, name, later)
+    harness.run(Budget(time_seconds=15), report=False)
+    assert iterations(harness.paths) == [0, 1]
+    assert status(harness.paths)["stop_reason"]["detail"] == "time budget reached (15s this invocation)"
+
+
+@pytest.mark.parametrize("state", ["interrupted", "crashed"])
+def test_resume_after_an_interrupted_invocation_says_what_was_left(project, state):
+    paths = begun(project, "-n", "1")
+    data = status(paths)  # as if `run -n 9` had stopped after iteration 1 (a dead PID: crashed)
+    data.update(state="running" if state == "crashed" else state, max_iterations=9, pid=2 ** 22 + 12345,
+                host=socket.gethostname())
+    paths.status.write_text(json.dumps(data))
+    result = cli(project, "resume", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert "3 more (default); the interrupted invocation had 8 left: -n 8" in result.output
+    assert iterations(paths) == [0, 1, 2, 3, 4]
+
+
+def test_no_interrupted_note_with_a_budget_flag_or_after_a_finished_invocation(project):
+    paths = begun(project, "-n", "2")
+    result = cli(project, "resume", "--no-report")
+    assert "interrupted invocation" not in result.output  # finished: nothing was left
+    data = status(paths)
+    data.update(state="interrupted", max_iterations=20)
+    paths.status.write_text(json.dumps(data))
     result = cli(project, "resume", "-n", "1", "--no-report")
-    assert "time budget reached" in result.output and iterations(paths) == [0, 1]
+    assert result.exit_code == 0 and "interrupted invocation" not in result.output

@@ -54,6 +54,11 @@ def format_cost(cost: float | None, precision: int = 2) -> str:
     return f"${cost:.{precision}f}" if cost is not None else "cost unavailable"
 
 
+def format_cap(cost: float) -> str:
+    """A dollar cap as given: cents (`$5.00`), or the digits it has (`$0.015`)."""
+    return f"${cost:.2f}" if abs(cost * 100 - round(cost * 100)) < 1e-9 else f"${cost:.4g}"
+
+
 def format_total_cost(usages: Iterable[dict]) -> str:
     """Describe a total as incomplete when some agent calls have no known cost."""
     total = summarize_costs(usages)

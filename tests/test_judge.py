@@ -13,7 +13,7 @@ from autohelix.agents import AgentConfig
 from autohelix.agents.claudecode import ClaudeCodeAgent
 from autohelix.agents.codex import CodexAgent
 from autohelix.cli import main
-from autohelix.harness import Harness
+from autohelix.harness import Budget, Harness
 from autohelix.history import History
 from autohelix.judge import (
     ANSWER_SCHEMA, JudgeError, ask, build_system_prompt, judge_config, parse_answer,
@@ -254,7 +254,7 @@ stop:
     subprocess.run(["git", "add", "-A"], cwd=project, capture_output=True, check=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=project, capture_output=True, check=True)
 
-    Harness(project, verbose=False).run(max_iterations=3, report=False)
+    Harness(project, verbose=False).run(Budget(until=3), report=False)
 
     records = History(project).load()
     assert [r.iteration for r in records] == [0, 1]

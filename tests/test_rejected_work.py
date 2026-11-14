@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from autohelix import runs
-from autohelix.harness import AutoHelixRunError, Harness
+from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.workspace import ITERATION_DIR
 
@@ -77,7 +77,7 @@ def test_rejected_trees_are_kept_and_shown_to_the_next_agent(project):
     base = _git(project, "rev-parse", "HEAD")
     harness = Harness(project, verbose=False, land_mode="manual")
     spy = Spy(harness)
-    harness.run(max_iterations=3, report=False)
+    harness.run(Budget(until=3), report=False)
     records = History(project).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, False), (2, True), (3, True)]
     rejected, accepted = records[1], records[2]
@@ -113,7 +113,7 @@ def test_failed_agent_attempt_keeps_its_tree_and_stays_rejected(project):
     _configure(project, settings={"should_fail": True})
     harness = Harness(project, verbose=False, land_mode="manual")
     Spy(harness, edit=lambda worktree: (worktree / "hello.py").write_text("half done\n"))
-    harness.run(max_iterations=1, report=False)  # the loop goes on; the budget ends it here
+    harness.run(Budget(until=1), report=False)  # the loop goes on; the budget ends it here
     record = History(project).load()[-1]
     assert record.iteration == 1 and not record.accepted
     assert record.reason == "Iteration 1 agent failed: Mock failure"
@@ -129,7 +129,7 @@ def test_discarded_paths_are_recorded(project):
     _git(project, "commit", "-m", "tests")
     _configure(project, settings={"change_file": "tests/test_x.py"}, scope={"editable": ["hello.py"]})
     harness = Harness(project, verbose=False, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     record = History(project).load()[-1]
     assert record.accepted and record.commit is None  # its only change was out of scope
     assert record.discarded == ["tests/test_x.py"]
@@ -138,5 +138,5 @@ def test_discarded_paths_are_recorded(project):
 
 def test_no_scope_warns_at_run_start(project, capsys):
     _configure(project, gates=["true"])
-    Harness(project, verbose=False, land_mode="manual").run(max_iterations=1, report=False)
+    Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
     assert "the agent may edit the tests and benchmarks that gate it" in capsys.readouterr().out

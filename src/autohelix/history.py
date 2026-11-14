@@ -75,6 +75,19 @@ class IterationResult:
         return summarize_costs(self.cost_usages)
 
 
+def record_seconds(record: IterationResult) -> float:
+    """Wall-clock seconds a recorded iteration took: the agent call's `wall_clock_ms` (the
+    whole iteration), else (the baseline, which has no agent call) its start to end."""
+    usage = record.usage
+    ms = usage.get("wall_clock_ms", usage.get("duration_ms"))
+    if isinstance(ms, (int, float)) and not isinstance(ms, bool):
+        return ms / 1000
+    start, end = record.started_at, record.ended_at
+    if isinstance(start, (int, float)) and isinstance(end, (int, float)) and end > start:
+        return end - start
+    return 0.0
+
+
 def _copy_error(error: BaseException) -> str:
     """One line for a copy failure (shutil.Error carries a list of per-file errors)."""
     if isinstance(error, shutil.Error) and error.args and isinstance(error.args[0], list):

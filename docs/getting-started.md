@@ -101,24 +101,26 @@ intended path (`autohelix.yaml`, or `autohelix/<name>.yaml`) before changing
 project files. A numbered walkthrough follows the YAML in configuration order:
 what each section controls, why its settings were chosen, and how to adjust
 them. It covers the goal, scope, gates, observations and evidence, backend,
-budgets, and effective defaults for omitted fields. Missing evaluators are
+and effective defaults for omitted fields. Missing evaluators are
 proposed with their design and likely cost before implementation. Discuss
 revisions, then agree to save and commit
 when the proposal fits your goal. You can also ask for a proposal only, or for
 files to be saved without committing.
 
 The skill uses a consistent top-level order for generated configs: `goal`,
-`scope`, `gates`, `observe`, `stop`, `agent`, `budget`, `land`, `report`,
+`scope`, `gates`, `observe`, `stop`, `agent`, `land`, `report`,
 `prompt_template`, omitting unused fields. This is a presentation convention;
 existing configs can use any top-level order.
 
 After agreement, the agent writes the setup files, validates the config without
 executing evaluators, and commits only the agreed setup changes. It can also run
 known cheap checks within the request. Its final reply gives the saved paths,
-commit, verification results, what remains unverified, and launch instructions.
+commit, verification results, what remains unverified, and the complete
+command line to start it, with a suggested budget and why (`autohelix run perf
+-n 10 --cost 20`). Budgets are command-line flags, not config: `-n`
+iterations, `--cost` dollars, `--time` wall clock, for each `run` or `resume`
+(3 iterations when none is given; see [CLI → Budgets](cli.md#budgets)).
 Measurements alone do not reject regressions; metric gates are optional.
-The proposed default is three iterations; omitted iterations use the runtime
-default of five. Unset optional budgets provide no cap from those fields.
 
 After reviewing the configuration, ask for a managed execution:
 
@@ -137,12 +139,12 @@ mean an open-ended experiment cannot be continued with `autohelix resume`.
 You can also combine preparation and execution in one request when you want the
 agent to set up and manage the experiment from scratch.
 
-Time thresholds are checked between iterations; per-agent deadlines and check
-timeouts have their own boundaries. Dollar accounting depends on backend
+`--time` and `--cost` are checked between iterations; per-agent deadlines and
+check timeouts have their own boundaries. Dollar accounting depends on backend
 reporting and includes the optimization agent and the `ask` and `review` calls
 of gates and observe entries, including the baseline's. Report generation and
 supervisor calls are separate. Missing cost
-is unknown, not zero. See [budget details](config.md) before relying on a cap.
+is unknown, not zero. See [CLI → Budgets](cli.md#budgets) before relying on a cap.
 The console, `autohelix view`, the run summary and run page (`report.md`,
 `report.html`), and saved records already support inspecting results.
 
@@ -214,12 +216,12 @@ agent's live output below them (`autohelix view --web` for the same in a browser
 
 ### 4. Continue, set aside or start over
 
-Each `autohelix run` starts a **new** run, with fresh notes and budget. To give
-the same run more iterations, resume it:
+Each `autohelix run` starts a **new** run, with fresh notes. To give the same
+run more iterations, resume it; budgets count each invocation:
 
 ```bash
 autohelix resume -n 5                # five more iterations of this config's latest run
-autohelix resume k3f9                # a specific run (its id, or the last part of it)
+autohelix resume k3f9 --cost 5       # a specific run (its id, or its last part), up to $5 more
 ```
 
 Runs you're done with stay listed in `autohelix dashboard`; archive them to hide
@@ -260,7 +262,7 @@ with several, it stops with the list (`autohelix run <name>` picks one). See
 
 ### 6. Several runs side by side
 
-To try a goal several ways at once (another model, prompt or budget), write
+To try a goal several ways at once (another model or prompt), write
 one config per variant, commit them, and start runs of one group, each in its
 own terminal:
 

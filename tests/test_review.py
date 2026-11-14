@@ -622,7 +622,7 @@ def test_launcher_is_immune_to_the_command_environment(tmp_path):
 def test_harness_commands_run_autohelix_through_the_launcher(tmp_path, monkeypatch):
     """A candidate `yaml.py` on the remapped PYTHONPATH is not imported by a gate's
     `autohelix ask` or an observe entry's `autohelix review`."""
-    from autohelix.harness import Harness
+    from autohelix.harness import Budget, Harness
     from autohelix.history import History
 
     project = make_repo(tmp_path / "project")
@@ -649,7 +649,7 @@ observe:
     git(project, "commit", "-qm", "init")
     # As an editable install would: the project's src/ on sys.path, remapped onto the copy.
     monkeypatch.syspath_prepend(str(project / "src"))
-    Harness(project, verbose=False).run(max_iterations=1, report=False)
+    Harness(project, verbose=False).run(Budget(until=1), report=False)
     baseline, first = History(project).load()
     assert baseline.gates[0]["passed"] is False  # the judge's "no", not the planted exit 0
     assert baseline.observe[0]["ok"] is True and baseline.observe[0]["metrics"] == {"missing": 7}

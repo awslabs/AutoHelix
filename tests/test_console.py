@@ -9,8 +9,8 @@ from click.testing import CliRunner
 
 from autohelix.cli import main
 from autohelix.config import Config
-from autohelix.display import Transcript, clean, header_lines
-from autohelix.harness import Harness
+from autohelix.display import Transcript, budget_text, clean, header_lines
+from autohelix.harness import Budget, Harness
 from autohelix.history import IterationResult
 from autohelix.runs import RunPaths, short_id
 
@@ -27,7 +27,6 @@ CONFIG = {
                 {"name": "review", "review": "Review the diff."},
                 {"name": "progress", "review": "Count missing items.", "metrics": {"missing": "lower"}}],
     "scope": {"editable": ["sort.py"]},
-    "budget": {"iterations": 20, "cost": 10, "time": "2h"},
 }
 
 
@@ -35,7 +34,9 @@ CONFIG = {
 
 
 def test_header_lines():
-    lines = [line.plain for line in header_lines(Config.from_dict(CONFIG), "20261112-1200-sorting-0mws", "sorting", 20)]
+    budget = Budget(iterations=20, cost_usd=10, time_seconds=7200)
+    lines = [line.plain for line in header_lines(Config.from_dict(CONFIG), "20261112-1200-sorting-0mws", "sorting",
+                                                 budget)]
     assert lines == [
         "  AutoHelix · run 0mws · sorting",
         "  Goal     Make sort_list faster in sort.py.",
@@ -43,13 +44,28 @@ def test_header_lines():
         "  Gates    pytest -q · ask: keeps the public API? · speed regress 5%",
         "  Observe  bench (speed ↑) · review · progress (missing ↓)",
         "  Scope    editable: sort.py",
-        "  Budget   20 iterations · $10 · 2h",
+        "  Budget   20 iterations · $10.00 · 2h",
     ]
 
 
 def test_header_omits_empty_lines_and_names_the_project():
-    lines = [line.plain for line in header_lines(Config.from_dict({"goal": "g"}), "20261112-1200-abcd", "proj", 1)]
+    lines = [line.plain for line in header_lines(Config.from_dict({"goal": "g"}), "20261112-1200-abcd", "proj",
+                                                 Budget(until=1))]
     assert lines == ["  AutoHelix · run abcd · proj", "  Goal     g", "  Agent    claude", "  Budget   1 iteration"]
+
+
+@pytest.mark.parametrize("budget, done, text", [
+    (Budget(), 0, "3 iterations (default)"),
+    (Budget(), 5, "3 more iterations (default, to 8)"),
+    (Budget(iterations=3, cost_usd=5, time_seconds=3600), 5, "3 more iterations (to 8) · $5.00 more · 1h"),
+    (Budget(until=8), 5, "3 more iterations (to 8)"),
+    (Budget(until=4), 5, "0 more iterations (to 4)"),
+    (Budget(cost_usd=5), 5, "no iteration cap · $5.00 more"),
+    (Budget(time_seconds=5400), 0, "no iteration cap · 1h30m"),
+    (Budget(cost_usd=0.015), 0, "no iteration cap · $0.015"),
+])
+def test_header_budget_says_what_this_invocation_may_do(budget, done, text):
+    assert budget_text(budget, done) == text
 
 
 def _record(iteration, accepted, metrics=None, **fields):
