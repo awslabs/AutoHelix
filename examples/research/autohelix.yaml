@@ -24,6 +24,3 @@ scope:
 
 agent:
   timeout: 8m
-
-budget:
-  iterations: 4

@@ -5,7 +5,10 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+import glob as globmod
+import json
 import math
+import os
 import re
 import shlex
 from typing import Any
@@ -69,7 +72,7 @@ class ConfigIssue:
 DEFAULT_CHECK_TIMEOUT = 1800
 
 KNOWN_TOP_LEVEL_KEYS = {
-    "goal", "agent", "prompt_template", "scope", "gates", "observe", "stop", "budget", "land", "report",
+    "goal", "agent", "prompt_template", "scope", "gates", "observe", "stop", "land", "report",
 }
 
 # Keys of the first config format: each is an error naming its replacement.
@@ -82,6 +85,8 @@ RENAMED_TOP_LEVEL_KEYS = {
                    "(was max_regression_pct) or `improve: N%`"),
     "reviewer": "`reviewer:` is now an `observe:` entry with `name:` and `review: <prompt>`",
     "name": "`name:` is gone: runs are named after the config file; use autohelix/<name>.yaml",
+    "budget": ("`budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` "
+               "(also `resume`; `agent.timeout` limits one iteration)"),
 }
 
 ENTRY_AGENT_KEYS = ("backend", "model", "reasoning_effort", "timeout", "command")
@@ -155,19 +160,31 @@ class Config:
     agent: AgentConfig = field(default_factory=AgentConfig)
     editable: list[str] = field(default_factory=list)
     frozen: list[str] = field(default_factory=list)
-    max_iterations: int = 5
-    max_cost_usd: float | None = None
-    max_time_seconds: int | None = None
     report: bool = True  # write a summary (report.md) when a run finishes
     land: str | None = None  # the landing mode of new runs; unset: auto (manual with --group)
-    # A Jinja file replacing the built-in agent prompt, resolved against the config file's folder.
+    # A Jinja file replacing the built-in agent prompt, resolved against the config file's folder;
+    # `prompt_template_text` is its text when the config is a run's stored copy (which inlines it).
     prompt_template: Path | None = None
+    prompt_template_text: str | None = None
+    # The config file and its template, project-relative, as named and (for symlinks) as
+    # resolved: always frozen, whatever `scope:` says (the agent can't edit its own protocol).
+    protected: list[str] = field(default_factory=list)
     _parse_errors: list[str] = field(default_factory=list, repr=False)
 
     @property
     def title(self) -> str:
         """The goal's first line, cut to about 80 characters (`goal_title`)."""
         return goal_title(self.goal)
+
+    def frozen_names(self) -> list[str]:
+        """What is frozen, as shown (header, prompt): `scope.frozen`, then the config and
+        template files."""
+        return self.frozen + [path for path in self.protected if path not in self.frozen]
+
+    def frozen_patterns(self) -> list[str]:
+        """What the harness matches as frozen: `frozen_names` with the files' glob
+        characters escaped."""
+        return self.frozen + [globmod.escape(path) for path in self.protected if path not in self.frozen]
 
     def gate_commands(self) -> list[CommandSpec]:
         return [gate for gate in self.gates if isinstance(gate, CommandSpec)]
@@ -263,7 +280,8 @@ class Config:
             if self.agent.require_notes.max_retries < 1:
                 error("agent.require_notes.max_retries must be >= 1")
 
-        if self.prompt_template is not None and not self.prompt_template.is_file():
+        if (self.prompt_template is not None and self.prompt_template_text is None
+                and not self.prompt_template.is_file()):
             error(f"prompt_template not found: {self.prompt_template}")
         return issues
 
@@ -294,40 +312,6 @@ class Config:
             if key not in ("editable", "frozen"):
                 errors.append(f"Unknown key scope.{key} (known: editable, frozen)")
 
-        budget = data.get("budget") or {}
-        if not isinstance(budget, dict):
-            errors.append("budget must be a mapping")
-            budget = {}
-        for key in budget:
-            if key == "iteration_time":
-                errors.append("`budget.iteration_time` is now `agent.timeout`")
-            elif key not in ("iterations", "cost", "time"):
-                errors.append(f"Unknown key budget.{key} (known: iterations, cost, time)")
-        max_iterations = budget.get("iterations", 5)
-        if max_iterations is None:
-            max_iterations = 5
-        elif type(max_iterations) is not int or max_iterations < 1:
-            errors.append(f"budget.iterations must be a positive integer, got {max_iterations!r}")
-            max_iterations = 5
-
-        max_cost_usd = None
-        raw_cost = budget.get("cost")
-        if raw_cost is not None:
-            if isinstance(raw_cost, bool):
-                errors.append(f"budget.cost: expected a number, got bool ({raw_cost})")
-            else:
-                try:
-                    max_cost_usd = float(raw_cost)
-                except (TypeError, ValueError):
-                    errors.append(f"budget.cost: '{raw_cost}' is not a valid number")
-                else:
-                    if not max_cost_usd > 0:
-                        errors.append("budget.cost must be a positive number")
-
-        max_time_seconds = None
-        if budget.get("time") is not None:
-            max_time_seconds = _duration(budget["time"], "budget.time", errors)
-
         goal = data.get("goal", "")
         return cls(
             goal=goal if isinstance(goal, str) else "" if goal is None else str(goal),
@@ -337,9 +321,6 @@ class Config:
             agent=agent,
             editable=editable,
             frozen=frozen,
-            max_iterations=max_iterations,
-            max_cost_usd=max_cost_usd,
-            max_time_seconds=max_time_seconds,
             report=data.get("report") is not False,
             land=data.get("land"),
             _parse_errors=errors,
@@ -711,17 +692,8 @@ def find_config(project: Path, name: str | None = None) -> Path:
     raise ConfigNotFound(f"No config found in {project}{found}.", configs)
 
 
-def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Config, dict[str, Any]]:
-    """Load configuration from `config_file`, else the project's config (`find_config`).
-
-    Returns:
-        A tuple of (Config, raw_data) where raw_data is the parsed YAML dict.
-        The raw_data is used for unknown-key validation.
-    """
-    config_path = Path(config_file) if config_file else find_config(project_path)
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config not found: {config_path}")
-
+def parse_config(config_path: Path, project_path: Path) -> dict[str, Any]:
+    """The config file's YAML mapping; ConfigError if it isn't one (named relative to the project)."""
     try:
         shown = config_path.resolve().relative_to(Path(project_path).resolve())
     except ValueError:
@@ -733,11 +705,160 @@ def load_config(project_path: Path, config_file: Path | None = None) -> tuple[Co
             raise ConfigError(f"Cannot parse {shown}: {e}") from None
     if not isinstance(data, dict):
         raise ConfigError(f"{shown} must be a YAML mapping")
+    return data
+
+
+def template_path(config_path: Path, file: str) -> Path:
+    """A `prompt_template:` path, next to the config file, resolved."""
+    return (config_path.resolve().parent / Path(file).expanduser()).resolve()
+
+
+def _project_relative(project: Path, paths) -> list[str]:
+    """`paths` relative to the project, each as named and as resolved (a symlink and its
+    target), outside ones left out."""
+    roots = [Path(os.path.normpath(project.absolute())), project.resolve()]
+    found = []
+    for path in paths:
+        for candidate in (Path(os.path.normpath(path.absolute())), path.resolve()):
+            root = next((r for r in roots if candidate.is_relative_to(r)), None)
+            if root is not None and (name := candidate.relative_to(root).as_posix()) not in found:
+                found.append(name)
+    return found
+
+
+def load_config(project_path: Path, config_file: Path | None = None, *,
+                source: Path | None = None) -> tuple[Config, dict[str, Any]]:
+    """Load configuration from `config_file`, else the project's config (`find_config`).
+
+    `prompt_template:` is a path, resolved next to the config file, or a run's stored
+    form `{file, text}` (`stored_config_text`): the text is the template. For a run's
+    stored copy, `source` is the file it was made from: `file` resolves next to it, and
+    it is the config file `Config.protected` freezes.
+
+    Returns:
+        A tuple of (Config, raw_data) where raw_data is the parsed YAML dict.
+        The raw_data is used for unknown-key validation.
+    """
+    config_path = Path(config_file) if config_file else find_config(project_path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config not found: {config_path}")
+    data = parse_config(config_path, project_path)
 
     config = Config.from_dict(data)
+    origin = Path(source) if source else config_path
     template = data.get("prompt_template")
-    if isinstance(template, str) and template.strip():
-        config.prompt_template = (config_path.resolve().parent / Path(template).expanduser()).resolve()
+    if isinstance(template, dict):
+        for key in template:
+            if key not in ("file", "text"):
+                config._parse_errors.append(f"Unknown key prompt_template.{key} (known: file, text)")
+        file, text = template.get("file"), template.get("text")
+        if isinstance(file, str) and file.strip() and isinstance(text, str):
+            config.prompt_template = template_path(origin, file)
+            config.prompt_template_text = text
+        else:
+            config._parse_errors.append("a stored prompt_template needs file: (its path) and text: (its contents)")
+    elif isinstance(template, str) and template.strip():
+        config.prompt_template = template_path(origin, template)
     elif template is not None:
         config._parse_errors.append("prompt_template must be a path to a template file")
+    named = [origin]
+    if config.prompt_template is not None:
+        file = template["file"] if isinstance(template, dict) else template
+        named.append(origin.resolve().parent / Path(file).expanduser())  # where it resolves from
+    config.protected = _project_relative(Path(project_path), named)
     return config, data
+
+
+STORED_NOTE = "# stored when the run started"
+
+
+def inlined(config_path: Path, data: dict[str, Any] | None = None, *,
+            project: Path | None = None) -> dict[str, Any]:
+    """The config in `config_path` (parsed: `data`) as a run stores it: a `prompt_template:`
+    path becomes `{file, text}` with the template's current text. Raises ConfigError
+    when the file or its template can't be read (naming it relative to `project`)."""
+    if data is None:
+        data = parse_config(config_path, project or config_path.parent)
+    template = data.get("prompt_template")
+    if not isinstance(template, str) or not template.strip():
+        return data
+    try:
+        text = template_path(config_path, template).read_text()
+    except (OSError, UnicodeDecodeError) as e:
+        raise ConfigError(f"Cannot read prompt_template {template}: {e}") from None
+    return {**data, "prompt_template": {"file": template, "text": text}}
+
+
+class _StoredDumper(yaml.SafeDumper):
+    """Multi-line strings as literal blocks where YAML allows it (the dump fallback)."""
+
+
+_StoredDumper.add_representer(str, lambda dumper, value: dumper.represent_scalar(
+    "tag:yaml.org,2002:str", value, style="|" if "\n" in value else None))
+
+
+def _template_block(file: str, text: str) -> str:
+    """`prompt_template:` in its stored form, as YAML lines: `text` a literal block with
+    the chomping its trailing newlines need, and an indentation indicator when its
+    first line starts with spaces. `stored_config_text` checks the result parses back."""
+    plain = yaml.safe_load(f"k: {file}") == {"k": file} if file.strip() == file and file else False
+    chomp = "+" if text.endswith("\n\n") else "" if text.endswith("\n") else "-"
+    first = next((line for line in text.split("\n") if line.strip()), "")
+    indicator = "2" if first.startswith(" ") else ""
+    body = text if text.endswith("\n") else text + "\n"
+    lines = "".join(("    " + line if line else "") + "\n" for line in body.split("\n")[:-1])
+    return (f"prompt_template:  {STORED_NOTE}\n"
+            + f"  file: {file if plain else json.dumps(file)}\n  text: |{indicator}{chomp}\n{lines}")
+
+
+def stored_config_text(config_path: Path) -> str:
+    """What a run stores as `runs/<id>/config.yaml`: the config file's text verbatim
+    (comments kept), with a `prompt_template: x.md` line replaced by the stored form
+    `{file, text}`. When that line can't be replaced textually (flow style, a value
+    on the next line), a YAML dump of the stored form. Raises ConfigError as `inlined`."""
+    text = config_path.read_text()
+    data = parse_config(config_path, config_path.parent)
+    stored = inlined(config_path, data)
+    if stored is data:
+        return text
+    lines = text.splitlines(keepends=True)
+    found = [i for i, line in enumerate(lines) if re.match(r"prompt_template\s*:", line)]
+    if len(found) == 1:
+        i = found[0]
+        template = stored["prompt_template"]
+        candidate = ("".join(lines[:i]) + _template_block(template["file"], template["text"])
+                     + "".join(lines[i + 1:]))
+        try:
+            if yaml.safe_load(candidate) == stored:
+                return candidate
+        except yaml.YAMLError:
+            pass
+    return (f"{STORED_NOTE} from {config_path.name} (its prompt_template inlined)\n"
+            + yaml.dump(stored, Dumper=_StoredDumper, sort_keys=False, allow_unicode=True))
+
+
+def _normalized(value: Any) -> Any:
+    """Mappings without None values or empty containers, at any depth (`gates: []`,
+    `scope: {editable: null}` and no key are the same)."""
+    if isinstance(value, dict):
+        items = ((key, _normalized(item)) for key, item in value.items())
+        return {key: item for key, item in items if item is not None and item != {} and item != []}
+    if isinstance(value, list):
+        return [_normalized(item) for item in value]
+    return value
+
+
+def config_changes(stored: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    """The top-level keys whose parsed values differ: comments and formatting don't count,
+    nor empty values (`_normalized`) or how `prompt_template.file` spells the path
+    (`./p.md`). Defaults written out (`report: true`) and other spellings (`10m`, `600`)
+    do: the refusal names the keys."""
+    def normalized(data: dict[str, Any]) -> dict[str, Any]:
+        data = _normalized(data)
+        template = data.get("prompt_template")
+        if isinstance(template, dict) and isinstance(template.get("file"), str):
+            data["prompt_template"] = {**template, "file": os.path.normpath(template["file"])}
+        return data
+
+    stored, current = normalized(stored), normalized(current)
+    return [key for key in dict.fromkeys([*stored, *current]) if stored.get(key) != current.get(key)]

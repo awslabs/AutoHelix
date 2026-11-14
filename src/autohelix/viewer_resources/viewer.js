@@ -29,12 +29,27 @@ function fmtNumber(v) {
   return Math.abs(v) >= 100 ? v.toFixed(1) : Number(v.toPrecision(4)).toString();
 }
 
+// A dollar cap as formatting.format_cap writes it: cents, else up to four significant digits.
+function fmtCap(v) {
+  if (Math.abs(v * 100 - Math.round(v * 100)) < 1e-9) return `$${v.toFixed(2)}`;
+  const decimals = Math.min(12, Math.max(2, 3 - Math.floor(Math.log10(v))));
+  return `$${v.toFixed(decimals).replace(/0+$/, '').replace(/\.$/, '')}`;
+}
+
 function fmtDuration(seconds) {
   if (!seconds && seconds !== 0) return '—';
-  const s = Math.round(seconds);
+  const s = Math.max(0, Math.round(seconds)); // clock skew: never "-5s"
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
   return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
+}
+
+// A --time cap, and the time against it, as the terminal writes them
+// (iteration_time.format_duration): "10m", "2h", "1h30m", "12m5s".
+function fmtLimit(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return `${h ? `${h}h` : ''}${m ? `${m}m` : ''}${r || (!h && !m) ? `${r}s` : ''}`;
 }
 
 function fmtClock(epochSeconds) {
@@ -839,13 +854,13 @@ function observeLabel(o) {
 
 function renderConfig() {
   const c = state.config;
-  if (c?.missing) { // the run's own file is gone; never another in its place
+  if (c?.missing) { // a run started by an older AutoHelix: never its source file instead
     $('config').hidden = false;
     const summary = $('config-summary');
     summary.title = '';
     summary.dataset.key = 'missing';
     summary.replaceChildren(el('b', { textContent: 'Config' }),
-      el('span', { className: 'config-file', textContent: `${c.file} is gone` }));
+      el('span', { className: 'config-file', textContent: `${c.file}: not stored with this run` }));
     const pre = $('config-text');
     pre.dataset.text = '';
     pre.replaceChildren();
@@ -853,22 +868,25 @@ function renderConfig() {
   }
   $('config').hidden = !c?.text;
   if (!c?.text) return;
-  // `run -n N` overrides the file for that run; the harness records what it used.
-  const runLimit = state.status?.max_iterations;
-  const iterations = runLimit && runLimit !== c.max_iterations
-    ? `${runLimit} iterations (run -n ${runLimit}; file says ${c.max_iterations})`
-    : c.max_iterations && `${c.max_iterations} iterations`;
+  // Budgets are not config: the latest segment's flags, as its status records them.
+  // Iterations and cost as run totals (spent before it plus its own cap); --time only
+  // while the segment runs, against its clock (run_table.time_cap; a stop reason says
+  // when time ended it).
+  const s = state.status || {};
+  const elapsed = s.state === 'running' && typeof s.segment_started_at === 'number'
+    ? Math.max(0, Math.floor(Date.now() / 1000 - s.segment_started_at)) : null;
   const budget = [
-    iterations,
-    c.max_cost_usd && `$${c.max_cost_usd}`,
-    c.max_time_seconds && fmtDuration(c.max_time_seconds),
-  ].filter(Boolean).join(', ');
+    s.max_iterations && `to iteration ${s.max_iterations}`,
+    s.max_cost_usd && `${fmtCap(s.max_cost_usd)} total`,
+    s.max_time_seconds && elapsed !== null
+      && `${fmtLimit(elapsed)} of ${fmtLimit(s.max_time_seconds)} (this segment)${elapsed >= s.max_time_seconds ? ' (time up)' : ''}`,
+  ].filter(Boolean).join(' · ');
   const parts = [
     c.agent && ['Agent', c.agent],
     c.gates?.length && ['Gates', c.gates.join(' · '), c.gates.join('\n')],
     c.observe?.length && ['Observe', c.observe.map(observeLabel).join(' · ')],
     c.scope?.length && ['Editable', c.scope.join(', ')],
-    budget && ['Budget', budget],
+    budget && ['Budget', budget, `${budget}: the latest run/resume's -n/--until and --cost as run totals, its --time as its own`],
   ].filter(Boolean);
   const summary = $('config-summary');
   summary.title = `Show the full ${c.file}`;
@@ -1011,6 +1029,12 @@ async function getJSON(url) {
   return res.json();
 }
 
+// "Why: … · continues from k3f9 · archived: …" from run.json's notes (shown as text).
+function runNotes(run) {
+  return [run.why && `Why: ${run.why}`, run.import?.run && `continues from ${run.import.run}`,
+    run.archive_why && `archived: ${run.archive_why}`].filter(Boolean).join(' · ');
+}
+
 function render() {
   const names = metricNames();
   if (!names.includes(metric)) metric = names[0] || null;
@@ -1027,6 +1051,10 @@ function render() {
   const goal = (state.goal || '').trim();
   const [first, ...rest] = goal.split('\n');
   setText('goal', state.title && first.trim() === state.title ? rest.join('\n').trim() : goal);
+  // Why the run exists (run --why), what it continues from (run --import), why it was archived.
+  const why = runNotes(state);
+  setText('why', why);
+  show('why', !!why);
   renderStatus();
   renderConfig();
   renderReport();

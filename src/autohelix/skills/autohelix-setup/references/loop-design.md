@@ -14,7 +14,7 @@ long run. Use the user's budget rather than imposing a fixed iteration count.
 | Guide the next attempt | `observe:` review entry or captured feedback | Editorial suggestions with examples |
 | Track a worklist | Review entry with `previous: true` and a count metric | Items still missing |
 | End when done | `stop:` command | Count reaches zero, or an `ask` judgment |
-| Limit effort | Iteration, time, and available cost budgets | A short exploratory pilot |
+| Limit effort | `run`/`resume` flags: `-n`, `--time`, `--cost` (not config) | A short exploratory pilot |
 
 Make a requirement a gate when every accepted candidate must satisfy it.
 Measuring a number alone does not make it a requirement. Avoid making every
@@ -81,17 +81,17 @@ require evidence for a predetermined conclusion.
 
 ## Choose a budget that fits the work
 
-Retain the user's stated budgets and agent/model preferences. By default, set
-only an iteration limit (`budget: {iterations: 3}`) and no cost or time limit,
-and leave timeouts at their defaults; add any of these when the user asks.
-
-For preparation/design, optional cost, time, and `agent.timeout` may be omitted
-or set to YAML `null`: no cap is configured by that field. Leave proposed values
-as comments or suggestions when not selected; choosing active budgets is not a
-prerequisite for setup-only handoff. If iterations is omitted, including in an
-empty/null budget, the runtime defaults to five attempts, not unlimited.
-Do not generate `iterations: null`; it is incompatible with the current numeric
-run limit. See the [commented budget template](config.md#budgets-and-run-state).
+The budget is the launch command's flags, not config: `autohelix run perf -n 10
+--cost 20`. Retain the user's stated budgets and agent/model preferences. By
+default, suggest only an iteration count and no `--cost` or `--time`: `-n 3`
+for an open-ended goal ("make X faster", "improve Y"), `-n 1` for a single task
+that gates (commands or `ask:`) can check (one checked attempt; also what no
+flag means). Reviews never reject, and their feedback reaches only a next
+iteration, so a goal judged by a review alone needs `-n` above 1. Leave timeouts at their defaults. Add any of these when the user asks
+or the work calls for it (expensive evaluations, a deadline), and say why. Hand over the complete command line with the budget
+explained; the user can change it without touching the config, and `autohelix
+resume <id> -n N` gives a run more later. See
+[budgets](config.md#budgets-and-run-state).
 
 For launch/autonomous requests, use given/existing bounds and resolve material
 budget ambiguity before execution. When choosing bounds is part of the agreed
@@ -100,7 +100,7 @@ them. A small pilot can be a useful proposal when unspecified, not a universal
 active default. Do not repeat approval already supplied, impose an arbitrary
 dollar/iteration amount, or require a dollar cap where reporting is unavailable.
 
-A dollar budget is optional. Suggest it only when the chosen backend actually
+A dollar budget (`--cost`) is optional. Suggest it only when the chosen backend actually
 records authoritative reported dollar usage for those calls. Inspect available
 usage records and backend support rather than making a model call just to check
 accounting. A backend's support for a dollar field alone does not establish that
@@ -108,7 +108,8 @@ the chosen configuration reports it reliably.
 
 Explain that the dollar counter covers the optimization agent and the model
 calls of `ask` gates and reviews, including the baseline's, and is checked
-between iterations; it may overshoot.
+between iterations; it may overshoot. It counts one segment: a `resume`
+gets its own.
 Report generation, external calls, and supervising/setup-agent expenditure
 are separate. If reporting is unsupported, missing,
 or unreliable, say that a dollar budget cannot reliably bound spend. Do not

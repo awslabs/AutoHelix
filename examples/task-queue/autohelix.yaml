@@ -9,6 +9,3 @@ scope:
   editable:
     - TASKS.md
     - release_notes/
-
-budget:
-  iterations: 3

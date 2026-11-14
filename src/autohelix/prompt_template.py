@@ -35,8 +35,12 @@ def _create_env() -> Environment:
 
 
 def load_template(config) -> str:
-    """The agent prompt template: the config's `prompt_template:` file, else the built-in
-    one (so new features reach every project). `.autohelix/prompt.md` is no longer read."""
+    """The agent prompt template: the config's `prompt_template:` (a run's stored text,
+    else the file), else the built-in one (so new features reach every project).
+    `.autohelix/prompt.md` is no longer read."""
+    text = getattr(config, "prompt_template_text", None)
+    if text is not None:
+        return text
     path = getattr(config, "prompt_template", None)
     if path is None:
         return DEFAULT_TEMPLATE
@@ -47,7 +51,7 @@ def load_template(config) -> str:
 
 
 def describe_member(paths, data: dict) -> str:
-    """One line about another run of the group: where its state is in the copy, how far
+    """One line about another run of the group (or the imported run): where its state is in the copy, how far
     it got, its latest accepted metric values (what landing it would deliver, as the
     metric gates compare), whether it is running, and its code's ref."""
     from autohelix.history import History
@@ -89,6 +93,8 @@ def build_prompt_variables(
     group: str | None = None,
     members=(),
     rejected_diff: str = "",
+    imported=None,
+    head: str | None = None,
 ) -> dict[str, Any]:
     """The variables a prompt template gets: a stable, documented contract
     (`VARIABLES`; agent-written text in them is cleaned of control characters).
@@ -101,7 +107,8 @@ def build_prompt_variables(
       gate's text says what it compares ("speed: at most 5% worse than ...").
     - `observe`: every observe entry, `{"name", "kind": "command"|"review", "command"
       (command entries) or "prompt" (review entries, on one line), "metric_labels"}`.
-    - `stop`: the stop commands; `editable`, `frozen`: the scope patterns.
+    - `stop`: the stop commands; `editable`, `frozen`: the scope patterns (`frozen` with
+      the config and template files, always frozen).
     - `notes_path`: where this iteration's notes go (in the copy).
     - `hints`: the copy's hints file (`.autohelix-iteration/hints.md`) if there are
       hints, else "".
@@ -127,6 +134,14 @@ def build_prompt_variables(
     - `time_limit`: `agent.timeout` as a compact duration ("15m"), or "".
     - `group`: the run's group, or ""; `group_runs`: one line per other run of the
       group (`describe_member`; `members` as `runs.group_members` returns them).
+    - `imported`: the run this one continues from (`run --import`; `imported` as
+      `runs.imported_run` returns it), if its state is in the copy, else None:
+      `{"id", "short", "path", "description", "same_code"}`; `path` is its state in the
+      copy, `.autohelix-iteration/runs/<id>/` (run.json, history.jsonl, notes/; read-only);
+      its code is at `autohelix/<id>`; `description` is its line as `describe_member`
+      gives it; `same_code` whether its tip's tree is the copy's code (`head`, the
+      iteration's base commit, else this run's tip): False when unknown.
+      Members whose state isn't in the copy (it failed to copy) are left out of `group_runs`.
     """
     from autohelix.config import MetricGate
     from autohelix.iteration_time import format_duration
@@ -149,7 +164,7 @@ def build_prompt_variables(
         "observe": [_describe_entry(entry) for entry in config.observe],
         "stop": [c.command for c in config.stop],
         "editable": config.editable,
-        "frozen": config.frozen,
+        "frozen": config.frozen_names(),
         "notes_path": str(state / "notes" / f"iter-{iteration}.md"),
         "hints": "",
         "rejected_patch": f"{ITERATION_DIR}/rejected.patch" if (state / "rejected.patch").is_file() else "",
@@ -161,12 +176,59 @@ def build_prompt_variables(
         "recent_iterations": SEEDED_ITERATIONS,
         "time_limit": format_duration(config.agent.timeout) if config.agent.timeout is not None else "",
         "group": group or "",
-        "group_runs": [describe_member(paths, data) for paths, data in members],
+        "group_runs": [describe_member(paths, data) for paths, data in members
+                       if _in_copy(state, "runs", paths.run_id)],
+        "imported": _describe_imported(imported, state, head or _own_tip(history)),
     }
     hints = history.paths.hints
     if hints.exists() and hints.stat().st_size > 0:
         variables["hints"] = f"{ITERATION_DIR}/hints.md"
     return variables
+
+
+def _own_tip(history) -> str | None:
+    """This run's tip (`runs.run_tip`), or None if it can't be read."""
+    from autohelix.runs import run_tip
+
+    try:
+        return run_tip(history.paths)
+    except Exception:  # noqa: BLE001 - only decides whether a hint is shown
+        return None
+
+
+def _same_tree(project: Path, a: str | None, b: str) -> bool:
+    """Whether commits `a` and `b` hold the same tree (False when either can't be read)."""
+    from autohelix.runs import git
+
+    if not a or not b:
+        return False
+    try:
+        trees = [git(project, "rev-parse", "--verify", "--quiet", f"{commit}^{{tree}}", check=False)
+                 for commit in (a, b)]
+    except Exception:  # noqa: BLE001
+        return False
+    return all(t.returncode == 0 for t in trees) and trees[0].stdout.strip() == trees[1].stdout.strip()
+
+
+def _describe_imported(imported, state: Path, head: str | None = None) -> dict[str, Any] | None:
+    """The imported run (`(paths, data)`, or None) as the prompt names it, if its state
+    made it into the copy (`state` is its `.autohelix-iteration/`); `head` is the commit
+    the copy's code is."""
+    from autohelix.runs import run_tip, short_id
+
+    if imported is None:
+        return None
+    paths, data = imported
+    path = _in_copy(state, "runs", paths.run_id)
+    if not path:
+        return None
+    try:
+        tip = run_tip(paths, data)
+    except Exception:  # noqa: BLE001 - another run's state must not stop this run
+        tip = None
+    return {"id": paths.run_id, "short": short_id(paths.run_id), "path": path,
+            "description": describe_member(paths, data),
+            "same_code": _same_tree(paths.project, head, tip)}
 
 
 def _describe_entry(entry) -> dict[str, Any]:
@@ -233,7 +295,7 @@ def _describe_accepted(history, iteration: int, state: Path) -> dict[str, Any] |
 VARIABLES = frozenset({
     "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable", "frozen",
     "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted",
-    "recent_iterations", "time_limit", "group", "group_runs",
+    "recent_iterations", "time_limit", "group", "group_runs", "imported",
 })
 
 

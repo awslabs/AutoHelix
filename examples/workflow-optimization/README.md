@@ -33,11 +33,11 @@ needs more than prompt changes.
 python examples/setup_example.py workflow-optimization --dir ./workflow-run
 cd ./workflow-run
 python benchmark.py --mock
-autohelix run
+autohelix run -n 2
 ```
 
 The mock command is a free smoke test. A real evaluation contains six inner
-model calls. The default two-iteration run evaluates the baseline and two
+model calls. The two-iteration run above evaluates the baseline and two
 candidates, for at least 18 calls total.
 
 By default, the inner workflow invokes the user's configured Claude CLI model

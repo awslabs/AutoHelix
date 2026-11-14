@@ -496,14 +496,12 @@ def run_observe_entry(
 
 def metric_reference(records, metric: str) -> float | None:
     """The value a metric gate compares with: the metric as measured on the run's tip
-    commit, by the accepted iteration that created it or the baseline. An accepted
-    no-op doesn't re-measure it. If that record lacks the metric (a gate added later),
-    the most recent commit-creating accepted record (or the baseline) that has it."""
+    commit, by the accepted iteration that created it or the baseline (an accepted
+    no-op doesn't re-measure it); None if that record has no finite value for it."""
     for record in reversed(records):
-        value = record.metrics.get(metric)
-        if (record.accepted and (record.commit or record.iteration == 0) and isinstance(value, (int, float))
-                and math.isfinite(value)):
-            return value
+        if record.accepted and (record.commit or record.iteration == 0):
+            value = record.metrics.get(metric)
+            return value if isinstance(value, (int, float)) and math.isfinite(value) else None
     return None
 
 
@@ -514,7 +512,7 @@ def metric_gate_failure(gate: MetricGate, direction: str, value: float | None,
     Percentages are of |reference|: with a reference of 0, `regress:` means no worse
     than 0 and `improve:` any strict improvement. A missing value fails; a missing
     reference (nothing measured it yet) passes; a non-finite value fails. Non-finite
-    references are skipped by `metric_reference`."""
+    references are None (`metric_reference`)."""
     if value is None:
         return f"metric gate: {gate.metric} was not measured"
     if not math.isfinite(value):

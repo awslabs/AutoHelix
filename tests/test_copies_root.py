@@ -6,7 +6,7 @@ import stat
 import pytest
 
 import autohelix.runs as runs
-from autohelix.harness import Harness
+from autohelix.harness import Budget, Harness
 from autohelix.runs import (COPIES_ENV, RunPaths, claim_copies, delete, copies_base, ensure_copies,
                             git, project_key, remove_copies)
 from tests.test_runs import configure
@@ -24,7 +24,7 @@ def test_copies_live_outside_the_project_and_go_at_segment_end(project, copies_d
     assert root == copies_dir / project_key(project.resolve()) / harness.paths.run_id
     assert not root.exists()  # created on first use
     assert [p.name for p in root.parent.iterdir()] == ["project.json"]  # which checkout, for the sweep
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     lines = seen.read_text().splitlines()
     assert lines[0] == str(root / "iter-0-checks")  # baseline
     assert lines[1].split(os.pathsep)[0] == str(root)
@@ -38,7 +38,7 @@ def test_a_copy_without_git_finds_no_enclosing_repository(project, monkeypatch, 
     monkeypatch.setenv(COPIES_ENV, str(home / ".cache" / "autohelix" / "copies"))
     configure(project, gates=["rm -rf .git && ! git rev-parse --git-dir"])
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert harness.history.load()[-1].accepted
 
 
@@ -167,7 +167,7 @@ def test_remove_copies_keeps_the_project_folder_of_other_runs(run_paths):
 
 def test_delete_finishes_when_copies_cannot_be_removed(project, monkeypatch):
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     root = ensure_copies(harness.paths.copies)
     (root / "iter-9-agent").mkdir()
 
@@ -184,7 +184,7 @@ def test_delete_finishes_when_copies_cannot_be_removed(project, monkeypatch):
 
 def test_delete_removes_copies(project):
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     root = ensure_copies(harness.paths.copies)
     (root / "iter-9-agent" / "x").mkdir(parents=True)
     delete(harness.paths, force=True)

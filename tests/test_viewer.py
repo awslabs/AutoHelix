@@ -11,7 +11,7 @@ import urllib.request
 import pytest
 
 from autohelix.agents import AgentRunResult
-from autohelix.harness import AutoHelixRunError, Harness
+from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.run_status import RunStatus, read_run_status
 from autohelix.viewer import make_server
 from autohelix.runs import RunPaths, short_id
@@ -47,7 +47,7 @@ def test_dead_process_reads_as_crashed(tmp_path, run_paths):
 
 
 def test_harness_records_finished_run(integration_project):  # noqa: F811
-    Harness(integration_project).run(max_iterations=1)
+    Harness(integration_project).run(Budget(until=1))
     data = read_run_status(integration_project)
     assert data["state"] == "finished"
     assert data["iteration"] == 1
@@ -61,12 +61,12 @@ def test_harness_records_failed_run(integration_project, monkeypatch):  # noqa: 
 
     monkeypatch.setattr(harness, "run_agent", broken)
     with pytest.raises(AutoHelixRunError):
-        harness.run(max_iterations=1)
+        harness.run(Budget(until=1))
     assert read_run_status(integration_project)["state"] == "failed"
     # A failed agent call is a rejected iteration: the run finishes normally.
     harness = Harness(integration_project)
     monkeypatch.setattr(harness, "run_agent", lambda *a, **k: AgentRunResult(success=False, exit_code=1))
-    harness.run(max_iterations=2)
+    harness.run(Budget(until=2))
     assert read_run_status(integration_project)["state"] == "finished"
 
 
@@ -74,7 +74,7 @@ def test_harness_records_failed_run(integration_project, monkeypatch):  # noqa: 
 
 @pytest.fixture
 def viewer(integration_project):  # noqa: F811
-    Harness(integration_project).run(max_iterations=2)
+    Harness(integration_project).run(Budget(until=2))
     root = RunPaths(integration_project).run_dir
     (root / "notes" / "iter-2.md").write_text("Tried **the obvious** thing.\n\n<script>alert(1)</script>")
     server = make_server(integration_project, port=0)
@@ -282,7 +282,7 @@ def _snapshot(page: str) -> dict:
 def test_stopped_run_saves_static_page(integration_project):  # noqa: F811
     (integration_project / "hello.py").write_text('print("</script><b>")\n')  # text that must not break out
     subprocess.run(["git", "commit", "-qam", "tricky"], cwd=integration_project)
-    Harness(integration_project).run(max_iterations=2)
+    Harness(integration_project).run(Budget(until=2))
     page = RunPaths(integration_project).report_html.read_text()
     for ref in ('src="/viewer.js"', 'href="/viewer.css"', 'src="/logo-light.svg"', 'href="/logo-light.svg"'):
         assert ref not in page  # everything is inlined
@@ -304,7 +304,7 @@ def test_stopped_run_saves_static_page(integration_project):  # noqa: F811
 def test_interrupted_run_still_saves_static_page(integration_project, monkeypatch):  # noqa: F811
     harness = Harness(integration_project)
     monkeypatch.setattr(harness, "run_iteration", lambda n: (_ for _ in ()).throw(KeyboardInterrupt))
-    harness.run(max_iterations=1)
+    harness.run(Budget(until=1))
     page = RunPaths(integration_project).report_html.read_text()
     state = _snapshot(page)["routes"]["/api/state"]
     assert state["status"]["state"] == "interrupted"
@@ -315,9 +315,9 @@ def test_interrupted_run_still_saves_static_page(integration_project, monkeypatc
 
 def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa: F811
     first = Harness(integration_project)
-    first.run(max_iterations=2, report=False)
+    first.run(Budget(until=2), report=False)
     second = Harness(integration_project, new=True, name="second", land_mode="manual")
-    second.run(max_iterations=1, report=False)
+    second.run(Budget(until=1, cost_usd=5, time_seconds=3600), report=False)
     server = make_server(integration_project, port=0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_port}"
@@ -330,7 +330,13 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
         assert (one["archived"], one["status"]["state"]) == (False, "finished")
         progress = one["progress"]
         assert (progress["iterations"], progress["max_iterations"], progress["max_cost_usd"]) == (2, 2, None)
-        assert progress["seconds"] > 0
+        assert progress["seconds"] > 0 and progress["max_seconds"] is None
+        # Budget figures come from the run's status (its latest segment's flags: iterations
+        # and cost as run totals, time as the segment's own), never from the config.
+        assert (two["progress"]["max_iterations"], two["progress"]["max_cost_usd"],
+                two["progress"]["max_seconds"]) == (1, 5, 3600)
+        assert (two["status"]["max_cost_usd"], two["status"]["max_time_seconds"]) == (5, 3600)
+        assert two["status"]["segment_started_at"] <= two["status"]["stopped_at"]
         assert one["landing"] == {"commits": 0, "fast_forward": True}  # auto-landed at the end of its segment
         assert two["landing"] == {"commits": 1, "fast_forward": True}  # manual: ready to land
         assert two["accepted"] == 1 and two["metrics"] is None
@@ -414,11 +420,11 @@ observe:
 """)
     subprocess.run(["git", "commit", "-qam", "metric"], cwd=integration_project, check=True)
     first = Harness(integration_project)
-    first.run(max_iterations=2, report=False)
+    first.run(Budget(until=2), report=False)
     second = Harness(integration_project, new=True, land_mode="manual")
-    second.run(max_iterations=1, report=False)
+    second.run(Budget(until=1), report=False)
     gone = Harness(integration_project, new=True, land_mode="manual")
-    gone.run(max_iterations=1, report=False)
+    gone.run(Budget(until=1), report=False)
     archived = _cli("archive", gone.paths.run_id, "-p", integration_project)
     assert archived.exit_code == 0, archived.output
     return integration_project, first.paths.run_id, second.paths.run_id, gone.paths.run_id
@@ -480,9 +486,14 @@ def test_view_json_and_once(measured_project):
     missing = _cli("view", "missing-zzzz", "-p", project, "--json")
     assert missing.exit_code == 1 and "missing-zzzz" in missing.output
 
-    # The table reads the run's config as the file is now.
+    # The table reads the run's stored config, not the file as it is now.
     config = project / "autohelix.yaml"
     config.write_text(config.read_text().replace("Test the integration", '" "'))
+    printed = _cli("view", first, "-p", project, "--once")
+    assert printed.exit_code == 0 and "Goal: Test the integration" in printed.output
+    stored = RunPaths(project, first).config
+    stored.chmod(0o644)  # stored read-only
+    stored.write_text(stored.read_text().replace("Test the integration", '" "'))
     printed = _cli("view", first, "-p", project, "--once")
     assert printed.exit_code == 0 and "Goal:" not in printed.output
 
@@ -526,5 +537,5 @@ def test_pin_is_announced_before_the_checks_copy(integration_project, monkeypatc
     original = RunStatus.phase
     monkeypatch.setattr(RunStatus, "phase", lambda self, phase, iteration=None: (
         phases.append(phase), original(self, phase, iteration))[1])
-    Harness(integration_project).run(max_iterations=1, report=False)
+    Harness(integration_project).run(Budget(until=1), report=False)
     assert phases.index("agent") < phases.index("preparing checks") < phases.index("checks")

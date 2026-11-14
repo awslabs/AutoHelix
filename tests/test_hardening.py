@@ -14,7 +14,7 @@ from autohelix import runs
 from autohelix.agents import AgentRunResult
 from autohelix.checks import run_command
 from autohelix.config import Config
-from autohelix.harness import AutoHelixRunError, Harness
+from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History, IterationResult
 from autohelix.prompt_template import build_prompt_variables, load_template, render_template, unknown_variables
 from autohelix.workspace import ITERATION_DIR
@@ -141,7 +141,7 @@ def test_patches_apply_whatever_the_git_config(repo, sub):
                                       '[ "$AUTOHELIX_ITERATION" != 1 ]'])
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness)
-    harness.run(max_iterations=2, report=False)
+    harness.run(Budget(until=2), report=False)
     records = History(project).load()
     assert [r.accepted for r in records] == [True, False, True]
     prefix = f"{sub}/" if sub else ""
@@ -158,7 +158,7 @@ def test_patches_apply_whatever_the_git_config(repo, sub):
 def test_observe_entry_that_modifies_the_candidate_is_recorded_failed(repo):
     project = _project(repo)
     _configure(project, repo, observe=[{"name": "bench", "command": '[ "$AUTOHELIX_ITERATION" = 0 ] || echo x >> hello.py'}])
-    Harness(project, verbose=False, land_mode="manual").run(max_iterations=1, report=False)
+    Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
     record = History(project).load()[-1]
     assert not record.accepted and record.reason.startswith("checks modified candidate files: ")
     assert record.observe[0]["ok"] is False and record.observe[0]["error"] == record.reason
@@ -180,7 +180,7 @@ def test_every_kind_of_change_round_trips_through_rejected_patch(repo):
 
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness, act)
-    harness.run(max_iterations=2, report=False)
+    harness.run(Budget(until=2), report=False)
     rejected = History(project).load()[1]
     assert not rejected.accepted
     listing = _git(repo, "ls-tree", rejected.tree)
@@ -196,7 +196,7 @@ def test_a_too_large_rejected_change_is_named_not_written(repo, monkeypatch):
     _configure(project, repo, gates=['[ "$AUTOHELIX_ITERATION" != 1 ]'])
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness)
-    harness.run(max_iterations=2, report=False)
+    harness.run(Budget(until=2), report=False)
     rejected = History(project).load()[1]
     seen = agent.seen[2]
     assert seen["patch"] is None
@@ -211,7 +211,7 @@ def test_a_stale_kept_tree_under_an_accepted_number_is_removed(repo):
     _configure(project, repo)
     harness = Harness(project, verbose=False, land_mode="manual")
     _git(repo, "update-ref", harness.paths.rejected_ref(1), _git(repo, "rev-parse", "HEAD^{tree}"))
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert History(project).load()[-1].accepted and _refs(repo, harness) == []
 
 
@@ -226,7 +226,7 @@ def test_a_timed_out_agent_is_kept_and_rejected_unchecked(repo, tmp_path):
 
     harness = Harness(project, verbose=False, land_mode="manual")
     Agent(harness, act)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     record = History(project).load()[-1]
     assert record.reason == "Iteration 1 agent failed: timed out after 1s"
     assert not record.accepted and record.gates == [] and not ran.exists()
@@ -250,7 +250,7 @@ def test_a_failed_agent_that_replaced_its_material_by_a_symlink(repo, tmp_path):
 
     harness = Harness(project, verbose=False, land_mode="manual")
     Agent(harness, act)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     record = History(project).load()[-1]
     assert record.summary is None and record.rejected_ref
     assert ITERATION_DIR not in _git(repo, "ls-tree", "--name-only", record.tree).split()
@@ -335,7 +335,7 @@ def test_summary_is_cleaned_and_capped_for_record_and_commit(repo):
 
     harness = Harness(project, verbose=False, land_mode="manual")
     Agent(harness, act)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     record = History(project).load()[-1]
     assert record.summary.startswith("red ww") and len(record.summary) == 200 and record.summary.endswith("…")
     assert _git(repo, "show", "-s", "--format=%s", record.commit) == record.summary
@@ -352,7 +352,7 @@ def test_a_custom_template_with_old_variables_warns_at_run_start(repo, capsys):
     project = _project(repo)
     (project / "prompt.md").write_text("Goal: {{ goal }}\n{{ history_summary }}\n")
     _configure(project, repo, prompt_template="prompt.md")
-    Harness(project, verbose=False, land_mode="manual").run(max_iterations=1, report=False)
+    Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
     out = capsys.readouterr().out
     assert "prompt.md uses variables the prompt doesn't have" in out and "history_summary" in out
 
@@ -370,7 +370,7 @@ def test_status_names_the_running_observe_entry(repo):
         original(**info)
 
     harness.run_status.note = note
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert ("benchmark", "first") in seen and ("benchmark", "second") in seen
     assert seen[-1][1] is None
 
@@ -390,7 +390,7 @@ def test_frozen_discards_are_said_apart(repo):
 
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness, act)
-    harness.run(max_iterations=2, report=False)
+    harness.run(Budget(until=2), report=False)
     record = History(project).load()[1]
     assert record.discarded == ["fixtures/data.txt", "notes.txt"]
     assert record.discarded_frozen == ["fixtures/data.txt"]
@@ -405,7 +405,7 @@ def test_a_rejection_that_changed_nothing_keeps_no_tree(repo):
                gates=['[ "$AUTOHELIX_ITERATION" != 1 ]'])
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness)
-    harness.run(max_iterations=2, report=False)
+    harness.run(Budget(until=2), report=False)
     record = History(project).load()[1]
     assert not record.accepted and record.discarded == ["elsewhere.txt"]
     assert record.rejected_ref is None and _refs(repo, harness) == []
@@ -464,7 +464,7 @@ def test_header_lines_are_cut_to_the_width():
     from autohelix.display import header_lines
 
     config = Config.from_dict({"goal": "g", "gates": [f"pytest tests/test_{i}.py" for i in range(10)]})
-    lines = header_lines(config, "20261112-1200-abcd", "proj", 3, 60)
+    lines = header_lines(config, "20261112-1200-abcd", "proj", Budget(until=3), width=60)
     assert all(len(line.plain) <= 60 for line in lines) and lines[3].plain.endswith("…")
 
 
@@ -472,7 +472,7 @@ def test_baseline_missing_metric_names_the_entry(repo):
     project = _project(repo)
     _configure(project, repo, observe=[{"name": "bench", "command": "echo done", "metrics": {"speed": "higher"}}])
     with pytest.raises(RuntimeError, match=r"observe entry `bench` exited 0 but reported no `speed`"):
-        Harness(project, verbose=False).run(max_iterations=1, report=False)
+        Harness(project, verbose=False).run(Budget(until=1), report=False)
 
 
 def test_run_start_warnings_wrap_under_their_label(repo, capsys):
@@ -481,7 +481,7 @@ def test_run_start_warnings_wrap_under_their_label(repo, capsys):
     (project / ".autohelix" / "prompt.md").write_text("old\n")
     (project / "prompt.md").write_text("Goal: {{ goal }}; notes in .autohelix/notes/iter-1.md\n")
     _configure(project, repo, prompt_template="prompt.md")
-    Harness(project, verbose=False, land_mode="manual").run(max_iterations=1, report=False)
+    Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
     out = capsys.readouterr().out
     text = " ".join(out.split())
     assert ".autohelix/prompt.md is no longer read" in text
@@ -508,7 +508,7 @@ def test_a_timeout_then_an_accept_with_its_patch(repo):
     _configure(project, repo)
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness, _failing({1}, error="timed out after 30 minutes"))
-    harness.run(max_iterations=2, report=False)
+    harness.run(Budget(until=2), report=False)
     records = History(project).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, False), (2, True)]
     timed_out = records[1]
@@ -525,7 +525,7 @@ def test_three_agent_failures_in_a_row_stop_the_run_and_land_accepted_work(repo)
     _configure(project, repo, scope={"editable": ["hello.py"]})
     harness = Harness(project, verbose=False)  # auto landing
     Agent(harness, _failing({2, 3, 4}))
-    harness.run(max_iterations=10, report=False)
+    harness.run(Budget(until=10), report=False)
     records = History(project).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True), (2, False), (3, False), (4, False)]
     reason = read_run_status(project)["stop_reason"]
@@ -540,7 +540,7 @@ def test_failures_that_are_not_consecutive_dont_stop_the_run(repo):
     _configure(project, repo, scope={"editable": ["hello.py"]})
     harness = Harness(project, verbose=False, land_mode="manual")
     Agent(harness, _failing({1, 3, 4}))
-    harness.run(max_iterations=4, report=False)
+    harness.run(Budget(until=4), report=False)
     records = History(project).load()
     assert [r.accepted for r in records] == [True, False, True, False, False]
     assert read_run_status(project)["stop_reason"]["detail"] == "iteration budget reached (4)"

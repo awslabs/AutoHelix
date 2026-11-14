@@ -18,8 +18,8 @@ from pathlib import Path
 from autohelix.formatting import SUMMARY_LIMIT, clean
 from autohelix.history import History
 from autohelix.launcher import write_launcher
-from autohelix.runs import (RunPaths, RunState, critical_section, ensure_copies, group_members, is_transcript,
-                            iteration_folder, remove_planted)
+from autohelix.runs import (RunPaths, RunState, critical_section, ensure_copies, group_members, imported_run,
+                            is_transcript, iteration_folder, remove_planted)
 from autohelix.safe_open import copy_dir, copy_file, open_dir
 from autohelix.workspace import ITERATION_DIR, Copy, Repo, Scope, diff_args, remove_copy
 
@@ -95,10 +95,11 @@ def prepare_state(paths: RunPaths, copy, *, members=(), prompt: str | None = Non
     `notes/` round-trips (see `save_notes`); the rest is read-only reference:
     `prompt.md` (this iteration's prompt), `history.jsonl`, `hints.md`,
     `iterations/NNN/` for the iterations `seeded_iterations` picks (below `before`; as
-    `_seed_iteration` copies them), and for each other run of the group (`members`, as
-    `group_members` returns them) its `run.json`, `history.jsonl` and `notes/` under
-    `runs/<id>/`. Copies are anything with a `working_dir`. Project state remains
-    reachable by absolute path; this is not access isolation."""
+    `_seed_iteration` copies them), and for each other run shown (`members`: the
+    imported run and the group's, as `IterationWorkspace.others` lists them) its
+    `run.json`, `history.jsonl` and `notes/` under `runs/<id>/`. Copies are anything
+    with a `working_dir`. Project state remains reachable by absolute path; this is
+    not access isolation."""
     state = copy.working_dir / ITERATION_DIR
     state.mkdir(parents=True, exist_ok=True)
     if prompt is not None:
@@ -213,12 +214,20 @@ class IterationWorkspace:
         self.recorded = False
         self.record_write_attempted = False
         self.prompt: str | None = None
-        # The group as of this iteration's start: what its copies show of other runs.
-        self.members = group_members(run.paths, run.data)
-        self.refs = (run.paths.ref, *(paths.ref for paths, _ in self.members))
+        # The imported run and the group as of this iteration's start: what its copies
+        # show of other runs. An imported run that is also in the group is shown once, as imported.
+        self.imported = imported_run(run.paths, run.data)
+        self.members = [(paths, data) for paths, data in group_members(run.paths, run.data)
+                        if not self.imported or paths.run_id != self.imported[0].run_id]
+        self.refs = (run.paths.ref, *(paths.ref for paths, _ in self.others))
         self._calls = 0  # per-command folders made so far (`call_folder`)
         self._call_folders: list[Path] = []
         self._candidate: tuple[str, str] | None = None  # (T, its tree hash)
+
+    @property
+    def others(self) -> list[tuple[RunPaths, dict]]:
+        """Every other run the agent copy shows: the imported one first, then the group's."""
+        return [*([self.imported] if self.imported else []), *self.members]
 
     def _copy(self, role: str, files: str, head: str) -> Copy:
         path = ensure_copies(self._run.copies_root) / f"iter-{self.iteration}-{role}"
@@ -229,7 +238,7 @@ class IterationWorkspace:
     def agent_copy(self) -> Copy:
         """A's files with agent-facing material seeded under `.autohelix-iteration/`."""
         self.agent = self._copy("agent", self.base, self.base)
-        prepare_state(self._run.paths, self.agent, members=self.members, before=self.iteration)
+        prepare_state(self._run.paths, self.agent, members=self.others, before=self.iteration)
         self._write_rejected_patch()
         return self.agent
 

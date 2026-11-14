@@ -54,12 +54,6 @@
   <text x="42" y="456" class="code" xml:space="preserve"><tspan class="key">model</tspan><tspan class="punct">:</tspan><tspan class="str"> claude-opus-4-8</tspan></text>
   <text x="42" y="472" class="code" xml:space="preserve"><tspan class="key">timeout</tspan><tspan class="punct">:</tspan><tspan class="str"> 30m</tspan></text>
 
-  <!-- budget section -->
-  <text x="28" y="504" class="code" xml:space="preserve"><tspan class="key">budget</tspan><tspan class="punct">:</tspan></text>
-  <text x="42" y="520" class="code" xml:space="preserve"><tspan class="key">iterations</tspan><tspan class="punct">:</tspan><tspan class="val"> 10</tspan></text>
-  <text x="42" y="536" class="code" xml:space="preserve"><tspan class="key">cost</tspan><tspan class="punct">:</tspan><tspan class="val"> 30</tspan></text>
-  <text x="42" y="552" class="code" xml:space="preserve"><tspan class="key">time</tspan><tspan class="punct">:</tspan><tspan class="str"> 4h</tspan></text>
-
   <!-- Annotation panel (right) — all lines are horizontal -->
 
   <!-- Goal annotation -->
@@ -99,11 +93,4 @@
   <text x="542" y="444" class="label">Agent</text>
   <text x="542" y="459" class="desc">Backend: claude, codex, or opencode. Model, and a</text>
   <text x="542" y="473" class="desc">per-iteration timeout with time-left hints.</text>
-
-  <!-- Budget annotation -->
-  <line x1="175" y1="536" x2="530" y2="536" class="connector"/>
-  <circle cx="530" cy="536" r="2.5" class="dot"/>
-  <text x="542" y="528" class="label">Budget</text>
-  <text x="542" y="543" class="desc">When to stop: iteration count, total wall-clock,</text>
-  <text x="542" y="557" class="desc">or max USD spend.</text>
 </svg>

@@ -24,11 +24,12 @@ function fmtDuration(seconds) {
   return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
 }
 
-// Budgets are usually round: "10m", "2h", "1h 30m".
+// A --time cap, and the time against it, as the terminal writes them
+// (iteration_time.format_duration): "10m", "2h", "1h30m", "12m5s".
 function fmtLimit(seconds) {
-  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
-  if (seconds < 3600 && seconds % 60 === 0) return `${seconds / 60}m`;
-  return fmtDuration(seconds);
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return `${h ? `${h}h` : ''}${m ? `${m}m` : ''}${r || (!h && !m) ? `${r}s` : ''}`;
 }
 
 function fmtAgo(epochSeconds) {
@@ -64,7 +65,9 @@ function outcome(run) {
 const WORDS = { finished: 'finished', interrupted: 'interrupted', failed: 'failed', crashed: 'stopped unexpectedly',
                 idle: 'not started', archived: 'archived', running: 'running', error: 'unreadable' };
 
-const fmtMoney = (v) => `$${Number.isInteger(v) ? v : v.toFixed(2)}`;
+// A dollar cap as formatting.format_cap writes it: cents, else up to four significant digits.
+const fmtMoney = (v) => Math.abs(v * 100 - Math.round(v * 100)) < 1e-9 ? `$${v.toFixed(2)}`
+  : `$${v.toFixed(Math.min(12, Math.max(2, 3 - Math.floor(Math.log10(v))))).replace(/0+$/, '').replace(/\.$/, '')}`;
 
 // The iteration under way while running, otherwise the last one finished.
 function currentIteration(run) {
@@ -72,8 +75,20 @@ function currentIteration(run) {
   return live(run) && s.iteration > p.iterations ? s.iteration : p.iterations;
 }
 
+// The running segment's --time against its clock (run_table.time_cap): "12m5s of 1h
+// (this segment)", short "12m5s/1h"; past the cap "(time up)". '' when the run isn't
+// running or the segment has no --time (a stop reason says when time ended it).
+function timeCap(run, short = false) {
+  const s = run.status, cap = run.progress?.max_seconds;
+  if (!cap || !live(run) || typeof s.segment_started_at !== 'number') return '';
+  const elapsed = Math.max(0, Math.floor(Date.now() / 1000 - s.segment_started_at));
+  const text = short ? `${fmtLimit(elapsed)}/${fmtLimit(cap)}` : `${fmtLimit(elapsed)} of ${fmtLimit(cap)} (this segment)`;
+  return elapsed >= cap ? `${text} (time up)` : text;
+}
+
 // Line 1: the state, with the phase while running or how long ago it stopped.
-// Line 2: time and cost so far. Stop reason and budgets are in the tooltip.
+// Line 2: time and cost so far, and while running the segment's time against its --time.
+// Stop reason, budgets (the latest segment's) and that time in full are in the tooltip.
 function statusCell(run) {
   const kind = outcome(run);
   const s = run.status;
@@ -94,10 +109,14 @@ function statusCell(run) {
     const seconds = p.seconds + (currentIteration(run) > p.iterations && s.iteration_started_at
       ? Date.now() / 1000 - s.iteration_started_at : 0);
     const cost = p.cost_usd;
+    // The run's total time (no cap) and cost, then the running segment's time against
+    // its --time (never a run total). --cost is a run total (spent before it + its cap).
     spent = [seconds ? fmtDuration(seconds) : null,
-      typeof cost === 'number' ? `$${cost.toFixed(2)}${p.cost_incomplete ? '+' : ''}` : null].filter(Boolean).join(' · ');
-    if (p.max_seconds) notes.push(`Time budget ${fmtLimit(p.max_seconds)}`);
-    if (p.max_cost_usd) notes.push(`Cost budget ${fmtMoney(p.max_cost_usd)}`);
+      typeof cost === 'number' ? `$${cost.toFixed(2)}${p.cost_incomplete ? '+' : ''}` : null,
+      timeCap(run, true)].filter(Boolean).join(' · ');
+    const cap = timeCap(run);
+    if (cap) notes.push(`Time budget: ${cap}`);
+    if (p.max_cost_usd) notes.push(`Cost budget ${fmtMoney(p.max_cost_usd)} (run total)`);
     if (p.cost_incomplete) notes.push('Some call costs are unavailable');
   }
   return el('td', { title: notes.join('\n') },
@@ -159,13 +178,17 @@ function lastActiveCell(run) {
 function runRow(run) {
   const href = `/run/${encodeURIComponent(run.id)}/`;
   const file = run.config_file && run.config_file
-    + (run.config_missing ? ' (missing)' : run.config_invalid ? ' (invalid)' : '');
+    + (run.config_missing ? ' (not stored)' : run.config_invalid ? ' (invalid)' : '');
+  const notes = [run.why && `Why: ${run.why}`, run.import?.run && `continues from ${run.import.run}`,
+    run.archive_why && `archived: ${run.archive_why}`].filter(Boolean).join(' · ');
   const tr = el('tr', { className: run.archived ? 'archived' : '', tabIndex: 0 },
     el('td', {}, el('a', { className: 'run-id', href, textContent: run.id }),
       run.group ? el('span', { className: 'muted', title: 'Group: runs that see each other\'s notes and code' },
         ` (${run.group})`) : null,
       // The goal's first line; the full goal on hover.
       run.title ? el('div', { className: 'run-title', textContent: run.title, title: run.goal || run.title }) : null,
+      // Why it was started, what it continues from, why it was archived: run.json's notes, as text.
+      notes ? el('div', { className: 'status-sub run-why', textContent: notes, title: notes }) : null,
       file ? el('div', { className: 'status-sub run-config', textContent: file, title: 'Config file' }) : null),
     statusCell(run),
     iterationsCell(run),

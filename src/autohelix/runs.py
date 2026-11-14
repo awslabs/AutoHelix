@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from autohelix.config import project_configs, run_command
+from autohelix.config import load_config, run_command, stored_config_text
 
 SCHEMA = 2
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
@@ -81,7 +81,7 @@ class RunPaths:
     Without an explicit id, observers follow current. The root remains useful
     for project setup, but observers must not treat it as a run without an id.
 
-    A run's folder holds what people read (run.json, history.jsonl, hints.md,
+    A run's folder holds what people read (run.json, config.yaml, history.jsonl, hints.md,
     report.md/.html, the `notes` link, `iterations/NNN/`, `logs/`); everything the
     harness keeps for itself is in its `.internal/`, and the project's own
     (the current-run pointer, locks, helper scripts) in `.autohelix/.internal/`.
@@ -124,6 +124,8 @@ class RunPaths:
     @property
     def identity(self): return self.run_dir / "run.json"
     @property
+    def config(self): return self.run_dir / "config.yaml"  # the run's config, stored when it started
+    @property
     def history(self): return self.run_dir / "history.jsonl"
     @property
     def hints(self): return self.run_dir / "hints.md"
@@ -136,13 +138,15 @@ class RunPaths:
     @property
     def iterations(self): return self.run_dir / "iterations"
     @property
-    def logs(self): return self.run_dir / "logs"  # run logs per invocation, report.log, hook audit
+    def logs(self): return self.run_dir / "logs"  # run logs per segment, report.log, hook audit
 
     # One run's internal files.
     @property
     def internal(self): return self.run_dir / ".internal"
     @property
     def status(self): return self.internal / "status.json"
+    @property
+    def segments(self): return self.internal / "segments.jsonl"  # one line per segment (`run_status.SegmentLog`)
     @property
     def metrics(self): return self.internal / "metrics.json"  # `$AUTOHELIX_METRICS` for stop commands
     @property
@@ -616,6 +620,38 @@ def group_members(paths: RunPaths, data: dict) -> list[tuple[RunPaths, dict]]:
             if p.run_id != paths.run_id and d.get("group") == group and not is_archived(d)]
 
 
+def imported_run(paths: RunPaths, data: dict) -> tuple[RunPaths, dict] | None:
+    """The run this one imports (`run --import`, run.json's `import.run`), or None
+    without one or when it can't be read (deleted, say): another run's state must not
+    stop this run."""
+    source = data.get("import")
+    source = source.get("run") if isinstance(source, dict) else None
+    if not isinstance(source, str) or not _ID.fullmatch(source):  # a real id, never the `current` alias
+        return None
+    try:
+        other = RunPaths(paths.project, source)
+        if other.run_id == paths.run_id:
+            return None
+        return other, other.read_identity()
+    except RuntimeError:
+        return None
+
+
+WHY_LIMIT = 300  # characters of a `--why` note kept
+
+
+def check_why(text: str) -> str:
+    """A `--why` note as stored: one clean line (`formatting.clean`), at most WHY_LIMIT characters."""
+    from autohelix.formatting import clean
+
+    why = clean(text)
+    if not why:
+        raise RuntimeError("--why needs some text.")
+    if len(why) > WHY_LIMIT:
+        raise RuntimeError(f"--why is {len(why)} characters; use at most {WHY_LIMIT} (one line).")
+    return why
+
+
 def has_baseline(paths: RunPaths) -> bool:
     from autohelix.history import History
 
@@ -686,13 +722,16 @@ def _resuming(paths: RunPaths, data: dict) -> str:
 
 
 def _new_run_notices(project: Path, config_path: str, target: str | None,
-                     group: str | None = None) -> list[tuple[str, str]]:
+                     group: str | None = None, imported: str | None = None,
+                     base: str | None = None, land_mode: str | None = None) -> list[tuple[str, str]]:
     """What `run` says about this config's other runs: it never refuses. Runs of a
-    group are meant to run side by side, so a live one isn't worth a warning."""
+    group are meant to run side by side, and when either run lands manually only one of
+    them lands on its own, so a live one isn't worth a warning then; the `imported` run
+    needs no pointer to itself, nor a warning when `base` has its code."""
     notices = []
     runs = project_runs(project, config_path)
-    for paths, _ in runs:
-        if not group and is_live(paths):
+    for paths, data in runs:
+        if not group and land_mode != "manual" and data.get("land") != "manual" and is_live(paths):
             notices.append(("warn", f"{short_id(paths.run_id)} is also running for this config. Both land on "
                             f"{target or 'their branch'}; whichever finishes second may not fast-forward "
                             f"(its commits stay on autohelix/{paths.run_id})."))
@@ -703,6 +742,9 @@ def _new_run_notices(project: Path, config_path: str, target: str | None,
         paths, data = latest
         short = short_id(paths.run_id)
         count = unlanded(paths, data)
+        if paths.run_id == imported and (not count or base and git(
+                project, "merge-base", "--is-ancestor", paths.ref, base, check=False).returncode == 0):
+            return notices
         if count:
             notices.append(("warn", f"{short} has {count} unlanded commit{'s' * (count != 1)}; this run starts "
                             f"from {target or 'HEAD'} without them. `autohelix resume {short}` to continue it "
@@ -738,13 +780,20 @@ def no_run_to_resume(config_path: str) -> str:
     return f"No run to resume for {config_path}; start one with `{run_command(config_path)}`."
 
 
-def config_gone(project: Path, run_id: str, config_path: str, base_commit: str | None = None) -> str:
-    """A run keeps the config it started with: never another in its place."""
-    configs = project_configs(project)
-    others = f" (configs: {', '.join(configs)})" if configs else ""
-    commit = base_commit[:12] if base_commit else "<commit>"
-    return (f"Run {short_id(run_id)} was started with {config_path}, which is gone; restore it "
-            f"(`git checkout {commit} -- {config_path}`), or start a new run of another config{others}.")
+def not_stored(paths: RunPaths, data: dict) -> str:
+    """For a run started before runs stored their config: it can only be continued by a new run."""
+    short = short_id(paths.run_id)
+    return (f"Run {short} has no stored config (it was started by an older AutoHelix); continue it in a new "
+            f"run: `{run_command(data['config_path'])} --import {short}`.")
+
+
+def load_run_config(paths: RunPaths, data: dict | None = None):
+    """The run's own config (`load_config` of its stored copy; the file it came from,
+    as run.json names it, is the `source`). RuntimeError (`not_stored`) without one."""
+    data = data if data is not None else paths.read_identity()
+    if not paths.config.is_file():
+        raise RuntimeError(not_stored(paths, data))
+    return load_config(paths.project, paths.config, source=paths.project / data["config_path"])
 
 
 def new_run_name(config: Path, name: str | None) -> str | None:
@@ -797,13 +846,16 @@ def planned_run(project: Path, config: Path, *, new: bool = False, run_id: str |
 def select_run(project: Path, config: Path, *, name: str | None = None, new: bool = False,
                run_id: str | None = None, create: bool = True, ready=None,
                group: str | None = None, land_mode: str | None = None,
+               imported: str | None = None, why: str | None = None,
                ) -> tuple[RunPaths, dict, RunLock, list[tuple[str, str]]]:
     """Select and own a run atomically before creating any per-run state.
 
     `run_id` resumes that run; `new` creates one (`autohelix run`); otherwise the
     config's most recently active run that isn't archived resumes, preferring
     runs with a baseline (`autohelix resume`), else one is created unless
-    `create` is false. A new run records `group` (if any) and `land_mode`.
+    `create` is false. A new run stores its config (`RunPaths.config`, from `config`)
+    and records `group`, the `imported` run's id (`import.run`) and `why` (if any) and
+    `land_mode`.
     Returns notices, `(level, text)`, for the caller to print. `ready` runs the
     caller's readiness checks (a clean tree included) before a new run is allocated;
     raising refuses the start without leaving an identity, ref or pointer. Callers
@@ -811,7 +863,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
     None when the decision was a new run."""
     _refuse_legacy(project)
     # Serialize selection/creation for this project. The per-run lock remains
-    # authoritative throughout the invocation, including final landing.
+    # authoritative throughout the segment, including final landing.
     with RunLock(RunPaths(project).selection_lock, blocking=True):
         try:
             sweep_copies(project)
@@ -833,9 +885,10 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
         # Refused first starts must not leave an identity, owned ref or pointer.
         if ready is not None:
             ready()
+        stored = stored_config_text(config)
         base = git(project, "rev-parse", "HEAD").stdout.strip()
         target = git(project, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip().removeprefix("refs/heads/") or None
-        notices = _new_run_notices(project, config_path, target, group)
+        notices = _new_run_notices(project, config_path, target, group, imported, base, land_mode)
         # Suffixes are unique across the repository (refs of old-format ids included).
         taken = {short_id(ref) for ref in git(project, "for-each-ref", "--format=%(refname:lstrip=2)",
                                               "refs/autohelix/").stdout.split()}
@@ -863,8 +916,12 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
             data = {"schema": SCHEMA, "id": candidate, "name": name, "config_path": config_path,
                     "created_at": time.time(), "base_commit": base, "target_branch": target,
                     "ref": paths.ref, **({"group": group} if group else {}),
-                    **({"land": land_mode} if land_mode else {})}
+                    **({"land": land_mode} if land_mode else {}),
+                    **({"import": {"run": imported}} if imported else {}),
+                    **({"why": why} if why else {})}
             try:
+                write_text(paths.config, stored)  # first: a readable run (run.json) has its config
+                os.chmod(paths.config, 0o444)  # never edited: a run keeps the config it started with
                 write_json(paths.identity, data)
             except BaseException:
                 lock.close()
@@ -906,8 +963,40 @@ def repair_history(paths: RunPaths) -> None:
         write_records(paths, records, mode="derived", iterations=stale)
 
 
+def target_ahead(paths: RunPaths, data: dict, tip: str | None = None) -> int:
+    """How many commits the run's target branch has past its tip (`tip`, else its ref)
+    when the tip is behind it (the user committed after it landed), else 0. Before the
+    baseline, 0: the run hasn't started from its base commit yet."""
+    target = data.get("target_branch")
+    if not target or not has_baseline(paths):
+        return 0
+    branch = git(paths.project, "rev-parse", "--verify", "-q", f"refs/heads/{target}^{{commit}}", check=False)
+    tip = tip or git(paths.project, "rev-parse", "--verify", "-q", f"{paths.ref}^{{commit}}", check=False).stdout.strip()
+    target_tip = branch.stdout.strip()
+    if branch.returncode or not tip or target_tip == tip:
+        return 0
+    if git(paths.project, "merge-base", "--is-ancestor", tip, target_tip, check=False).returncode:
+        return 0
+    return int(git(paths.project, "rev-list", "--count", f"{tip}..{target_tip}").stdout.strip() or 0)
+
+
+def target_ahead_refusal(paths: RunPaths, data: dict, count: int) -> str:
+    """Why an auto-landing `resume` refuses a run whose target moved past its tip: by
+    you or another run, after its tip, or since it started if it never accepted a change."""
+    short = short_id(paths.run_id)
+    tip = git(paths.project, "rev-parse", "--verify", "-q", f"{paths.ref}^{{commit}}", check=False).stdout.strip()
+    when = (f"committed since run {short} started; it hasn't accepted any changes" if tip == data.get("base_commit")
+            else "committed after its tip")
+    return (f"{data['target_branch']} has {count} commit{'s' * (count != 1)} past run {short}'s tip ({when}). "
+            f"A run continues its own code: start a new run that continues from it, "
+            f"`{run_command(data['config_path'])} --import {short}`, or continue without landing: "
+            f"`autohelix resume {short} --land manual`.")
+
+
 def reconcile(paths: RunPaths, data: dict, history, land_mode: str) -> tuple[str, str | None]:
-    """Recover a ref advance without its record, then pick up target commits."""
+    """Recover a ref advance without its record, then compare the run's tip with its
+    target. A run continues its own tip: a target that moved past it refuses an
+    auto-landing run (`target_ahead_refusal`) and is a warning for a manual one."""
     from autohelix.history import IterationResult
 
     repair_history(paths)
@@ -936,8 +1025,12 @@ def reconcile(paths: RunPaths, data: dict, history, land_mode: str) -> tuple[str
             return git(paths.project, "merge-base", "--is-ancestor", a, b, check=False).returncode == 0
 
         if ancestor(tip, target_tip):
-            git(paths.project, "update-ref", "--no-deref", "-m", "AutoHelix resume from target", paths.ref, target_tip, tip)
-            tip = target_tip
+            count = target_ahead(paths, data, tip)
+            if land_mode == "auto":
+                raise RuntimeError(target_ahead_refusal(paths, data, count))
+            warning = (f"{target} has {count} commit{'s' * (count != 1)} past run {short_id(paths.run_id)}'s tip; "
+                       "it continues from its own tip, without them (manual landing: once it accepts a "
+                       f"change, merge it yourself: git merge autohelix/{paths.run_id}).")
         elif not ancestor(target_tip, tip):
             warning = (f"Target {target} diverged; continuing run {short_id(paths.run_id)} from its accepted tip. "
                        "Landing requires a branch that can fast-forward.")
@@ -980,8 +1073,9 @@ def land(paths: RunPaths, data: dict, expected_tip: str, into: str | None = None
                 raise RuntimeError(f"Cannot land {target}: branch is busy or changed. {hint}")
 
 
-def archive(paths: RunPaths, *, undo: bool = False) -> None:
-    """Set a run aside (hidden from the run list, skipped by a bare `resume`), or bring it back."""
+def archive(paths: RunPaths, *, undo: bool = False, why: str | None = None) -> None:
+    """Set a run aside (hidden from the run list, skipped by a bare `resume`), or bring it
+    back. `why` (archive only) replaces the archive note, `archive_why`; undo keeps it."""
     with RunLock(paths.lock):
         data = paths.read_identity()
         data.pop("lifecycle", None)
@@ -989,6 +1083,8 @@ def archive(paths: RunPaths, *, undo: bool = False) -> None:
             data.pop("archived", None)
         else:
             data["archived"] = True
+            if why:
+                data["archive_why"] = why
         write_json(paths.identity, data)
 
 

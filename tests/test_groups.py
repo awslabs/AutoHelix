@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from autohelix import workspace
 from autohelix.cli import main
 from autohelix.config import Config
-from autohelix.harness import Harness
+from autohelix.harness import Budget, Harness
 from autohelix.runs import RunLock, RunPaths, archive, git, short_id
 from tests.test_runs import configure
 
@@ -56,13 +56,13 @@ def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, mon
               agent={"backend": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
                                                   "notes_content": "tried {iteration}"}})
     first = Harness(project, new=True, group="g")
-    first.run(max_iterations=1, report=False)
+    first.run(Budget(until=1), report=False)
     stranger = Harness(project, new=True, land_mode="manual")
-    stranger.run(max_iterations=1, report=False)
+    stranger.run(Budget(until=1), report=False)
     second = Harness(project, new=True, group="g")
     seen = {}
     watch_agent(second, monkeypatch, seen)
-    second.run(max_iterations=1, report=False)
+    second.run(Budget(until=1), report=False)
 
     one = first.paths.run_id
     assert seen["runs"] == [one]
@@ -72,21 +72,21 @@ def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, mon
     assert stranger.paths.ref not in seen["refs"] and any(r.startswith("refs/heads/") for r in seen["refs"])
     line = (f"`.autohelix-iteration/runs/{one}/` (1 iteration, latest accepted score 3.5, finished; "
             f"code at `autohelix/{one}`)")
-    assert "Other runs in group `g`" in seen["prompt"] and line in seen["prompt"]
+    assert "  - Group `g` members (" in seen["prompt"] and f"    {line}\n" in seen["prompt"]
     assert "name that run in your summary" in seen["prompt"]
     assert seen["prompt_file"] == seen["prompt"]
     # The first run (alone in its group then) was not told about anyone.
     first_prompt = first.paths.prompt(1).read_text()
-    assert "Other runs in group" not in first_prompt
+    assert "Where things are" not in first_prompt
 
     # Archiving is how a run leaves its group.
     archive(first.paths)
     third = Harness(project, run_id=second.paths.run_id)
     seen.clear()
     watch_agent(third, monkeypatch, seen)
-    third.run(max_iterations=2, report=False)
+    third.run(Budget(until=2), report=False)
     assert seen["runs"] == [] and f"refs/autohelix/{one}" not in seen["refs"]
-    assert "Other runs in group" not in seen["prompt"]
+    assert "Where things are" not in seen["prompt"]
 
 
 def test_group_and_landing_mode_are_stored_kept_and_changed(project):
@@ -107,8 +107,6 @@ def test_group_and_landing_mode_are_stored_kept_and_changed(project):
     assert "group" not in data and data["land"] == "auto"
 
     configure(project, land="manual")  # the config's land: is the default for new runs only
-    result = cli(project, "resume", short_id(run_id), "-n", "1", "--no-report")
-    assert result.exit_code == 0 and identity(grouped)["land"] == "auto" and "  Landed " in result.output
     fresh, _ = started(project)
     assert identity(fresh)["land"] == "manual"
     explicit, _ = started(project, "--group", "perf", "--land", "auto")
@@ -125,24 +123,35 @@ def test_config_land_keeps_unset_apart_from_auto():
 
 
 def test_legacy_runs_without_a_recorded_mode_follow_the_config(project):
+    configure(project, land="manual")
     paths, _ = started(project, "--land", "manual")
     data = identity(paths)
     del data["land"]
     paths.identity.write_text(json.dumps(data))
-    configure(project, land="manual")
     harness = Harness(project, run_id=paths.run_id)
     assert harness.land_mode == "manual"
     harness.close()
 
 
-def test_group_runs_dont_warn_about_each_other_while_live(project):
+def test_group_and_manual_runs_dont_warn_about_a_live_run(project):
     first, _ = started(project, "--group", "g")
     with RunLock(first.lock):
         _, result = started(project, "--group", "g")
     assert "is also running for this config" not in result.output
-    with RunLock(first.lock):
+    with RunLock(first.lock):  # a comparison: it never lands on its own
+        _, result = started(project, "--land", "manual")
+    assert "is also running for this config" not in result.output
+    manual, _ = started(project, "--land", "manual")
+    with RunLock(manual.lock):  # the live one lands manually: only the new one would land
         _, result = started(project)
-    assert f"{short_id(first.run_id)} is also running for this config" in result.output
+    assert "is also running for this config" not in result.output
+    with RunLock(first.lock):  # a group run lands manually too
+        _, result = started(project)
+    assert "is also running for this config" not in result.output
+    auto, _ = started(project)
+    with RunLock(auto.lock):  # both would land
+        _, result = started(project)
+    assert f"{short_id(auto.run_id)} is also running for this config" in result.output
 
 
 def test_dashboard_shows_the_group_after_the_id(project):
@@ -201,7 +210,7 @@ def test_freeze_never_hashes_harness_material_into_the_users_objects(project, mo
         return real(cwd, prompt, iteration)
 
     monkeypatch.setattr(harness, "run_agent", agent)
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert harness.history.load()[-1].accepted
     objects = git(project, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)").stdout.split()
     for text in (unique["hint"] + "\n", unique["scratch"]):

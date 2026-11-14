@@ -18,10 +18,10 @@ session, with persistent notes and measurements from earlier attempts.
 
 ## Understand the experiment
 
-Unless the user has already said what the loop should do, your first message
+Unless the user has already said what they want to accomplish, your first message
 is exactly this line and nothing else (no preamble, no mention of this skill):
 
-What should this AutoHelix loop do?
+What do you want to accomplish?
 
 Don't inspect anything before the answer.
 
@@ -36,14 +36,20 @@ different environments.
 
 Recommend, don't interview. From the user's answer and the project (its
 tests, benchmarks, instructions), choose scope, gates, observe entries, backend,
-and budget. Ask before proposing the config only when the project
+and the budget of the launch command. Ask before proposing the config only when the project
 can't tell you something that changes the loop materially, such as there being
 no way yet to check or measure the goal. Don't ask about budgets, timeouts,
 models or reviews: pick defaults, say what you picked. Carry forward any
 preferences the user states.
 
-Defaults: `budget: {iterations: 3}` and nothing else (no cost or time limit),
-and no timeouts (no `timeout:` on gates or observe entries, no `agent.timeout`):
+Budgets are not config: they are flags of `autohelix run` and `resume` (`-n N`
+iterations, `--cost USD`, `--time DURATION`, for each `run` or `resume` command), so the config never
+has a `budget:` key (it is an error). The iteration count follows the goal: `-n 3`
+for an open-ended goal ("make X faster", "improve Y"), `-n 1` for a single task
+that gates (commands or `ask:`) can check (`-n 1` is also what no flag means). A
+`review:` entry never rejects: its feedback goes to the next iteration, which a
+`-n 1` run never has, so a goal checked only by a review needs more iterations. Defaults
+otherwise: no cost or time limit, and no timeouts (no `timeout:` on gates or observe entries, no `agent.timeout`):
 the built-in defaults apply. No metric gates (`- metric: … regress:/improve:`)
 either: the agent sees the numbers and decides. Set any of these only when the
 user asks. The
@@ -75,8 +81,8 @@ reference](references/config.md). Preserve other configs and the run state in
 `metrics:`, `reviewer:`, ...), which no longer loads.
 
 Define a goal (its first line is the run's title), editable scope, gates,
-observe entries (commands, optional reviews), optional metric gates or a
-stop condition, and budget settings or a commented template. Keep tests,
+observe entries (commands, optional reviews), and optional metric gates or a
+stop condition. Keep tests,
 benchmark definitions, evaluation criteria, and `autohelix/` outside the
 editable scope unless changing them is part of the user's task.
 
@@ -98,7 +104,7 @@ Show the complete proposed YAML in a fenced block, including the full goal and
 every configured field. For an existing config, show the proposed replacement
 and summarize the changes. For newly generated configs, use this top-level
 order, omitting unused fields: `goal`, `scope`, `gates`, `observe`, `stop`,
-`agent`, `budget`, `land`, `report`, `prompt_template`. This is a presentation
+`agent`, `land`, `report`, `prompt_template`. This is a presentation
 convention, not a validation requirement. Preserve an existing config's order
 unless reorganizing it is requested. Keep the order of entries within `gates`,
 `observe`, and `stop`: it affects execution.
@@ -107,8 +113,8 @@ Follow the YAML with a numbered, section-by-section
 walkthrough in configuration order: what each setting controls, why it was
 chosen, and how changing it would affect the run. Cover editable and frozen
 scope, each gate, observations and evidence paths, metric directions and metric
-gates or their absence, the backend, and effective budgets/defaults, including
-omitted fields that affect the run.
+gates or their absence, the backend, and effective defaults, including omitted
+fields that affect the run; then the suggested launch command and its budget.
 Distinguish instructions to the agent from enforced checks, and measurements
 from acceptance decisions. Explain what has been inspected and what remains
 unverified. Include any proposed helper scripts, prompt templates, or evaluators
@@ -178,7 +184,14 @@ to make the setup ready to run.
 
 Keep the final handoff brief: saved config and helper paths, the setup commit
 (or why no commit was made), validation and execution results, what remains
-unverified, and verification/launch commands. The complete YAML and rationale
+unverified, and verification commands. End with the complete launch command,
+budget included, and one line on why that budget: e.g. `autohelix run perf -n
+10 --cost 20` ("10 iterations to see a trend; $20 caps a runaway review"),
+`autohelix run perf -n 3` for a first look at an open-ended goal, or `autohelix
+run fix -n 1` for one task the gates check. Always write the flags out, `-n 1`
+included. Add `--cost` or `--time` only
+for a reason (expensive evaluations, a deadline); `autohelix resume <id> -n N`
+gives more later. The complete YAML and rationale
 were shown in the proposal; repeat them only if requested or needed to explain
 a revision.
 
@@ -187,7 +200,7 @@ checkout with a commit, and the first baseline needs no uncommitted changes to
 tracked files; identify unrelated changes that still prevent launch without
 committing or discarding them. `autohelix run` creates `.autohelix/` itself.
 The launch command is `autohelix run` for `autohelix.yaml`, or
-`autohelix run <name>` for `autohelix/<name>.yaml`.
+`autohelix run <name>` for `autohelix/<name>.yaml`, followed by its budget flags.
 Keep the iteration prompt's instruction to leave candidate edits uncommitted:
 AutoHelix validates and commits accepted changes. A setup commit before launch
 is different from an iteration agent or supervisor making extra commits while

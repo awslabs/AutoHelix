@@ -18,6 +18,3 @@ scope:
 
 agent:
   timeout: 2m
-
-budget:
-  iterations: 5

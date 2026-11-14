@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from autohelix.cli import main
-from autohelix.harness import AutoHelixRunError, Harness
+from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 
 
@@ -217,7 +217,7 @@ def test_programmatic_run_rechecks_changed_ignore_rules(
 
     monkeypatch.setattr(harness, "run_iteration", unexpected_iteration)
     with pytest.raises(AutoHelixRunError, match="not effectively ignored"):
-        harness.run(max_iterations=1, report=False)
+        harness.run(Budget(until=1), report=False)
 
     assert not (project / ".autohelix" / "history.jsonl").exists()
     assert not (project / ".autohelix" / "worktrees").exists()

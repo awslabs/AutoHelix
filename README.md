@@ -141,7 +141,7 @@ bundled setup skill (nothing is installed), or writes the commented template
 `autohelix.yaml`. With an agent, review the proposal before it saves and commits
 the agreed setup. With the template, edit it using the
 [configuration reference](#configuration) and commit the intended setup changes.
-Then launch with `autohelix run`.
+Then launch with `autohelix run -n 3` (a bare `autohelix run` is one iteration).
 For several loops in one project, `autohelix setup perf` writes
 `autohelix/perf.yaml`, which `autohelix run perf` runs. Other commands are
 described in the [CLI reference](docs/cli.md).
@@ -255,11 +255,6 @@ agent:
   backend: claude
   model: claude-opus-4-8
   timeout: 30m
-
-budget:
-  iterations: 10
-  cost: 30
-  time: 4h
 ```
 
 </details>
@@ -277,13 +272,14 @@ my-project/
 └── .autohelix/          # run state (gitignored)
     ├── runs/<id>/       # one persistent state directory per run
     │   ├── run.json     # identity, starting commit, target branch
+    │   ├── config.yaml  # the config the run started with (what resume uses)
     │   ├── history.jsonl # one record per iteration: results and each model call's usage/log
     │   ├── notes/       # agent's persistent notes
     │   ├── hints.md     # messages from `autohelix hint`
     │   ├── report.md    # the run summary (and report.html, the run page)
     │   ├── iterations/NNN/ # one folder per iteration (000 is the baseline): record.json,
     │   │                #   prompt.md, agent.log, gates/<k>/, observe/<name>/, stop/<k>/
-    │   ├── logs/        # run logs per invocation
+    │   ├── logs/        # run logs per segment
     │   └── .internal/   # live status, usage, notes versions, superseded attempts
     └── .internal/       # selected run id, helper scripts and lock files
 ```
@@ -293,9 +289,11 @@ Temporary per-phase candidate copies live outside the project, in
 
 Each `autohelix run` starts a new run; `autohelix resume [<id>] [-n MORE]` continues
 one, `autohelix archive <id>` sets one aside and `autohelix delete <id>` removes it.
+A run keeps the config it started with (stored with the run); to apply an edited config,
+start a new run.
 Use `--land manual` to keep validated commits on the run's `refs/autohelix/<id>` until
 `autohelix land`. By default, accepted changes land on the starting branch when a run
-segment (one invocation) ends. A resumed run can coexist with unrelated dirty checkout
+segment (one `run` or `resume` command) ends. A resumed run can coexist with unrelated dirty checkout
 files. See [CLI reference](docs/cli.md#autohelix-run).
 
 <!-- ───────────────────── OTHER FEATURES ───────────────────── -->
@@ -341,8 +339,8 @@ serves a live page for a run on 127.0.0.1: status, metric chart, iterations with
 
 Two time controls:
 
-- **`budget.time`** — caps *total* wall-clock for the whole run. Checked before each
-  iteration starts; doesn't interrupt one in progress.
+- **`--time DURATION`** (on `run` / `resume`) — caps that command's wall clock (one segment).
+  Checked before each iteration starts; doesn't interrupt one in progress.
 - **`agent.timeout`** — per-iteration deadline, a hard kill. Where the backend supports
   it, a hook injects a countdown into the agent's context after each tool call, so it can
   wrap up and write notes before the deadline hits.
@@ -382,9 +380,10 @@ organizes its persistent notes. See [Concepts → Prompt](docs/concepts.md#promp
 <details>
 <summary><b>Several runs at once</b></summary>
 
-Runs started with `autohelix run --group NAME` run side by side in one project and see each
-other's notes, history and accepted code at the start of every iteration. Compare them on
-`autohelix dashboard`, `autohelix land` the winner and `autohelix archive` the rest. See
+To compare approaches, start separate runs with `--land manual`, compare them on
+`autohelix dashboard`, `autohelix land` the winner and `autohelix archive` the rest. Runs that
+should build on each other's work share a group (`autohelix run --group NAME`): they see each
+other's notes, history and accepted code at the start of every iteration. See
 [CLI → Groups](docs/cli.md#groups).
 
 </details>

@@ -16,21 +16,20 @@ as "Use AutoHelix for improving this API guide." The user need not specify a
 skill name or draft YAML first. More explicit examples make the launch intent
 clear:
 
-- "Use AutoHelix to make the solver faster. Prepare a config template for review;
-  leave optional budgets unset."
+- "Use AutoHelix to make the solver faster. Prepare a config template for review."
 - "Use AutoHelix to improve this API guide. Prepare the loop and start a pilot
-  using my configured backend and budget."
+  using my configured backend."
 - "Use AutoHelix to make the solver faster. Prepare, run, and supervise three
   iterations, with four minutes per agent call and fifteen minutes for the
   loop. Use my configured agent and model, keep existing evaluations fixed,
   and explain the actual results when the execution ends."
 
 The first request finishes at preparation; the second includes launch within
-the stated authorization and the entrypoint's execution rules. A setup-only
-handoff need not choose every budget: use the
-[commented template](config.md#budgets-and-run-state) and explain the five-attempt
-default when iterations is omitted. The selected budgets in the patterns below
-illustrate possible run designs rather than required preparation defaults.
+the stated authorization and the entrypoint's execution rules. Budgets are not
+part of the config: every handoff ends with the complete launch command, its
+budget flags included (`autohelix run -n 3`; see
+[budgets](config.md#budgets-and-run-state)). The launch commands in the
+patterns below illustrate possible run designs rather than required defaults.
 Present the config as the proposed agreement on behavior and evaluation,
 including its limits, rather than treating a general goal as permission for
 unlimited work.
@@ -60,9 +59,9 @@ observe:
     metrics:
       runtime_ms: lower
     capture: [results/benchmark.json]
-budget:
-  iterations: 3
 ```
+
+Launch: `autohelix run -n 3`.
 
 The benchmark must emit `##autohelix[runtime_ms=12.3]` (with the measured value).
 Capture the detailed results so a speedup can be inspected. If timings are
@@ -92,9 +91,9 @@ observe:
       Read docs/guide.md and api-spec.json. Assess clarity for a first-time user,
       accuracy against the specification, and whether the example is complete.
       Support feedback with specific passages and propose useful revisions.
-budget:
-  iterations: 3
 ```
+
+Launch: `autohelix run -n 3`.
 
 Do not invent `validate_guide.py` if the project has no such evaluator.
 A small proposal could check local link targets and required example sections,
@@ -102,6 +101,27 @@ explain its limits on semantic accuracy, and estimate its filesystem-only cost.
 Agree on implementation if needed. The review is an optional source of later
 feedback and is not needed to finish setup; explain the limits if the run relies
 on review alone. No numeric score is required.
+
+## A single checked task
+
+The user wants one concrete fix, such as "make the failing date-parsing test
+pass without breaking the others". The gates can decide it, so one checked
+attempt is enough to start with: no observe entry, and no review (its feedback
+would only reach a next iteration).
+
+```yaml
+goal: |
+  Fix parse_date so tests/test_dates.py::test_timezone_offset passes, without
+  changing other behavior.
+scope:
+  editable: [src/dates.py]
+gates:
+  - python -m pytest tests/
+```
+
+Launch: `autohelix run -n 1`. If the attempt is rejected, `autohelix resume <id>
+-n 2` gives it two more, with the rejected change and its gate output to learn
+from.
 
 ## Autonomous research
 
@@ -131,9 +151,9 @@ observe:
       feedback. Inspect supplied artifacts without running experiments.
 agent:
   timeout: 8m
-budget:
-  iterations: 4
 ```
+
+Launch: `autohelix run -n 4`.
 
 The validator and summary command must exist and fit the project's protocol.
 The observe entry needs no `metrics`; captured output and files can guide
@@ -175,13 +195,13 @@ observe:
       missing: lower
 stop:
   - jq -e '.missing == 0' "$AUTOHELIX_METRICS"
-budget:
-  iterations: 10
 ```
+
+Launch: `autohelix run -n 10 --cost 20` (the stop condition can end it sooner; each review is a model call, so `--cost` caps them).
 
 `previous: true` gives the review its own last accepted status to re-verify,
 so the status is written by the checker, not the implementer, and moves only
 with accepted iterations. The `missing` count is an LLM's answer: use it for
 display and the stop condition, not a gate. Each review is a model call;
-include its cost in the budget discussion. The stop command needs `jq` on the
+include its cost when choosing `--cost`. The stop command needs `jq` on the
 harness's `PATH`.

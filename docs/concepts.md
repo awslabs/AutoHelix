@@ -35,8 +35,9 @@ A useful loop answers five questions:
 3. **What must remain true?** Encode non-negotiable requirements as gates.
 4. **What should carry forward?** Decide which metrics, artifacts, reviews,
    results, and lessons later iterations need: those are `observe:` entries.
-5. **When should the loop stop?** Set an iteration, time, or cost budget that
-   matches the intended scope, and a `stop:` condition if "done" is checkable.
+5. **When should the loop stop?** Give an iteration, time, or cost budget that
+   matches the intended scope on the command line (`autohelix run -n 30 --cost
+   20`), and a `stop:` condition in the config if "done" is checkable.
 
 ### Tips
 
@@ -63,7 +64,7 @@ combined.
 Every phase of an iteration (agent, checks, each review, stop) runs in **its own fresh
 copy** of the code: a private folder holding one fixed tree, with its own small
 `.git`. That `.git` borrows your repository's objects and has copies of its
-branches, tags, remote branches, and this run's ref and its group's (a snapshot taken
+branches, tags, remote branches, and the refs of this run, its imported run and its group (a snapshot taken
 when the copy is made; no stash, no remote). This means:
 
 - Whatever the agent does with git (commits, branches, config, hooks) stays in its copy.
@@ -143,7 +144,7 @@ The agent's persistent memory across iterations. Stored in `.autohelix/runs/<id>
 
 `notes/` is the **sole agent-owned region** and the only thing that round-trips
 between the main project and each iteration's agent copy. Everything else the agent
-sees in `.autohelix-iteration/` (history, observations, hints, `rejected.patch`, other runs of its group) is read-only
+sees in `.autohelix-iteration/` (history, observations, hints, `rejected.patch`, other runs' state) is read-only
 reference — copied *into* the copy but never copied back. That asymmetry is
 the whole contract: the agent freely structures `notes/` however the prompt
 directs (per-iteration files, a journal, subdirectories), and only `notes/`
@@ -157,6 +158,7 @@ Key properties:
 - **Versioned** — each save is a new version (`.internal/notes/<n>/`), so a note the agent deletes stays deleted, and the notes as of any iteration remain
 - **Shared in a group** — runs started with the same `--group` see each other's notes (read-only copies, in `.autohelix-iteration/runs/<id>/notes/`)
 - **Per run** — each `autohelix run` starts with empty notes; `resume` continues a run's notes; `archive` keeps them, `delete` removes them
+- **Imported read-only** — a run started with `run --import <id>` sees that run's notes and history in `.autohelix-iteration/runs/<id>/`; its own notes still start empty, numbered from its iteration 1
 
 Notes are the primary mechanism for the agent to build on previous attempts. They're more effective than full session context because the agent curates what's worth remembering.
 
@@ -213,6 +215,13 @@ latest iteration:
   the prompt names the folder of the last accepted iteration too.
 - **After discarded changes:** the paths that were outside the scope, frozen
   ones said apart from the ones that aren't editable.
+
+With other runs in the copy (an [import](cli.md#continuing-from-another-run) or
+a [group](cli.md#groups)), the reading list becomes one "Where things are"
+block: the run's own notes (editable, numbered from its iteration 1), its own
+iterations, `rejected.patch` when there is one, each other run's state in
+`runs/<id>/` (read-only, the imported one and the group members said apart),
+and their code's refs. Without them the prompt has no such block.
 
 Observe commands are different: `$AUTOHELIX_PREVIOUS` (and so
 `review --previous`) always comes from the last *accepted* iteration in which
@@ -317,9 +326,9 @@ observe:
 
 stop:
   - jq -e '.missing == 0' "$AUTOHELIX_METRICS"
-
-budget: {iterations: 30, cost: 20}
 ```
+
+Run it with `autohelix run -n 30 --cost 20`.
 
 `metrics: {missing: lower}` adds `missing` to the review's answer schema; the
 command prints it as `##autohelix[missing=3]`, so it is a number like any
@@ -353,7 +362,7 @@ The variables a template gets are a stable, documented contract:
 | `gates` | Every gate in list order: `{text, kind}`, `kind` being `command` or `metric`; a metric gate's text says what it compares ("speed: at most 5% worse than the last accepted iteration"). Elsewhere (console header, `view --json`, the `gates` of history records) a metric gate goes by its short text, `speed regress 5%` or `speed improve 0%` |
 | `observe` | Every observe entry: `{name, kind, metric_labels}`, `kind` being `command` (with `command`) or `review` (with `prompt`, on one line); `metric_labels` like `speed (↑)` |
 | `stop` | The stop commands |
-| `editable`, `frozen` | The scope patterns |
+| `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files (always frozen) |
 | `notes_path` | Where this iteration's notes go (in the copy) |
 | `hints` | `.autohelix-iteration/hints.md` if there are hints, else empty |
 | `rejected_patch` | `.autohelix-iteration/rejected.patch` if the copy has one, else empty |
@@ -363,6 +372,7 @@ The variables a template gets are a stable, documented contract:
 | `last` | The latest iteration (the baseline before iteration 1), or none: `{iteration, accepted, reason, summary, failure_output, gates: [{text, kind, status}], observe: [{name, ok, error, missing, path}]}`; `status` is `passed`, `failed` or `pending`, `missing` the declared metrics an entry ran without reporting, and `path` the entry's folder in the copy |
 | `time_limit` | `agent.timeout` as a compact duration (`15m`), or empty |
 | `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group |
+| `imported` | The run this one continues from (`run --import`), or none: `{id, short, path, description}`, `path` being its state in the copy (`.autohelix-iteration/runs/<id>/`, read-only), `description` its line as in `group_runs`; its code is at `autohelix/<id>`. Not listed in `group_runs`, even when it is in the group |
 
 A custom template is a copy: it won't pick up future changes to the built-in
 one. Remove `prompt_template:` to return to it. A run warns when a custom
@@ -391,7 +401,8 @@ harness keeps for itself is in `.internal/` folders:
 ```
 .autohelix/
 ├── runs/<id>/
-│   ├── run.json                # identity (base commit, target branch, config), archived flag
+│   ├── run.json                # identity (base commit, target branch, config file), archived flag
+│   ├── config.yaml             # the run's config, stored when it started (the stored copy inlines the template)
 │   ├── history.jsonl           # one record per iteration: the index and the source of truth
 │   ├── hints.md
 │   ├── report.md  report.html  # the run summary; the one-file run page
@@ -399,8 +410,8 @@ harness keeps for itself is in `.internal/` folders:
 │   ├── iterations/
 │   │   ├── 000/                # the baseline
 │   │   └── 001/ ...            # one folder per iteration (below)
-│   ├── logs/                   # run logs per invocation, report.log, hook audit
-│   └── .internal/              # status.json, usage/, notes versions notes/<n>/,
+│   ├── logs/                   # run logs per segment, report.log, hook audit
+│   └── .internal/              # status.json, segments.jsonl, usage/, notes versions notes/<n>/,
 │                               # superseded attempts attempts/, report.json, the copies path
 └── .internal/                  # the current run's id, lock files, helper scripts (bin/)
 ```
@@ -426,6 +437,28 @@ of truth (`jq` on it for numbers across iterations; see
 retried baseline, reuses its number: the earlier attempt's folder is moved to
 `.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
 
+`.internal/segments.jsonl` records every segment (one `run` or `resume`
+command) that started, append-only, two JSON lines each, linked by `segment`
+(1, 2, … in the run) and told apart by `event`:
+
+- `"event": "start"`: `started_at` (epoch seconds), `budget` as given
+  (`iterations`, `until`, `cost_usd`, `time_seconds`, each `null` when unset,
+  and `default`: no budget flag, so the default `-n 1` applied),
+  `start_iteration` (the first iteration it may run, `0` when it captures the
+  baseline), `pid` and `host`;
+- `"event": "end"`: `ended_at`, `state` (`finished`, `interrupted` or
+  `failed`), `stop_reason` (as in `status.json`: why the loop ended, kept when
+  Ctrl-C or an error comes later, during landing or the report; `null` only when
+  the loop itself was interrupted or failed), `iterations` (how many records the
+  segment added to `history.jsonl`, the baseline's included: `0` when none
+  completed), `last_iteration` (the run's last recorded iteration then; with
+  `iterations: 0` it is the one before the segment) and `error` (what a failed
+  segment failed with, one line, cut to 500 characters; else `null`).
+
+A segment whose process died has a start and no end. Each line is written in
+one append and synced, and earlier lines are never rewritten: a damaged line
+loses only itself (readers skip it).
+
 The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
 project; see [Candidate Copies](#candidate-copies).
 
@@ -437,7 +470,7 @@ run's folder:
 ```
 <copy>/
 ├── <code at the run's tip>
-├── .git/                       private; refs: branches, tags, this run's (and its group's)
+├── .git/                       private; refs: branches, tags, this run's (and its import's, group's)
 └── .autohelix-iteration/
     ├── prompt.md  hints.md     this iteration's prompt; hints
     ├── notes/                  this run's notes: the only thing saved back
@@ -446,7 +479,8 @@ run's folder:
     │                           failing gates' gates/<k>/, observe/, stop/
     ├── rejected.patch          after a rejection: the rejected attempt's change
     ├── commit_summary.txt      written by the agent: the commit's first line
-    └── runs/<other-id>/        other runs of the group: run.json, history.jsonl, notes/
+    └── runs/<other-id>/        the imported run and other runs of the group: run.json,
+                                history.jsonl, notes/
 ```
 
 A copy's `iterations/` leaves out the agent logs, prompts, `notes` links,
@@ -461,17 +495,35 @@ that version. Everything else is reference material. A checks copy gets only
 
 A run is a line of work: `autohelix run` starts one, `autohelix resume` continues
 one (by default the config's most recently active), `archive` sets one aside and
-`delete` removes it. A run has no other state: whether it is running comes from its
+`delete` removes it. **A run keeps its config**: it stores it as `config.yaml`
+when it starts, and every segment, `view`, `dashboard`, `report` and the judges
+(`$AUTOHELIX_CONFIG`) use that copy. `resume` refuses before spending anything
+when the config file's parsed config differs from it (comments and formatting
+don't count; the prompt template's text does): `autohelix run <config> --import
+<id>` applies the new config in a new run, or restore the file to continue. A
+deleted config file isn't a change. `run --import <id>` starts a new run (code
+from your checkout, its own config, budgets, baseline and notes) whose agents
+also see the imported run's `run.json`, `history.jsonl` and notes read-only, and
+whose baseline observe entries continue from that run's outputs
+(`$AUTOHELIX_PREVIOUS`); `run.json` records it as `import: {run: <id>}`. The config file and its `prompt_template:`
+file are always frozen, so the agent can't change its own protocol. Scripts the
+config calls (`bench.py`, gate scripts) are code: they move with the run's
+commits; list them under `scope.frozen` if they must not change. A run has no other state: whether it is running comes from its
 lock, how its last segment ended from `status.json`, and whether it has landed from
-git. One invocation of `run` or `resume`, called a **segment**,
+git. One `run` or `resume` command, called a **segment**,
 holds a process lock through validation, final landing and report. Agent commits
 don't matter: the candidate is the agent copy's files. Acceptance commits exactly
 the checked tree, with the previous accepted tip as its parent; it leaves the
 user's branch and staged files alone. No-op accepts retain the same tip.
 
 Resuming repairs an interrupted final record and recovers accepted commits whose
-record was not finished. Other history corruption is refused. User commits on
-the target can be picked up when they descend from the run tip. Auto landing
+record was not finished. Other history corruption is refused. **`resume` only
+continues the same run**: its stored config, its own tip, more budget. When the
+target branch has moved past the run's tip (you or another run committed on it), an
+auto-landing `resume` refuses before writing anything and names the ways on: a
+new run that continues from it, `autohelix run <config> --import <id>` (your
+checkout's code, that run's notes and history), or `resume <id> --land manual`,
+which continues from the run's own tip without your commits. Auto landing
 fast-forwards the target at segment end before report; manual mode retains code
 on the run ref until `autohelix land`. Divergence, a branch being rebased or checked
 out elsewhere, and dirty files that would be overwritten require user resolution.
@@ -504,7 +556,7 @@ Available token usage and cost are captured from agent backends:
 - **Persisted**: stored in `.autohelix/runs/<id>/history.jsonl` for later analysis
 
 Each iteration's cost includes its optimization agent and the model calls its
-commands report (`ask`, `review`). Run totals and `budget.cost` also include the
+commands report (`ask`, `review`). Run totals and `--cost` also include the
 baseline's. History's `calls` list records each agent and command call with
 its role, usage and log path; baseline calls and failed calls count too.
 Failed main-agent calls consume their iteration number and resume at the next one;
@@ -528,7 +580,7 @@ represent subscription or Bedrock bills. Backend-supplied amounts may also be
 estimates.
 
 Missing costs are unavailable, and totals with missing costs are incomplete.
-`budget.cost` uses the recorded amounts, including Codex estimates, and warns
+`--cost` uses the recorded amounts, including Codex estimates, and warns
 if some costs are unavailable. See [Cost Tracking](config.md#cost-tracking) for
 the pricing assumptions and accounting limits.
 

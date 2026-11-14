@@ -47,7 +47,5 @@ scope:
 #   # model: claude-opus-4-8
 #   # timeout: 30m        # per iteration: the agent sees the time left, then is stopped
 
-budget:
-  iterations: 5
-  # cost: 10              # dollars
-  # time: 2h              # total wall-clock
+# How long to run is not set here: `autohelix run -n 10 --cost 20 --time 2h`
+# (iterations, dollars, wall clock; each optional, 1 iteration by default).

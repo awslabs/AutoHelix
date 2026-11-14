@@ -4,7 +4,7 @@
 """Duration helpers.
 
 `parse_duration_string` holds the one duration grammar, used by every config
-duration (`agent.timeout`, entry `timeout:`, `budget.time`) through
+duration (`agent.timeout`, entry `timeout:`) and `--time` through
 config.parse_duration; this module's parse_duration is the optional variant
 (None/empty/zero mean unset).
 """

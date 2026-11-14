@@ -43,7 +43,7 @@ from autohelix.agents import AgentEventKind
 from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained, open_dir as _open_dir, open_file as _open_file, open_run_log
 from autohelix.config import ConfigNotFound, MetricGate, find_config, load_config
 from autohelix.costs import summarize_costs
-from autohelix.history import History
+from autohelix.history import History, record_seconds
 from autohelix.runs import RunPaths, config_relative, git, is_archived, is_transcript, last_activity
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
@@ -256,9 +256,10 @@ class RunData:
             return self.history.load()
 
     def _config(self):
-        """The run's stored config, parsed again only when its file changes. A run whose
-        file is gone shows it missing, never another; with no run, the project's config
-        if the lookup finds one, else none (None, None)."""
+        """The run's stored config (`runs/<id>/config.yaml`), parsed again only when it
+        changes. A run without one (started by an older AutoHelix) shows it missing, never
+        its source file; with no run, the project's config if the lookup finds one, else
+        none (None, None)."""
         if self.paths.run_id:
             path = read_stored_config_path(self.project, self.paths.run_id)
         else:
@@ -284,7 +285,13 @@ class RunData:
         if path is None:
             return None
         cached = self._configs.get(path)
-        summary = {"file": config_relative(self.project, path), "text": cached[2] if cached else _read_user_file(path)}
+        file = config_relative(self.project, path)
+        if self.paths.run_id and path == self.paths.config:
+            try:  # the file it was stored from, as the run's other pages name it
+                file = self.paths.read_identity()["config_path"]
+            except (RuntimeError, KeyError):
+                pass
+        summary = {"file": file, "text": cached[2] if cached else _read_user_file(path)}
         if not path.exists():
             summary["missing"] = True
         if config:
@@ -294,9 +301,6 @@ class RunData:
                 observe=[{"name": entry.name, "review": entry.review is not None, "metrics": entry.metrics}
                          for entry in config.observe],
                 scope=config.editable,
-                max_iterations=config.max_iterations,
-                max_cost_usd=config.max_cost_usd,
-                max_time_seconds=config.max_time_seconds,
             )
         return summary
 
@@ -344,7 +348,16 @@ class RunData:
                 "incomplete": total_cost.incomplete,
             },
             "report": self._report(),
+            **self._run_notes(),
         }
+
+    def _run_notes(self) -> dict:
+        """`run_notes` of the run's run.json; all None when it can't be read."""
+        try:
+            data = self.paths.read_identity() if self.paths.run_id else {}
+        except RuntimeError:
+            data = {}
+        return run_notes(data)
 
     def _report(self) -> dict | None:
         if not self.paths.run_id:
@@ -839,6 +852,19 @@ RUN_ID = r"[a-z0-9][a-z0-9-]{0,50}"
 JSON_SCHEMA = 1
 
 
+def run_notes(data: dict) -> dict:
+    """What run.json says about why a run exists (untrusted: strings or None): `why`
+    (`run --why`), `archive_why` (`archive --why`) and `import`, `{"run": id}` for a
+    run started with `run --import`."""
+    def text(value):
+        return value if isinstance(value, str) and value else None
+
+    source = data.get("import")
+    source = text(source.get("run")) if isinstance(source, dict) else None
+    return {"why": text(data.get("why")), "archive_why": text(data.get("archive_why")),
+            "import": {"run": source} if source else None}
+
+
 class ProjectRuns:
     """Reads every run in a project's .autohelix/runs/ for the dashboard."""
 
@@ -890,10 +916,11 @@ class ProjectRuns:
             return {}
         return dict(line.split("\t", 1) for line in out.splitlines() if "\t" in line)
 
-    def _config(self, relative: str | None) -> dict:
+    def _config(self, paths: RunPaths, relative: str | None) -> dict:
+        """A summary of the run's stored config; `file` is the one it was stored from."""
         if not relative:
             return {}
-        path = Path(relative) if Path(relative).is_absolute() else self.project / relative
+        path = paths.config
         try:
             mtime = path.stat().st_mtime
         except OSError:
@@ -905,9 +932,7 @@ class ProjectRuns:
             config = load_config(self.project, config_file=path)[0]
             summary = {"file": relative, "goal": (config.goal.strip() or None) if isinstance(config.goal, str) else None,
                        "title": (config.title or None) if isinstance(config.goal, str) else None,
-                       "directions": config.metric_directions(),
-                       "max_iterations": config.max_iterations, "max_cost_usd": config.max_cost_usd,
-                       "max_time_seconds": config.max_time_seconds, "land": config.land}
+                       "directions": config.metric_directions(), "land": config.land}
         except Exception:
             summary = {"file": relative, "invalid": True}
         self._configs[path] = (mtime, summary)
@@ -946,11 +971,11 @@ class ProjectRuns:
         status = read_run_status(self.project, run_id)
         history = self._histories.setdefault(run_id, History(self.project, run_id))
         records = history.load()
-        # Read from the checkout's current file (phase 2: the segment's config snapshot).
-        config = self._config(data.get("config_path"))
+        config = self._config(paths, data.get("config_path"))
 
         attempts = [r for r in records if r.iteration > 0]
         cost = summarize_costs([usage for r in records for usage in r.cost_usages])
+        budget = status or {}
         tip = refs.get(paths.ref) or data.get("abandoned_tip")
         target = data.get("target_branch")
         target_tip = refs.get(f"refs/heads/{target}") if target else None
@@ -961,32 +986,34 @@ class ProjectRuns:
             "created_at": data.get("created_at"),
             "last_activity": last_activity(paths, data, status or {}),
             "config_file": config.get("file"),
-            # The run's own file, gone (never replaced by another) or no longer valid.
+            # The run's stored config, missing (an old run's: never its source file instead) or invalid.
             "config_missing": bool(config.get("missing")),
             "config_invalid": bool(config.get("invalid")),
             "goal": config.get("goal"),
             "title": config.get("title"),  # the goal's first line, cut (Config.title)
             "status": status and {k: status.get(k) for k in (
                 "state", "phase", "iteration", "iteration_started_at", "phase_started_at", "stopped_at",
-                "stop_reason", "max_iterations")},
+                "stop_reason", "max_iterations", "max_cost_usd", "max_time_seconds", "segment_started_at")},
             "accepted": sum(1 for r in attempts if r.accepted),
             "metrics": self._metrics(records, config.get("directions") or {}),
-            # Budgets are run totals across segments; `run -n` overrides the file for a segment.
+            # The caps of the latest segment (`run`/`resume` flags), from its status; None
+            # where it had none. Iterations and cost as run totals (spent before it plus its
+            # own budget); time as its own --time, counted from `segment_started_at`.
             "progress": {
                 "iterations": max((r.iteration for r in attempts), default=0),
-                "max_iterations": (status or {}).get("max_iterations") or config.get("max_iterations"),
+                "max_iterations": budget.get("max_iterations"),
                 "cost_usd": cost.cost_usd, "cost_incomplete": cost.incomplete,
-                "max_cost_usd": config.get("max_cost_usd"),
-                # As the time budget counts it: iteration wall-clock, not the baseline.
-                "seconds": sum(r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0)) or 0
-                               for r in attempts) / 1000,
-                "max_seconds": config.get("max_time_seconds"),
+                "max_cost_usd": budget.get("max_cost_usd"),
+                # The run's total: the recorded iterations' wall clock, the baseline's included.
+                "seconds": sum(record_seconds(r) for r in records),
+                "max_seconds": budget.get("max_time_seconds"),  # the segment's, not a run total
             },
             "target_branch": target,
             "landing": self._landing(target_tip, tip),
             "group": data.get("group"),
             # Recorded at creation; older runs follow the config (else auto).
             "land": data.get("land") or config.get("land") or "auto",
+            **run_notes(data),
         }
 
 

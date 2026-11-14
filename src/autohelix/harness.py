@@ -5,13 +5,15 @@
 
 import json
 import hashlib
+import itertools
+import math
 import os
 import shutil
 import subprocess
 import sys
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from rich.console import Console
@@ -22,21 +24,23 @@ from rich.table import Table
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import MetricGate, find_config, load_config, run_command
+from autohelix.config import (ConfigError, MetricGate, config_changes, find_config, inlined, load_config,
+                              parse_config, run_command, template_path)
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay, Transcript, clean, header_lines
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
-                            claim_copies, config_gone, config_relative, critical_section, new_run_name,
-                            iteration_folder, planned_run, remove_copies, require_clean, short_id, unlanded,
+                            claim_copies, config_relative, critical_section, new_run_name,
+                            iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
+                            imported_run, is_live, target_ahead, target_ahead_refusal,
                             write_json, write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning)
-from autohelix.run_status import RunStatus
+from autohelix.run_status import RunStatus, SegmentLog
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
-from autohelix.formatting import format_cost, format_total_cost
+from autohelix.formatting import format_cap, format_cost, format_total_cost
 from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
                                        uses_old_layout)
 from autohelix.run_log import RunLog
@@ -60,6 +64,48 @@ class AutoHelixRunError(RuntimeError):
 # A failed or timed-out agent call is a rejected iteration and the loop goes on; this
 # many in a row (within a segment) stop the run: the agent is unlikely to recover.
 MAX_CONSECUTIVE_AGENT_FAILURES = 3
+
+# Iterations a segment runs when no budget flag is given (`run`/`resume` without
+# -n, --until, --cost or --time).
+DEFAULT_ITERATIONS = 1
+
+
+@dataclass(frozen=True)
+class Budget:
+    """How long one segment (`run`, `resume`) goes on: the config says what an
+    iteration does, the command line how long.
+
+    `iterations` more iterations, or up to iteration `until` in total (the one figure
+    that counts a total: safe to repeat); up to `cost_usd` more dollars charged by this
+    segment (agent calls, reviews, asks, the baseline: known costs only) and
+    `time_seconds` of its wall clock, baseline included. With nothing set,
+    `DEFAULT_ITERATIONS` more; with only cost or time, no iteration cap."""
+
+    iterations: int | None = None
+    until: int | None = None
+    cost_usd: float | None = None
+    time_seconds: int | None = None
+
+    def __post_init__(self):
+        if self.iterations is not None and self.until is not None:
+            raise ValueError("Use either -n (more iterations) or --until (up to an iteration), not both.")
+        for flag, value in (("-n", self.iterations), ("--until", self.until), ("--cost", self.cost_usd),
+                            ("--time", self.time_seconds)):
+            if value is not None and (isinstance(value, bool) or not math.isfinite(value) or not value > 0):
+                raise ValueError(f"{flag} must be a positive finite number, got {value!r}")
+
+    @property
+    def default(self) -> bool:
+        """No figure given: `DEFAULT_ITERATIONS` more."""
+        return self == Budget()
+
+    def last_iteration(self, done: int) -> int | None:
+        """The last iteration this segment may run after iteration `done`; None: no cap."""
+        if self.until is not None:
+            return self.until
+        if self.iterations is not None:
+            return done + self.iterations
+        return None if self.cost_usd is not None or self.time_seconds is not None else done + DEFAULT_ITERATIONS
 
 
 @dataclass
@@ -155,7 +201,8 @@ class Harness:
     def __init__(self, project_path: Path, verbose: bool = False, heartbeat_seconds: int = 30,
                  config_file: Path | None = None, *, new: bool = False,
                  run_id: str | None = None, name: str | None = None,
-                 land_mode: str | None = None, create: bool = True, group: str | None = None):
+                 land_mode: str | None = None, create: bool = True, group: str | None = None,
+                 import_run: str | None = None, why: str | None = None):
         """Own one run: `run_id`, a new one (`new`, as `autohelix run`), or the config's
         most recently active run (as `autohelix resume`; created if there is none,
         unless `create` is false).
@@ -164,53 +211,81 @@ class Harness:
         else auto, or manual with a `group`) and its `group`. On resume `land_mode`
         and `group` change the stored ones (`group=''` clears it) once the segment
         starts; otherwise the run keeps its own. A new run is named after the config
-        file (`name` replaces that, for library callers and tests)."""
+        file (`name` replaces that, for library callers and tests).
+
+        A new run may import another (`import_run`, a full id: `run --import`): every
+        agent copy shows that run's state read-only, and the baseline's observe entries
+        get its last outputs as `$AUTOHELIX_PREVIOUS`. `why` is the new run's note
+        (`run --why`). A resume refuses, before writing anything, when its target branch
+        moved past its tip and it lands automatically (`runs.target_ahead`)."""
         # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send
         # every git call (ours, and the agent's, checks' and judges') to another repository.
         # The CLI does the same in `cli.main`; this covers the Harness as a library.
         for key in SCRUBBED_GIT_ENV:
             os.environ.pop(key, None)
         self.project_path = Path(project_path).resolve()
-        # Always an explicit file: run.json and $AUTOHELIX_CONFIG name it. A run keeps its own.
+        # `config_file` is the source file, as run.json names it (naming, messages); the run
+        # loads its stored copy (`RunPaths.config`), which judges and the report read too.
         if run_id:
-            identity = RunPaths(self.project_path, run_id).read_identity()
-            stored = identity["config_path"]
+            stored = RunPaths(self.project_path, run_id).read_identity()["config_path"]
             if config_file is None:
                 config_file = self.project_path / stored
-                if not config_file.exists():
-                    raise FileNotFoundError(config_gone(self.project_path, run_id, stored,
-                                                        identity.get("base_commit")))
             elif config_relative(self.project_path, Path(config_file)) != stored:
                 raise RuntimeError(f"Run {short_id(run_id)} was started with {stored}, not "
                                    f"{config_relative(self.project_path, Path(config_file))}; a run keeps its config.")
         elif config_file is None:
             config_file = find_config(self.project_path)
         self.config_file = config_file = Path(config_file)
-        # Every refusal comes before the first write (the excludes, then .autohelix/): the
-        # run to own, read-only (no run to resume, a run without its ref), the config,
-        # and for a new run its name, a clean tree and readiness. select_run decides
-        # again under its lock.
-        creating = planned_run(self.project_path, config_file, new=new, run_id=run_id, create=create) is None
-        self.config, self._raw_config = load_config(self.project_path, config_file=config_file)
         self.verbose = verbose
         self.heartbeat_seconds = heartbeat_seconds
         self.console = Console()
+        # Every refusal comes before the first write (the excludes, then .autohelix/): the
+        # run to own, read-only (no run to resume, a run without its ref), the config (for
+        # an existing run, its stored copy, which the file must still match), and for a new
+        # run its name, a clean tree and readiness. select_run decides again under its lock.
+        if import_run and not new:
+            raise ValueError("import_run applies to a new run")
+        planned = planned_run(self.project_path, config_file, new=new, run_id=run_id, create=create)
+        creating = planned is None
+        if import_run:
+            source = RunPaths(self.project_path, import_run).read_identity().get("config_path")
+            if not isinstance(source, str):
+                raise RuntimeError(f"Run {short_id(import_run)}'s run.json names no config file; it can't be imported.")
+            if source != (used := config_relative(self.project_path, config_file)):
+                self.console.print(f"[yellow]Run {short_id(import_run)} used {source}; this run uses {used}.[/yellow]",
+                                   highlight=False)
+        if creating:
+            self.config, self._raw_config = load_config(self.project_path, config_file=config_file)
+        else:
+            self.config, self._raw_config = self._run_config(planned)
         errors = [issue for issue in self.config.validate(self._raw_config) if issue.level == "error"]
         if errors:
             for error in errors:
                 self.console.print(f"[red]Error:[/red] {error.message}")
-            raise SystemExit(f"Config validation failed. Edit {config_relative(self.project_path, config_file)} "
-                             "and try again.")
+            if creating:
+                raise SystemExit(f"Config validation failed. Edit {config_relative(self.project_path, config_file)} "
+                                 "and try again.")
+            short = short_id(planned.run_id)
+            raise SystemExit(f"Run {short}'s stored config is no longer valid; continue it in a new run: "
+                             f"`{run_command(config_relative(self.project_path, config_file))} --import {short}`.")
         self._preflight_done = False
         if creating:
             name = new_run_name(config_file, name)
             self._new_run_ready()
+        else:  # a run continues its own tip: refused before anything is written
+            data = planned.read_identity()
+            if (land_mode or data.get("land") or self.config.land or "auto") == "auto" and (
+                    count := target_ahead(planned, data)):
+                if is_live(planned):  # said first: the advice (`--land manual`) would lead straight to it
+                    raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
+                raise RuntimeError(target_ahead_refusal(planned, data, count))
         # The first writes: the local excludes, before .autohelix/ exists.
         ensure_runtime_ignored(self.project_path)
         try:  # best effort: only runtime state must be ignored
             ensure_git_exclude_entry(self.project_path, "__pycache__/")
         except (OSError, subprocess.CalledProcessError):
             pass
+        existing = {p.name for p in RunPaths(self.project_path).runs.glob("*")}
         self.paths, self.run_info, self._ownership, notices = select_run(
             self.project_path, config_file,
             new=new, run_id=run_id, name=name,
@@ -218,7 +293,15 @@ class Harness:
             # A group lands manually unless --land says otherwise: the config's `land:` is
             # the default for runs on their own (auto landing in a group diverges the rest).
             land_mode=land_mode or ("manual" if group else self.config.land or "auto"),
+            imported=import_run, why=why,
         )
+        if self.paths.run_id != (planned and planned.run_id):
+            try:  # a new run (or, raced, another than planned): from now on, its stored copy
+                self.config, self._raw_config = self._run_config(
+                    self.paths, check=self.paths.run_id in existing)  # one just created matches its file
+            except BaseException:
+                self._ownership.close()
+                raise
         # Stored on resume when the segment starts (`_run`): the mode and group asked for.
         self._identity_changes: dict = {}
         if land_mode and self.run_info.get("land") != land_mode:
@@ -239,6 +322,7 @@ class Harness:
             write_text(self.paths.current, self.paths.run_id + "\n")
             self.repo = Repo(self.project_path)
             self.run_status = RunStatus(self.project_path, self.paths.run_id)
+            self.segment_log = SegmentLog(self.paths.segments)
             self.log = RunLog(self.project_path, self.paths.run_id)
             self.run_state.copies_root = claim_copies(self.paths, self.log.warn)
             self._land_attempted = False
@@ -268,6 +352,42 @@ class Harness:
         except BaseException:
             self.close()
             raise
+
+    def _run_config(self, paths: RunPaths, check: bool = True):
+        """A run's stored config (`load_run_config`). With `check`, refuses, before
+        anything is spent, when the file it came from parses differently now
+        (`config_changes`); a deleted file, or a deleted prompt template (the other
+        keys still compared), continues from the stored copy."""
+        data = paths.read_identity()
+        config, raw = load_run_config(paths, data)
+        source = self.project_path / data["config_path"]
+        short = short_id(paths.run_id)
+        if not check:
+            return config, raw
+        if not source.is_file():
+            self.console.print(f"[dim]{data['config_path']} is gone; run {short} continues "
+                               "with the config it stored when it started.[/dim]", highlight=False)
+            return config, raw
+        try:
+            current = parse_config(source, self.project_path)
+            template = current.get("prompt_template")
+            if isinstance(template, str) and template.strip() and not template_path(source, template).exists():
+                self.console.print(f"[dim]{template} is gone; run {short} continues with the prompt template "
+                                   "it stored when it started.[/dim]", highlight=False)
+                current = {**current, "prompt_template": raw.get("prompt_template")}
+            else:
+                current = inlined(source, current)
+            keys = config_changes(raw, current)
+            changed = f"changed: {', '.join(keys)}" if keys else None
+        except ConfigError as e:
+            changed = f"it no longer reads: {e}"
+        if changed:
+            raise RuntimeError(
+                f"{data['config_path']} changed since run {short} started ({changed}); the run keeps the "
+                f"config it started with. To apply the new config, start a new run that continues from "
+                f"this one: `{run_command(data['config_path'])} --import {short}`. To continue this run, "
+                "restore the file.")
+        return config, raw
 
     def _metric_label(self, name: str) -> str:
         """Format metric name with direction arrow."""
@@ -327,12 +447,11 @@ class Harness:
             item["reason"] = failure
         return failure
 
-    def _print_header(self, max_iter: int, start_iter: int = 1) -> None:
+    def _print_header(self, budget: Budget, start_iter: int = 1) -> None:
         """The run's header (`display.header_lines`); on resume, the rows so far."""
         self.console.print()
         for line in header_lines(self.config, self.paths.run_id, self.run_info.get("name") or self.project_path.name,
-                                 max_iter,
-                                 self.console.width or 100):
+                                 budget, start_iter - 1, self.console.width or 100):
             self.console.print(line, highlight=False)
         self.console.print()
         if start_iter > 1:  # resuming: the rows so far, for context
@@ -417,7 +536,7 @@ class Harness:
         opencode auto-loads project-local plugins from .opencode/plugin/*.js. The
         plugin appends time_left.sh output to each tool result — the opencode
         analog of Claude's PostToolUse time hook. It lives in the worktree (never
-        installed for the invocation) and reads $AUTOHELIX_TIME_LEFT_SCRIPT from the agent env.
+        installed for the agent call) and reads $AUTOHELIX_TIME_LEFT_SCRIPT from the agent env.
         """
         src = Path(__file__).parent / "bin" / "opencode_timer_pertool.js"
         if not src.exists():
@@ -477,13 +596,16 @@ class Harness:
             self.console.print(f"[yellow]Warning:[/yellow] {text}", highlight=False)
             self.log.warn(text)
 
-    def build_prompt(self, iteration: int, worktree_dir: Path, members=(), rejected_diff: str = "") -> str:
+    def build_prompt(self, iteration: int, worktree_dir: Path, members=(), rejected_diff: str = "",
+                     imported=None, head: str | None = None) -> str:
         """Build the prompt for the agent using the template; `members` are the other
-        runs of the group, as `group_members` returns them."""
+        runs of the group, as `group_members` returns them, `imported` the run this one
+        imports (`runs.imported_run`), if any; `head` the commit the copy's code is."""
         template = load_template(self.config)
         variables = build_prompt_variables(
             self.config, self.history, iteration, worktree_dir,
-            group=self.run_info.get("group"), members=members, rejected_diff=rejected_diff,
+            group=self.run_info.get("group"), members=members, rejected_diff=rejected_diff, imported=imported,
+            head=head,
         )
         return render_template(template, variables)
 
@@ -716,7 +838,8 @@ class Harness:
             self.console.print(f"  Working dir: {agent_copy.working_dir}")
         self.run_status.note(worktree=str(agent_copy.working_dir))
         prompt = self.build_prompt(iteration, agent_copy.working_dir, workspace.members,
-                                   rejected_diff=workspace.rejected_diff)
+                                   rejected_diff=workspace.rejected_diff, imported=workspace.imported,
+                                   head=workspace.base)
         workspace.write_prompt(prompt)
         if self.verbose:
             self.console.print(Panel(prompt.strip(), title="[bold]Agent Prompt[/bold]", border_style="dim"))
@@ -779,7 +902,7 @@ class Harness:
         """Freeze the candidate: out-of-scope changes never reach the tree. The viewer
         shows the pin from "preparing checks" on (viewer.FROZEN_PHASES); a failed agent's
         attempt is frozen only to be kept (`checking=False`), never checked."""
-        workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen)),
+        workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen_patterns())),
                          pinned=(lambda: self.run_status.phase("preparing checks")) if checking else None)
         self.run_status.note(worktree=None)
         reverted = self._discarded(workspace)
@@ -800,7 +923,7 @@ class Harness:
         result.base = workspace.base
         result.tree = workspace.tree if workspace.iteration else None
         result.discarded = self._discarded(workspace)
-        result.discarded_frozen = [path for path in result.discarded if path_in_scope(path, self.config.frozen)]
+        result.discarded_frozen = [path for path in result.discarded if path_in_scope(path, self.config.frozen_patterns())]
 
     def _gate_text(self, command: str) -> str:
         """A gate command's display text (`ask: <question>` for ask entries)."""
@@ -932,7 +1055,9 @@ class Harness:
                  command_env: dict, records, *, verify, progress, notes: list[str]) -> None:
         """Observe entries in order (see `_evaluate`), each with its own call folder and,
         as `$AUTOHELIX_PREVIOUS`, a copy of its output from the last accepted iteration
-        in which it succeeded.
+        in which it succeeded; in a run that imports another (`run --import`), until the
+        entry has succeeded in this run, the imported run's last successful output of the
+        entry with the same name.
 
         An entry's output (stdout.txt, stderr.txt, captures) is staged in its call
         folder after the command (and its process group) ended, then replaces
@@ -944,9 +1069,23 @@ class Harness:
         where = "baseline" if baseline else f"iter {iteration}"
         gates = [(index, gate) for index, gate in enumerate(self.config.gates) if isinstance(gate, MetricGate)]
         declared = self.config.metric_names()
+        imported = imported_run(self.paths, self.run_info)
+        imported_history = History(self.project_path, imported[0].run_id) if imported else None
         for entry in self.config.observe:
             self.run_status.note(entry=entry.name)  # the viewer marks the running entry
             previous = self.history.previous_observations(entry.name, iteration)
+            # Until the entry has succeeded in this run (a failed baseline entry included),
+            # it continues from the imported run's last successful output.
+            if imported_history and not any(
+                    r.accepted and r.iteration < iteration and any(
+                        isinstance(item, dict) and item.get("name") == entry.name and item.get("ok")
+                        for item in r.observe)
+                    for r in records):
+                try:
+                    previous = imported_history.previous_observations(entry.name, sys.maxsize)
+                except Exception as e:  # noqa: BLE001 - another run's history never stops this one
+                    self.log.warn(f"No $AUTOHELIX_PREVIOUS for {entry.name} from the imported run: {e}")
+                    previous = None
             with workspace.call_folder(previous=previous) as folders:
                 env = {**command_env, "AUTOHELIX_SCRATCH": str(folders["scratch"]),
                        "AUTOHELIX_PREVIOUS": str(folders["previous"]) if "previous" in folders else None,
@@ -1158,7 +1297,7 @@ class Harness:
         set per call (its call folder's `logs/`)."""
         return {
             USAGE_ENV: str(self.paths.usage(iteration)),
-            "AUTOHELIX_CONFIG": str(self.config_file.resolve()),
+            "AUTOHELIX_CONFIG": str(self.paths.config),  # the run's stored copy
             "AUTOHELIX_LOG_DIR": None,  # per call: the call folder's private logs/
             "AUTOHELIX_RUN_ID": self.paths.run_id,
             "AUTOHELIX_RUN_DIR": str(self.paths.run_dir),
@@ -1240,6 +1379,7 @@ class Harness:
         """Evaluate A in a checks copy and check stop commands.
 
         Returns the stop condition the baseline already meets, if any."""
+        started_at = time.time()  # the record's span: `history.record_seconds`
         workspace = self._baseline_workspace()
         evaluation = self._new_evaluation()
         try:
@@ -1307,13 +1447,13 @@ class Harness:
                         f"Stop command failed on the baseline: {errors[0].command} "
                         "(expected exit 0 to stop or 1 to continue)"
                     )
-            self._complete_record(baseline, time.time(), time.monotonic(), evaluation)
+            self._complete_record(baseline, started_at, time.monotonic(), evaluation)
             self._write_baseline(baseline)
             return baseline.stop
         except BaseException as error:
             baseline = IterationResult(iteration=0, accepted=False, reason=f"baseline failed: {error}",
                                        base=workspace.base)
-            self._complete_record(baseline, time.time(), time.monotonic(), evaluation)
+            self._complete_record(baseline, started_at, time.monotonic(), evaluation)
             if any(r.iteration == 0 and r.accepted for r in self.history.load()):
                 raise
             self._write_baseline(baseline)
@@ -1321,8 +1461,9 @@ class Harness:
         finally:
             workspace.close()
 
-    def run(self, max_iterations: int | None = None, report: bool = True) -> None:
-        """Run the optimization loop, recording live status in .internal/status.json.
+    def run(self, budget: Budget | None = None, report: bool = True) -> None:
+        """Run the optimization loop for `budget` (default: `DEFAULT_ITERATIONS` more),
+        recording live status in .internal/status.json.
 
         When the loop finishes normally (not interrupted) after running at least one
         iteration, writes the run summary unless `report: false` or `report=False`.
@@ -1339,13 +1480,12 @@ class Harness:
                 self.run_state.data = self.run_info
                 self.run_state.expected_tip = tip
             self._land_attempted = False
-            if self._run(max_iterations) and report and self.config.report:
+            if self._run(budget or Budget()) and report and self.config.report:
                 from autohelix.report import write_report
 
                 self.run_status.phase("report")
                 self.console.print()
-                write_report(self.config, self.project_path, self.console, self.config_file,
-                             run_id=self.paths.run_id, _owned=True)
+                write_report(self.config, self.project_path, self.console, run_id=self.paths.run_id, _owned=True)
         except KeyboardInterrupt:
             outcome = "interrupted"
             raise
@@ -1367,6 +1507,7 @@ class Harness:
                 finally:
                     self.run_status.stop(outcome)
                     if self._segment_started:
+                        self._end_segment_log(sys.exc_info()[1])
                         self._write_static()
             finally:
                 try:
@@ -1375,6 +1516,23 @@ class Harness:
                     remove_copies(self.run_state.copies_root, self.log.warn)
                 finally:
                     self.close()
+
+    def _end_segment_log(self, error: BaseException | None) -> None:
+        """This segment's end record in segments.jsonl: how it ended (the status's state
+        and stop reason, the error it failed with), the run's last iteration and how
+        many records the segment added to the history."""
+        try:
+            records = self.history.load()
+            last = max((r.iteration for r in records), default=0)
+            added = len(records) - self._segment_records
+        except Exception:  # noqa: BLE001 - the log is best-effort; the outcome stands
+            last = added = None
+        failure = None
+        if error is not None and not isinstance(error, KeyboardInterrupt):
+            failure = clean(f"{type(error).__name__}: {error}", 500)
+        self.segment_log.end(state=self.run_status.data.get("state"),
+                             stop_reason=self.run_status.data.get("stop_reason"), last_iteration=last,
+                             iterations=added, error=failure)
 
     def close(self) -> None:
         if hasattr(self, "_ownership"):
@@ -1462,10 +1620,12 @@ class Harness:
         except Exception as e:  # noqa: BLE001 - never hide the run's own outcome
             self.console.print(f"[yellow]Could not save report.html: {e}[/yellow]")
 
-    def _run(self, max_iterations: int | None = None) -> bool:
+    def _run(self, budget: Budget) -> bool:
         """Returns True if the loop ran at least one iteration and was not interrupted."""
-        max_iter = max_iterations or self.config.max_iterations
+        segment_start = time.monotonic()  # --time counts from here, baseline included
+        segment_started_at = time.time()
         start_iter = self.history.get_last_iteration() + 1
+        max_iter = budget.last_iteration(start_iter - 1)
 
         # Again at each segment: the ignore rules may have changed since this Harness was
         # created (a long-lived programmatic one).
@@ -1484,7 +1644,7 @@ class Harness:
             ensure_editable_files_ready(self.repo, self.project_path, self.config.editable)
 
         # Show header
-        self._print_header(max_iter, start_iter)
+        self._print_header(budget, start_iter)
         remove_copies(self.run_state.copies_root, self.log.warn)  # left by a segment that crashed
         if not self.repo.attr_source:
             self._warn(ATTR_SOURCE_LIMITATION)
@@ -1509,8 +1669,19 @@ class Harness:
         if needs_baseline and not self._preflight_done and not self._preflight():
             return False
 
-        self.run_status.start(max_iterations=max_iter, run_id=self.paths.run_id)
+        # Status records the iteration and cost caps as run totals (spent before this
+        # segment plus its own), the time cap as this segment's, counted from its start.
+        cost_before = summarize_costs(self.history.cost_usages).cost_usd or 0
+        self._segment_records = len(self.history.load())  # the end record counts what it adds
+        # Set before the first write: from here the segment's ending writes its end record.
         self._segment_started = True
+        self.run_status.start(
+            max_iterations=max_iter, run_id=self.paths.run_id,
+            max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
+            max_time_seconds=budget.time_seconds, segment_started_at=segment_started_at)
+        self.segment_log.start(started_at=segment_started_at,
+                               start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
+                               budget={**asdict(budget), "default": budget.default})
         self._segment_target_tip = self._target_tip()
         flags = [self.run_info.pop("archived", None), self.run_info.pop("lifecycle", None)]
         for key, value in self._identity_changes.items():  # `resume --land` / `--group`
@@ -1526,53 +1697,60 @@ class Harness:
         if start_iter == 1 and needs_baseline:
             baseline_stop = self._capture_baseline()
 
-        # Load cumulative cost and time from history so budgets persist across resume
-        prior_cost = summarize_costs(self.history.cost_usages)
-        cumulative_cost = prior_cost.cost_usd or 0
-        prior_elapsed_seconds = 0.0
-        if start_iter > 1:
-            prior = self.history.load()
-            prior_iterations = [r for r in prior if r.iteration > 0]
-            # Prefer wall_clock_ms (total iteration time) over duration_ms (agent-only time)
-            prior_elapsed_seconds = sum(
-                r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0))
-                for r in prior_iterations
-            ) / 1000.0
-        loop_start = time.monotonic()  # monotonic counts from boot: never subtract prior time from it
+        # Dollars this segment has charged (known costs): the baseline's, then each iteration's.
+        spent = (summarize_costs(self.history.cost_usages).cost_usd or 0) - cost_before
+
+        cost_unknown = False  # some of this segment's charges are unavailable
+        # With --cost the only bound, an unknown charge means it may never be reached.
+        cost_only = budget.cost_usd is not None and max_iter is None and budget.time_seconds is None
+
+        def out_of_budget() -> dict | None:
+            if cost_only and cost_unknown:
+                return {"kind": "budget", "budget": "cost",
+                        "detail": "cost unknown: --cost can't bound this segment (add -n or --time)"}
+            if budget.cost_usd is not None and spent >= budget.cost_usd:
+                return {"kind": "budget", "budget": "cost",
+                        "detail": f"cost budget reached ({format_cap(budget.cost_usd)} this segment)"}
+            if budget.time_seconds is not None and time.monotonic() - segment_start >= budget.time_seconds:
+                return {"kind": "budget", "budget": "time",
+                        "detail": f"time budget reached ({_format_time(budget.time_seconds)} this segment)"}
+            return None
 
         config_name = config_relative(self.project_path, self.config_file)
-        self.log.info(f"run started — config: {config_name}, max_iter: {max_iter}, resuming from iter {start_iter}")
+        self.log.info(f"run started — config: {config_name}, max_iter: {max_iter or 'none'}, "
+                      f"resuming from iter {start_iter}")
 
         ran = False
         cost_warning_shown = False
-        if self.config.max_cost_usd is not None:
-            cost_warning_shown = prior_cost.incomplete
-            if cost_warning_shown:
-                self.console.print(
-                    "[yellow]Warning: prior agent or command calls have unavailable cost.\n"
-                    "budget.cost can only track known costs.[/yellow]"
-                )
+
+        def warn_unknown_cost() -> None:
+            nonlocal cost_warning_shown, cost_unknown
+            cost_unknown = True
+            if budget.cost_usd is not None and not cost_warning_shown:
+                self.console.print("           [yellow]! cost unknown; --cost counts known costs only[/yellow]",
+                                   highlight=False)
+                cost_warning_shown = True
+
+        if start_iter == 1 and needs_baseline:
+            baseline = next((r for r in self.history.load() if r.iteration == 0 and r.accepted), None)
+            if baseline is not None and baseline.cost.incomplete:
+                warn_unknown_cost()
 
         # Why the loop ended; budgets are checked after stop conditions.
         stop_reason: dict | None = None
         if baseline_stop:
             stop_reason = self._condition_stop(baseline_stop, 0)
-        cost_reached = {"kind": "budget", "budget": "cost",
-                        "detail": f"cost budget reached ({format_cost(self.config.max_cost_usd)})"}
-        time_reached = {"kind": "budget", "budget": "time",
-                        "detail": f"time budget reached ({_format_time(self.config.max_time_seconds or 0)})"}
         iteration = start_iter
         agent_failures = 0  # consecutive failed agent calls in this segment
         try:
-            for iteration in range(start_iter, max_iter + 1):
+            for iteration in itertools.count(start_iter):
                 if stop_reason:
                     break
-                if self.config.max_cost_usd is not None and cumulative_cost >= self.config.max_cost_usd:
-                    stop_reason = cost_reached
+                if stop_reason := out_of_budget():
                     break
-                if (self.config.max_time_seconds is not None
-                        and prior_elapsed_seconds + time.monotonic() - loop_start >= self.config.max_time_seconds):
-                    stop_reason = time_reached
+                if max_iter is not None and iteration > max_iter:
+                    stop_reason = {"kind": "budget", "budget": "iterations",
+                                   "detail": f"iteration budget reached ({max_iter})"}
                     break
                 result = self.run_iteration(iteration)
                 ran = True
@@ -1587,31 +1765,9 @@ class Harness:
                                    "detail": f"the agent failed {agent_failures} times in a row: "
                                              f"{clean(result.agent_error, 200)}"}
                     break
-
-                # Check cost budget
-                if (
-                    self.config.max_cost_usd is not None
-                    and result.cost.incomplete
-                    and not cost_warning_shown
-                ):
-                    self.console.print(
-                        "           [yellow]! cost unknown; budget.cost counts known costs only[/yellow]", highlight=False,
-                    )
-                    cost_warning_shown = True
-                cumulative_cost += result.cost.cost_usd or 0
-                if self.config.max_cost_usd is not None and cumulative_cost >= self.config.max_cost_usd:
-                    stop_reason = cost_reached
-                    break
-
-                # Check time budget
-                elapsed = prior_elapsed_seconds + time.monotonic() - loop_start
-                if self.config.max_time_seconds is not None and elapsed >= self.config.max_time_seconds:
-                    stop_reason = time_reached
-                    break
-            else:
-                stop_reason = stop_reason or {
-                    "kind": "budget", "budget": "iterations",
-                    "detail": f"iteration budget reached ({max_iter})"}
+                if result.cost.incomplete:
+                    warn_unknown_cost()
+                spent += result.cost.cost_usd or 0
             self.run_status.note(stop_reason=stop_reason)
             self.console.print()
             self.console.print(Text(f"  Stopped: {clean(stop_reason['detail'])}", no_wrap=True, overflow="ellipsis"),

@@ -66,7 +66,3 @@ agent:
   backend: claude
   reasoning_effort: xhigh   # harder thinking → agent explores the toolkit, not just the obvious method
   timeout: 2h               # per-iteration wall-clock (agent gets a heads-up before the deadline)
-
-budget:
-  iterations: 20
-  time: 10h                 # total wall-clock across the whole run

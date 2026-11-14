@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from autohelix.harness import Harness
+from autohelix.harness import Budget, Harness
 from autohelix.runs import RunPaths, git, land
 from tests.test_runs import configure
 
@@ -31,7 +31,7 @@ def test_mutate_validate_restore_across_commands_is_caught(project):
         '[ "$AUTOHELIX_ITERATION" = 0 ] || { grep -q "x = 1" code.py && cp /tmp/ah-e2e.$PPID code.py; }',
     ])
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     record = harness.history.load()[-1]
     assert not record.accepted
     assert record.reason.startswith("checks modified candidate files: [ \"$AUTOHELIX_ITERATION\" = 0 ] || { cp")
@@ -44,7 +44,7 @@ def test_swallowed_failed_ask_passes_and_keeps_its_usage(project):
     data["gates"] = ['autohelix ask "Done?" || true']
     _write(project, data)
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     record = harness.history.load()[-1]
     assert record.accepted
     judges = [call for call in record.calls if call["role"] == "command"]
@@ -83,7 +83,7 @@ def test_noop_stop_sees_the_unchanged_tip(project, monkeypatch):
     harness = Harness(project, land_mode="manual")
     base = harness.run_info["base_commit"]
     monkeypatch.setattr(harness, "run_agent", lambda *_: AgentRunResult(success=True, usage={}))
-    harness.run(max_iterations=2, report=False)
+    harness.run(Budget(until=2), report=False)
     records = harness.history.load()
     assert [(r.iteration, r.accepted, r.commit) for r in records] == [(0, True, None), (1, True, None)]
     assert records[1].stop["reason"] == "same tip"
@@ -94,7 +94,7 @@ def test_noop_stop_sees_the_unchanged_tip(project, monkeypatch):
 def test_stop_modifying_files_is_an_error_but_acceptance_stays(project):
     configure(project, stop=['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 1; echo stop-edit >> code.py; exit 0'])
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     record = harness.history.load()[-1]
     assert record.accepted and record.commit and record.stop is None
     assert "stop-edit" not in git(project, "show", f"{harness.paths.ref}:code.py").stdout
@@ -103,7 +103,7 @@ def test_stop_modifying_files_is_an_error_but_acceptance_stays(project):
 
 def test_land_refuses_target_checked_out_in_another_worktree(project, tmp_path):
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     target = harness.run_info["target_branch"]
     git(project, "checkout", "-q", "--detach")
     other = tmp_path / "other"
@@ -117,7 +117,7 @@ def test_land_refuses_target_checked_out_in_another_worktree(project, tmp_path):
 
 def test_copies_and_the_pin_are_gone_after_a_segment(project):
     harness = Harness(project, land_mode="manual")
-    harness.run(max_iterations=2, report=False)
+    harness.run(Budget(until=2), report=False)
     assert not harness.paths.copies.exists()
     assert git(project, "rev-parse", "--verify", harness.paths.pin, check=False).returncode != 0
 
@@ -129,7 +129,7 @@ def test_stale_copies_are_removed_at_segment_start(project):
     (stale / "pkg" / "x").write_text("x")
     (stale / "pkg").chmod(0o555)
     harness.paths.copies.joinpath("iter-7-agent.index").write_text("")
-    harness.run(max_iterations=1, report=False)
+    harness.run(Budget(until=1), report=False)
     assert not stale.exists() and not harness.paths.copies.joinpath("iter-7-agent.index").exists()
     harness.close()
 

@@ -13,6 +13,7 @@ import re
 import time
 from datetime import datetime
 from autohelix.formatting import format_delta, format_duration
+from autohelix.iteration_time import format_duration as format_limit
 
 WORDS = {"crashed": "stopped unexpectedly", "idle": "not started"}  # others as they are (dashboard.js)
 # Control characters (C0, DEL, C1): from agents, configs and paths, they could move the
@@ -84,6 +85,23 @@ def _spent(run: dict, now: float) -> str:
                                     _money(cost, p["cost_incomplete"]) if cost is not None else None]))
 
 
+def time_cap(run: dict, now: float, short: bool = False) -> str:
+    """The running segment's --time against its clock: `12m5s of 1h (this segment)`,
+    or with `short` (the dashboard's row) `12m5s/1h`; past the cap `(time up)` is
+    added. "" when the run isn't running or the segment has no --time (a stopped
+    run's stop reason says when time ended it). Never a run total. Both figures in
+    the cap's format (`iteration_time.format_duration`: 1h30m)."""
+    status = run.get("status") or {}
+    cap, started = status.get("max_time_seconds"), status.get("segment_started_at")
+    if (not _live(run) or not isinstance(cap, (int, float)) or isinstance(cap, bool) or cap <= 0
+            or not isinstance(started, (int, float))):
+        return ""
+    elapsed = max(0, int(now - started))
+    text = f"{format_limit(elapsed)}/{format_limit(int(cap))}" if short else \
+        f"{format_limit(elapsed)} of {format_limit(int(cap))} (this segment)"
+    return text + " (time up)" * (elapsed >= cap)
+
+
 def _iterations(run: dict) -> str:
     p = run["progress"]
     n = _under_way(run) or p["iterations"]
@@ -96,10 +114,23 @@ def _label(run: dict) -> str:
 
 
 def _config_file(run: dict) -> str:
-    """The run's config file, marked when it is gone or no longer valid."""
+    """The run's config file, marked when the run has no stored copy (an old run) or it is invalid."""
     file = run["config_file"] or ""
-    flag = " (missing)" if run.get("config_missing") else " (invalid)" if run.get("config_invalid") else ""
+    flag = " (not stored)" if run.get("config_missing") else " (invalid)" if run.get("config_invalid") else ""
     return file + flag if file else ""
+
+
+def _notes(run: dict) -> str:
+    """Why the run was started, what it continues from, why it was archived (run.json's
+    notes, `run --why`, `--import`, `archive --why`), as the web pages show them."""
+    source = (run.get("import") or {}).get("run")
+    return " · ".join(filter(None, [run.get("why") and f"Why: {run['why']}",
+                                    source and f"continues from {source}",
+                                    run.get("archive_why") and f"archived: {run['archive_why']}"]))
+
+
+def _cut(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
 def _landing(run: dict) -> str:
@@ -163,7 +194,8 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
                     + ([_metric(run, metric)] if metric else [])
                     + [_landing(run), "now" if _live(run) else _ago(run["last_activity"], now),
                        run.get("title") or ""])
-        rows.append(["  " + _config_file(run), _spent(run, now)] + [""] * (len(head) - 2))
+        spent = " · ".join(filter(None, [_spent(run, now), time_cap(run, now, short=True)]))
+        rows.append(["  " + _config_file(run), spent] + [""] * (len(head) - 3) + [_cut(_notes(run), 100)])
     return "\n".join(list(map(clean, lines)) + [""] + _table(rows, right={2, 3} if metric else {2})) + "\n"
 
 
@@ -173,7 +205,7 @@ def format_run(data: dict, now: float | None = None) -> str:
     run = data["run"]
     under_way = _under_way(run)
     lines = [" · ".join([_label(run), _state(run, now)] + ([f"iteration {under_way}"] if under_way else []))]
-    second = [_config_file(run), _spent(run, now), f"iterations {_iterations(run)}"]
+    second = [_config_file(run), _spent(run, now), time_cap(run, now), f"iterations {_iterations(run)}"]
     landing = _landing(run)
     if landing != "—":
         second.append(f"{landing} ({run['target_branch']})")
@@ -184,6 +216,8 @@ def format_run(data: dict, now: float | None = None) -> str:
     title = run.get("title") or (run["goal"].splitlines()[0] if run["goal"] else None)
     if title:
         lines.append(f"Goal: {title}")
+    if notes := _notes(run):
+        lines.append(notes)
     metrics = run["metrics"]
     if metrics and metrics["iteration"] > 0:
         parts = [" ".join(filter(None, [f"{v['name']} {_number(v['value'])}",

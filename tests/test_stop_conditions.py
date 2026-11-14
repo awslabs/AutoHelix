@@ -7,7 +7,7 @@ import pytest
 
 from autohelix.checks import run_stop_checks
 from autohelix.config import Config
-from autohelix.harness import AutoHelixRunError, Harness
+from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.prompt_template import build_prompt_variables
 from autohelix.run_status import read_run_status
@@ -50,7 +50,7 @@ agent:
 
 
 def _run(project, n: int) -> list:
-    Harness(project, verbose=False).run(max_iterations=n, report=False)
+    Harness(project, verbose=False).run(Budget(until=n), report=False)
     return History(project).load()
 
 
@@ -156,7 +156,7 @@ stop:
 def test_broken_command_fails_on_the_baseline_before_recording(project):
     _configure(project, "stop:\n  - exit 3\n")
     with pytest.raises(AutoHelixRunError, match="Stop command failed on the baseline"):
-        Harness(project, verbose=False).run(max_iterations=2, report=False)
+        Harness(project, verbose=False).run(Budget(until=2), report=False)
     records = History(project).load()
     assert len(records) == 1 and records[0].iteration == 0 and not records[0].accepted
 
@@ -207,7 +207,7 @@ def test_interrupt_during_stop_check_still_records_the_merge(project, monkeypatc
         raise KeyboardInterrupt
 
     monkeypatch.setattr(harness, "_check_stop", interrupt_after_baseline)
-    harness.run(max_iterations=3, report=False)  # the loop handles the interrupt
+    harness.run(Budget(until=3), report=False)  # the loop handles the interrupt
     records = History(project).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True)]
     assert records[1].commit
@@ -269,13 +269,13 @@ def test_stop_check_failure_after_merge_keeps_the_iteration(project, monkeypatch
         raise OSError("disk full")
 
     monkeypatch.setattr(harness, "_check_stop", fail_after_baseline)
-    harness.run(max_iterations=2, report=False)
+    harness.run(Budget(until=2), report=False)
     records = History(project).load()
     assert [(r.iteration, r.accepted, r.stop) for r in records] == [(0, True, None), (1, True, None), (2, True, None)]
 
 
 def test_cost_budget_reason(project, monkeypatch):
-    _configure(project, "budget:\n  cost: 0.10\n")
+    _configure(project, "")
     harness = Harness(project, verbose=False)
     original = harness.run_iteration
 
@@ -285,8 +285,9 @@ def test_cost_budget_reason(project, monkeypatch):
         return result
 
     monkeypatch.setattr(harness, "run_iteration", costly)
-    harness.run(max_iterations=10, report=False)
-    assert read_run_status(project)["stop_reason"]["budget"] == "cost"
+    harness.run(Budget(until=10, cost_usd=0.10), report=False)
+    reason = read_run_status(project)["stop_reason"]
+    assert (reason["budget"], reason["detail"]) == ("cost", "cost budget reached ($0.10 this segment)")
 
 
 def test_report_prompt_says_why_the_run_ended(project):
@@ -295,5 +296,5 @@ def test_report_prompt_says_why_the_run_ended(project):
     _configure(project, "stop:\n  - '[ \"$AUTOHELIX_ITERATION\" -ge 1 ] && echo done enough'\n")
     _run(project, 3)
     config = Config.from_dict({"goal": "g"})
-    prompt = build_report_prompt(config, project, project / "autohelix.yaml", project / "draft.md")
+    prompt = build_report_prompt(config, project, project / "draft.md")
     assert "The run ended because: stop condition met at iteration 1: done enough." in prompt

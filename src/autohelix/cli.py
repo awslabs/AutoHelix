@@ -17,10 +17,11 @@ from click.core import ParameterSource
 
 from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFound, find_config, load_config,
                               project_configs, run_command)
-from autohelix.harness import Harness
+from autohelix.harness import DEFAULT_ITERATIONS, Budget, Harness
 from autohelix.history import History
-from autohelix.runs import (NoRunToResume, RunPaths, RunLock, archive as archive_run, check_group,
-                            config_gone, delete as delete_run, land as land_run, project_runs, resolve_run,
+from autohelix.run_status import read_run_status
+from autohelix.runs import (NoRunToResume, RunPaths, planned_run, RunLock, archive as archive_run, check_group, check_why,
+                            delete as delete_run, load_run_config, land as land_run, project_runs, resolve_run,
                             run_tip, short_id, valid_name)
 from autohelix import run_table
 from autohelix.skill import SKILL_NAME, skill
@@ -97,7 +98,7 @@ def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[st
              if exists else f"Propose the config for `{target}`")
     launcher = _launcher()
     tools = f"use AutoHelix's own Python, `{sys.executable}`" + (f" (its CLI is `{launcher}`)" if launcher else "")
-    prompt = (f"Read `{skill_dir / 'SKILL.md'}` and follow it to help me set up an AutoHelix loop for this "
+    prompt = (f"Read `{skill_dir / 'SKILL.md'}` and follow it to help me set up AutoHelix for this "
               f"project. {where}, with `agent.backend: {agent}` unless we decide otherwise. Show the complete "
               f"proposal and explain its sections, choices, and effective defaults before changing project "
               f"files; discuss revisions, then write, validate, and commit "
@@ -290,6 +291,13 @@ def _group(value: str | None) -> str | None:
         raise click.BadParameter(str(error), param_hint="--group") from error
 
 
+def _why(value: str | None) -> str | None:
+    try:
+        return None if value is None else check_why(value)
+    except RuntimeError as error:
+        raise click.BadParameter(str(error), param_hint="--why") from error
+
+
 def _git_project(path: str) -> Path:
     """The project directory, refused before anything (.autohelix/ included) is
     created there unless it is in a git checkout with a commit to start from."""
@@ -349,13 +357,96 @@ def _start(project: Path, config: Path | None, **selection) -> Harness:
     except NoRunToResume as e:
         click.echo(f"Error: {e}", err=True)
         raise SystemExit(3)
-    except (RuntimeError, FileNotFoundError, ConfigError) as e:  # FileNotFoundError: a run's stored config is gone
+    except (RuntimeError, FileNotFoundError, ConfigError) as e:
         raise click.ClickException(str(e)) from e
 
 
-def _segment(harness: Harness, iterations: int | None, report: bool) -> None:
+def _duration_option(ctx, param, value: str | None) -> int | None:
+    if value is None:
+        return None
+    from autohelix.config import parse_duration
+
     try:
-        harness.run(max_iterations=iterations, report=report)
+        return parse_duration(value)
+    except (ValueError, OverflowError) as e:
+        raise click.BadParameter(f"{value!r} is not a duration ({e}); e.g. 90m, 2h, 1h30m") from e
+
+
+def _budget_options(more: str):
+    """The budget flags `run` and `resume` share: how long this segment goes on
+    (`more`: "" for a new run, " more" on resume)."""
+    def decorate(command):
+        for option in reversed(_budget_option_list(more)):
+            command = option(command)
+        return command
+    return decorate
+
+
+def _budget_option_list(more: str) -> list:
+    return [
+        click.option("--iterations", "-n", type=click.IntRange(min=1), metavar="N",
+                     help=f"Run up to N{more} iterations (default {DEFAULT_ITERATIONS}, only when no budget "
+                          "flag is given)."),
+        click.option("--until", type=click.IntRange(min=1), metavar="N",
+                     help="Run up to iteration N in total (safe to repeat; for scripts)."),
+        click.option("--cost", "cost_usd", type=click.FloatRange(min=0, min_open=True), metavar="USD",
+                     help="Stop once this segment has spent USD more (every call it charges, baseline "
+                          "included; known costs only)."),
+        click.option("--time", "time_seconds", callback=_duration_option, metavar="DURATION",
+                     help="Stop starting iterations after DURATION of this segment's wall clock "
+                          "(e.g. 2h, 90m; baseline included)."),
+    ]
+
+
+def _budget(iterations: int | None, until: int | None, cost_usd: float | None,
+            time_seconds: int | None) -> Budget:
+    try:
+        return Budget(iterations=iterations, until=until, cost_usd=cost_usd, time_seconds=time_seconds)
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+
+
+def _interrupted_note(harness: Harness) -> str | None:
+    """After an interrupted segment (Ctrl-C, killed, reboot), what it had left, for a
+    resume given no budget flag: `1 more (default); the interrupted segment had 8 left: -n 8`."""
+    status = read_run_status(harness.project_path, harness.paths.run_id) or {}
+    cap = status.get("max_iterations")
+    # A stop reason: it had ended for its own reason (a budget, a condition) before that.
+    if status.get("state") not in ("interrupted", "crashed") or type(cap) is not int or status.get("stop_reason"):
+        return None
+    left = cap - harness.history.get_last_iteration()
+    if left <= 0 or left == DEFAULT_ITERATIONS:
+        return None
+    return (f"{DEFAULT_ITERATIONS} more (default); the interrupted segment had {left} left: "
+            f"-n {left}")
+
+
+def _stopped_note(harness: Harness) -> str | None:
+    """After a stop condition ended the last segment: resume continues, and says when
+    it stops again (stop conditions are checked after each accepted iteration)."""
+    stop = (read_run_status(harness.project_path, harness.paths.run_id) or {}).get("stop_reason")
+    if not isinstance(stop, dict) or stop.get("kind") != "condition":
+        return None
+    from autohelix.formatting import clean
+
+    reason = clean(stop.get("reason") or stop.get("command") or "a stop condition held", 200)
+    return (f"Run {short_id(harness.paths.run_id)} stopped because {reason}; it stops again after the next "
+            "accepted iteration if that still holds.")
+
+
+def _last_iteration(project: Path, config: Path | None, run_id: str | None) -> int:
+    """The last iteration of the run `resume` would continue, read before anything is
+    written; -1 when there is none to read (`_start` then refuses as usual)."""
+    try:
+        planned = planned_run(project, config, run_id=run_id, create=False)
+    except (RuntimeError, ValueError):
+        return -1
+    return History(project, planned.run_id).get_last_iteration() if planned else -1
+
+
+def _segment(harness: Harness, budget: Budget, report: bool) -> None:
+    try:
+        harness.run(budget, report=report)
     except RuntimeError as e:
         if getattr(e, "autohelix_reported", False):  # printed first, above landing and the run page
             raise SystemExit(1) from e
@@ -365,61 +456,92 @@ def _segment(harness: Harness, iterations: int | None, report: bool) -> None:
 @main.command()
 @click.argument("config_name", metavar="[CONFIG]", required=False)
 @_segment_options
-@click.option("--iterations", "-n", type=click.IntRange(min=1), help="Iterations to run (default: budget.iterations)")
+@_budget_options("")
 @click.option("--group", help="Share notes and code with the project's other runs of this group "
                               "(landing defaults to manual).")
+@click.option("--import", "import_run", metavar="RUN_ID",
+              help="Continue from another run: its notes and history (read-only) in every iteration, its last "
+                   "observe outputs at the baseline. Code still comes from your checkout.")
+@click.option("--why", help="Why this run is started (one line, shown on the dashboard).")
 def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None,
-        iterations: int | None, group: str | None):
+        iterations: int | None, until: int | None, cost_usd: float | None, time_seconds: int | None,
+        group: str | None, import_run: str | None, why: str | None):
     """Start a new run of the optimization loop.
 
-    Always a new run, with its own budget, notes and history; to continue one,
-    use `autohelix resume`. CONFIG names a config in autohelix/ (`perf` for
+    Always a new run, with its own notes and history; to continue one, use
+    `autohelix resume`. CONFIG names a config in autohelix/ (`perf` for
     autohelix/perf.yaml); without it, the run reads autohelix.yaml, else the
     only config in autohelix/.
 
+    The config says what one iteration does; the budget flags say how long this
+    command (a segment of the run) goes on: -n N iterations (or --until N),
+    --cost USD, --time DURATION, whichever comes first. Without any of them,
+    1 iteration: type -n for a loop. With only --cost or --time, no iteration cap.
+
     With --group NAME, each iteration's agent also sees the other non-archived
     runs of that group: their notes and history, and their code (each run's
-    ref, refs/autohelix/<id>). Start several, compare them on the dashboard, land the
-    winner and archive the rest.
+    ref, refs/autohelix/<id>). Groups are for runs that should build on each
+    other's work. To compare approaches, start separate runs with --land manual,
+    compare them on the dashboard, land the winner and archive the rest.
+
+    With --import RUN_ID (or its last part), the new run continues from that
+    one: its agents see its run.json, history and notes (read-only, in
+    .autohelix-iteration/runs/<id>/) and its code's ref, and the baseline's
+    observe entries get its last outputs as $AUTOHELIX_PREVIOUS. Your notes,
+    budgets, metric reference and group are this run's own. To fork from the
+    run's code, `git checkout autohelix/<id>` first.
     """
+    budget = _budget(iterations, until, cost_usd, time_seconds)
     group = _group(group)
+    why = _why(why)
     project = _git_project(path)
+    imported = _run_id(project, import_run)
     config = _segment_config(project, config_name, "run")
     harness = _start(project, config, verbose=verbose, new=True, land_mode=land_mode,
-                     group=group or None)
-    _segment(harness, iterations, not no_report)
+                     group=group or None, import_run=imported, why=why)
+    _segment(harness, budget, not no_report)
 
 
 @main.command()
 @click.argument("run_id", required=False)
 @_segment_options
-@click.option("--iterations", "-n", type=click.IntRange(min=1), help="How many more iterations to run.")
-@click.option("--until", type=click.IntRange(min=1), help="Run up to iteration N (repeatable; for scripts).")
+@_budget_options(" more")
 @click.option("--group", help="Set or change the run's group from its next iteration; '' clears it.")
-def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None, iterations: int | None, until: int | None, group: str | None):
+def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None,
+           iterations: int | None, until: int | None, cost_usd: float | None, time_seconds: int | None,
+           group: str | None):
     """Continue a run: RUN_ID (or its last part), else the latest run of the config a bare `run` would use.
 
-    A run uses the config it started with; without RUN_ID, the config is the
-    one a bare `autohelix run` reads, and its latest is the most recently
-    active run for that config that isn't
-    archived, preferring runs that captured their baseline. Without -n or --until it runs to
-    budget.iterations; cost and time budgets stay run totals from the config.
-    The run keeps its landing mode and group unless --land or --group changes
-    them. Exits 3 when there is no run to resume.
+    A run uses the config it stored when it started. If the file has changed
+    since (comments and formatting aside), resume refuses: `autohelix run
+    --import <id>` applies the new config in a new run; a deleted file is fine.
+    Without RUN_ID, the config is the one a bare `autohelix run` reads, and its
+    latest is the most recently active run for that config that isn't
+    archived, preferring runs that captured their baseline.
+
+    Budgets count this segment (this command): `resume -n 10 --cost 5` runs 10 more
+    iterations, up to $5 more, whatever earlier segments spent; --until N
+    runs up to iteration N in total. Without a budget flag, 1 more. The run
+    keeps its landing mode and group unless --land or --group changes them.
+    Exits 3 when there is no run to resume.
     """
-    if iterations and until:
-        raise click.UsageError("Use either -n (more iterations) or --until (up to an iteration), not both.")
+    budget = _budget(iterations, until, cost_usd, time_seconds)
     group = _group(group)
     project = _git_project(path)
     selected = _run_id(project, run_id)
     config = None
     if not selected:
         config = _segment_config(project, None, "resume")
+    if budget.until is not None and (done := _last_iteration(project, config, selected)) >= budget.until:
+        click.echo(f"Already at iteration {done}; --until {budget.until} runs nothing.")
+        return
     harness = _start(project, config, verbose=verbose, run_id=selected, create=False, land_mode=land_mode,
                      group=group)
-    if iterations:
-        until = harness.history.get_last_iteration() + iterations
-    _segment(harness, until, not no_report)
+    if budget.default and (note := _interrupted_note(harness)):
+        click.echo(click.style(note, fg="yellow"))
+    if note := _stopped_note(harness):
+        click.echo(click.style(note, fg="yellow"))
+    _segment(harness, budget, not no_report)
 
 
 @main.command()
@@ -443,18 +565,22 @@ def land(run_id: str | None, path: str, into: str | None):
 @main.command()
 @click.argument("run_ids", nargs=-1, required=True)
 @click.option("--path", "-p", type=click.Path(exists=True), default=".")
-@click.option("--undo", is_flag=True, help="Bring archived runs back.")
-def archive(run_ids: tuple[str, ...], path: str, undo: bool):
+@click.option("--undo", is_flag=True, help="Bring archived runs back (their archive note stays).")
+@click.option("--why", help="Why they are archived (one line, kept with each run; replaces an earlier note).")
+def archive(run_ids: tuple[str, ...], path: str, undo: bool, why: str | None):
     """Set runs aside: hidden from the run list and skipped by a bare resume.
 
     Their history, notes and commits stay; `autohelix resume RUN_ID` (or
     --undo) brings one back.
     """
+    if undo and why is not None:
+        raise click.UsageError("--why goes with archiving, not --undo.")
+    why = _why(why)
     project = Path(path)
     for value in run_ids:
         paths = RunPaths(project, _run_id(project, value))
         try:
-            archive_run(paths, undo=undo)
+            archive_run(paths, undo=undo, why=why)
         except RuntimeError as e:
             raise click.ClickException(str(e)) from e
         click.echo(f"{'Unarchived' if undo else 'Archived'} {short_id(paths.run_id)}.")
@@ -624,7 +750,7 @@ def hint(message: str, path: str, run_id: str | None):
     """Send a hint to the running agent (picked up next iteration).
 
     Appends a timestamped message to the selected run's hints.md.
-    The agent sees this file in its "Read before starting" list.
+    The agent's prompt lists this file among what to read before starting.
     """
     from datetime import datetime
 
@@ -683,8 +809,9 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
          open_browser: bool):
     """One run, live in the terminal: RUN_ID (or its last part), else the current run.
 
-    On top, the run's status, budgets, latest accepted metrics, landing state
-    and one row per iteration; below, the live output of the agent, a review
+    On top, the run's state, its config file, time and cost so far, iterations
+    (of its latest segment's cap), landing, why it stopped, its goal and latest
+    accepted metrics; then one row per iteration; below, the live output of the agent, a review
     or the summary agent. Keeps waiting when the run stops; Ctrl-C stops watching
     (not the run). Safe to run alongside `autohelix run`; it only reads
     .autohelix/.
@@ -741,7 +868,7 @@ def _view_live(project_path: Path, run_id: str | None) -> None:
                       highlight=False)
         raise SystemExit(1)
     try:
-        # The run's own config, even when its file is gone (then none); the lookup only without a run.
+        # The run's stored config (an old run has none); the lookup only without a run.
         config, _ = load_config(project_path, config_file=read_stored_config_path(project_path, run_id))
         backend = config.agent.backend
     except Exception:  # noqa: BLE001 - the log parser can tell backends apart on its own
@@ -759,7 +886,7 @@ def dashboard(path: Path, once: bool, as_json: bool, web: bool, port: int | None
               metric: str | None):
     """This project's runs, live in the terminal.
 
-    One row per run with its status, iterations of the budget, latest
+    One row per run with its status, iterations (of its latest segment's cap), latest
     accepted metrics, landing state and last activity; archived runs are
     counted, not listed. Redrawn every 5 seconds until Ctrl-C.
 
@@ -824,7 +951,7 @@ def report(run_id: str | None, path: str):
     One agent call reads the run's history, notes, reviews, logs and commits, and writes
     the selected run's report.md. `run` and `resume` do this automatically when a run
     finishes; use this after an interrupted run or to regenerate it. It reads the config
-    the run started with.
+    the run stored when it started.
     """
     from rich.console import Console
 
@@ -837,19 +964,17 @@ def report(run_id: str | None, path: str):
     if not paths.run_id or History(project_path, run_id).get_last_iteration() == 0:
         console.print("[yellow]No iterations run yet. Nothing to report.[/yellow]")
         raise SystemExit(1)
-    config_path = read_stored_config_path(project_path, run_id)
-    try:
-        config, _ = load_config(project_path, config_file=config_path)
-    except FileNotFoundError:
-        data = paths.read_identity()
-        console.print(f"[red]Error:[/red] {config_gone(project_path, paths.run_id, data['config_path'], data.get('base_commit'))}",
-                      highlight=False)
+    if not paths.config.is_file():
+        console.print(f"[red]Error:[/red] Run {short_id(paths.run_id)} has no stored config (started by an older "
+                      "AutoHelix); its report can't be written.", highlight=False)
         raise SystemExit(1)
-    except ConfigError as e:
+    try:
+        config, _ = load_run_config(paths)
+    except (RuntimeError, ConfigError) as e:
         console.print(f"[red]Error:[/red] {e}", highlight=False)
         raise SystemExit(1)
 
-    if not write_report(config, project_path, console, config_path, run_id=run_id):
+    if not write_report(config, project_path, console, run_id=run_id):
         raise SystemExit(1)
     from autohelix.viewer import write_static
 

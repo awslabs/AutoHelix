@@ -29,9 +29,9 @@ class MockAgent:
         should_fail: If True, returns failure (default: False)
         notes_content: Optional notes to write
         cost_usd: Synthetic cost reported per iteration (default: none). Lets the
-            mock exercise the harness cost budget without a real LLM.
+            mock exercise `--cost` without a real LLM.
         sleep_seconds: Wall-clock seconds to sleep before returning (default: 0).
-            Consumes real time so the total-time budget can be exercised offline.
+            Consumes real time so `--time` can be exercised offline.
 
     For a run-summary prompt it writes a fixed summary instead of changing code.
     """

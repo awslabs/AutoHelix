@@ -100,10 +100,11 @@ class TestBuildPromptVariables:
         assert set(variables) == {
             "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable",
             "frozen", "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted", "recent_iterations", "time_limit", "group",
-            "group_runs"}
+            "group_runs", "imported"}
         assert variables["title"] == "Title line."
         assert variables["notes_path"] == str(tmp_path / ".autohelix-iteration" / "notes" / "iter-1.md")
         assert variables["last"] is None and variables["discarded"] == [] and variables["rejected_patch"] == ""
+        assert variables["imported"] is None
 
     def test_hints_empty_when_no_file(self, tmp_path):
         (tmp_path / ".autohelix").mkdir()
@@ -193,8 +194,12 @@ def _seed(worktree, records):
             (folder / "observe" / item["name"]).mkdir(parents=True, exist_ok=True)
 
 
-def _render(tmp_path, records, iteration, *, patch=False, group=None, members=(), seed=True):
+def _render(tmp_path, records, iteration, *, patch=False, group=None, members=(), imported=None, seed=True,
+            rejected_diff="", hints=False, head=None, missing=()):
+    """Render the default template; `members`/`imported` are run ids, their state put in the
+    copy unless `missing` names them (it failed to copy)."""
     from autohelix.history import IterationResult
+    from autohelix.runs import RunPaths
 
     (tmp_path / ".autohelix").mkdir(parents=True, exist_ok=True)
     history = History(tmp_path)
@@ -206,8 +211,16 @@ def _render(tmp_path, records, iteration, *, patch=False, group=None, members=()
         (worktree / ".autohelix-iteration" / "rejected.patch").write_text("diff --git a/sort.py b/sort.py\n")
     if seed:
         _seed(worktree, records)
+    for run_id in [*members, *([imported] if imported else [])]:
+        if run_id not in missing:
+            (worktree / ".autohelix-iteration" / "runs" / run_id / "notes").mkdir(parents=True)
+    if hints:
+        history.paths.hints.write_text("- try a heap\n")
     config = Config.from_dict(CONFIG)
-    variables = build_prompt_variables(config, history, iteration, worktree, group=group, members=members)
+    variables = build_prompt_variables(
+        config, history, iteration, worktree, group=group,
+        members=[(RunPaths(tmp_path, run_id), {}) for run_id in members],
+        imported=(RunPaths(tmp_path, imported), {}) if imported else None, rejected_diff=rejected_diff, head=head)
     return variables, render_template(load_template(config), variables)
 
 
@@ -277,15 +290,118 @@ def test_rejection_after_observe_shows_what_it_produced(tmp_path):
     assert "rejected.patch" not in rendered  # no kept tree, no patch
 
 
+PARENT, MEMBER = "20261112-1100-perf-a1b2", "20261112-1200-other-k3f9"
+REJECTED = {"iteration": 1, "accepted": False, "reason": "gate failed: pytest -q",
+            "failure_output": "FAILED test_sort.py::test_negative", "tree": "abc",
+            "rejected_ref": "refs/autohelix-rejected/x/1",
+            "gates": [{"text": "pytest -q", "kind": "command", "passed": False},
+                      {"text": "speed regress 5%", "kind": "metric", "passed": None}]}
+
+
+def test_a_plain_run_has_no_layout_block(tmp_path):
+    _, rendered = _render(tmp_path, [BASELINE, REJECTED], 2, patch=True, hints=True)
+    assert "Read before starting:\n- .autohelix-iteration/notes/iter-*.md — your own notes from past iterations" in rendered
+    assert "Where things are" not in rendered and "runs/" not in rendered and "autohelix/<id>" not in rendered
+    assert "the last rejected attempt's change" not in rendered  # said once, with the rejection
+    assert rendered.count("rejected.patch") == 1
+    assert "  Older iterations: .autohelix-iteration/history.jsonl\n- .autohelix-iteration/hints.md\n" in rendered
+
+
+NOTES_LINE = ("- .autohelix-iteration/notes/ — yours: this run's notes, editable; numbered by this run's iterations "
+              "(iter-1.md onward), separately from other runs' iter-N.md\n")
+RUNS_LINE = ("- .autohelix-iteration/runs/<id>/ — other runs' run.json, history.jsonl and notes/ (no iterations/: their "
+             "observe outputs aren't copied); read-only (a copy; edits there are discarded)\n")
+CODE_LINES = ("- Other runs' code: refs `autohelix/<id>` in this copy's git (not branches: `git branch` doesn't list them;\n"
+              "  `git for-each-ref refs/autohelix` does): `git diff HEAD autohelix/<id>`, `git show autohelix/<id>:<file>`,\n"
+              "  `git checkout autohelix/<id> -- <file>`.")
+
+
 def test_group_runs(tmp_path):
-    from autohelix.runs import RunPaths
+    (tmp_path / ".autohelix").mkdir()
+    variables, rendered = _render(tmp_path, [BASELINE], 1, group="perf", members=[MEMBER])
+    assert variables["group"] == "perf" and len(variables["group_runs"]) == 1
+    assert ("Where things are (read before starting):\n" + NOTES_LINE +
+            "- .autohelix-iteration/iterations/NNN/ — this run's own last 5 iterations and its last accepted one") in rendered
+    assert (RUNS_LINE +
+            "  - Group `perf` members (other runs alongside this one, running or finished; their state as of this iteration's start):\n"
+            f"    `.autohelix-iteration/runs/{MEMBER}/` (0 iterations, finished; code at `autohelix/{MEMBER}`)\n"
+            + CODE_LINES) in rendered
+    assert "name that run in your summary" in rendered
+    assert "Imported" not in rendered and "Read before starting:" not in rendered
+
+
+def test_a_member_whose_state_isnt_in_the_copy_is_left_out(tmp_path):
+    other = "20261112-1300-third-z9y8"
+    variables, rendered = _render(tmp_path, [BASELINE], 1, group="perf", members=[MEMBER, other], missing=[other])
+    assert [line.split("`")[1] for line in variables["group_runs"]] == [f".autohelix-iteration/runs/{MEMBER}/"]
+    assert other not in rendered
+    _, rendered = _render(tmp_path / "alone", [BASELINE], 1, group="perf", members=[other], missing=[other])
+    assert "Where things are" not in rendered and "Read before starting:" in rendered
+
+
+def test_an_import(tmp_path):
+    from autohelix.history import IterationResult
 
     (tmp_path / ".autohelix").mkdir()
-    member = RunPaths(tmp_path, "20261112-1200-other-k3f9")
-    variables, rendered = _render(tmp_path, [BASELINE], 1, group="perf", members=[(member, {})])
-    assert variables["group"] == "perf" and len(variables["group_runs"]) == 1
-    assert "Other runs in group `perf`" in rendered
-    assert "`.autohelix-iteration/runs/20261112-1200-other-k3f9/`" in rendered
+    parent = History(tmp_path, PARENT)
+    for record in (BASELINE, {**BASELINE, "iteration": 1, "reason": None, "metrics": {"speed": 12.5}}):
+        parent.append(IterationResult(**record))
+    variables, rendered = _render(tmp_path, [BASELINE], 1, imported=PARENT)
+    line = (f"`.autohelix-iteration/runs/{PARENT}/` (1 iteration, latest accepted speed 12.5, finished; "
+            f"code at `autohelix/{PARENT}`)")
+    assert variables["imported"] == {"id": PARENT, "short": "a1b2", "path": f".autohelix-iteration/runs/{PARENT}/",
+                                     "description": line, "same_code": False}  # no repository: unknown
+    assert ("  - Imported (this run continues from a1b2; its notes and history are where that work left off):\n"
+            f"    {line}\n"
+            "    Your copy holds this run's code, not necessarily a1b2's: "
+            f"`git diff HEAD autohelix/{PARENT}` shows what differs.\n"
+            "- Other runs' code:") in rendered
+    assert NOTES_LINE in rendered
+    assert "Group" not in rendered and "name that run in your summary" not in rendered
+
+
+def test_an_import_says_when_the_copys_code_differs_from_its_tip(tmp_path):
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    git("init", "-q")
+    (tmp_path / "sort.py").write_text("v1\n")
+    git("add", "sort.py")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "v1")
+    first = git("rev-parse", "HEAD")
+    git("update-ref", f"refs/autohelix/{PARENT}", first)
+    variables, rendered = _render(tmp_path, [BASELINE], 1, imported=PARENT, head=first)
+    assert variables["imported"]["same_code"] is True
+    assert "Your copy holds this run's code" not in rendered and "  - Imported (" in rendered
+
+    (tmp_path / "sort.py").write_text("v2\n")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "v2")
+    variables, rendered = _render(tmp_path / "later", [BASELINE], 1, imported=PARENT, head=git("rev-parse", "HEAD"))
+    assert variables["imported"]["same_code"] is False
+    assert "    Your copy holds this run's code, not necessarily a1b2's" in rendered
+
+
+def test_an_import_in_a_group_after_a_rejection(tmp_path):
+    (tmp_path / ".autohelix").mkdir()
+    _, rendered = _render(tmp_path, [BASELINE, REJECTED], 2, patch=True, group="perf", members=[MEMBER],
+                          imported=PARENT, hints=True)
+    imported = rendered.index("  - Imported (this run continues from a1b2")
+    assert imported < rendered.index("  - Group `perf` members") < rendered.index("- Other runs' code:")
+    assert ("  Older iterations: .autohelix-iteration/history.jsonl\n"
+            "- .autohelix-iteration/rejected.patch — the last rejected attempt's change\n"
+            "- .autohelix-iteration/hints.md — hints from the person running this run\n" + RUNS_LINE) in rendered
+    assert "Its changes are in `.autohelix-iteration/rejected.patch`; `git apply` it" in rendered
+    assert "name that run in your summary" in rendered
+
+
+def test_a_large_rejected_change_is_in_the_block(tmp_path):
+    _, rendered = _render(tmp_path, [BASELINE, REJECTED], 2, imported=PARENT, rejected_diff="git diff abc def")
+    assert ("- `git diff abc def` — the last rejected attempt's change (too large for a file)\n" + RUNS_LINE) in rendered
+    _, plain = _render(tmp_path / "plain", [BASELINE, REJECTED], 2, rejected_diff="git diff abc def")
+    assert "too large for a file" not in plain and "too large for a patch file" in plain
 
 
 def test_the_prompt_names_only_folders_that_are_in_the_copy(tmp_path):
