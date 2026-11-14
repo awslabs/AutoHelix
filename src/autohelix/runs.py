@@ -138,13 +138,15 @@ class RunPaths:
     @property
     def iterations(self): return self.run_dir / "iterations"
     @property
-    def logs(self): return self.run_dir / "logs"  # run logs per invocation, report.log, hook audit
+    def logs(self): return self.run_dir / "logs"  # run logs per segment, report.log, hook audit
 
     # One run's internal files.
     @property
     def internal(self): return self.run_dir / ".internal"
     @property
     def status(self): return self.internal / "status.json"
+    @property
+    def segments(self): return self.internal / "segments.jsonl"  # one line per segment (`run_status.SegmentLog`)
     @property
     def metrics(self): return self.internal / "metrics.json"  # `$AUTOHELIX_METRICS` for stop commands
     @property
@@ -861,7 +863,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
     None when the decision was a new run."""
     _refuse_legacy(project)
     # Serialize selection/creation for this project. The per-run lock remains
-    # authoritative throughout the invocation, including final landing.
+    # authoritative throughout the segment, including final landing.
     with RunLock(RunPaths(project).selection_lock, blocking=True):
         try:
             sweep_copies(project)

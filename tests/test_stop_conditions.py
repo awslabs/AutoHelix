@@ -287,7 +287,7 @@ def test_cost_budget_reason(project, monkeypatch):
     monkeypatch.setattr(harness, "run_iteration", costly)
     harness.run(Budget(until=10, cost_usd=0.10), report=False)
     reason = read_run_status(project)["stop_reason"]
-    assert (reason["budget"], reason["detail"]) == ("cost", "cost budget reached ($0.10 this invocation)")
+    assert (reason["budget"], reason["detail"]) == ("cost", "cost budget reached ($0.10 this segment)")
 
 
 def test_report_prompt_says_why_the_run_ended(project):

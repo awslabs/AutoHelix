@@ -74,8 +74,19 @@ function currentIteration(run) {
   return live(run) && s.iteration > p.iterations ? s.iteration : p.iterations;
 }
 
+// The latest segment's --time cap: "12m 05s of 1h (this segment)" while it runs, counted
+// from its start; "--time 1h (last segment)" once it stopped; '' without one.
+function timeCap(run) {
+  const s = run.status, cap = run.progress?.max_seconds;
+  if (!cap) return '';
+  if (live(run) && typeof s.segment_started_at === 'number') {
+    return `${fmtDuration(Date.now() / 1000 - s.segment_started_at)} of ${fmtLimit(cap)} (this segment)`;
+  }
+  return `--time ${fmtLimit(cap)} (last segment)`;
+}
+
 // Line 1: the state, with the phase while running or how long ago it stopped.
-// Line 2: time and cost so far. Stop reason and budgets (the latest invocation's) are in the tooltip.
+// Line 2: time and cost so far. Stop reason and budgets (the latest segment's) are in the tooltip.
 function statusCell(run) {
   const kind = outcome(run);
   const s = run.status;
@@ -96,10 +107,13 @@ function statusCell(run) {
     const seconds = p.seconds + (currentIteration(run) > p.iterations && s.iteration_started_at
       ? Date.now() / 1000 - s.iteration_started_at : 0);
     const cost = p.cost_usd;
+    // The run's total time (no cap) and cost, then the latest run/resume's --time: its
+    // own, never a run total. --cost is a run total (spent before it + its cap).
+    const cap = timeCap(run);
     spent = [seconds ? fmtDuration(seconds) : null,
-      typeof cost === 'number' ? `$${cost.toFixed(2)}${p.cost_incomplete ? '+' : ''}` : null].filter(Boolean).join(' · ');
-    // The latest run/resume's --time and --cost, as run totals (spent before it + its cap).
-    if (p.max_seconds) notes.push(`Time budget ${fmtLimit(p.max_seconds)} (run total)`);
+      typeof cost === 'number' ? `$${cost.toFixed(2)}${p.cost_incomplete ? '+' : ''}` : null,
+      cap].filter(Boolean).join(' · ');
+    if (cap) notes.push(`Time budget: ${cap}`);
     if (p.max_cost_usd) notes.push(`Cost budget ${fmtMoney(p.max_cost_usd)} (run total)`);
     if (p.cost_incomplete) notes.push('Some call costs are unavailable');
   }

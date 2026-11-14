@@ -55,8 +55,8 @@ def test_header_omits_empty_lines_and_names_the_project():
 
 
 @pytest.mark.parametrize("budget, done, text", [
-    (Budget(), 0, "3 iterations (default)"),
-    (Budget(), 5, "3 more iterations (default, to 8)"),
+    (Budget(), 0, "1 iteration (default)"),
+    (Budget(), 5, "1 more iteration (default, to 6)"),
     (Budget(iterations=3, cost_usd=5, time_seconds=3600), 5, "3 more iterations (to 8) · $5.00 more · 1h"),
     (Budget(until=8), 5, "3 more iterations (to 8)"),
     (Budget(until=4), 5, "0 more iterations (to 4)"),
@@ -65,7 +65,7 @@ def test_header_omits_empty_lines_and_names_the_project():
     (Budget(cost_usd=0.015), 0, "no iteration cap · $0.015"),
     (Budget(cost_usd=1e-9), 0, "no iteration cap · $0.000000001"),
 ])
-def test_header_budget_says_what_this_invocation_may_do(budget, done, text):
+def test_header_budget_says_what_this_segment_may_do(budget, done, text):
     assert budget_text(budget, done) == text
 
 

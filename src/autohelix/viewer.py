@@ -993,19 +993,20 @@ class ProjectRuns:
             "title": config.get("title"),  # the goal's first line, cut (Config.title)
             "status": status and {k: status.get(k) for k in (
                 "state", "phase", "iteration", "iteration_started_at", "phase_started_at", "stopped_at",
-                "stop_reason", "max_iterations", "max_cost_usd", "max_time_seconds")},
+                "stop_reason", "max_iterations", "max_cost_usd", "max_time_seconds", "segment_started_at")},
             "accepted": sum(1 for r in attempts if r.accepted),
             "metrics": self._metrics(records, config.get("directions") or {}),
-            # The caps of the latest invocation (`run`/`resume` flags), from its status, as
-            # run totals: spent before it plus its own budget; None where it had none.
+            # The caps of the latest segment (`run`/`resume` flags), from its status; None
+            # where it had none. Iterations and cost as run totals (spent before it plus its
+            # own budget); time as its own --time, counted from `segment_started_at`.
             "progress": {
                 "iterations": max((r.iteration for r in attempts), default=0),
                 "max_iterations": budget.get("max_iterations"),
                 "cost_usd": cost.cost_usd, "cost_incomplete": cost.incomplete,
                 "max_cost_usd": budget.get("max_cost_usd"),
-                # Wall clock of the recorded iterations, the baseline's included (as --time counts).
+                # The run's total: the recorded iterations' wall clock, the baseline's included.
                 "seconds": sum(record_seconds(r) for r in records),
-                "max_seconds": budget.get("max_time_seconds"),
+                "max_seconds": budget.get("max_time_seconds"),  # the segment's, not a run total
             },
             "target_branch": target,
             "landing": self._landing(target_tip, tip),

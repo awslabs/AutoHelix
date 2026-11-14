@@ -83,10 +83,11 @@ require evidence for a predetermined conclusion.
 
 The budget is the launch command's flags, not config: `autohelix run perf -n 10
 --cost 20`. Retain the user's stated budgets and agent/model preferences. By
-default, suggest only an iteration count (`-n 3`, also what no flag means) and
-no `--cost` or `--time`, and leave timeouts at their defaults; add any of these
-when the user asks or the work calls for it (expensive evaluations, a
-deadline), and say why. Hand over the complete command line with the budget
+default, suggest only an iteration count and no `--cost` or `--time`: `-n 3`
+for an open-ended goal ("make X faster", "improve Y"), `-n 1` for a single task
+that gates or a review can check (one checked attempt; also what no flag
+means). Leave timeouts at their defaults. Add any of these when the user asks
+or the work calls for it (expensive evaluations, a deadline), and say why. Hand over the complete command line with the budget
 explained; the user can change it without touching the config, and `autohelix
 resume <id> -n N` gives a run more later. See
 [budgets](config.md#budgets-and-run-state).
@@ -106,7 +107,7 @@ the chosen configuration reports it reliably.
 
 Explain that the dollar counter covers the optimization agent and the model
 calls of `ask` gates and reviews, including the baseline's, and is checked
-between iterations; it may overshoot. It counts one invocation: a `resume`
+between iterations; it may overshoot. It counts one segment: a `resume`
 gets its own.
 Report generation, external calls, and supervising/setup-agent expenditure
 are separate. If reporting is unsupported, missing,

@@ -795,7 +795,7 @@ def test_old_reviewer_call_costs_count_in_the_run_total(project):
     assert first.history.load()[-1].cost.cost_usd == pytest.approx(0.6)
     resumed = Harness(project, run_id=run_id)
     resumed.run(Budget(until=2, cost_usd=0.55), report=False)
-    # --cost is this invocation's: the earlier $0.60 doesn't stop it, and the cap's run
+    # --cost is this segment's: the earlier $0.60 doesn't stop it, and the cap's run
     # total counts it.
     assert [r.iteration for r in resumed.history.load()] == [0, 1, 2]
     status = json.loads(resumed.paths.status.read_text())

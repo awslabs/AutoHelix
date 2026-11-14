@@ -211,26 +211,26 @@ when the run is done; keep the command and any criteria files outside
 ## Budgets and run state
 
 Budgets are flags of `autohelix run` and `autohelix resume`, never config (a
-`budget:` key is an error naming the flags). Each counts **one invocation**:
+`budget:` key is an error naming the flags). Each counts **one segment** (one `run` or `resume` command):
 
 - `-n N`: N iterations (on `resume`, N more). `--until N`: up to iteration N in
   total, the one flag that counts a total (repeating it is harmless; prefer it
   in scripts and retries). Not both.
-- `--cost USD`: stop once this invocation has charged USD more.
+- `--cost USD`: stop once this segment has charged USD more.
 - `--time DURATION`: start no iteration after DURATION (`30m`, `2h`) of this
-  invocation's wall clock, the baseline included.
+  segment's wall clock, the baseline included.
 
-Without any of them an invocation runs three iterations; with only `--cost` or
+Without any of them a segment runs one iteration (`-n 1`); with only `--cost` or
 `--time` it has no iteration cap. Cost and time are checked between
 iterations, so they can overshoot rather than interrupt one. `resume -n 10
---cost 5` is 10 more iterations, up to $5 more, whatever earlier invocations
+--cost 5` is 10 more iterations, up to $5 more, whatever earlier segments
 spent. Other limits, such as `agent.timeout` or a command timeout, still apply.
 
 `agent.timeout` limits the main-agent call and provides remaining-time feedback,
 not a deadline for the whole evaluation cycle. Gate and observe commands have
 per-command timeouts.
 
-`--cost` compares what the invocation's optimization agent and the model calls
+`--cost` compares what the segment's optimization agent and the model calls
 the harness's commands report (`ask` gates, reviews) cost, the baseline's
 included, with the dollar limit. History keeps each actual model call in the
 `calls` list, including its role, usage and relative log path. Claude Code and
@@ -244,7 +244,7 @@ threshold, not an absolute all-inclusive financial cap.
 
 Commit the config and any scripts it uses, then start with `autohelix run
 [NAME] --path PROJECT -n 3` (`NAME` for `autohelix/NAME.yaml`, none for
-`autohelix.yaml`): always a new run, of three iterations. A run keeps the config it started with
+`autohelix.yaml`): always a new run, here of three iterations (an open-ended goal; `-n 1` for a single checkable task). A run keeps the config it started with
 (stored in `.autohelix/runs/<id>/config.yaml`, the prompt template inlined). `resume` refuses when
 the file's parsed config has changed since (comment edits don't count): apply an edited config with a
 new run, `autohelix run [NAME] --import <id>`, or restore the file. The config and template files are

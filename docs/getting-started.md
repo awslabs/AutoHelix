@@ -119,7 +119,7 @@ commit, verification results, what remains unverified, and the complete
 command line to start it, with a suggested budget and why (`autohelix run perf
 -n 10 --cost 20`). Budgets are command-line flags, not config: `-n`
 iterations, `--cost` dollars, `--time` wall clock, for each `run` or `resume`
-(3 iterations when none is given; see [CLI → Budgets](cli.md#budgets)).
+(1 iteration when none is given; see [CLI → Budgets](cli.md#budgets)).
 Measurements alone do not reject regressions; metric gates are optional.
 
 After reviewing the configuration, ask for a managed execution:
@@ -219,7 +219,7 @@ agent's live output below them (`autohelix view --web` for the same in a browser
 ### 4. Continue, set aside or start over
 
 Each `autohelix run` starts a **new** run, with fresh notes. To give the same
-run more iterations, resume it; budgets count each invocation:
+run more iterations, resume it; budgets count each segment:
 
 ```bash
 autohelix resume -n 5                # five more iterations of this config's latest run

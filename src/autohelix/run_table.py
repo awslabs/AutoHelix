@@ -13,6 +13,7 @@ import re
 import time
 from datetime import datetime
 from autohelix.formatting import format_delta, format_duration
+from autohelix.iteration_time import format_duration as format_limit
 
 WORDS = {"crashed": "stopped unexpectedly", "idle": "not started"}  # others as they are (dashboard.js)
 # Control characters (C0, DEL, C1): from agents, configs and paths, they could move the
@@ -82,6 +83,19 @@ def _spent(run: dict, now: float) -> str:
     cost = p["cost_usd"]
     return " · ".join(filter(None, [format_duration(seconds) if seconds else None,
                                     _money(cost, p["cost_incomplete"]) if cost is not None else None]))
+
+
+def time_cap(run: dict, now: float) -> str:
+    """The latest segment's --time cap: `12m 05s of 1h (this segment)` while it runs,
+    `1h (last segment)` once it stopped, "" without one. Never a run total."""
+    status = run.get("status") or {}
+    cap = status.get("max_time_seconds")
+    if not isinstance(cap, (int, float)) or isinstance(cap, bool) or cap <= 0:
+        return ""
+    started = status.get("segment_started_at")
+    if _live(run) and isinstance(started, (int, float)):
+        return f"{format_duration(now - started)} of {format_limit(int(cap))} (this segment)"
+    return f"--time {format_limit(int(cap))} (last segment)"
 
 
 def _iterations(run: dict) -> str:
@@ -176,7 +190,8 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
                     + ([_metric(run, metric)] if metric else [])
                     + [_landing(run), "now" if _live(run) else _ago(run["last_activity"], now),
                        run.get("title") or ""])
-        rows.append(["  " + _config_file(run), _spent(run, now)] + [""] * (len(head) - 3) + [_cut(_notes(run), 100)])
+        spent = " · ".join(filter(None, [_spent(run, now), time_cap(run, now)]))
+        rows.append(["  " + _config_file(run), spent] + [""] * (len(head) - 3) + [_cut(_notes(run), 100)])
     return "\n".join(list(map(clean, lines)) + [""] + _table(rows, right={2, 3} if metric else {2})) + "\n"
 
 
@@ -186,7 +201,7 @@ def format_run(data: dict, now: float | None = None) -> str:
     run = data["run"]
     under_way = _under_way(run)
     lines = [" · ".join([_label(run), _state(run, now)] + ([f"iteration {under_way}"] if under_way else []))]
-    second = [_config_file(run), _spent(run, now), f"iterations {_iterations(run)}"]
+    second = [_config_file(run), _spent(run, now), time_cap(run, now), f"iterations {_iterations(run)}"]
     landing = _landing(run)
     if landing != "—":
         second.append(f"{landing} ({run['target_branch']})")

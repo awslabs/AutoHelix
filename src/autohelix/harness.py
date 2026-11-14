@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from rich.console import Console
@@ -28,7 +28,7 @@ from autohelix.config import (ConfigError, MetricGate, config_changes, find_conf
                               parse_config, run_command, template_path)
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay, Transcript, clean, header_lines
-from autohelix.history import History, IterationResult, record_seconds
+from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
                             claim_copies, config_relative, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
@@ -38,7 +38,7 @@ from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning)
-from autohelix.run_status import RunStatus
+from autohelix.run_status import RunStatus, SegmentLog
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
 from autohelix.formatting import format_cap, format_cost, format_total_cost
 from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
@@ -65,19 +65,19 @@ class AutoHelixRunError(RuntimeError):
 # many in a row (within a segment) stop the run: the agent is unlikely to recover.
 MAX_CONSECUTIVE_AGENT_FAILURES = 3
 
-# Iterations an invocation runs when no budget flag is given (`run`/`resume` without
+# Iterations a segment runs when no budget flag is given (`run`/`resume` without
 # -n, --until, --cost or --time).
-DEFAULT_ITERATIONS = 3
+DEFAULT_ITERATIONS = 1
 
 
 @dataclass(frozen=True)
 class Budget:
-    """How long one invocation (`run`, `resume`) goes on: the config says what an
+    """How long one segment (`run`, `resume`) goes on: the config says what an
     iteration does, the command line how long.
 
     `iterations` more iterations, or up to iteration `until` in total (the one figure
     that counts a total: safe to repeat); up to `cost_usd` more dollars charged by this
-    invocation (agent calls, reviews, asks, the baseline: known costs only) and
+    segment (agent calls, reviews, asks, the baseline: known costs only) and
     `time_seconds` of its wall clock, baseline included. With nothing set,
     `DEFAULT_ITERATIONS` more; with only cost or time, no iteration cap."""
 
@@ -100,7 +100,7 @@ class Budget:
         return self == Budget()
 
     def last_iteration(self, done: int) -> int | None:
-        """The last iteration this invocation may run after iteration `done`; None: no cap."""
+        """The last iteration this segment may run after iteration `done`; None: no cap."""
         if self.until is not None:
             return self.until
         if self.iterations is not None:
@@ -322,6 +322,7 @@ class Harness:
             write_text(self.paths.current, self.paths.run_id + "\n")
             self.repo = Repo(self.project_path)
             self.run_status = RunStatus(self.project_path, self.paths.run_id)
+            self.segment_log = SegmentLog(self.paths.segments)
             self.log = RunLog(self.project_path, self.paths.run_id)
             self.run_state.copies_root = claim_copies(self.paths, self.log.warn)
             self._land_attempted = False
@@ -535,7 +536,7 @@ class Harness:
         opencode auto-loads project-local plugins from .opencode/plugin/*.js. The
         plugin appends time_left.sh output to each tool result — the opencode
         analog of Claude's PostToolUse time hook. It lives in the worktree (never
-        installed for the invocation) and reads $AUTOHELIX_TIME_LEFT_SCRIPT from the agent env.
+        installed for the agent call) and reads $AUTOHELIX_TIME_LEFT_SCRIPT from the agent env.
         """
         src = Path(__file__).parent / "bin" / "opencode_timer_pertool.js"
         if not src.exists():
@@ -1506,6 +1507,7 @@ class Harness:
                 finally:
                     self.run_status.stop(outcome)
                     if self._segment_started:
+                        self._end_segment_log()
                         self._write_static()
             finally:
                 try:
@@ -1514,6 +1516,16 @@ class Harness:
                     remove_copies(self.run_state.copies_root, self.log.warn)
                 finally:
                     self.close()
+
+    def _end_segment_log(self) -> None:
+        """Complete this segment's line in segments.jsonl: how it ended (the status's
+        state and stop reason) and the run's last iteration."""
+        try:
+            last = self.history.get_last_iteration()
+        except Exception:  # noqa: BLE001 - the log is best-effort; the outcome stands
+            last = None
+        self.segment_log.end(state=self.run_status.data.get("state"),
+                             stop_reason=self.run_status.data.get("stop_reason"), last_iteration=last)
 
     def close(self) -> None:
         if hasattr(self, "_ownership"):
@@ -1603,7 +1615,8 @@ class Harness:
 
     def _run(self, budget: Budget) -> bool:
         """Returns True if the loop ran at least one iteration and was not interrupted."""
-        invocation_start = time.monotonic()  # --time counts from here, baseline included
+        segment_start = time.monotonic()  # --time counts from here, baseline included
+        segment_started_at = time.time()
         start_iter = self.history.get_last_iteration() + 1
         max_iter = budget.last_iteration(start_iter - 1)
 
@@ -1649,13 +1662,16 @@ class Harness:
         if needs_baseline and not self._preflight_done and not self._preflight():
             return False
 
-        # Status records the caps as run totals: spent before this invocation plus its own.
+        # Status records the iteration and cost caps as run totals (spent before this
+        # segment plus its own), the time cap as this segment's, counted from its start.
         cost_before = summarize_costs(self.history.cost_usages).cost_usd or 0
-        seconds_before = sum(record_seconds(r) for r in self.history.load())
         self.run_status.start(
             max_iterations=max_iter, run_id=self.paths.run_id,
             max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
-            max_time_seconds=None if budget.time_seconds is None else round(seconds_before) + budget.time_seconds)
+            max_time_seconds=budget.time_seconds, segment_started_at=segment_started_at)
+        self.segment_log.start(started_at=segment_started_at,
+                               start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
+                               budget={**asdict(budget), "default": budget.default})
         self._segment_started = True
         self._segment_target_tip = self._target_tip()
         flags = [self.run_info.pop("archived", None), self.run_info.pop("lifecycle", None)]
@@ -1672,23 +1688,23 @@ class Harness:
         if start_iter == 1 and needs_baseline:
             baseline_stop = self._capture_baseline()
 
-        # Dollars this invocation has charged (known costs): the baseline's, then each iteration's.
+        # Dollars this segment has charged (known costs): the baseline's, then each iteration's.
         spent = (summarize_costs(self.history.cost_usages).cost_usd or 0) - cost_before
 
-        cost_unknown = False  # some of this invocation's charges are unavailable
+        cost_unknown = False  # some of this segment's charges are unavailable
         # With --cost the only bound, an unknown charge means it may never be reached.
         cost_only = budget.cost_usd is not None and max_iter is None and budget.time_seconds is None
 
         def out_of_budget() -> dict | None:
             if cost_only and cost_unknown:
                 return {"kind": "budget", "budget": "cost",
-                        "detail": "cost unknown: --cost can't bound this invocation (add -n or --time)"}
+                        "detail": "cost unknown: --cost can't bound this segment (add -n or --time)"}
             if budget.cost_usd is not None and spent >= budget.cost_usd:
                 return {"kind": "budget", "budget": "cost",
-                        "detail": f"cost budget reached ({format_cap(budget.cost_usd)} this invocation)"}
-            if budget.time_seconds is not None and time.monotonic() - invocation_start >= budget.time_seconds:
+                        "detail": f"cost budget reached ({format_cap(budget.cost_usd)} this segment)"}
+            if budget.time_seconds is not None and time.monotonic() - segment_start >= budget.time_seconds:
                 return {"kind": "budget", "budget": "time",
-                        "detail": f"time budget reached ({_format_time(budget.time_seconds)} this invocation)"}
+                        "detail": f"time budget reached ({_format_time(budget.time_seconds)} this segment)"}
             return None
 
         config_name = config_relative(self.project_path, self.config_file)

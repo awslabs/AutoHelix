@@ -158,6 +158,24 @@ def _run_data(iterations: int) -> dict:
             "commit": "abc1234", "run": run}
 
 
+def test_the_time_cap_is_the_segments_own():
+    """--time is shown against the segment's clock while it runs, as the cap after;
+    the run's total time has no cap."""
+    from autohelix import run_table
+
+    data = _run_data(3)
+    run = data["run"]
+    assert run_table.time_cap(run, 1000) == ""  # no --time
+    run["status"] = {"state": "running", "iteration": 2, "segment_started_at": 1000 - 725,
+                     "max_time_seconds": 3600, "phase": "agent", "phase_started_at": 990}
+    assert run_table.time_cap(run, 1000) == "12m 05s of 1h (this segment)"
+    assert "1m 00s · $1.50 · 12m 05s of 1h (this segment)" in run_table.format_run(data, now=1000)
+    run["status"].update(state="finished", max_time_seconds=5400)
+    assert run_table.time_cap(run, 1000) == "--time 1h30m (last segment)"
+    listing = run_table.format_runs({**data, "runs": [run]}, now=1000)
+    assert "1m 00s · $1.50 · --time 1h30m (last segment)" in listing
+
+
 def _screen_lines(data, log, height) -> list[str]:
     out = io.StringIO()
     console = Console(file=out, width=100, height=height, force_terminal=False)

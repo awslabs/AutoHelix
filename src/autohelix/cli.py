@@ -373,7 +373,7 @@ def _duration_option(ctx, param, value: str | None) -> int | None:
 
 
 def _budget_options(more: str):
-    """The budget flags `run` and `resume` share: how long this invocation goes on
+    """The budget flags `run` and `resume` share: how long this segment goes on
     (`more`: "" for a new run, " more" on resume)."""
     def decorate(command):
         for option in reversed(_budget_option_list(more)):
@@ -390,10 +390,10 @@ def _budget_option_list(more: str) -> list:
         click.option("--until", type=click.IntRange(min=1), metavar="N",
                      help="Run up to iteration N in total (safe to repeat; for scripts)."),
         click.option("--cost", "cost_usd", type=click.FloatRange(min=0, min_open=True), metavar="USD",
-                     help="Stop once this invocation has spent USD more (every call it charges, baseline "
+                     help="Stop once this segment has spent USD more (every call it charges, baseline "
                           "included; known costs only)."),
         click.option("--time", "time_seconds", callback=_duration_option, metavar="DURATION",
-                     help="Stop starting iterations after DURATION of this invocation's wall clock "
+                     help="Stop starting iterations after DURATION of this segment's wall clock "
                           "(e.g. 2h, 90m; baseline included)."),
     ]
 
@@ -407,8 +407,8 @@ def _budget(iterations: int | None, until: int | None, cost_usd: float | None,
 
 
 def _interrupted_note(harness: Harness) -> str | None:
-    """After an interrupted invocation (Ctrl-C, killed, reboot), what it had left, for a
-    resume given no budget flag: `3 more (default); the interrupted invocation had 8 left: -n 8`."""
+    """After an interrupted segment (Ctrl-C, killed, reboot), what it had left, for a
+    resume given no budget flag: `1 more (default); the interrupted segment had 8 left: -n 8`."""
     status = read_run_status(harness.project_path, harness.paths.run_id) or {}
     cap = status.get("max_iterations")
     # A stop reason: it had ended for its own reason (a budget, a condition) before that.
@@ -417,12 +417,12 @@ def _interrupted_note(harness: Harness) -> str | None:
     left = cap - harness.history.get_last_iteration()
     if left <= 0 or left == DEFAULT_ITERATIONS:
         return None
-    return (f"{DEFAULT_ITERATIONS} more (default); the interrupted invocation had {left} left: "
+    return (f"{DEFAULT_ITERATIONS} more (default); the interrupted segment had {left} left: "
             f"-n {left}")
 
 
 def _stopped_note(harness: Harness) -> str | None:
-    """After a stop condition ended the last invocation: resume continues, and says when
+    """After a stop condition ended the last segment: resume continues, and says when
     it stops again (stop conditions are checked after each accepted iteration)."""
     stop = (read_run_status(harness.project_path, harness.paths.run_id) or {}).get("stop_reason")
     if not isinstance(stop, dict) or stop.get("kind") != "condition":
@@ -474,9 +474,9 @@ def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land
     only config in autohelix/.
 
     The config says what one iteration does; the budget flags say how long this
-    invocation goes on: -n N iterations (or --until N), --cost USD, --time
-    DURATION, whichever comes first. Without any of them, 3 iterations; with
-    only --cost or --time, no iteration cap.
+    command (a segment of the run) goes on: -n N iterations (or --until N),
+    --cost USD, --time DURATION, whichever comes first. Without any of them,
+    1 iteration: type -n for a loop. With only --cost or --time, no iteration cap.
 
     With --group NAME, each iteration's agent also sees the other non-archived
     runs of that group: their notes and history, and their code (each run's
@@ -519,9 +519,9 @@ def resume(run_id: str | None, path: str, verbose: bool, no_report: bool, land_m
     latest is the most recently active run for that config that isn't
     archived, preferring runs that captured their baseline.
 
-    Budgets count this invocation: `resume -n 10 --cost 5` runs 10 more
-    iterations, up to $5 more, whatever earlier invocations spent; --until N
-    runs up to iteration N in total. Without a budget flag, 3 more. The run
+    Budgets count this segment (this command): `resume -n 10 --cost 5` runs 10 more
+    iterations, up to $5 more, whatever earlier segments spent; --until N
+    runs up to iteration N in total. Without a budget flag, 1 more. The run
     keeps its landing mode and group unless --land or --group changes them.
     Exits 3 when there is no run to resume.
     """
@@ -810,7 +810,7 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
     """One run, live in the terminal: RUN_ID (or its last part), else the current run.
 
     On top, the run's state, its config file, time and cost so far, iterations
-    (of its latest invocation's cap), landing, why it stopped, its goal and latest
+    (of its latest segment's cap), landing, why it stopped, its goal and latest
     accepted metrics; then one row per iteration; below, the live output of the agent, a review
     or the summary agent. Keeps waiting when the run stops; Ctrl-C stops watching
     (not the run). Safe to run alongside `autohelix run`; it only reads
@@ -886,7 +886,7 @@ def dashboard(path: Path, once: bool, as_json: bool, web: bool, port: int | None
               metric: str | None):
     """This project's runs, live in the terminal.
 
-    One row per run with its status, iterations (of its latest invocation's cap), latest
+    One row per run with its status, iterations (of its latest segment's cap), latest
     accepted metrics, landing state and last activity; archived runs are
     counted, not listed. Redrawn every 5 seconds until Ctrl-C.
 

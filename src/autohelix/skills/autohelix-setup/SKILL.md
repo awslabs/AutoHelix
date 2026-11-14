@@ -43,9 +43,11 @@ models or reviews: pick defaults, say what you picked. Carry forward any
 preferences the user states.
 
 Budgets are not config: they are flags of `autohelix run` and `resume` (`-n N`
-iterations, `--cost USD`, `--time DURATION`, per invocation), so the config never
-has a `budget:` key (it is an error). Defaults: three iterations (`-n 3`, also
-what no flag means) and no cost or time limit, and no timeouts (no `timeout:` on gates or observe entries, no `agent.timeout`):
+iterations, `--cost USD`, `--time DURATION`, for each `run` or `resume` command), so the config never
+has a `budget:` key (it is an error). The iteration count follows the goal: `-n 3`
+for an open-ended goal ("make X faster", "improve Y"), `-n 1` for a single task
+that gates or a review can check (`-n 1` is also what no flag means). Defaults
+otherwise: no cost or time limit, and no timeouts (no `timeout:` on gates or observe entries, no `agent.timeout`):
 the built-in defaults apply. No metric gates (`- metric: … regress:/improve:`)
 either: the agent sees the numbers and decides. Set any of these only when the
 user asks. The
@@ -182,8 +184,10 @@ Keep the final handoff brief: saved config and helper paths, the setup commit
 (or why no commit was made), validation and execution results, what remains
 unverified, and verification commands. End with the complete launch command,
 budget included, and one line on why that budget: e.g. `autohelix run perf -n
-10 --cost 20` ("10 iterations to see a trend; $20 caps a runaway review"), or
-just `autohelix run perf -n 3` for a first look. Add `--cost` or `--time` only
+10 --cost 20` ("10 iterations to see a trend; $20 caps a runaway review"),
+`autohelix run perf -n 3` for a first look at an open-ended goal, or `autohelix
+run fix -n 1` for one task the gates check. Always write the flags out, `-n 1`
+included. Add `--cost` or `--time` only
 for a reason (expensive evaluations, a deadline); `autohelix resume <id> -n N`
 gives more later. The complete YAML and rationale
 were shown in the proposal; repeat them only if requested or needed to explain

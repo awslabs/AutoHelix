@@ -331,11 +331,12 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
         progress = one["progress"]
         assert (progress["iterations"], progress["max_iterations"], progress["max_cost_usd"]) == (2, 2, None)
         assert progress["seconds"] > 0 and progress["max_seconds"] is None
-        # Budget figures come from the run's status (its latest invocation's flags, as run
-        # totals), never from the config.
+        # Budget figures come from the run's status (its latest segment's flags: iterations
+        # and cost as run totals, time as the segment's own), never from the config.
         assert (two["progress"]["max_iterations"], two["progress"]["max_cost_usd"],
                 two["progress"]["max_seconds"]) == (1, 5, 3600)
         assert (two["status"]["max_cost_usd"], two["status"]["max_time_seconds"]) == (5, 3600)
+        assert two["status"]["segment_started_at"] <= two["status"]["stopped_at"]
         assert one["landing"] == {"commits": 0, "fast_forward": True}  # auto-landed at the end of its segment
         assert two["landing"] == {"commits": 1, "fast_forward": True}  # manual: ready to land
         assert two["accepted"] == 1 and two["metrics"] is None

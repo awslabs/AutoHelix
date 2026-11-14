@@ -492,9 +492,9 @@ hints), OpenCode through a plugin. Every backend can run
 
 The config says what one iteration does; how long a run goes on is up to each
 `autohelix run` or `resume`: `-n N` (N iterations, or N more), `--until N` (up
-to iteration N), `--cost USD` (up to USD spent by this invocation) and `--time
-DURATION` (this invocation's wall clock), whichever comes first. Without any of
-them, 3 iterations. See [CLI → Budgets](cli.md#budgets). A `budget:` key is an
+to iteration N), `--cost USD` (up to USD spent by that command) and `--time
+DURATION` (its wall clock), whichever comes first. Without any of
+them, 1 iteration. See [CLI → Budgets](cli.md#budgets). A `budget:` key is an
 error naming the flags.
 
 ## Run identity and landing
@@ -557,7 +557,7 @@ replacement; there are no aliases and no migration.
 | `reviewer.model`, `reviewer.timeout_seconds` | `agent:` and `timeout:` on the review entry | |
 | `agent.type` | `agent.backend` | `` `agent.type` is now `agent.backend` `` |
 | `agent.timeout_seconds` | `agent.timeout` (a duration) | `` `agent.timeout_seconds` is now `agent.timeout` (a duration such as 30m) `` |
-| `budget:` (`iterations`, `cost`, `time`) | the `run`/`resume` flags `-n`, `--cost`, `--time`, per invocation (see [CLI → Budgets](cli.md#budgets)) | `` `budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`; ...) `` |
+| `budget:` (`iterations`, `cost`, `time`) | the `run`/`resume` flags `-n`, `--cost`, `--time`, per segment (see [CLI → Budgets](cli.md#budgets)) | `` `budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`; ...) `` |
 | `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | as `budget:` |
 | `agent.settings.model` | `agent.model` | `` `agent.settings.model` is now `agent.model` `` |
 | a bare number as the threshold (`max_regression_pct: 5` was one; `regress: 5` now) | `regress: 5%` | `write the percentage with %, e.g. 5%, got 5` |

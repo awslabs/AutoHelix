@@ -860,20 +860,24 @@ function renderConfig() {
   }
   $('config').hidden = !c?.text;
   if (!c?.text) return;
-  // Budgets are not config: the latest invocation's flags, as its status records them
-  // (run totals: what was spent before it plus its own cap).
+  // Budgets are not config: the latest segment's flags, as its status records them.
+  // Iterations and cost as run totals (spent before it plus its own cap); --time as its
+  // own cap, with the time since the segment started while it runs.
   const s = state.status || {};
+  const running = s.state === 'running' && typeof s.segment_started_at === 'number';
   const budget = [
     s.max_iterations && `to iteration ${s.max_iterations}`,
     s.max_cost_usd && `${fmtCap(s.max_cost_usd)} total`,
-    s.max_time_seconds && `${fmtDuration(s.max_time_seconds)} total`,
+    s.max_time_seconds && (running
+      ? `${fmtDuration(Date.now() / 1000 - s.segment_started_at)} of ${fmtDuration(s.max_time_seconds)} (this segment)`
+      : `--time ${fmtDuration(s.max_time_seconds)} (last segment)`),
   ].filter(Boolean).join(' · ');
   const parts = [
     c.agent && ['Agent', c.agent],
     c.gates?.length && ['Gates', c.gates.join(' · '), c.gates.join('\n')],
     c.observe?.length && ['Observe', c.observe.map(observeLabel).join(' · ')],
     c.scope?.length && ['Editable', c.scope.join(', ')],
-    budget && ['Budget', budget, `${budget}: the latest run/resume's -n/--until, --cost and --time, as run totals`],
+    budget && ['Budget', budget, `${budget}: the latest run/resume's -n/--until and --cost as run totals, its --time as its own`],
   ].filter(Boolean);
   const summary = $('config-summary');
   summary.title = `Show the full ${c.file}`;

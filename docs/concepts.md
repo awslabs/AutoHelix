@@ -410,8 +410,8 @@ harness keeps for itself is in `.internal/` folders:
 │   ├── iterations/
 │   │   ├── 000/                # the baseline
 │   │   └── 001/ ...            # one folder per iteration (below)
-│   ├── logs/                   # run logs per invocation, report.log, hook audit
-│   └── .internal/              # status.json, usage/, notes versions notes/<n>/,
+│   ├── logs/                   # run logs per segment, report.log, hook audit
+│   └── .internal/              # status.json, segments.jsonl, usage/, notes versions notes/<n>/,
 │                               # superseded attempts attempts/, report.json, the copies path
 └── .internal/                  # the current run's id, lock files, helper scripts (bin/)
 ```
@@ -436,6 +436,18 @@ of truth (`jq` on it for numbers across iterations; see
 [Stored output](config.md#stored-output) for texts). A killed iteration, or a
 retried baseline, reuses its number: the earlier attempt's folder is moved to
 `.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
+
+`.internal/segments.jsonl` has one JSON line per segment (one `run` or
+`resume` command), written when it starts and completed when it ends:
+`started_at` and `ended_at` (epoch seconds), `budget` as given (`iterations`,
+`until`, `cost_usd`, `time_seconds`, each `null` when unset, and `default`: no
+budget flag, so the default `-n 1` applied), `start_iteration` (its first
+iteration, `0` when it captures the baseline), `last_iteration` (the run's last
+recorded iteration when it ended), `stop_reason` (as in `status.json`, `null`
+when it was interrupted or failed) and `state` (`finished`, `interrupted` or
+`failed`), plus `pid` and `host`. A segment whose process died keeps
+`ended_at: null`. Each write replaces the file atomically, so it never holds a
+torn line.
 
 The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
 project; see [Candidate Copies](#candidate-copies).
@@ -488,7 +500,7 @@ file are always frozen, so the agent can't change its own protocol. Scripts the
 config calls (`bench.py`, gate scripts) are code: they move with the run's
 commits; list them under `scope.frozen` if they must not change. A run has no other state: whether it is running comes from its
 lock, how its last segment ended from `status.json`, and whether it has landed from
-git. One invocation of `run` or `resume`, called a **segment**,
+git. One `run` or `resume` command, called a **segment**,
 holds a process lock through validation, final landing and report. Agent commits
 don't matter: the candidate is the agent copy's files. Acceptance commits exactly
 the checked tree, with the previous accepted tip as its parent; it leaves the

@@ -245,7 +245,7 @@ def test_delete_refuses_a_live_run(project):
     assert result.exit_code == 1 and "is running" in result.output and paths.run_dir.exists()
 
 
-# --- budgets: command-line flags, per invocation ----------------------------------------
+# --- budgets: command-line flags, per segment ----------------------------------------
 
 
 def status(paths):
@@ -268,16 +268,17 @@ def test_budget_flags_are_validated(project):
     assert not RunPaths(project).run_id  # refused before a run exists
 
 
-def test_without_a_budget_flag_three_iterations(project):
+def test_without_a_budget_flag_one_iteration(project):
+    """A bare `run` is one checked attempt; loops are typed."""
     result = cli(project, "run", "--no-report")
     assert result.exit_code == 0, result.output
     paths = RunPaths(project)
-    assert "Budget   3 iterations (default)" in result.output
-    assert iterations(paths) == [0, 1, 2, 3] and status(paths)["max_iterations"] == 3
+    assert "Budget   1 iteration (default)" in result.output
+    assert iterations(paths) == [0, 1] and status(paths)["max_iterations"] == 1
     result = cli(project, "resume", "--no-report")
-    assert "Budget   3 more iterations (default, to 6)" in result.output
-    assert iterations(paths) == [0, 1, 2, 3, 4, 5, 6]
-    assert "iteration budget reached (6)" in result.output
+    assert "Budget   1 more iteration (default, to 2)" in result.output
+    assert iterations(paths) == [0, 1, 2]
+    assert "iteration budget reached (2)" in result.output
 
 
 def test_until_on_run_and_resume(project):
@@ -289,14 +290,14 @@ def test_until_on_run_and_resume(project):
     assert iterations(paths) == [0, 1, 2, 3] and status(paths)["max_iterations"] == 3
 
 
-def test_cost_alone_has_no_iteration_cap_and_counts_this_invocation(project):
+def test_cost_alone_has_no_iteration_cap_and_counts_this_segment(project):
     """The mock charges $0.10 an iteration: `--cost 0.35` runs four (past the default
-    three), and a resume gets its whole --cost again."""
+    one), and a resume gets its whole --cost again."""
     paths = begun(project, "--cost", "0.35")
     assert iterations(paths) == [0, 1, 2, 3, 4]
     assert status(paths)["max_iterations"] is None
     assert status(paths)["max_cost_usd"] == pytest.approx(0.35)
-    assert status(paths)["stop_reason"]["detail"] == "cost budget reached ($0.35 this invocation)"
+    assert status(paths)["stop_reason"]["detail"] == "cost budget reached ($0.35 this segment)"
     result = cli(project, "resume", "--cost", "0.15", "--no-report")
     assert result.exit_code == 0, result.output
     assert "Budget   no iteration cap · $0.15 more" in result.output
@@ -304,18 +305,21 @@ def test_cost_alone_has_no_iteration_cap_and_counts_this_invocation(project):
     assert status(paths)["max_cost_usd"] == pytest.approx(0.55)  # spent before + --cost
 
 
-def test_time_counts_this_invocation_only(project):
-    """Two hours recorded before don't stop a `--time 1h` resume; the cap's run total adds them."""
+def test_time_counts_this_segment_only(project):
+    """Two hours recorded before don't stop a `--time 1h` resume; status records the
+    segment's own cap (not a run total) and when the segment started."""
     paths = started(project)
     records = [json.loads(line) for line in paths.history.read_text().splitlines()]
     records[-1]["calls"][0]["usage"]["wall_clock_ms"] = 2 * 3600 * 1000
     paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
     before = sum(record_seconds(r) for r in History(project, paths.run_id).load())
+    clock = time.time()
     result = cli(project, "resume", "-n", "1", "--time", "1h", "--no-report")
     assert result.exit_code == 0, result.output
     assert "Budget   1 more iteration (to 2) · 1h" in result.output
     assert iterations(paths) == [0, 1, 2]
-    assert status(paths)["max_time_seconds"] == round(before) + 3600 and before > 7200
+    assert status(paths)["max_time_seconds"] == 3600 and before > 7200
+    assert clock <= status(paths)["segment_started_at"] <= status(paths)["started_at"]
 
 
 def test_time_counts_the_baseline_and_is_checked_before_an_iteration(project, monkeypatch):
@@ -333,11 +337,11 @@ def test_time_counts_the_baseline_and_is_checked_before_an_iteration(project, mo
         monkeypatch.setattr(harness, name, later)
     harness.run(Budget(time_seconds=15), report=False)
     assert iterations(harness.paths) == [0, 1]
-    assert status(harness.paths)["stop_reason"]["detail"] == "time budget reached (15s this invocation)"
+    assert status(harness.paths)["stop_reason"]["detail"] == "time budget reached (15s this segment)"
 
 
 @pytest.mark.parametrize("state", ["interrupted", "crashed"])
-def test_resume_after_an_interrupted_invocation_says_what_was_left(project, state):
+def test_resume_after_an_interrupted_segment_says_what_was_left(project, state):
     paths = begun(project, "-n", "1")
     data = status(paths)  # as if `run -n 9` had stopped after iteration 1 (a dead PID: crashed)
     del data["stop_reason"]  # it didn't end for its own reason
@@ -346,19 +350,19 @@ def test_resume_after_an_interrupted_invocation_says_what_was_left(project, stat
     paths.status.write_text(json.dumps(data))
     result = cli(project, "resume", "--no-report")
     assert result.exit_code == 0, result.output
-    assert "3 more (default); the interrupted invocation had 8 left: -n 8" in result.output
-    assert iterations(paths) == [0, 1, 2, 3, 4]
+    assert "1 more (default); the interrupted segment had 8 left: -n 8" in result.output
+    assert iterations(paths) == [0, 1, 2]
 
 
-def test_no_interrupted_note_with_a_budget_flag_or_after_a_finished_invocation(project):
+def test_no_interrupted_note_with_a_budget_flag_or_after_a_finished_segment(project):
     paths = begun(project, "-n", "2")
     result = cli(project, "resume", "--no-report")
-    assert "interrupted invocation" not in result.output  # finished: nothing was left
+    assert "interrupted segment" not in result.output  # finished: nothing was left
     data = status(paths)
     data.update(state="interrupted", max_iterations=20)
     paths.status.write_text(json.dumps(data))
     result = cli(project, "resume", "-n", "1", "--no-report")
-    assert result.exit_code == 0 and "interrupted invocation" not in result.output
+    assert result.exit_code == 0 and "interrupted segment" not in result.output
 
 
 def test_non_finite_budgets_are_usage_errors(project):
@@ -376,7 +380,7 @@ def test_cost_alone_with_an_unknown_cost_stops_before_the_next_iteration(project
     assert iterations(paths) == [0, 1]
     assert status(paths)["stop_reason"] == {
         "kind": "budget", "budget": "cost",
-        "detail": "cost unknown: --cost can't bound this invocation (add -n or --time)"}
+        "detail": "cost unknown: --cost can't bound this segment (add -n or --time)"}
     paths = begun(project, "--cost", "1", "-n", "2")  # another bound: it goes on, counting known costs
     assert iterations(paths) == [0, 1, 2]
 
@@ -397,7 +401,64 @@ def test_no_interrupted_note_after_a_stop(project):
                 stop_reason={"kind": "condition", "detail": "stop condition met at iteration 1: done"})
     paths.status.write_text(json.dumps(data))
     result = cli(project, "resume", "--no-report")
-    assert result.exit_code == 0 and "interrupted invocation" not in result.output
+    assert result.exit_code == 0 and "interrupted segment" not in result.output
+
+
+# --- the segment log ----------------------------------------------------------------
+
+
+def segments(paths):
+    return [json.loads(line) for line in paths.segments.read_text().splitlines()]
+
+
+def test_each_segment_has_a_line_in_the_segment_log(project):
+    paths = begun(project)
+    result = cli(project, "resume", "--time", "1h", "-n", "2", "--no-report")
+    assert result.exit_code == 0, result.output
+    first, second = segments(paths)
+    assert first["budget"] == {"iterations": None, "until": None, "cost_usd": None, "time_seconds": None,
+                               "default": True}
+    assert (first["start_iteration"], first["last_iteration"], first["state"]) == (0, 1, "finished")
+    assert first["stop_reason"]["detail"] == "iteration budget reached (1)"
+    assert second["budget"] == {"iterations": 2, "until": None, "cost_usd": None, "time_seconds": 3600,
+                                "default": False}
+    assert (second["start_iteration"], second["last_iteration"], second["state"]) == (2, 3, "finished")
+    assert first["started_at"] <= first["ended_at"] <= second["started_at"] <= second["ended_at"]
+    assert second["started_at"] == status(paths)["segment_started_at"]
+    assert second["pid"] == os.getpid() and second["host"] == socket.gethostname()
+    # --until already reached: no segment, no line.
+    assert cli(project, "resume", "--until", "3").exit_code == 0
+    assert len(segments(paths)) == 2
+
+
+def test_an_interrupted_segment_is_completed_in_the_log(project, monkeypatch):
+    harness = Harness(project, new=True)
+
+    def interrupted(iteration):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(harness, "run_iteration", interrupted)
+    harness.run(Budget(iterations=5), report=False)
+    [line] = segments(harness.paths)
+    assert (line["state"], line["stop_reason"], line["last_iteration"]) == ("interrupted", None, 0)
+    assert line["budget"]["iterations"] == 5 and line["ended_at"] >= line["started_at"]
+
+
+def test_the_segment_log_keeps_a_crashed_segments_open_line(tmp_path):
+    from autohelix.run_status import SegmentLog, read_segments
+
+    path = tmp_path / "segments.jsonl"
+    SegmentLog(path).start(started_at=1.0, budget={"iterations": 3}, start_iteration=0)  # its process died
+    with path.open("a") as stream:
+        stream.write("not json\n")
+    log = SegmentLog(path)
+    log.start(started_at=2.0, budget={"iterations": 1}, start_iteration=4)
+    log.end(state="finished", stop_reason={"detail": "iteration budget reached (4)"}, last_iteration=4)
+    crashed, done = read_segments(path)
+    assert (crashed["started_at"], crashed["ended_at"], crashed["state"]) == (1.0, None, None)
+    assert (done["started_at"], done["last_iteration"], done["state"]) == (2.0, 4, "finished")
+    assert path.read_text().splitlines()[1] == "not json"  # kept as it was
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["segments.jsonl"]  # no temporary left
 
 
 def test_n_help_says_more_only_on_resume(project):

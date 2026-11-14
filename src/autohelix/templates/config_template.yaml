@@ -48,4 +48,4 @@ scope:
 #   # timeout: 30m        # per iteration: the agent sees the time left, then is stopped
 
 # How long to run is not set here: `autohelix run -n 10 --cost 20 --time 2h`
-# (iterations, dollars, wall clock; each optional, 3 iterations by default).
+# (iterations, dollars, wall clock; each optional, 1 iteration by default).

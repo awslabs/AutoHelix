@@ -260,7 +260,7 @@ def _line(width: int, *parts: tuple[str, str]) -> Text:
 
 
 def budget_text(budget, done: int) -> str:
-    """The budget in effect for an invocation after iteration `done` (a `harness.Budget`):
+    """The budget in effect for a segment after iteration `done` (a `harness.Budget`):
     `3 more iterations (to 8) · $5.00 more · 1h`, `no iteration cap · $5.00 more`; a new
     run says `3 iterations · $5.00`."""
     from autohelix.formatting import format_cap
@@ -284,7 +284,7 @@ def budget_text(budget, done: int) -> str:
 def header_lines(config, run_id: str, label: str, budget, done: int = 0, width: int = 100) -> list[Text]:
     """`AutoHelix · run <short> · <label>` (the run's name, else the project's), then Goal, Agent, Gates, Observe, Scope and
     Budget lines (each only if it has something to say), each cut to `width`. `budget` is
-    the invocation's (`budget_text`), `done` the run's last iteration before it."""
+    the segment's (`budget_text`), `done` the run's last iteration before it."""
     from autohelix.iteration_time import format_duration
     from autohelix.runs import short_id
 

@@ -26,11 +26,15 @@ Breaking:
     (a Codex without hook support warns and runs without them).
 - **`budget:` moved to the command line** (an error naming the flags): `run`
   and `resume` take `-n N`, `--until N`, `--cost USD` and `--time DURATION`,
-  each counting that invocation (`resume -n 10 --cost 5`: 10 more iterations,
-  up to $5 more). Without a budget flag, 3 iterations; with only `--cost` or
-  `--time`, no iteration cap. Cost and time are checked before each iteration
-  starts as well as after it. Status and `--json` record the caps as run totals
-  (spent before + this invocation's cap).
+  each counting one segment, that is one `run` or `resume` command
+  (`resume -n 10 --cost 5`: 10 more iterations, up to $5 more). Without a
+  budget flag, **1 iteration** (was 3): a bare `run` is one checked attempt,
+  loops are typed (`-n 5`); with only `--cost` or `--time`, no iteration cap.
+  Cost and time are checked before each iteration starts as well as after it.
+  Status and `--json` record the iteration and cost caps as run totals (spent
+  before + this segment's cap) and the `--time` cap as the segment's own, with
+  `segment_started_at`; the dashboard shows it as "12m 05s of 1h (this
+  segment)".
 - Metric gate thresholds are percent strings (`regress: 5%`); a bare number
   is an error. Durations everywhere: a bare number (or a string of digits) is
   seconds, strings like `90s`, `30m`, `2h30m`.
@@ -222,6 +226,9 @@ Added:
   prompt variable `imported`.
 - The "also running for this config" warning is quiet when either run lands
   manually (only one of them lands on its own), as for group runs.
+- A segment log, `.autohelix/runs/<id>/.internal/segments.jsonl`: one line per
+  `run`/`resume` command with its start and end times, the budget as given,
+  its first and last iteration, the stop reason and how it ended.
 
 ### Changed (breaking)
 

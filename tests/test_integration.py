@@ -534,13 +534,13 @@ gates:
         assert all(r.usage["cost_source"] == "calculated" for r in iterations)
         assert all(r.usage["cost_rates"]["output"] == 10 for r in iterations)
         assert "$0.02" in capsys.readouterr().out
-        # --cost counts this invocation only: the $0.02 already spent doesn't, the
+        # --cost counts this segment only: the $0.02 already spent doesn't, the
         # estimates of its own two iterations do ($0.01, then $0.02 >= $0.015).
         harness = Harness(integration_project)
         harness.run(Budget(cost_usd=0.015))
         assert calls == 4
         status = json.loads(harness.paths.status.read_text())
-        assert status["stop_reason"]["detail"] == "cost budget reached ($0.015 this invocation)"
+        assert status["stop_reason"]["detail"] == "cost budget reached ($0.015 this segment)"
         assert status["max_cost_usd"] == pytest.approx(0.035) and status["max_iterations"] is None
 
     def test_cost_budget_stops_loop(self, integration_project):
@@ -739,7 +739,7 @@ gates:
         assert "--cost counts known costs only" in output
         assert "cost unavailable" in output
 
-    def test_cost_budget_is_per_invocation(self, integration_project):
+    def test_cost_budget_is_per_segment(self, integration_project):
         """A resumed run gets the full --cost again, whatever it spent before; status
         records the cap as a run total (spent before + --cost)."""
         import json
@@ -804,15 +804,16 @@ gates:
 
         results2 = history.load()
         iters2 = [r for r in results2 if r.iteration > 0]
-        # $0.05 each: iterations 3, 4 and 5 reach $0.15 this invocation
+        # $0.05 each: iterations 3, 4 and 5 reach $0.15 this segment
         assert len(iters2) == 5
         status = json.loads(RunPaths(integration_project).status.read_text())
         assert status["max_cost_usd"] == pytest.approx(0.25)
-        assert status["stop_reason"]["detail"] == "cost budget reached ($0.15 this invocation)"
+        assert status["stop_reason"]["detail"] == "cost budget reached ($0.15 this segment)"
 
-    def test_time_budget_is_per_invocation(self, integration_project):
-        """--time counts this invocation's wall clock only; status records the cap as
-        the seconds recorded before (wall_clock_ms, else duration_ms) + --time."""
+    def test_time_budget_is_per_segment(self, integration_project):
+        """--time counts this segment's wall clock only, whatever the iterations
+        recorded before (wall_clock_ms, else duration_ms); status records the
+        segment's own cap, not a run total."""
         import json
 
         from autohelix.history import record_seconds
@@ -843,7 +844,7 @@ gates:
         harness2.run(Budget(until=4, time_seconds=40))
         assert [r.iteration for r in History(integration_project).load() if r.iteration > 0] == [1, 2, 3, 4]
         status = json.loads(RunPaths(integration_project).status.read_text())
-        assert status["max_time_seconds"] == round(before) + 40
+        assert status["max_time_seconds"] == 40 and before >= 19
         assert status["max_iterations"] == 4 and status["max_cost_usd"] is None
 
     def test_wall_clock_ms_recorded(self, integration_project):

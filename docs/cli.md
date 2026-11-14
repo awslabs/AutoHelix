@@ -155,10 +155,10 @@ commands use: iteration copies are made from the commit. Do it before the first
 
 | Option | Description |
 |--------|-------------|
-| `-n`, `--iterations N` | Run N iterations (for `resume`, N more). Default 3, only when no budget flag is given |
+| `-n`, `--iterations N` | Run N iterations (for `resume`, N more). Default 1, only when no budget flag is given |
 | `--until N` | Run up to iteration N in total (safe to repeat) |
-| `--cost USD` | Stop once this invocation has spent USD (known costs) |
-| `--time DURATION` | Start no iteration after DURATION of this invocation's wall clock (`90m`, `2h`) |
+| `--cost USD` | Stop once this segment has spent USD (known costs) |
+| `--time DURATION` | Start no iteration after DURATION of this segment's wall clock (`90m`, `2h`) |
 | `--path`, `-p` | Project directory (default: current dir) |
 | `--group NAME` | Make the run part of a [group](#groups): it sees the other runs of the group (their notes, history and code), and lands manually by default |
 | `--land auto\|manual` | Land accepted code at the end of each segment, or retain it only on the run ref until `autohelix land`. Stored with the run. Default: `manual` with `--group`, else `land:` in the config, else `auto` |
@@ -191,7 +191,7 @@ commits advance `refs/autohelix/<id>` first, then auto landing fast-forwards the
 starting branch before report generation. If dirty files would be overwritten,
 the target diverged, or the target is checked out elsewhere, landing is refused
 and the run ref retains the accepted code. Resolve that condition and land later.
-One invocation of `run` or `resume` is a segment, with its own
+One `run` or `resume` command is a **segment**, with its own
 [budget](#budgets). Only one process can own a run at a time; a PID in
 the viewer is advisory, while a process-held file lock enforces ownership.
 
@@ -209,26 +209,33 @@ Legacy `.autohelix/history.jsonl` state is not migrated: move or delete the old
 ### Budgets
 
 The config says what one iteration does; the flags say how long this
-invocation goes on. Every budget counts **this invocation**, whatever earlier
-ones spent:
+command goes on: one `run` or `resume` command is a **segment** of the run.
+Every budget counts **this segment**, whatever earlier ones spent:
 
 | Flag | Stops |
 |---|---|
 | `-n N` | after N iterations (`resume -n N`: N more) |
 | `--until N` | after iteration N of the run: the one flag that counts a total, so a script can repeat it (`resume --until 20` twice runs nothing the second time) |
-| `--cost USD` | once this invocation has charged USD: agent calls, reviews, asks, every model call a command reports, the baseline's too (the summary report excepted) |
-| `--time DURATION` | once DURATION of this invocation's wall clock has passed, the baseline included |
+| `--cost USD` | once this segment has charged USD: agent calls, reviews, asks, every model call a command reports, the baseline's too (the summary report excepted) |
+| `--time DURATION` | once DURATION of this segment's wall clock has passed, the baseline included |
 
-Whichever comes first ends the invocation; a stop condition can end it sooner.
-`-n` and `--until` don't go together. Without any budget flag an invocation
-runs **3** iterations (more); with only `--cost` or `--time` it has no
+Whichever comes first ends the segment; a stop condition can end it sooner.
+`-n` and `--until` don't go together. Without any budget flag a segment
+runs **1** iteration (one more): a bare `autohelix run` is one checked
+attempt, and a loop is typed (`-n 5`). With only `--cost` or `--time` it has no
 iteration cap. Cost and time are checked before each iteration and after it,
-never during one, so an invocation can overshoot by one iteration's worth: for
+never during one, so a segment can overshoot by one iteration's worth: for
 a hard limit on one iteration use [`agent.timeout`](config.md#agent). Costs that
 are unavailable don't count (`--cost` warns and tracks only the known ones): keep
 `-n` or `--time` alongside. With `--cost` the only bound, an unknown cost stops
-the invocation before its next iteration ("cost unknown: --cost can't bound this
-invocation (add -n or --time)").
+the segment before its next iteration ("cost unknown: --cost can't bound this
+segment (add -n or --time)").
+
+`--time` starts no new iteration once the time is up; what is under way then
+comes on top, so the worst case is `--time` plus one iteration, landing and the
+report: the iteration's agent call (unbounded unless
+[`agent.timeout`](config.md#agent) is set), each of its commands up to its
+`timeout:` (default 30m), and the report agent's 15 minutes (`--no-report` skips it).
 
 ```bash
 autohelix run perf -n 10 --cost 20      # at most 10 iterations and $20
@@ -238,8 +245,13 @@ autohelix resume --until 30 --time 2h   # up to iteration 30, starting none afte
 ```
 
 The header names the budget in effect ("3 more iterations (to 8) · $5.00
-more · 2h"), and the run's status records it as run totals (see
-[JSON output](#json-output)).
+more · 2h", or "1 iteration (default)"). The run's status records the
+iteration and cost caps as run totals and the `--time` cap as this segment's
+own; the dashboard shows it against the segment's clock while it runs ("12m 05s
+of 2h (this segment)") and the run's total time without a cap (see
+[JSON output](#json-output)). Every segment also gets a line in
+`.autohelix/runs/<id>/.internal/segments.jsonl` (see
+[Concepts → Runs and run state](concepts.md#runs-and-run-state)).
 
 ### Groups
 
@@ -327,9 +339,9 @@ process, a reboot, three agent failures), a stop condition, or to change
 
 | Option | Description |
 |--------|-------------|
-| `-n`, `--iterations` | How many **more** iterations to run (default 3, only when no budget flag is given) |
+| `-n`, `--iterations` | How many **more** iterations to run (default 1, only when no budget flag is given) |
 | `--until N` | Run up to iteration N (a total: running it twice does nothing the second time) |
-| `--cost USD`, `--time DURATION` | Up to USD more, and DURATION of this invocation's wall clock (see [Budgets](#budgets)) |
+| `--cost USD`, `--time DURATION` | Up to USD more, and DURATION of this segment's wall clock (see [Budgets](#budgets)) |
 | `--land auto\|manual` | Change the run's landing mode (stored; default: keep it) |
 | `--group NAME` | Put the run in group NAME from its next iteration (stored); `--group ''` takes it out of its group |
 
@@ -354,11 +366,11 @@ last active 2h ago"). If that run is running in another terminal, `resume`
 says so rather than picking an older one. With no run to resume it exits
 with status 3.
 
-Budgets are this invocation's ([Budgets](#budgets)): `resume -n 10 --cost 5`
+Budgets are this segment's ([Budgets](#budgets)): `resume -n 10 --cost 5`
 runs 10 more iterations, up to $5 more, however much the run spent before.
-After an interrupted invocation (Ctrl-C, a killed process, a reboot), a
-`resume` without budget flags says what that one had left: "3 more (default);
-the interrupted invocation had 8 left: -n 8" (not when that invocation had already stopped for a
+After an interrupted segment (Ctrl-C, a killed process, a reboot), a
+`resume` without budget flags says what that one had left: "1 more (default);
+the interrupted segment had 8 left: -n 8" (not when that segment had already stopped for a
 reason of its own). `--until` with a number already reached says so ("Already at iteration 5;
 --until 3 runs nothing.") and exits 0 without starting a segment: nothing is written, landed or
 reported. A run stopped by a
@@ -432,7 +444,7 @@ autohelix view [RUN_ID] [-p PATH] --once | --json
 autohelix view [RUN_ID] [-p PATH] --web [--port 8765] [--open]
 ```
 
-`RUN_ID` (or its last part) picks the run; the default is the current run. By default the terminal shows, on top, the run's status, time and cost, landing, the latest accepted metrics against the baseline, and one row per iteration, refreshed as the run goes. Below that is the live output of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (agent, checks, benchmark, …) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out. When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/` (and, for a judge or review call still running, its transcript in the run's copies folder).
+`RUN_ID` (or its last part) picks the run; the default is the current run. By default the terminal shows, on top, the run's status, time and cost (with the latest segment's `--time` cap, as on the [dashboard](#autohelix-dashboard)), landing, the latest accepted metrics against the baseline, and one row per iteration, refreshed as the run goes. Below that is the live output of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (agent, checks, benchmark, …) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out. When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/` (and, for a judge or review call still running, its transcript in the run's copies folder).
 
 `--once` prints the top part (status and iteration table) once as text and exits. `--json` prints the run once and exits, for scripts and agents managing runs: the run's row from [`dashboard --json`](#json-output) under `run`, plus `iterations`, one entry per iteration with `iteration`, `accepted`, `metrics`, `summary` (the agent's one-line summary; for records without one, the commit subject, or why it was rejected), `reason` (why it was rejected, `null` otherwise), `cost`, `cost_incomplete`, `seconds`, `gates` (in config order: `text`, `kind` (`command` or `metric`), `passed` (`true`, `false`, or `null` when not reached), and for commands that ran `return_code`, `duration_s` and, failed, the `output` tail; for checked metric gates `value`, `reference` and, failed, `reason`), `observe` (the entries that ran, in order: `name`, `ok`, `return_code`, `error`, `metrics`, `duration_s`) and `discarded` (paths outside the editable scope whose changes were dropped). In the text table a rejected iteration shows the gate that failed, with the agent's summary, failed observe entries and discarded paths on the lines under it. Use one of `--once`, `--json` and `--web` at a time.
 
@@ -457,7 +469,7 @@ autohelix dashboard [-p PATH] --json
 autohelix dashboard [-p PATH] --web [--port 8765] [--open]
 ```
 
-By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C: the id, with its group after it (`20261111-1432-k3f9 (perf)`); the status (with the phase while running), with time and cost so far underneath; iterations, of the latest invocation's cap; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; when the run was last active; and the goal's title (its first line), with the run's notes under it: why it was started (`run --why`) and the run it continues from (`run --import`). The header names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
+By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C: the id, with its group after it (`20261111-1432-k3f9 (perf)`); the status (with the phase while running), with time and cost so far underneath (the run's total, no cap) and the latest segment's `--time` cap ("12m 05s of 1h (this segment)" while it runs, "--time 1h (last segment)" after); iterations, of the latest segment's cap; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; when the run was last active; and the goal's title (its first line), with the run's notes under it: why it was started (`run --why`) and the run it continues from (`run --import`). The header names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
 
 `--web` serves the same rows as a live page instead (`--port`, default 8765, and `--open` go with it). There the metric's change against the run's own baseline is in the tooltip, and the metric is picked from a menu in the column header. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel). Archived runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view --web`](#autohelix-view) page. It is the same server as `autohelix view --web`, with the same `127.0.0.1`-only binding.
 
@@ -470,10 +482,10 @@ By default the terminal shows one row per run in `.autohelix/runs/`, redrawn eve
   - `id`, `name`, `archived` (true or false), `created_at`, `last_activity`;
   - `group` (`null` outside a group) and `land` (`auto` or `manual`: the run's landing mode);
   - `config_file`, `goal` and `title` (the goal's first line, cut to about 80 characters), read from the config file as it is now in the checkout;
-  - `status`: the last segment's `state` (`running`, `finished`, `interrupted`, `failed`, or `crashed` when its process is gone), `phase`, `iteration`, `iteration_started_at`, `phase_started_at`, `stopped_at`, `stop_reason` (`kind`, `detail`, …), and that segment's caps `max_iterations`, `max_cost_usd` and `max_time_seconds` (as in `progress`); `null` before the first segment;
+  - `status`: the last segment's `state` (`running`, `finished`, `interrupted`, `failed`, or `crashed` when its process is gone), `phase`, `iteration`, `iteration_started_at`, `phase_started_at`, `stopped_at`, `stop_reason` (`kind`, `detail`, …), that segment's caps `max_iterations`, `max_cost_usd` and `max_time_seconds` (as in `progress`), and `segment_started_at`, when that segment started (its `--time` counts from there); `null` before the first segment;
   - `accepted`: the number of accepted iterations;
   - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
-  - `progress`: `iterations` attempted, `cost_usd` and `cost_incomplete` (the whole run's), `seconds` (the recorded iterations' wall clock, the baseline's included), and the latest invocation's [budget](#budgets) as run totals, "spent before it + its own cap", `null` where it had none: `max_iterations` (the last iteration it may run: the previous last iteration + `-n`, or `--until`), `max_cost_usd` (the run's cost before it + `--cost`) and `max_seconds` (`seconds` before it + `--time`). They come from the run's status, never from the config;
+  - `progress`: `iterations` attempted, `cost_usd` and `cost_incomplete` (the whole run's), `seconds` (the recorded iterations' wall clock, the baseline's included), and the latest segment's [budget](#budgets), `null` where it had none: `max_iterations` (the last iteration it may run: the previous last iteration + `-n`, or `--until`) and `max_cost_usd` (the run's cost before it + `--cost`) as run totals, "spent before it + its own cap"; `max_seconds`, that segment's own `--time` (not a run total: compare it with the time since `status.segment_started_at`, not with `seconds`). They come from the run's status, never from the config;
   - `target_branch` and `landing`: `commits` the target lacks and whether it can `fast_forward`, or `null` when either side is unavailable;
   - `why` (`run --why`), `archive_why` (`archive --why`) and `import` (`{"run": <id>}` for a run started with `run --import`), each `null` when absent.
   - A run that can't be read has only `id` and `error`.
