@@ -148,6 +148,8 @@ class RunPaths:
     @property
     def segments(self): return self.internal / "segments.jsonl"  # one line per segment (`run_status.SegmentLog`)
     @property
+    def stop_request(self): return self.internal / "stop.json"  # `autohelix stop`'s request (`run_status`)
+    @property
     def metrics(self): return self.internal / "metrics.json"  # `$AUTOHELIX_METRICS` for stop commands
     @property
     def claude_settings(self): return self.internal / "claude_settings.json"

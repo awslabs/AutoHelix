@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Live run status: the harness writes runs/<id>/.internal/status.json, observers read it;
-and the segment log, runs/<id>/.internal/segments.jsonl."""
+the segment log, runs/<id>/.internal/segments.jsonl; and stop requests
+(`autohelix stop`), runs/<id>/.internal/stop.json."""
 
 import json
 import os
 import socket
 import time
 from pathlib import Path
-from autohelix.runs import RunPaths, SCHEMA
+from autohelix.runs import RunPaths, SCHEMA, write_json
 
 
 def _path(project: Path, run_id: str | None = None) -> Path:
@@ -75,9 +76,13 @@ class SegmentLog:
         self.path = path
         self.segment: int | None = None
 
+    def next_number(self) -> int:
+        """The number `start` gives the next segment: past every number in the file, end
+        records too (a damaged start line can't make one reused)."""
+        return max((r["segment"] for r in _segment_records(self.path)), default=0) + 1
+
     def start(self, *, started_at: float, budget: dict, start_iteration: int) -> None:
-        # Past every number in the file, end records too (a damaged start line can't make one reused).
-        self.segment = max((r["segment"] for r in _segment_records(self.path)), default=0) + 1
+        self.segment = self.next_number()
         self._append({"segment": self.segment, "event": "start", "started_at": started_at, "pid": os.getpid(),
                       "host": socket.gethostname(), "budget": budget, "start_iteration": start_iteration})
 
@@ -165,3 +170,43 @@ def running_iteration(status: dict | None) -> int | None:
         return None
     n = status.get("iteration")
     return n if isinstance(n, int) and not isinstance(n, bool) and n >= 0 else None
+
+
+def write_stop_request(paths: RunPaths, *, segment: int, why: str | None, now: bool) -> dict:
+    """Ask a running segment (`segment`, its status's number) to stop after its current
+    iteration; with `now` the requester also interrupts it (SIGINT). Replaces an earlier
+    request. Raises OSError."""
+    request = {"requested_at": time.time(), "why": why, "now": now, "segment": segment,
+               "host": socket.gethostname(), "pid": os.getpid()}
+    write_json(paths.stop_request, request)
+    return request
+
+
+def read_stop_request(paths: RunPaths, segment) -> dict | None:
+    """The stop request for segment `segment`, else None: no request, an unreadable one,
+    or one for another segment (left by a segment that ended before reading it)."""
+    if type(segment) is not int:
+        return None
+    try:
+        request = json.loads(paths.stop_request.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(request, dict) or type(request.get("segment")) is not int or request["segment"] != segment:
+        return None
+    return request
+
+
+def clear_stop_request(paths: RunPaths) -> None:
+    try:
+        paths.stop_request.unlink(missing_ok=True)
+    except OSError:
+        pass  # never break a run over it
+
+
+def pending_stop(paths: RunPaths, status: dict | None) -> dict | None:
+    """What a running status's segment was asked by `autohelix stop` (`requested_at`,
+    `why`, `now`); None when it isn't running or wasn't asked."""
+    if not isinstance(status, dict) or status.get("state") != "running":
+        return None
+    request = read_stop_request(paths, status.get("segment"))
+    return None if request is None else {key: request.get(key) for key in ("requested_at", "why", "now")}

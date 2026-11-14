@@ -47,7 +47,7 @@ from autohelix.history import History, record_seconds
 from autohelix.runs import RunPaths, config_relative, git, is_archived, is_transcript, last_activity
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
-from autohelix.run_status import read_run_status, running_iteration
+from autohelix.run_status import pending_stop, read_run_status, running_iteration
 from autohelix.state import read_stored_config_path
 from autohelix.workspace import ITERATION_DIR
 
@@ -993,7 +993,10 @@ class ProjectRuns:
             "title": config.get("title"),  # the goal's first line, cut (Config.title)
             "status": status and {k: status.get(k) for k in (
                 "state", "phase", "iteration", "iteration_started_at", "phase_started_at", "stopped_at",
-                "stop_reason", "max_iterations", "max_cost_usd", "max_time_seconds", "segment_started_at")},
+                "stop_reason", "max_iterations", "max_cost_usd", "max_time_seconds", "segment_started_at",
+                "segment")},
+            # `autohelix stop` asked the running segment to end ({requested_at, why, now}), else None.
+            "stop_requested": pending_stop(paths, status),
             "accepted": sum(1 for r in attempts if r.accepted),
             "metrics": self._metrics(records, config.get("directions") or {}),
             # The caps of the latest segment (`run`/`resume` flags), from its status; None

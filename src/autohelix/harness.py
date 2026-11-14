@@ -38,7 +38,7 @@ from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning)
-from autohelix.run_status import RunStatus, SegmentLog
+from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
 from autohelix.formatting import format_cap, format_cost, format_total_cost
 from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
@@ -327,6 +327,7 @@ class Harness:
             self.run_state.copies_root = claim_copies(self.paths, self.log.warn)
             self._land_attempted = False
             self._segment_started = False
+            self._segment: int | None = None  # this segment's number (segments.jsonl, status, stop requests)
             self._usage_starts: set = set()
             self._segment_target_tip: str | None = None
             self._agent_logs = {}
@@ -1471,6 +1472,7 @@ class Harness:
         """
         outcome = "finished"
         self._segment_started = False
+        self._segment = None
         self.run_status.data = {}
         try:
             if self._ownership._file.closed:
@@ -1488,6 +1490,7 @@ class Harness:
                 write_report(self.config, self.project_path, self.console, run_id=self.paths.run_id, _owned=True)
         except KeyboardInterrupt:
             outcome = "interrupted"
+            self._note_interrupt_request()  # in the baseline or the report (the loop notes its own)
             raise
         except BaseException:
             outcome = "failed"
@@ -1508,6 +1511,7 @@ class Harness:
                     self.run_status.stop(outcome)
                     if self._segment_started:
                         self._end_segment_log(sys.exc_info()[1])
+                        clear_stop_request(self.paths)  # answered (or too late for this segment)
                         self._write_static()
             finally:
                 try:
@@ -1673,10 +1677,15 @@ class Harness:
         # segment plus its own), the time cap as this segment's, counted from its start.
         cost_before = summarize_costs(self.history.cost_usages).cost_usd or 0
         self._segment_records = len(self.history.load())  # the end record counts what it adds
+        # A stop request no segment answered (its own ended first): gone before the status
+        # says running, the only time `autohelix stop` writes one.
+        clear_stop_request(self.paths)
+        # The number its start record gets: in the status, so a stop request names this segment.
+        self._segment = self.segment_log.next_number()
         # Set before the first write: from here the segment's ending writes its end record.
         self._segment_started = True
         self.run_status.start(
-            max_iterations=max_iter, run_id=self.paths.run_id,
+            max_iterations=max_iter, run_id=self.paths.run_id, segment=self._segment,
             max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
             max_time_seconds=budget.time_seconds, segment_started_at=segment_started_at)
         self.segment_log.start(started_at=segment_started_at,
@@ -1736,7 +1745,7 @@ class Harness:
             if baseline is not None and baseline.cost.incomplete:
                 warn_unknown_cost()
 
-        # Why the loop ended; budgets are checked after stop conditions.
+        # Why the loop ended: stop conditions, then `autohelix stop`, then budgets.
         stop_reason: dict | None = None
         if baseline_stop:
             stop_reason = self._condition_stop(baseline_stop, 0)
@@ -1745,6 +1754,9 @@ class Harness:
         try:
             for iteration in itertools.count(start_iter):
                 if stop_reason:
+                    break
+                # First right after the baseline, then after each iteration: never during one.
+                if stop_reason := self._requested_stop():
                     break
                 if stop_reason := out_of_budget():
                     break
@@ -1775,8 +1787,9 @@ class Harness:
             self.log.info(f"run stopped — {stop_reason['detail']}")
         except KeyboardInterrupt:
             self.run_status.stop("interrupted")
+            by = " by autohelix stop --now" if self._note_interrupt_request() else ""
             self.console.print()
-            self.console.print(f"  [yellow]Interrupted at iteration {iteration}. Progress saved.[/yellow]",
+            self.console.print(f"  [yellow]Interrupted{by} at iteration {iteration}. Progress saved.[/yellow]",
                                highlight=False)
             ran = False
         # The ending, as plain lines: stop reason (above), totals, what landed, next commands.
@@ -1784,6 +1797,28 @@ class Harness:
         self._land()
         self._print_next()
         return ran
+
+    def _requested_stop(self, now: bool = False) -> dict | None:
+        """The stop reason for this segment's `autohelix stop` request (with `now`: only a
+        `--now` one), else None. The request is the CLI's file; a bad one is no request."""
+        request = read_stop_request(self.paths, self._segment)
+        if request is None or (now and request.get("now") is not True):
+            return None
+        why = clean(request["why"], 200) if isinstance(request.get("why"), str) and request["why"].strip() else None
+        requested_at = request.get("requested_at")
+        detail = "requested by autohelix stop" + " --now" * now + (f": {why}" if why else "")
+        return {"kind": "request", **({"now": True} if now else {}), "detail": detail, "why": why,
+                "requested_at": requested_at if isinstance(requested_at, (int, float)) else None}
+
+    def _note_interrupt_request(self) -> bool:
+        """After an interrupt: when `autohelix stop --now` sent it, note that as the stop
+        reason (the segment end record carries it). The state stays interrupted."""
+        if not self._segment_started or self.run_status.data.get("stop_reason"):
+            return False  # an earlier reason (the loop's own end) stands
+        if (reason := self._requested_stop(now=True)) is None:
+            return False
+        self.run_status.note(stop_reason=reason)
+        return True
 
     @staticmethod
     def _condition_stop(stop: dict[str, str], iteration: int) -> dict:

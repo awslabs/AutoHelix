@@ -773,6 +773,112 @@ def hint(message: str, path: str, run_id: str | None):
     click.echo(f"Hint added: {message}")
 
 
+def _process_command(pid: int) -> str:
+    """A process's command line (`ps`), "" when there is no such process or ps fails."""
+    try:
+        result = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True,
+                                timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _stop_run(project: Path, value: str, why: str | None, now: bool) -> tuple[str, str]:
+    """Ask one run to stop (`autohelix stop`): its short id and what it does next.
+    RuntimeError: refused (unknown id, not running, --now not possible)."""
+    import signal
+    import socket
+
+    from autohelix.run_status import write_stop_request
+
+    run_id = resolve_run(project, value)
+    short = short_id(run_id)
+    status = read_run_status(project, run_id) or {}
+    state = status.get("state")
+    if state != "running":
+        last = {"crashed": "it stopped unexpectedly"}.get(state, state)
+        raise RuntimeError(f"Run {short} is not running" + (f" ({last})." if last else "."))
+    if type(status.get("segment")) is not int:
+        raise RuntimeError(f"Run {short} was started by an older AutoHelix and can't be stopped this way; "
+                           "press Ctrl-C in its terminal.")
+    pid, host = status.get("pid"), status.get("host")
+    if now:
+        if host != socket.gethostname():
+            raise RuntimeError(f"Run {short} is running on {host}; --now works only there. Without --now it "
+                               "stops after its current iteration.")
+        if type(pid) is not int or pid <= 1 or "autohelix" not in _process_command(pid):
+            raise RuntimeError(f"Run {short}'s process ({pid}) is not an autohelix process; not interrupted.")
+    try:
+        write_stop_request(RunPaths(project, run_id), segment=status["segment"], why=why, now=now)
+    except OSError as error:
+        raise RuntimeError(f"Could not ask run {short} to stop: {error}") from error
+    if now:
+        try:
+            os.kill(pid, signal.SIGINT)  # as Ctrl-C in its terminal; the request (above) says why
+        except OSError as error:
+            raise RuntimeError(f"Could not interrupt run {short} ({pid}): {error}") from error
+    return short, _stop_message(short, status, now)
+
+
+def _stop_message(short: str, status: dict, now: bool) -> str:
+    """What a stopped run does next, by its status's iteration and phase."""
+    iteration, phase = status.get("iteration"), status.get("phase")
+    if type(iteration) is not int:
+        iteration = None
+    if now:
+        where = "the baseline" if iteration == 0 else f"iteration {iteration}" if iteration else "its start"
+        return f"Interrupting run {short} at {where}; an interrupted iteration is recorded as rejected."
+    if phase == "report":
+        return f"Run {short} is already ending (writing its summary)."
+    if iteration == 0:
+        return f"Run {short} stops after the baseline (running now)."
+    if iteration is not None and phase == "between iterations":
+        return f"Run {short} stops before iteration {iteration + 1}."
+    if iteration is not None:
+        return f"Run {short} stops after iteration {iteration} (running now)."
+    return f"Run {short} stops before its next iteration (it is starting)."
+
+
+@main.command()
+@click.argument("run_ids", nargs=-1, required=True)
+@click.option("--path", "-p", type=click.Path(exists=True, file_okay=False), default=".",
+              help="Project directory (default: current dir)")
+@click.option("--why", help="Why they are stopped (one line, shown with the stop reason).")
+@click.option("--now", is_flag=True,
+              help="Also interrupt the current iteration, like Ctrl-C in the run's terminal (same host only).")
+def stop(run_ids: tuple[str, ...], path: str, why: str | None, now: bool):
+    """End running runs after their current iteration (RUN_ID or its last part).
+
+    The iteration under way is never interrupted; the segment then ends as when
+    its budget runs out: it lands (auto landing), writes the summary (report:)
+    and the run page. Asked during the baseline, it stops after the baseline.
+    `autohelix resume RUN_ID` continues it later. Asking again replaces --why.
+
+    --now also interrupts the current iteration, like Ctrl-C in the run's
+    terminal: it is recorded as rejected (interrupted), the run lands, no
+    summary is written. Only on the host the run is running on.
+
+    Exits 1 if any run could not be asked (not running, unknown id).
+    """
+    why = _why(why)
+    project = Path(path)
+    asked, failed = [], False
+    for value in run_ids:
+        try:
+            short, message = _stop_run(project, value, why, now)
+        except RuntimeError as error:
+            click.echo(f"Error: {error}", err=True)
+            failed = True
+            continue
+        click.echo(message)
+        asked.append(short)
+    if asked:
+        ended = "it has ended" if len(asked) == 1 else "they have ended"
+        click.echo(f"autohelix wait {' '.join(asked)} reports when {ended}.")
+    if failed:
+        raise SystemExit(1)
+
+
 _JSON_HELP = "Print once as JSON and exit (for scripts and agents; fields are only ever added)."
 _ONCE_HELP = "Print the table once and exit."
 _WEB_HELP = "Serve a live web page on 127.0.0.1 instead."

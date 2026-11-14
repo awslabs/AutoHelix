@@ -94,10 +94,16 @@ function statusCell(run) {
   const s = run.status;
   const p = run.progress;
   let detail = '';
+  let word = WORDS[kind] || kind;
   const notes = [];
   if (kind === 'running') {
     detail = s.iteration === 0 ? 'baseline' : s.phase || '';
     notes.push(`${s.phase || 'running'} for ${fmtDuration(Date.now() / 1000 - s.phase_started_at)}`);
+    const asked = run.stop_requested;  // `autohelix stop`: it ends after this iteration
+    if (asked) {
+      word = 'running (stopping)';
+      notes.push(`Stop requested${asked.now ? ' (--now)' : ''}${asked.why ? `: ${asked.why}` : ''}`);
+    }
   } else if (kind === 'error') {
     notes.push(run.error);
   } else {
@@ -120,7 +126,7 @@ function statusCell(run) {
     if (p.cost_incomplete) notes.push('Some call costs are unavailable');
   }
   return el('td', { title: notes.join('\n') },
-    el('div', {}, el('span', { className: `pill ${kind}`, textContent: WORDS[kind] || kind }),
+    el('div', {}, el('span', { className: `pill ${kind}`, textContent: word }),
       detail ? el('span', { className: 'muted', textContent: ` ${detail}` }) : null),
     spent ? el('div', { className: 'status-sub', textContent: spent }) : null);
 }
