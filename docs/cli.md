@@ -246,20 +246,23 @@ of each iteration the agent's copy gets, for every other non-archived run of the
 project in that group (running or finished), its `run.json`, `history.jsonl` and
 `notes/` in `.autohelix-iteration/runs/<id>/`, and the copy's git has its ref,
 so `git diff autohelix/<id>`, `git show autohelix/<id>:path` and
-`git checkout autohelix/<id> -- path` work there. The prompt lists them, one
-line each, with their latest accepted metrics. Code taken from another run is
-checked like any other change; the prompt asks the agent to name the run it
-came from in its summary.
+`git checkout autohelix/<id> -- path` work there. The prompt's "Where things
+are" list names them, one line each, with their latest accepted metrics. Code
+taken from another run is checked like any other change; the prompt asks the
+agent to name the run it came from in its summary.
 
 That is all a group does: budgets, stop conditions, `resume`, `land`,
-`archive` and `delete` stay per run. A typical flow: start K runs with
-`--group perf` (one per terminal, or in the background), follow them on
-[`autohelix dashboard`](#autohelix-dashboard) (`--metric` picks the column to
-compare), `autohelix land <winner>`, and `autohelix archive` the rest. Group
-runs land manually by default: with auto landing the first to finish would land
-and every other would diverge from it for good. `resume --group NAME` moves a
-run into a group (from its next iteration) and `resume --group ''` takes it
-out; archiving a run takes it out of its group, and resuming it brings it back.
+`archive` and `delete` stay per run. Use a group for runs that should build on
+each other's notes and code, not for a comparison: runs that share what they
+learn don't measure their approaches apart. To compare approaches (models,
+prompts, or one setup several times), start separate runs with `--land manual`,
+follow them on [`autohelix dashboard`](#autohelix-dashboard) (`--metric` picks
+the column to compare), `autohelix land <winner>`, and archive the rest with
+the reason (`autohelix archive m2x7 --why "slower than k3f9"`). Group runs land
+manually by default: with auto landing the first to finish would land and every
+other would diverge from it for good. `resume --group NAME` moves a run into a
+group (from its next iteration) and `resume --group ''` takes it out; archiving
+a run takes it out of its group, and resuming it brings it back.
 
 ### Continuing from another run
 
@@ -273,8 +276,8 @@ baseline and metric reference. What it adds:
 
 - every iteration's copy shows the imported run's `run.json`, `history.jsonl`
   and `notes/` read-only in `.autohelix-iteration/runs/<id>/`, and its code's
-  ref, `autohelix/<id>`; the prompt says so ("This run continues from k3f9:
-  …"). They are copied at the start of each iteration, as for a
+  ref, `autohelix/<id>`; the prompt's "Where things are" list names it as
+  imported ("this run continues from k3f9"). They are copied at the start of each iteration, as for a
   [group](#groups); a deleted imported run is just left out;
 - at the baseline, each observe entry gets as `$AUTOHELIX_PREVIOUS` that run's
   last successful output of the entry with the same name
@@ -481,7 +484,7 @@ Send a hint to a running agent, picked up at the start of its next iteration.
 autohelix hint "MESSAGE" [-p PATH] [--run RUN_ID]
 ```
 
-Requires a selected run (start one first). Appends a timestamped line to `.autohelix/runs/<id>/hints.md`. The agent reads that file (listed in its "Read before starting" section) each iteration, so a hint lets you steer a run without stopping it. Run it from a second terminal while `autohelix run` is going. Hints accumulate — the file holds the full history for the run.
+Requires a selected run (start one first). Appends a timestamped line to `.autohelix/runs/<id>/hints.md`. The agent reads that file (its prompt lists it among what to read before starting) each iteration, so a hint lets you steer a run without stopping it. Run it from a second terminal while `autohelix run` is going. Hints accumulate — the file holds the full history for the run.
 
 ## `autohelix ask`
 

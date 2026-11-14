@@ -264,24 +264,27 @@ with several, it stops with the list (`autohelix run <name>` picks one). See
 
 ### 6. Several runs side by side
 
-To try a goal several ways at once (another model or prompt), write
-one config per variant, commit them, and start runs of one group, each in its
-own terminal:
+To try a goal several ways at once (another model or prompt), write one config
+per variant, commit them, and start a run of each, each in its own terminal,
+landing manually so that none lands before you compare:
 
 ```bash
-autohelix run a --group perf     # autohelix/a.yaml
-autohelix run b --group perf     # autohelix/b.yaml
+autohelix run a --land manual     # autohelix/a.yaml
+autohelix run b --land manual     # autohelix/b.yaml
 ```
 
-Each iteration's agent sees the other runs of its group: their notes, history and
-accepted code. Compare them with `autohelix dashboard`, then land the winner and
-archive the rest (group runs land manually by default):
+Compare them with `autohelix dashboard`, then land the winner and archive the
+rest:
 
 ```bash
 autohelix land k3f9
-autohelix archive m2x7
+autohelix archive m2x7 --why "slower than k3f9"
 ```
 
+Runs that should build on each other's work instead share a group
+(`--group perf`): each iteration's agent sees the other runs of its group, their
+notes, history and accepted code. To keep going from a run later (after more
+commits, or with an edited config), start a new one with `--import k3f9`.
 See [CLI → Groups](cli.md#groups).
 
 ## Built-in Examples

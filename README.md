@@ -379,9 +379,10 @@ organizes its persistent notes. See [Concepts → Prompt](docs/concepts.md#promp
 <details>
 <summary><b>Several runs at once</b></summary>
 
-Runs started with `autohelix run --group NAME` run side by side in one project and see each
-other's notes, history and accepted code at the start of every iteration. Compare them on
-`autohelix dashboard`, `autohelix land` the winner and `autohelix archive` the rest. See
+To compare approaches, start separate runs with `--land manual`, compare them on
+`autohelix dashboard`, `autohelix land` the winner and `autohelix archive` the rest. Runs that
+should build on each other's work share a group (`autohelix run --group NAME`): they see each
+other's notes, history and accepted code at the start of every iteration. See
 [CLI → Groups](docs/cli.md#groups).
 
 </details>

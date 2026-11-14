@@ -103,23 +103,34 @@ interrupted run, `autohelix report` writes one when requested.
 
 ## Orchestrate several runs
 
-To compare approaches (models, prompts, or the same setup several
-times), write one config per approach (`autohelix/a.yaml`, `autohelix/b.yaml`;
-runs are named after the file; repeats of one setup share a config), commit
-them, and start K runs of one group, each in its own background session:
+**Compare** approaches (models, prompts, or the same setup several times) with
+separate runs that land manually: they must not share notes or code, or the
+comparison measures their mix. Write one config per approach
+(`autohelix/a.yaml`, `autohelix/b.yaml`; runs are named after the file; repeats
+of one setup share a config), commit them, and start each run in its own
+background session with the same budget flags (repeats of one config warn
+that another run of it is running: harmless with manual landing):
 
 ```sh
-autohelix run a -p PROJECT --group perf
-autohelix run b -p PROJECT --group perf
+autohelix run a -p PROJECT --land manual -n 10 --why "approach a"
+autohelix run b -p PROJECT --land manual -n 10 --why "approach b"
 ```
 
-Runs of a group see each other's notes and history (copied into each
-iteration's `.autohelix-iteration/runs/<id>/`) and code (refs
-`autohelix/<id>` in the iteration's git), and land manually by default.
 Follow them with `autohelix dashboard --json` (`--once` for a table; add
 `--metric NAME` to compare one metric). Each run keeps its own budget, stop
-conditions and cost; there are no group commands. When they finish, compare
-the latest accepted metrics and diffs (`git diff main autohelix/<id>`), land
-the winner with `autohelix land <id>`, and `autohelix archive` the rest (an
-archived run leaves the group). Report which run won and why. Use
-`resume <id> --group NAME` to add an existing run (`--group ''` removes it).
+conditions and cost. When they finish, compare the latest accepted metrics and
+diffs (`git diff main autohelix/<id>`), land the winner with `autohelix land
+<id>`, and archive the rest with the reason (`autohelix archive <id> --why
+"lost to k3f9 on speed"`). Report which run won and why.
+
+**Collaborate** with a group when runs should build on each other's work:
+runs started with the same `--group NAME` see each other's notes and history
+(copied into each iteration's `.autohelix-iteration/runs/<id>/`) and code
+(refs `autohelix/<id>` in the iteration's git), and land manually by default.
+There are no group commands: when they finish, land the run to keep and
+archive the rest (an archived run leaves the group). Use `resume <id> --group
+NAME` to add an existing run (`--group ''` removes it).
+
+To **continue or fork** from a run (the winner, after more commits on the
+branch, or with an edited config), start a new run with `autohelix run
+<config> --import <id>` (see above); it is not a group membership.

@@ -64,7 +64,7 @@ combined.
 Every phase of an iteration (agent, checks, each review, stop) runs in **its own fresh
 copy** of the code: a private folder holding one fixed tree, with its own small
 `.git`. That `.git` borrows your repository's objects and has copies of its
-branches, tags, remote branches, and this run's ref and its group's (a snapshot taken
+branches, tags, remote branches, and the refs of this run, its imported run and its group (a snapshot taken
 when the copy is made; no stash, no remote). This means:
 
 - Whatever the agent does with git (commits, branches, config, hooks) stays in its copy.
@@ -144,7 +144,7 @@ The agent's persistent memory across iterations. Stored in `.autohelix/runs/<id>
 
 `notes/` is the **sole agent-owned region** and the only thing that round-trips
 between the main project and each iteration's agent copy. Everything else the agent
-sees in `.autohelix-iteration/` (history, observations, hints, `rejected.patch`, other runs of its group) is read-only
+sees in `.autohelix-iteration/` (history, observations, hints, `rejected.patch`, other runs' state) is read-only
 reference — copied *into* the copy but never copied back. That asymmetry is
 the whole contract: the agent freely structures `notes/` however the prompt
 directs (per-iteration files, a journal, subdirectories), and only `notes/`
@@ -215,6 +215,13 @@ latest iteration:
   the prompt names the folder of the last accepted iteration too.
 - **After discarded changes:** the paths that were outside the scope, frozen
   ones said apart from the ones that aren't editable.
+
+With other runs in the copy (an [import](cli.md#continuing-from-another-run) or
+a [group](cli.md#groups)), the reading list becomes one "Where things are"
+block: the run's own notes (editable, numbered from its iteration 1), its own
+iterations, `rejected.patch` when there is one, each other run's state in
+`runs/<id>/` (read-only, the imported one and the group members said apart),
+and their code's refs. Without them the prompt has no such block.
 
 Observe commands are different: `$AUTOHELIX_PREVIOUS` (and so
 `review --previous`) always comes from the last *accepted* iteration in which
@@ -441,7 +448,7 @@ run's folder:
 ```
 <copy>/
 ├── <code at the run's tip>
-├── .git/                       private; refs: branches, tags, this run's (and its group's)
+├── .git/                       private; refs: branches, tags, this run's (and its import's, group's)
 └── .autohelix-iteration/
     ├── prompt.md  hints.md     this iteration's prompt; hints
     ├── notes/                  this run's notes: the only thing saved back
@@ -450,7 +457,8 @@ run's folder:
     │                           failing gates' gates/<k>/, observe/, stop/
     ├── rejected.patch          after a rejection: the rejected attempt's change
     ├── commit_summary.txt      written by the agent: the commit's first line
-    └── runs/<other-id>/        other runs of the group: run.json, history.jsonl, notes/
+    └── runs/<other-id>/        the imported run and other runs of the group: run.json,
+                                history.jsonl, notes/
 ```
 
 A copy's `iterations/` leaves out the agent logs, prompts, `notes` links,

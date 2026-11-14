@@ -75,31 +75,44 @@ Editable (only changes to these files will be kept): {{ editable | join(', ') }}
 Frozen (changes to these files will be reverted{% if editable %}, even inside the editable ones{% endif %}): {{ frozen | join(', ') }}
 {% endif %}
 
+{% set others = imported or group_runs %}
+{% if others %}
+Where things are (read before starting):
+- .autohelix-iteration/notes/ — yours: this run's notes, editable, iter-N.md from this run's iteration 1
+{% else %}
 Read before starting:
 - .autohelix-iteration/notes/iter-*.md — your own notes from past iterations
-- .autohelix-iteration/iterations/NNN/ — the last {{ recent_iterations }} iterations and the last accepted one: record.json{% if gates %},
+{% endif %}
+- .autohelix-iteration/iterations/NNN/ — {{ "this run's own" if others else "the" }} last {{ recent_iterations }} iterations and {{ "its" if others else "the" }} last accepted one: record.json{% if gates %},
   gates/<k>/ of failed gates (k: position in the list above; stdout.txt, stderr.txt, ask.log){% endif %}{% if observe %},
   observe/<name>/ (stdout.txt, stderr.txt, captured files, review.log){% endif %}{% if stop %},
   stop/<k>/ (stop commands' output){% endif %}. ask.log/review.log are judge transcripts, often long.
   Older iterations: .autohelix-iteration/history.jsonl
+{% if others and rejected_patch %}
+- {{ rejected_patch }} — the last rejected attempt's change
+{% endif %}
 {% if hints %}
 - {{ hints }}
 {% endif %}
-
+{% if others %}
+- .autohelix-iteration/runs/<id>/ — other runs' run.json, history.jsonl and notes/: read-only (a copy; edits there are discarded)
 {% if imported %}
-This run continues from {{ imported.short }}: its notes and history are in `{{ imported.path }}` (read-only);
-its code is at `autohelix/{{ imported.id }}`. Your own notes (this run's, from its iteration 1) are in `.autohelix-iteration/notes/`.
+  - Imported (this run continues from {{ imported.short }}; its notes and history are where that work left off):
+    `{{ imported.path }}` (code at `autohelix/{{ imported.id }}`)
 {% endif %}
-
 {% if group_runs %}
-Other runs in group `{{ group }}` (copies of their state as of this iteration's start, read-only):
+  - Group `{{ group }}` members (other runs alongside this one, running or finished; their state as of this iteration's start):
 {% for line in group_runs %}
-- {{ line }}
+    {{ line }}
 {% endfor %}
-Each has run.json, history.jsonl and notes/. Their accepted code is on the refs above, in this
-copy's git: `git diff autohelix/<id>`, `git show autohelix/<id>:<file>`,
-`git checkout autohelix/<id> -- <file>`. Build on it or explore a different approach. If you
-adopt code from another run, name that run in your summary (e.g. "adopted the parser from k3f9").
+{% endif %}
+- Other runs' code: their refs `autohelix/<id>` in this copy's git: `git diff autohelix/<id>`,
+  `git show autohelix/<id>:<file>`, `git checkout autohelix/<id> -- <file>`.
+{% endif %}
+{% if group_runs %}
+
+Build on the group's work or explore a different approach. If you adopt code from another
+run, name that run in your summary (e.g. "adopted the parser from k3f9").
 {% endif %}
 
 {% if time_limit %}

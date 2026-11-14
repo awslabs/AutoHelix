@@ -69,11 +69,12 @@ def test_import_shows_the_runs_state_and_continues_its_observations(project, mon
     assert f"refs/autohelix/{parent.run_id}" in seen["refs"]
     assert stranger.ref not in seen["refs"] and not any(stranger.run_id in r for r in seen["refs"])
     assert snapshot(parent.run_dir) == before  # read, never written
-    line = (f"This run continues from {short_id(parent.run_id)}: its notes and history are in "
-            f"`.autohelix-iteration/runs/{parent.run_id}/` (read-only)")
-    assert line in seen["prompt"] and f"its code is at `autohelix/{parent.run_id}`" in seen["prompt"]
-    assert "Your own notes (this run's, from its iteration 1) are in `.autohelix-iteration/notes/`" in seen["prompt"]
-    assert "Other runs in group" not in seen["prompt"]
+    line = (f"  - Imported (this run continues from {short_id(parent.run_id)}; its notes and history are where "
+            f"that work left off):\n    `.autohelix-iteration/runs/{parent.run_id}/` (code at `autohelix/{parent.run_id}`)")
+    assert line in seen["prompt"]
+    assert "- .autohelix-iteration/notes/ — yours: this run's notes, editable, iter-N.md from this run's iteration 1" \
+        in seen["prompt"]
+    assert "Group `" not in seen["prompt"]
     # Its own notes start empty, versioned from its iteration 1.
     assert notes == [[]]
     assert sorted(p.name for p in child.paths.notes_versions.iterdir()) == ["1"]
@@ -106,7 +107,7 @@ def test_an_imported_group_member_is_shown_once_as_imported(project, monkeypatch
     child.run(Budget(until=1), report=False)
     assert identity(child.paths)["group"] == "g" and identity(child.paths)["import"] == {"run": parent.run_id}
     assert seen["runs"] == [parent.run_id]
-    assert "This run continues from" in seen["prompt"] and "Other runs in group" not in seen["prompt"]
+    assert "- Imported (this run continues from" in seen["prompt"] and "Group `g` members" not in seen["prompt"]
 
 
 def test_a_deleted_imported_run_doesnt_stop_the_run(project, monkeypatch):
@@ -118,7 +119,7 @@ def test_a_deleted_imported_run_doesnt_stop_the_run(project, monkeypatch):
     watch_agent(child, monkeypatch, seen)
     child.run(Budget(until=1), report=False)
     assert "previous none" in stdout(child.paths, 0, "tracker")
-    assert seen["runs"] == [] and "continues from" not in seen["prompt"]
+    assert seen["runs"] == [] and "continues from" not in seen["prompt"] and "Where things are" not in seen["prompt"]
     assert child.history.load()[-1].accepted
 
 

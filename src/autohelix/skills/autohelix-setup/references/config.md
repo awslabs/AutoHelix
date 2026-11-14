@@ -249,8 +249,8 @@ Commit the config and any scripts it uses, then start with `autohelix run
 the file's parsed config has changed since (comment edits don't count): apply an edited config with a
 new run, `autohelix run [NAME] --import <id>`, or restore the file. The config and template files are
 always frozen; freeze scripts the config calls under `scope.frozen` if they must not change. Continue one with `autohelix resume [RUN_ID]
---path PROJECT` and its own budget flags. A bare `resume` reads the config a bare `run`
-would; with several configs, name the run.
+--path PROJECT` and its own budget flags. A bare `resume` continues the latest run of the config a
+bare `run` would use; with several configs, name the run.
 
 `autohelix archive RUN_ID` hides a run and stops a bare `resume` from picking
 it, retaining its history and unlanded commits; `autohelix delete RUN_ID`

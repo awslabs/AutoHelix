@@ -749,7 +749,7 @@ def hint(message: str, path: str, run_id: str | None):
     """Send a hint to the running agent (picked up next iteration).
 
     Appends a timestamped message to the selected run's hints.md.
-    The agent sees this file in its "Read before starting" list.
+    The agent's prompt lists this file among what to read before starting.
     """
     from datetime import datetime
 
