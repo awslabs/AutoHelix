@@ -88,7 +88,7 @@ Read before starting:
 
 {% if imported %}
 This run continues from {{ imported.short }}: its notes and history are in `{{ imported.path }}` (read-only);
-its code is at `autohelix/{{ imported.id }}`. Your own notes start fresh in `.autohelix-iteration/notes/`.
+its code is at `autohelix/{{ imported.id }}`. Your own notes (this run's, from its iteration 1) are in `.autohelix-iteration/notes/`.
 {% endif %}
 
 {% if group_runs %}

@@ -489,7 +489,7 @@ user's branch and staged files alone. No-op accepts retain the same tip.
 Resuming repairs an interrupted final record and recovers accepted commits whose
 record was not finished. Other history corruption is refused. **`resume` only
 continues the same run**: its stored config, its own tip, more budget. When the
-target branch has moved past the run's tip (you committed after it landed), an
+target branch has moved past the run's tip (you or another run committed on it), an
 auto-landing `resume` refuses before writing anything and names the ways on: a
 new run that continues from it, `autohelix run <config> --import <id>` (your
 checkout's code, that run's notes and history), or `resume <id> --land manual`,

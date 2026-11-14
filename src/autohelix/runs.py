@@ -624,10 +624,12 @@ def imported_run(paths: RunPaths, data: dict) -> tuple[RunPaths, dict] | None:
     stop this run."""
     source = data.get("import")
     source = source.get("run") if isinstance(source, dict) else None
-    if not isinstance(source, str) or source == paths.run_id:
+    if not isinstance(source, str) or not _ID.fullmatch(source):  # a real id, never the `current` alias
         return None
     try:
         other = RunPaths(paths.project, source)
+        if other.run_id == paths.run_id:
+            return None
         return other, other.read_identity()
     except RuntimeError:
         return None
@@ -976,10 +978,14 @@ def target_ahead(paths: RunPaths, data: dict, tip: str | None = None) -> int:
 
 
 def target_ahead_refusal(paths: RunPaths, data: dict, count: int) -> str:
-    """Why an auto-landing `resume` refuses a run whose target moved past its tip."""
+    """Why an auto-landing `resume` refuses a run whose target moved past its tip: by
+    you or another run, after its tip, or since it started if it never accepted a change."""
     short = short_id(paths.run_id)
-    return (f"{data['target_branch']} has {count} commit{'s' * (count != 1)} past run {short}'s tip (committed "
-            f"after it landed). A run continues its own code: start a new run that continues from it, "
+    tip = git(paths.project, "rev-parse", "--verify", "-q", f"{paths.ref}^{{commit}}", check=False).stdout.strip()
+    when = (f"committed since run {short} started; it hasn't accepted any changes" if tip == data.get("base_commit")
+            else "committed after its tip")
+    return (f"{data['target_branch']} has {count} commit{'s' * (count != 1)} past run {short}'s tip ({when}). "
+            f"A run continues its own code: start a new run that continues from it, "
             f"`{run_command(data['config_path'])} --import {short}`, or continue without landing: "
             f"`autohelix resume {short} --land manual`.")
 

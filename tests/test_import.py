@@ -2,6 +2,7 @@
 its own run (a target branch moved past its tip, after a stop condition), and `--why`."""
 
 import json
+import os
 import shutil
 
 from autohelix.harness import Budget, Harness
@@ -22,10 +23,24 @@ def stdout(paths, iteration, name):
     return (paths.observe_entry(iteration, name) / "stdout.txt").read_text()
 
 
+def snapshot(*roots):
+    """Every file and link below `roots` (files themselves too): contents and mtimes."""
+    found = {}
+    for root in roots:
+        for path in [root, *root.rglob("*")] if root.is_dir() else [root]:
+            if path.is_symlink():
+                found[str(path)] = ("link", os.readlink(path))
+            elif path.is_file():
+                found[str(path)] = (path.read_bytes(), path.stat().st_mtime_ns)
+    return found
+
+
 def test_import_shows_the_runs_state_and_continues_its_observations(project, monkeypatch):
     configure(project, observe=[TRACKER], agent=MOCK, land="manual")
     parent, _ = started(project)
+    stranger, _ = started(project)  # neither imported nor in a group: nothing of it in the copy
     configure(project, observe=[TRACKER, OTHER], agent=MOCK, land="manual")  # the config moved on
+    before = snapshot(parent.run_dir)
     child = Harness(project, new=True, import_run=parent.run_id)
     seen = {}
     watch_agent(child, monkeypatch, seen)
@@ -52,9 +67,12 @@ def test_import_shows_the_runs_state_and_continues_its_observations(project, mon
     assert seen["runs"] == [parent.run_id]
     assert seen["member_files"] == {parent.run_id: ["history.jsonl", "notes", "run.json"]}
     assert f"refs/autohelix/{parent.run_id}" in seen["refs"]
+    assert stranger.ref not in seen["refs"] and not any(stranger.run_id in r for r in seen["refs"])
+    assert snapshot(parent.run_dir) == before  # read, never written
     line = (f"This run continues from {short_id(parent.run_id)}: its notes and history are in "
             f"`.autohelix-iteration/runs/{parent.run_id}/` (read-only)")
     assert line in seen["prompt"] and f"its code is at `autohelix/{parent.run_id}`" in seen["prompt"]
+    assert "Your own notes (this run's, from its iteration 1) are in `.autohelix-iteration/notes/`" in seen["prompt"]
     assert "Other runs in group" not in seen["prompt"]
     # Its own notes start empty, versioned from its iteration 1.
     assert notes == [[]]
@@ -104,6 +122,36 @@ def test_a_deleted_imported_run_doesnt_stop_the_run(project, monkeypatch):
     assert child.history.load()[-1].accepted
 
 
+def test_a_tracker_continues_from_the_import_until_it_succeeds_in_the_run(project):
+    log = {"name": "log", "command": '[ "$AUTOHELIX_ITERATION" = 0 ] && exit 1; echo "run $AUTOHELIX_RUN_ID"; '
+                                     'echo "previous $(head -1 "${AUTOHELIX_PREVIOUS:-/dev/null}/stdout.txt" 2>/dev/null)"'}
+    configure(project, observe=[log], agent=MOCK, land="manual")
+    parent, _ = started(project)
+    child, _ = started(project, "--import", short_id(parent.run_id), "-n", "2")
+    assert not child.observe_entry(0, "log").joinpath("stdout.txt").read_text()  # failed at the baseline
+    assert f"previous run {parent.run_id}" in stdout(child, 1, "log")  # so iteration 1 continues the import
+    assert f"previous run {child.run_id}" in stdout(child, 2, "log")
+
+
+def test_a_corrupt_imported_history_doesnt_stop_the_run(project):
+    configure(project, observe=[TRACKER], agent=MOCK)
+    parent, _ = started(project)
+    parent.history.write_text("not json\n" + parent.history.read_text())
+    child, result = started(project, "--import", short_id(parent.run_id))
+    assert "previous none" in stdout(child, 0, "tracker")
+    assert [r["accepted"] for r in map(json.loads, child.history.read_text().splitlines())] == [True, True]
+
+
+def test_an_imported_run_json_without_a_config_is_refused_cleanly(project):
+    parent, _ = started(project)
+    data = identity(parent)
+    del data["config_path"]
+    parent.identity.write_text(json.dumps(data))
+    result = cli(project, "run", "-n", "1", "--import", short_id(parent.run_id))
+    assert result.exit_code == 1 and "names no config file; it can't be imported" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
 def landed_then_committed(project):
     paths, _ = started(project)  # auto landing: main is at the run's tip
     (project / "user.py").write_text("x = 1\n")
@@ -115,16 +163,37 @@ def landed_then_committed(project):
 def test_resume_refuses_when_the_target_moved_past_the_tip(project):
     paths = landed_then_committed(project)
     tip = git(project, "rev-parse", paths.ref).stdout.strip()
-    before = {p.name: p.stat().st_mtime_ns for p in paths.run_dir.rglob("*") if p.is_file()}
+    state = (project / ".autohelix", project / ".git" / "info" / "exclude")
+    before = snapshot(*state)
     result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report")
     assert result.exit_code == 1, result.output
     short = short_id(paths.run_id)
-    assert (f"has 1 commit past run {short}'s tip (committed after it landed). A run continues its own code: "
+    assert (f"has 1 commit past run {short}'s tip (committed after its tip). A run continues its own code: "
             f"start a new run that continues from it, `autohelix run --import {short}`, or continue without "
             f"landing: `autohelix resume {short} --land manual`.") in " ".join(result.output.split())
     assert git(project, "rev-parse", paths.ref).stdout.strip() == tip
-    assert {p.name: p.stat().st_mtime_ns for p in paths.run_dir.rglob("*") if p.is_file()} == before
+    assert snapshot(*state) == before  # nothing written: no status, log, copies record or excludes
     assert not paths.copies.exists()
+    # A run elsewhere says so first: `--land manual` would only lead there.
+    from autohelix.runs import RunLock
+
+    with RunLock(paths.lock):
+        result = cli(project, "resume", short, "-n", "1", "--no-report")
+    assert result.exit_code == 1 and f"Run {short} is running." in result.output
+    assert "past run" not in result.output
+
+
+def test_the_refusal_says_when_the_run_never_accepted_a_change(project):
+    configure(project, agent={"backend": "mock", "settings": {"change_file": ".autohelix-iteration/x"}})
+    paths, _ = started(project)  # a no-op: the tip is still the base commit
+    assert git(project, "rev-parse", paths.ref).stdout.strip() == identity(paths)["base_commit"]
+    (project / "user.py").write_text("x = 1\n")
+    git(project, "add", "user.py")
+    git(project, "commit", "-qm", "user work")
+    result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report")
+    assert result.exit_code == 1, result.output
+    assert (f"(committed since run {short_id(paths.run_id)} started; it hasn't accepted any changes)"
+            in " ".join(result.output.split()))
 
 
 def test_a_manual_resume_continues_from_its_own_tip(project):

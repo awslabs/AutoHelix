@@ -194,8 +194,10 @@ See the [configuration reference](config.md).
 
 AutoHelix needs a git repository with a commit, and the first baseline needs no
 uncommitted changes to tracked files. Commit the config, and any scripts its
-commands use (iteration copies are made from the commit); preserve unrelated
-work:
+commands use (iteration copies are made from the commit), before the first
+`run`: with auto landing, a commit on the branch after the run makes `resume`
+refuse (a run continues its own code), leaving `autohelix run --import <id>` or
+`resume <id> --land manual`. Preserve unrelated work:
 
 ```bash
 git add autohelix.yaml

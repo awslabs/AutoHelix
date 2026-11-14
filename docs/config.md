@@ -323,10 +323,11 @@ Across iterations, put a header before each file so you can tell them apart:
 Every observe command gets `$AUTOHELIX_PREVIOUS`: a copy, made for that call,
 of the entry's own folder (`iterations/NNN/observe/<name>/`) from the most recent accepted iteration in which it
 **succeeded** (the baseline counts). It is unset when there is none (the
-baseline, or a new or renamed entry). At the baseline of a run started with
-[`run --import <id>`](cli.md#continuing-from-another-run), it is that run's
-last successful output of the entry with the same name, so a tracker
-continues from the imported run instead of starting over. Rejected iterations and failed runs of
+baseline, or a new or renamed entry). In a run started with
+[`run --import <id>`](cli.md#continuing-from-another-run), until the entry has
+succeeded in this run (at the baseline, or later if it failed there), it is the
+imported run's last successful output of the entry with the same name, so a
+tracker continues from the imported run instead of starting over. Rejected iterations and failed runs of
 the entry never count, so anything built on it moves only with accepted code.
 Because it is a copy, neither the agent nor candidate code can rewrite what the
 next call reads.

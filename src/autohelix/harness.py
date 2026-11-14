@@ -32,7 +32,7 @@ from autohelix.history import History, IterationResult, record_seconds
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
                             claim_copies, config_relative, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
-                            imported_run, target_ahead, target_ahead_refusal,
+                            imported_run, is_live, target_ahead, target_ahead_refusal,
                             write_json, write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
@@ -248,7 +248,9 @@ class Harness:
         planned = planned_run(self.project_path, config_file, new=new, run_id=run_id, create=create)
         creating = planned is None
         if import_run:
-            source = RunPaths(self.project_path, import_run).read_identity()["config_path"]
+            source = RunPaths(self.project_path, import_run).read_identity().get("config_path")
+            if not isinstance(source, str):
+                raise RuntimeError(f"Run {short_id(import_run)}'s run.json names no config file; it can't be imported.")
             if source != (used := config_relative(self.project_path, config_file)):
                 self.console.print(f"[yellow]Run {short_id(import_run)} used {source}; this run uses {used}.[/yellow]",
                                    highlight=False)
@@ -274,6 +276,8 @@ class Harness:
             data = planned.read_identity()
             if (land_mode or data.get("land") or self.config.land or "auto") == "auto" and (
                     count := target_ahead(planned, data)):
+                if is_live(planned):  # said first: the advice (`--land manual`) would lead straight to it
+                    raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
                 raise RuntimeError(target_ahead_refusal(planned, data, count))
         # The first writes: the local excludes, before .autohelix/ exists.
         ensure_runtime_ignored(self.project_path)
@@ -1048,8 +1052,9 @@ class Harness:
                  command_env: dict, records, *, verify, progress, notes: list[str]) -> None:
         """Observe entries in order (see `_evaluate`), each with its own call folder and,
         as `$AUTOHELIX_PREVIOUS`, a copy of its output from the last accepted iteration
-        in which it succeeded; at the baseline of a run that imports another, from that
-        run's (`run --import`), by entry name.
+        in which it succeeded; in a run that imports another (`run --import`), until the
+        entry has succeeded in this run, the imported run's last successful output of the
+        entry with the same name.
 
         An entry's output (stdout.txt, stderr.txt, captures) is staged in its call
         folder after the command (and its process group) ended, then replaces
@@ -1061,20 +1066,23 @@ class Harness:
         where = "baseline" if baseline else f"iter {iteration}"
         gates = [(index, gate) for index, gate in enumerate(self.config.gates) if isinstance(gate, MetricGate)]
         declared = self.config.metric_names()
-        source, before = self.history, iteration
-        if baseline:  # the baseline has no outputs of its own before it
-            imported = imported_run(self.paths, self.run_info)
-            source = History(self.project_path, imported[0].run_id) if imported else None
-            before = sys.maxsize
+        imported = imported_run(self.paths, self.run_info)
+        imported_history = History(self.project_path, imported[0].run_id) if imported else None
         for entry in self.config.observe:
             self.run_status.note(entry=entry.name)  # the viewer marks the running entry
-            try:
-                previous = source.previous_observations(entry.name, before) if source else None
-            except Exception as e:  # noqa: BLE001 - another run's history never stops this one
-                if source is self.history:
-                    raise
-                self.log.warn(f"No $AUTOHELIX_PREVIOUS for {entry.name} from the imported run: {e}")
-                previous = None
+            previous = self.history.previous_observations(entry.name, iteration)
+            # Until the entry has succeeded in this run (a failed baseline entry included),
+            # it continues from the imported run's last successful output.
+            if imported_history and not any(
+                    r.accepted and r.iteration < iteration and any(
+                        isinstance(item, dict) and item.get("name") == entry.name and item.get("ok")
+                        for item in r.observe)
+                    for r in records):
+                try:
+                    previous = imported_history.previous_observations(entry.name, sys.maxsize)
+                except Exception as e:  # noqa: BLE001 - another run's history never stops this one
+                    self.log.warn(f"No $AUTOHELIX_PREVIOUS for {entry.name} from the imported run: {e}")
+                    previous = None
             with workspace.call_folder(previous=previous) as folders:
                 env = {**command_env, "AUTOHELIX_SCRATCH": str(folders["scratch"]),
                        "AUTOHELIX_PREVIOUS": str(folders["previous"]) if "previous" in folders else None,

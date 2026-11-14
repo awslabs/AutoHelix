@@ -147,7 +147,9 @@ without it, the run uses `autohelix.yaml`, else the only config in
 `autohelix/` (see [Config files](#config-files)). The project must be a git
 checkout with a commit, and the first baseline needs no uncommitted changes to
 tracked files. Commit the config so it's versioned, and any scripts its
-commands use: iteration copies are made from the commit.
+commands use: iteration copies are made from the commit. Do it before the first
+`run`: with auto landing, a later commit on the branch makes `resume` refuse
+(see [`resume`](#autohelix-resume)), leaving `run --import` or `--land manual`.
 
 ### Options
 
@@ -360,15 +362,18 @@ and says so ("Run k3f9 stopped because score reached 0.9; it stops again after
 the next accepted iteration if that still holds"): the condition is checked
 again after the next accepted iteration.
 
-When the target branch has moved past the run's tip (the run landed and you
-committed more), the run doesn't take those commits. With auto landing,
-`resume` refuses before writing anything: "main has 2 commits past run k3f9's
-tip (committed after it landed). A run continues its own code: start a new run
+When the target branch has moved past the run's tip (you or another run
+committed on it after the run's tip), the run doesn't take those commits. With
+auto landing, `resume` refuses before writing anything (after saying so if the
+run is running elsewhere): "main has 2 commits past run k3f9's tip (committed
+after its tip). A run continues its own code: start a new run
 that continues from it, `autohelix run perf --import k3f9`, or continue without
 landing: `autohelix resume k3f9 --land manual`." With manual landing it says
 so and continues from the run's own tip; its accepted commits then diverge from
 the branch, so land them with `git merge autohelix/<id>`. Before the baseline
-the run hasn't started from its commit yet, so nothing is compared.
+the run hasn't started from its commit yet, so nothing is compared; after it,
+a run that never accepted a change says so ("committed since run k3f9 started;
+it hasn't accepted any changes").
 
 ## `autohelix land`
 
