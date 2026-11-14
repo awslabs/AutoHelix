@@ -22,7 +22,8 @@ from rich.table import Table
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import ConfigError, MetricGate, config_changes, find_config, inlined, load_config, run_command
+from autohelix.config import (ConfigError, MetricGate, config_changes, find_config, inlined, load_config,
+                              parse_config, run_command, template_path)
 from autohelix.costs import summarize_costs
 from autohelix.display import LiveDisplay, Transcript, clean, header_lines
 from autohelix.history import History, IterationResult
@@ -216,6 +217,7 @@ class Harness:
             ensure_git_exclude_entry(self.project_path, "__pycache__/")
         except (OSError, subprocess.CalledProcessError):
             pass
+        existing = {p.name for p in RunPaths(self.project_path).runs.glob("*")}
         self.paths, self.run_info, self._ownership, notices = select_run(
             self.project_path, config_file,
             new=new, run_id=run_id, name=name,
@@ -226,7 +228,8 @@ class Harness:
         )
         if self.paths.run_id != (planned and planned.run_id):
             try:  # a new run (or, raced, another than planned): from now on, its stored copy
-                self.config, self._raw_config = self._run_config(self.paths)
+                self.config, self._raw_config = self._run_config(
+                    self.paths, check=self.paths.run_id in existing)  # one just created matches its file
             except BaseException:
                 self._ownership.close()
                 raise
@@ -280,24 +283,35 @@ class Harness:
             self.close()
             raise
 
-    def _run_config(self, paths: RunPaths):
-        """A run's stored config (`load_run_config`). Refuses, before anything is spent,
-        when the file it came from parses differently now (comments and formatting don't
-        count: `config_changes`); a deleted file continues from the stored copy."""
+    def _run_config(self, paths: RunPaths, check: bool = True):
+        """A run's stored config (`load_run_config`). With `check`, refuses, before
+        anything is spent, when the file it came from parses differently now
+        (`config_changes`); a deleted file, or a deleted prompt template (the other
+        keys still compared), continues from the stored copy."""
         data = paths.read_identity()
         config, raw = load_run_config(paths, data)
         source = self.project_path / data["config_path"]
+        short = short_id(paths.run_id)
+        if not check:
+            return config, raw
         if not source.is_file():
-            self.console.print(f"[dim]{data['config_path']} is gone; run {short_id(paths.run_id)} continues "
+            self.console.print(f"[dim]{data['config_path']} is gone; run {short} continues "
                                "with the config it stored when it started.[/dim]", highlight=False)
             return config, raw
         try:
-            keys = config_changes(raw, inlined(source, project=self.project_path))
+            current = parse_config(source, self.project_path)
+            template = current.get("prompt_template")
+            if isinstance(template, str) and template.strip() and not template_path(source, template).exists():
+                self.console.print(f"[dim]{template} is gone; run {short} continues with the prompt template "
+                                   "it stored when it started.[/dim]", highlight=False)
+                current = {**current, "prompt_template": raw.get("prompt_template")}
+            else:
+                current = inlined(source, current)
+            keys = config_changes(raw, current)
             changed = f"changed: {', '.join(keys)}" if keys else None
         except ConfigError as e:
             changed = f"it no longer reads: {e}"
         if changed:
-            short = short_id(paths.run_id)
             raise RuntimeError(
                 f"{data['config_path']} changed since run {short} started ({changed}); the run keeps the "
                 f"config it started with. To apply the new config, start a new run that continues from "

@@ -531,7 +531,7 @@ def test_snapshot_has_no_gate_or_stop_output(project):
 
 
 def test_stop_checks_name_what_ran_and_flag_one(project, server):
-    """Labels come from command.txt (`stop:` may have been edited since); with duplicate
+    """Labels come from command.txt (what ran), not the config's `stop:`; with duplicate
     commands only the first, the one that exited 0, is flagged."""
     paths = RunPaths(project, "test")
     RunPaths(project, "test").config.write_text(CONFIG + "stop:\n  - echo edited\n  - echo later\n")

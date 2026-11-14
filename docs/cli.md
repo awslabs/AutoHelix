@@ -118,8 +118,8 @@ gates. `.autohelix/` is the runs' state, kept out of git.
   `report` and the judges use that copy. `resume` refuses when the file's
   parsed config has changed since (comment and formatting edits don't count):
   apply an edited config with a new run, `autohelix run perf --import <id>`,
-  or restore the file to continue. A deleted file is fine: the run continues
-  with its stored copy.
+  or restore the file to continue. A deleted file (or template) is fine: the
+  run continues with its stored copy.
 - The config file and its `prompt_template:` file are always frozen, whatever
   `scope:` says. Scripts the config calls (`bench.py`, gate scripts) are code:
   they move with the run's commits; list them under `scope.frozen` if they
@@ -247,7 +247,11 @@ compares it with the config file: when the file's parsed config differs (a
 value, a key, or the prompt template's text; comments and formatting don't
 count), it refuses and names both ways out: `autohelix run <config> --import
 <id>` applies the new config in a new run, or restore the file to continue
-this one. A deleted file isn't a change: the run continues with its copy. A
+this one. Empty values (`gates: []`, a key left out) count the same; a default
+written out (`report: true`) or another spelling (`10m` for `600`) is a change,
+named in the message. A deleted file, or a deleted prompt template, isn't a
+change: the run continues with its copy (other keys are still compared). The
+stored copy is read-only. A
 run started before runs stored their config can't be resumed: continue it
 with `run --import <id>`. Without `RUN_ID`, the config is the one a bare
 `autohelix run` would use (with several configs and no `autohelix.yaml`,

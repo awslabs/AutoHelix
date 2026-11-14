@@ -353,7 +353,7 @@ The variables a template gets are a stable, documented contract:
 | `gates` | Every gate in list order: `{text, kind}`, `kind` being `command` or `metric`; a metric gate's text says what it compares ("speed: at most 5% worse than the last accepted iteration"). Elsewhere (console header, `view --json`, the `gates` of history records) a metric gate goes by its short text, `speed regress 5%` or `speed improve 0%` |
 | `observe` | Every observe entry: `{name, kind, metric_labels}`, `kind` being `command` (with `command`) or `review` (with `prompt`, on one line); `metric_labels` like `speed (↑)` |
 | `stop` | The stop commands |
-| `editable`, `frozen` | The scope patterns |
+| `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files (always frozen) |
 | `notes_path` | Where this iteration's notes go (in the copy) |
 | `hints` | `.autohelix-iteration/hints.md` if there are hints, else empty |
 | `rejected_patch` | `.autohelix-iteration/rejected.patch` if the copy has one, else empty |
@@ -465,7 +465,7 @@ one (by default the config's most recently active), `archive` sets one aside and
 `delete` removes it. **A run keeps its config**: it stores it as `config.yaml`
 when it starts, and every segment, `view`, `dashboard`, `report` and the judges
 (`$AUTOHELIX_CONFIG`) use that copy. `resume` refuses before spending anything
-when the config file's parsed contents differ from it (comments and formatting
+when the config file's parsed config differs from it (comments and formatting
 don't count; the prompt template's text does): `autohelix run <config> --import
 <id>` applies the new config in a new run, or restore the file to continue. A
 deleted config file isn't a change. The config file and its `prompt_template:`

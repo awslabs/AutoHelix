@@ -877,6 +877,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
                     **({"land": land_mode} if land_mode else {})}
             try:
                 write_text(paths.config, stored)  # first: a readable run (run.json) has its config
+                os.chmod(paths.config, 0o444)  # never edited: a run keeps the config it started with
                 write_json(paths.identity, data)
             except BaseException:
                 lock.close()

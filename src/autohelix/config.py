@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import glob as globmod
 import json
 import math
+import os
 import re
 import shlex
 from typing import Any
@@ -166,8 +167,8 @@ class Config:
     # `prompt_template_text` is its text when the config is a run's stored copy (which inlines it).
     prompt_template: Path | None = None
     prompt_template_text: str | None = None
-    # The config file and its template, project-relative (glob characters escaped): always
-    # frozen, whatever `scope:` says (the agent can't edit its own protocol).
+    # The config file and its template, project-relative, as named and (for symlinks) as
+    # resolved: always frozen, whatever `scope:` says (the agent can't edit its own protocol).
     protected: list[str] = field(default_factory=list)
     _parse_errors: list[str] = field(default_factory=list, repr=False)
 
@@ -176,9 +177,15 @@ class Config:
         """The goal's first line, cut to about 80 characters (`goal_title`)."""
         return goal_title(self.goal)
 
-    def frozen_patterns(self) -> list[str]:
-        """What the harness freezes: `scope.frozen`, then the config and template files."""
+    def frozen_names(self) -> list[str]:
+        """What is frozen, as shown (header, prompt): `scope.frozen`, then the config and
+        template files."""
         return self.frozen + [path for path in self.protected if path not in self.frozen]
+
+    def frozen_patterns(self) -> list[str]:
+        """What the harness matches as frozen: `frozen_names` with the files' glob
+        characters escaped."""
+        return self.frozen + [globmod.escape(path) for path in self.protected if path not in self.frozen]
 
     def gate_commands(self) -> list[CommandSpec]:
         return [gate for gate in self.gates if isinstance(gate, CommandSpec)]
@@ -723,7 +730,8 @@ def find_config(project: Path, name: str | None = None) -> Path:
     raise ConfigNotFound(f"No config found in {project}{found}.", configs)
 
 
-def _parse(config_path: Path, project_path: Path) -> dict[str, Any]:
+def parse_config(config_path: Path, project_path: Path) -> dict[str, Any]:
+    """The config file's YAML mapping; ConfigError if it isn't one (named relative to the project)."""
     try:
         shown = config_path.resolve().relative_to(Path(project_path).resolve())
     except ValueError:
@@ -738,8 +746,22 @@ def _parse(config_path: Path, project_path: Path) -> dict[str, Any]:
     return data
 
 
-def _template_path(config_path: Path, file: str) -> Path:
+def template_path(config_path: Path, file: str) -> Path:
+    """A `prompt_template:` path, next to the config file, resolved."""
     return (config_path.resolve().parent / Path(file).expanduser()).resolve()
+
+
+def _project_relative(project: Path, paths) -> list[str]:
+    """`paths` relative to the project, each as named and as resolved (a symlink and its
+    target), outside ones left out."""
+    roots = [Path(os.path.normpath(project.absolute())), project.resolve()]
+    found = []
+    for path in paths:
+        for candidate in (Path(os.path.normpath(path.absolute())), path.resolve()):
+            root = next((r for r in roots if candidate.is_relative_to(r)), None)
+            if root is not None and (name := candidate.relative_to(root).as_posix()) not in found:
+                found.append(name)
+    return found
 
 
 def load_config(project_path: Path, config_file: Path | None = None, *,
@@ -758,7 +780,7 @@ def load_config(project_path: Path, config_file: Path | None = None, *,
     config_path = Path(config_file) if config_file else find_config(project_path)
     if not config_path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
-    data = _parse(config_path, project_path)
+    data = parse_config(config_path, project_path)
 
     config = Config.from_dict(data)
     origin = Path(source) if source else config_path
@@ -769,18 +791,19 @@ def load_config(project_path: Path, config_file: Path | None = None, *,
                 config._parse_errors.append(f"Unknown key prompt_template.{key} (known: file, text)")
         file, text = template.get("file"), template.get("text")
         if isinstance(file, str) and file.strip() and isinstance(text, str):
-            config.prompt_template = _template_path(origin, file)
+            config.prompt_template = template_path(origin, file)
             config.prompt_template_text = text
         else:
             config._parse_errors.append("a stored prompt_template needs file: (its path) and text: (its contents)")
     elif isinstance(template, str) and template.strip():
-        config.prompt_template = _template_path(origin, template)
+        config.prompt_template = template_path(origin, template)
     elif template is not None:
         config._parse_errors.append("prompt_template must be a path to a template file")
-    project = Path(project_path).resolve()
-    for path in (origin.resolve(), config.prompt_template):
-        if path is not None and path.is_relative_to(project):
-            config.protected.append(globmod.escape(path.relative_to(project).as_posix()))
+    named = [origin]
+    if config.prompt_template is not None:
+        file = template["file"] if isinstance(template, dict) else template
+        named.append(origin.resolve().parent / Path(file).expanduser())  # where it resolves from
+    config.protected = _project_relative(Path(project_path), named)
     return config, data
 
 
@@ -793,12 +816,12 @@ def inlined(config_path: Path, data: dict[str, Any] | None = None, *,
     path becomes `{file, text}` with the template's current text. Raises ConfigError
     when the file or its template can't be read (naming it relative to `project`)."""
     if data is None:
-        data = _parse(config_path, project or config_path.parent)
+        data = parse_config(config_path, project or config_path.parent)
     template = data.get("prompt_template")
     if not isinstance(template, str) or not template.strip():
         return data
     try:
-        text = _template_path(config_path, template).read_text()
+        text = template_path(config_path, template).read_text()
     except (OSError, UnicodeDecodeError) as e:
         raise ConfigError(f"Cannot read prompt_template {template}: {e}") from None
     return {**data, "prompt_template": {"file": template, "text": text}}
@@ -832,7 +855,7 @@ def stored_config_text(config_path: Path) -> str:
     `{file, text}`. When that line can't be replaced textually (flow style, a value
     on the next line), a YAML dump of the stored form. Raises ConfigError as `inlined`."""
     text = config_path.read_text()
-    data = _parse(config_path, config_path.parent)
+    data = parse_config(config_path, config_path.parent)
     stored = inlined(config_path, data)
     if stored is data:
         return text
@@ -852,7 +875,28 @@ def stored_config_text(config_path: Path) -> str:
             + yaml.dump(stored, Dumper=_StoredDumper, sort_keys=False, allow_unicode=True))
 
 
+def _normalized(value: Any) -> Any:
+    """Mappings without None values or empty containers, at any depth (`gates: []`,
+    `scope: {editable: null}` and no key are the same)."""
+    if isinstance(value, dict):
+        items = ((key, _normalized(item)) for key, item in value.items())
+        return {key: item for key, item in items if item is not None and item != {} and item != []}
+    if isinstance(value, list):
+        return [_normalized(item) for item in value]
+    return value
+
+
 def config_changes(stored: dict[str, Any], current: dict[str, Any]) -> list[str]:
-    """The top-level keys whose parsed values differ (comments and formatting don't
-    count; an empty key is the same as none)."""
+    """The top-level keys whose parsed values differ: comments and formatting don't count,
+    nor empty values (`_normalized`) or how `prompt_template.file` spells the path
+    (`./p.md`). Defaults written out (`report: true`) and other spellings (`10m`, `600`)
+    do: the refusal names the keys."""
+    def normalized(data: dict[str, Any]) -> dict[str, Any]:
+        data = _normalized(data)
+        template = data.get("prompt_template")
+        if isinstance(template, dict) and isinstance(template.get("file"), str):
+            data["prompt_template"] = {**template, "file": os.path.normpath(template["file"])}
+        return data
+
+    stored, current = normalized(stored), normalized(current)
     return [key for key in dict.fromkeys([*stored, *current]) if stored.get(key) != current.get(key)]

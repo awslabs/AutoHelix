@@ -98,7 +98,7 @@ def _label(run: dict) -> str:
 def _config_file(run: dict) -> str:
     """The run's config file, marked when the run has no stored copy (an old run) or it is invalid."""
     file = run["config_file"] or ""
-    flag = " (missing)" if run.get("config_missing") else " (invalid)" if run.get("config_invalid") else ""
+    flag = " (not stored)" if run.get("config_missing") else " (invalid)" if run.get("config_invalid") else ""
     return file + flag if file else ""
 
 

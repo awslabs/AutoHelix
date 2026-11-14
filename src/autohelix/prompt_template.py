@@ -154,7 +154,7 @@ def build_prompt_variables(
         "observe": [_describe_entry(entry) for entry in config.observe],
         "stop": [c.command for c in config.stop],
         "editable": config.editable,
-        "frozen": config.frozen_patterns(),
+        "frozen": config.frozen_names(),
         "notes_path": str(state / "notes" / f"iter-{iteration}.md"),
         "hints": "",
         "rejected_patch": f"{ITERATION_DIR}/rejected.patch" if (state / "rejected.patch").is_file() else "",

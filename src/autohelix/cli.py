@@ -839,6 +839,10 @@ def report(run_id: str | None, path: str):
     if not paths.run_id or History(project_path, run_id).get_last_iteration() == 0:
         console.print("[yellow]No iterations run yet. Nothing to report.[/yellow]")
         raise SystemExit(1)
+    if not paths.config.is_file():
+        console.print(f"[red]Error:[/red] Run {short_id(paths.run_id)} has no stored config (started by an older "
+                      "AutoHelix); its report can't be written.", highlight=False)
+        raise SystemExit(1)
     try:
         config, _ = load_run_config(paths)
     except (RuntimeError, ConfigError) as e:

@@ -486,6 +486,7 @@ def test_view_json_and_once(measured_project):
     printed = _cli("view", first, "-p", project, "--once")
     assert printed.exit_code == 0 and "Goal: Test the integration" in printed.output
     stored = RunPaths(project, first).config
+    stored.chmod(0o644)  # stored read-only
     stored.write_text(stored.read_text().replace("Test the integration", '" "'))
     printed = _cli("view", first, "-p", project, "--once")
     assert printed.exit_code == 0 and "Goal:" not in printed.output

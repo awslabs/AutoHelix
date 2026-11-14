@@ -212,17 +212,19 @@ def test_a_run_without_a_stored_config_is_never_given_its_file(folder_project):
     paths.config.unlink()  # as a run started before runs stored their config
     old = (f"Run {short} has no stored config (it was started by an older AutoHelix); continue it in a new "
            f"run: `autohelix run perf --import {short}`.")
-    for args in (("resume", short), ("report", short)):
-        result = cli(folder_project, *args)
-        assert result.exit_code == 1 and old in flat(result.output), (args, result.output)
+    result = cli(folder_project, "resume", short)
+    assert result.exit_code == 1 and old in flat(result.output), result.output
+    result = cli(folder_project, "report", short)
+    assert result.exit_code == 1 and (f"Run {short} has no stored config (started by an older AutoHelix); its "
+                                      "report can't be written.") in flat(result.output), result.output
     config = RunData(folder_project).state()["config"]
     assert (config["file"], config.get("missing")) == ("autohelix/perf.yaml", True)
     listed = json.loads(cli(folder_project, "view", "--json").output)["run"]
     assert (listed["config_file"], listed["config_missing"], listed["goal"]) == ("autohelix/perf.yaml", True, None)
-    assert "autohelix/perf.yaml (missing)" in cli(folder_project, "view", "--once").output
+    assert "autohelix/perf.yaml (not stored)" in cli(folder_project, "view", "--once").output
     (row,) = json.loads(cli(folder_project, "dashboard", "--json").output)["runs"]
     assert row["config_missing"] and not row["config_invalid"]
-    assert "autohelix/perf.yaml (missing)" in cli(folder_project, "dashboard", "--once").output
+    assert "autohelix/perf.yaml (not stored)" in cli(folder_project, "dashboard", "--once").output
 
 
 def test_an_invalid_config_is_named(folder_project):

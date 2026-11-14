@@ -115,7 +115,8 @@ class TestReportCommand:
         RunPaths(project).config.unlink()
         result = runner.invoke(main, ["report", "-p", str(project)])
         assert result.exit_code == 1
-        assert "no stored config" in result.output and "autohelix run --import test" in result.output
+        assert "Run test has no stored config (started by an older AutoHelix); its report can't be written." in (
+            " ".join(result.output.split()))
 
     @staticmethod
     def _agent_prompt(create):
