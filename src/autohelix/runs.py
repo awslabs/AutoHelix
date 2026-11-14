@@ -721,14 +721,15 @@ def _resuming(paths: RunPaths, data: dict) -> str:
 
 def _new_run_notices(project: Path, config_path: str, target: str | None,
                      group: str | None = None, imported: str | None = None,
-                     base: str | None = None) -> list[tuple[str, str]]:
+                     base: str | None = None, land_mode: str | None = None) -> list[tuple[str, str]]:
     """What `run` says about this config's other runs: it never refuses. Runs of a
-    group are meant to run side by side, so a live one isn't worth a warning; the
-    `imported` run needs no pointer to itself, nor a warning when `base` has its code."""
+    group are meant to run side by side, and a run landing manually never races a live
+    one to the branch, so a live one isn't worth a warning then; the `imported` run
+    needs no pointer to itself, nor a warning when `base` has its code."""
     notices = []
     runs = project_runs(project, config_path)
     for paths, _ in runs:
-        if not group and is_live(paths):
+        if not group and land_mode != "manual" and is_live(paths):
             notices.append(("warn", f"{short_id(paths.run_id)} is also running for this config. Both land on "
                             f"{target or 'their branch'}; whichever finishes second may not fast-forward "
                             f"(its commits stay on autohelix/{paths.run_id})."))
@@ -885,7 +886,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
         stored = stored_config_text(config)
         base = git(project, "rev-parse", "HEAD").stdout.strip()
         target = git(project, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip().removeprefix("refs/heads/") or None
-        notices = _new_run_notices(project, config_path, target, group, imported, base)
+        notices = _new_run_notices(project, config_path, target, group, imported, base, land_mode)
         # Suffixes are unique across the repository (refs of old-format ids included).
         taken = {short_id(ref) for ref in git(project, "for-each-ref", "--format=%(refname:lstrip=2)",
                                               "refs/autohelix/").stdout.split()}

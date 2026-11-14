@@ -319,11 +319,19 @@ def test_group_runs(tmp_path):
 
 
 def test_an_import(tmp_path):
+    from autohelix.history import IterationResult
+
     (tmp_path / ".autohelix").mkdir()
+    parent = History(tmp_path, PARENT)
+    for record in (BASELINE, {**BASELINE, "iteration": 1, "reason": None, "metrics": {"speed": 12.5}}):
+        parent.append(IterationResult(**record))
     variables, rendered = _render(tmp_path, [BASELINE], 1, imported=PARENT)
-    assert variables["imported"] == {"id": PARENT, "short": "a1b2", "path": f".autohelix-iteration/runs/{PARENT}/"}
+    line = (f"`.autohelix-iteration/runs/{PARENT}/` (1 iteration, latest accepted speed 12.5, finished; "
+            f"code at `autohelix/{PARENT}`)")
+    assert variables["imported"] == {"id": PARENT, "short": "a1b2", "path": f".autohelix-iteration/runs/{PARENT}/",
+                                     "description": line}
     assert ("  - Imported (this run continues from a1b2; its notes and history are where that work left off):\n"
-            f"    `.autohelix-iteration/runs/{PARENT}/` (code at `autohelix/{PARENT}`)\n"
+            f"    {line}\n"
             "- Other runs' code:") in rendered
     assert "yours: this run's notes, editable, iter-N.md from this run's iteration 1" in rendered
     assert "Group" not in rendered and "name that run in your summary" not in rendered

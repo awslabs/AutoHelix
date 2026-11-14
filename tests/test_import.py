@@ -70,7 +70,8 @@ def test_import_shows_the_runs_state_and_continues_its_observations(project, mon
     assert stranger.ref not in seen["refs"] and not any(stranger.run_id in r for r in seen["refs"])
     assert snapshot(parent.run_dir) == before  # read, never written
     line = (f"  - Imported (this run continues from {short_id(parent.run_id)}; its notes and history are where "
-            f"that work left off):\n    `.autohelix-iteration/runs/{parent.run_id}/` (code at `autohelix/{parent.run_id}`)")
+            f"that work left off):\n    `.autohelix-iteration/runs/{parent.run_id}/` (1 iteration, latest accepted "
+            f"score 1, finished; code at `autohelix/{parent.run_id}`)")
     assert line in seen["prompt"]
     assert "- .autohelix-iteration/notes/ — yours: this run's notes, editable, iter-N.md from this run's iteration 1" \
         in seen["prompt"]

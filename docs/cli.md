@@ -173,8 +173,9 @@ because of other runs, but says what it sees: a run of the same config that is
 still running (both will land on the same branch, and whichever finishes second
 may not fast-forward), a previous run with commits that haven't landed (this
 run starts from your branch without them), or otherwise just which run came
-before. Runs started with `--group` don't warn about each other: running side
-by side is the point. Scripts that want to continue where they left off should call
+before. Runs started with `--group` don't warn about each other (running side
+by side is the point), nor does a run that lands manually about a live one (it
+never lands on its own). Scripts that want to continue where they left off should call
 `resume`, not `run`.
 
 When the run finishes (not when interrupted), it writes a summary to `.autohelix/runs/<id>/report.md` — see [Configuration → Report](config.md#report).

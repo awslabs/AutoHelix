@@ -98,7 +98,7 @@ Read before starting:
 - .autohelix-iteration/runs/<id>/ — other runs' run.json, history.jsonl and notes/: read-only (a copy; edits there are discarded)
 {% if imported %}
   - Imported (this run continues from {{ imported.short }}; its notes and history are where that work left off):
-    `{{ imported.path }}` (code at `autohelix/{{ imported.id }}`)
+    {{ imported.description }}
 {% endif %}
 {% if group_runs %}
   - Group `{{ group }}` members (other runs alongside this one, running or finished; their state as of this iteration's start):

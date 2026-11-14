@@ -108,8 +108,7 @@ separate runs that land manually: they must not share notes or code, or the
 comparison measures their mix. Write one config per approach
 (`autohelix/a.yaml`, `autohelix/b.yaml`; runs are named after the file; repeats
 of one setup share a config), commit them, and start each run in its own
-background session with the same budget flags (repeats of one config warn
-that another run of it is running: harmless with manual landing):
+background session with the same budget flags:
 
 ```sh
 autohelix run a -p PROJECT --land manual -n 10 --why "approach a"

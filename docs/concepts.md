@@ -372,7 +372,7 @@ The variables a template gets are a stable, documented contract:
 | `last` | The latest iteration (the baseline before iteration 1), or none: `{iteration, accepted, reason, summary, failure_output, gates: [{text, kind, status}], observe: [{name, ok, error, missing, path}]}`; `status` is `passed`, `failed` or `pending`, `missing` the declared metrics an entry ran without reporting, and `path` the entry's folder in the copy |
 | `time_limit` | `agent.timeout` as a compact duration (`15m`), or empty |
 | `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group |
-| `imported` | The run this one continues from (`run --import`), or none: `{id, short, path}`, `path` being its state in the copy (`.autohelix-iteration/runs/<id>/`, read-only); its code is at `autohelix/<id>`. Not listed in `group_runs`, even when it is in the group |
+| `imported` | The run this one continues from (`run --import`), or none: `{id, short, path, description}`, `path` being its state in the copy (`.autohelix-iteration/runs/<id>/`, read-only), `description` its line as in `group_runs`; its code is at `autohelix/<id>`. Not listed in `group_runs`, even when it is in the group |
 
 A custom template is a copy: it won't pick up future changes to the built-in
 one. Remove `prompt_template:` to return to it. A run warns when a custom

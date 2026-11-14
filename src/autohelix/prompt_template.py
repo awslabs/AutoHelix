@@ -51,7 +51,7 @@ def load_template(config) -> str:
 
 
 def describe_member(paths, data: dict) -> str:
-    """One line about another run of the group: where its state is in the copy, how far
+    """One line about another run of the group (or the imported run): where its state is in the copy, how far
     it got, its latest accepted metric values (what landing it would deliver, as the
     metric gates compare), whether it is running, and its code's ref."""
     from autohelix.history import History
@@ -135,9 +135,10 @@ def build_prompt_variables(
       group (`describe_member`; `members` as `runs.group_members` returns them).
     - `imported`: the run this one continues from (`run --import`; `imported` as
       `runs.imported_run` returns it), if its state is in the copy, else None:
-      `{"id", "short", "path"}`; `path` is its state in the copy,
+      `{"id", "short", "path", "description"}`; `path` is its state in the copy,
       `.autohelix-iteration/runs/<id>/` (run.json, history.jsonl, notes/; read-only);
-      its code is at `autohelix/<id>`.
+      its code is at `autohelix/<id>`; `description` is its line as `describe_member`
+      gives it.
     """
     from autohelix.config import MetricGate
     from autohelix.iteration_time import format_duration
@@ -190,7 +191,8 @@ def _describe_imported(imported, state: Path) -> dict[str, Any] | None:
         return None
     run_id = imported[0].run_id
     path = _in_copy(state, "runs", run_id)
-    return {"id": run_id, "short": short_id(run_id), "path": path} if path else None
+    return {"id": run_id, "short": short_id(run_id), "path": path,
+            "description": describe_member(*imported)} if path else None
 
 
 def _describe_entry(entry) -> dict[str, Any]:

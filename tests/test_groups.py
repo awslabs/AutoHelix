@@ -133,10 +133,13 @@ def test_legacy_runs_without_a_recorded_mode_follow_the_config(project):
     harness.close()
 
 
-def test_group_runs_dont_warn_about_each_other_while_live(project):
+def test_group_and_manual_runs_dont_warn_about_a_live_run(project):
     first, _ = started(project, "--group", "g")
     with RunLock(first.lock):
         _, result = started(project, "--group", "g")
+    assert "is also running for this config" not in result.output
+    with RunLock(first.lock):  # a comparison: it never lands on its own
+        _, result = started(project, "--land", "manual")
     assert "is also running for this config" not in result.output
     with RunLock(first.lock):
         _, result = started(project)
