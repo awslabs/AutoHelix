@@ -98,7 +98,7 @@ def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[st
              if exists else f"Propose the config for `{target}`")
     launcher = _launcher()
     tools = f"use AutoHelix's own Python, `{sys.executable}`" + (f" (its CLI is `{launcher}`)" if launcher else "")
-    prompt = (f"Read `{skill_dir / 'SKILL.md'}` and follow it to help me set up an AutoHelix loop for this "
+    prompt = (f"Read `{skill_dir / 'SKILL.md'}` and follow it to help me set up AutoHelix for this "
               f"project. {where}, with `agent.backend: {agent}` unless we decide otherwise. Show the complete "
               f"proposal and explain its sections, choices, and effective defaults before changing project "
               f"files; discuss revisions, then write, validate, and commit "

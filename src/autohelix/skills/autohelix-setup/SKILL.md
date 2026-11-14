@@ -18,10 +18,10 @@ session, with persistent notes and measurements from earlier attempts.
 
 ## Understand the experiment
 
-Unless the user has already said what the loop should do, your first message
+Unless the user has already said what they want to accomplish, your first message
 is exactly this line and nothing else (no preamble, no mention of this skill):
 
-What should this AutoHelix loop do?
+What do you want to accomplish?
 
 Don't inspect anything before the answer.
 
