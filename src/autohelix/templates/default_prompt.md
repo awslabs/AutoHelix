@@ -78,7 +78,7 @@ Frozen (changes to these files will be reverted{% if editable %}, even inside th
 {% set others = imported or group_runs %}
 {% if others %}
 Where things are (read before starting):
-- .autohelix-iteration/notes/ — yours: this run's notes, editable, iter-N.md from this run's iteration 1
+- .autohelix-iteration/notes/ — yours: this run's notes, editable; numbered by this run's iterations (iter-1.md onward), separately from other runs' iter-N.md
 {% else %}
 Read before starting:
 - .autohelix-iteration/notes/iter-*.md — your own notes from past iterations
@@ -90,15 +90,20 @@ Read before starting:
   Older iterations: .autohelix-iteration/history.jsonl
 {% if others and rejected_patch %}
 - {{ rejected_patch }} — the last rejected attempt's change
+{% elif others and rejected_diff %}
+- `{{ rejected_diff }}` — the last rejected attempt's change (too large for a file)
 {% endif %}
 {% if hints %}
-- {{ hints }}
+- {{ hints }}{% if others %} — hints from the person running this run{% endif +%}
 {% endif %}
 {% if others %}
-- .autohelix-iteration/runs/<id>/ — other runs' run.json, history.jsonl and notes/: read-only (a copy; edits there are discarded)
+- .autohelix-iteration/runs/<id>/ — other runs' run.json, history.jsonl and notes/ (no iterations/: their observe outputs aren't copied); read-only (a copy; edits there are discarded)
 {% if imported %}
   - Imported (this run continues from {{ imported.short }}; its notes and history are where that work left off):
     {{ imported.description }}
+{% if not imported.same_code %}
+    Your copy holds this run's code, not necessarily {{ imported.short }}'s: `git diff HEAD autohelix/{{ imported.id }}` shows what differs.
+{% endif %}
 {% endif %}
 {% if group_runs %}
   - Group `{{ group }}` members (other runs alongside this one, running or finished; their state as of this iteration's start):
@@ -106,8 +111,9 @@ Read before starting:
     {{ line }}
 {% endfor %}
 {% endif %}
-- Other runs' code: their refs `autohelix/<id>` in this copy's git: `git diff autohelix/<id>`,
-  `git show autohelix/<id>:<file>`, `git checkout autohelix/<id> -- <file>`.
+- Other runs' code: refs `autohelix/<id>` in this copy's git (not branches: `git branch` doesn't list them;
+  `git for-each-ref refs/autohelix` does): `git diff HEAD autohelix/<id>`, `git show autohelix/<id>:<file>`,
+  `git checkout autohelix/<id> -- <file>`.
 {% endif %}
 {% if group_runs %}
 

@@ -141,9 +141,17 @@ def test_group_and_manual_runs_dont_warn_about_a_live_run(project):
     with RunLock(first.lock):  # a comparison: it never lands on its own
         _, result = started(project, "--land", "manual")
     assert "is also running for this config" not in result.output
-    with RunLock(first.lock):
+    manual, _ = started(project, "--land", "manual")
+    with RunLock(manual.lock):  # the live one lands manually: only the new one would land
         _, result = started(project)
-    assert f"{short_id(first.run_id)} is also running for this config" in result.output
+    assert "is also running for this config" not in result.output
+    with RunLock(first.lock):  # a group run lands manually too
+        _, result = started(project)
+    assert "is also running for this config" not in result.output
+    auto, _ = started(project)
+    with RunLock(auto.lock):  # both would land
+        _, result = started(project)
+    assert f"{short_id(auto.run_id)} is also running for this config" in result.output
 
 
 def test_dashboard_shows_the_group_after_the_id(project):

@@ -94,6 +94,7 @@ def build_prompt_variables(
     members=(),
     rejected_diff: str = "",
     imported=None,
+    head: str | None = None,
 ) -> dict[str, Any]:
     """The variables a prompt template gets: a stable, documented contract
     (`VARIABLES`; agent-written text in them is cleaned of control characters).
@@ -135,10 +136,12 @@ def build_prompt_variables(
       group (`describe_member`; `members` as `runs.group_members` returns them).
     - `imported`: the run this one continues from (`run --import`; `imported` as
       `runs.imported_run` returns it), if its state is in the copy, else None:
-      `{"id", "short", "path", "description"}`; `path` is its state in the copy,
-      `.autohelix-iteration/runs/<id>/` (run.json, history.jsonl, notes/; read-only);
+      `{"id", "short", "path", "description", "same_code"}`; `path` is its state in the
+      copy, `.autohelix-iteration/runs/<id>/` (run.json, history.jsonl, notes/; read-only);
       its code is at `autohelix/<id>`; `description` is its line as `describe_member`
-      gives it.
+      gives it; `same_code` whether its tip's tree is the copy's code (`head`, the
+      iteration's base commit, else this run's tip): False when unknown.
+      Members whose state isn't in the copy (it failed to copy) are left out of `group_runs`.
     """
     from autohelix.config import MetricGate
     from autohelix.iteration_time import format_duration
@@ -173,8 +176,9 @@ def build_prompt_variables(
         "recent_iterations": SEEDED_ITERATIONS,
         "time_limit": format_duration(config.agent.timeout) if config.agent.timeout is not None else "",
         "group": group or "",
-        "group_runs": [describe_member(paths, data) for paths, data in members],
-        "imported": _describe_imported(imported, state),
+        "group_runs": [describe_member(paths, data) for paths, data in members
+                       if _in_copy(state, "runs", paths.run_id)],
+        "imported": _describe_imported(imported, state, head or _own_tip(history)),
     }
     hints = history.paths.hints
     if hints.exists() and hints.stat().st_size > 0:
@@ -182,17 +186,49 @@ def build_prompt_variables(
     return variables
 
 
-def _describe_imported(imported, state: Path) -> dict[str, Any] | None:
+def _own_tip(history) -> str | None:
+    """This run's tip (`runs.run_tip`), or None if it can't be read."""
+    from autohelix.runs import run_tip
+
+    try:
+        return run_tip(history.paths)
+    except Exception:  # noqa: BLE001 - only decides whether a hint is shown
+        return None
+
+
+def _same_tree(project: Path, a: str | None, b: str) -> bool:
+    """Whether commits `a` and `b` hold the same tree (False when either can't be read)."""
+    from autohelix.runs import git
+
+    if not a or not b:
+        return False
+    try:
+        trees = [git(project, "rev-parse", "--verify", "--quiet", f"{commit}^{{tree}}", check=False)
+                 for commit in (a, b)]
+    except Exception:  # noqa: BLE001
+        return False
+    return all(t.returncode == 0 for t in trees) and trees[0].stdout.strip() == trees[1].stdout.strip()
+
+
+def _describe_imported(imported, state: Path, head: str | None = None) -> dict[str, Any] | None:
     """The imported run (`(paths, data)`, or None) as the prompt names it, if its state
-    made it into the copy (`state` is its `.autohelix-iteration/`)."""
-    from autohelix.runs import short_id
+    made it into the copy (`state` is its `.autohelix-iteration/`); `head` is the commit
+    the copy's code is."""
+    from autohelix.runs import run_tip, short_id
 
     if imported is None:
         return None
-    run_id = imported[0].run_id
-    path = _in_copy(state, "runs", run_id)
-    return {"id": run_id, "short": short_id(run_id), "path": path,
-            "description": describe_member(*imported)} if path else None
+    paths, data = imported
+    path = _in_copy(state, "runs", paths.run_id)
+    if not path:
+        return None
+    try:
+        tip = run_tip(paths, data)
+    except Exception:  # noqa: BLE001 - another run's state must not stop this run
+        tip = None
+    return {"id": paths.run_id, "short": short_id(paths.run_id), "path": path,
+            "description": describe_member(paths, data),
+            "same_code": _same_tree(paths.project, head, tip)}
 
 
 def _describe_entry(entry) -> dict[str, Any]:

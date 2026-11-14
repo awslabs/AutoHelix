@@ -596,14 +596,15 @@ class Harness:
             self.log.warn(text)
 
     def build_prompt(self, iteration: int, worktree_dir: Path, members=(), rejected_diff: str = "",
-                     imported=None) -> str:
+                     imported=None, head: str | None = None) -> str:
         """Build the prompt for the agent using the template; `members` are the other
         runs of the group, as `group_members` returns them, `imported` the run this one
-        imports (`runs.imported_run`), if any."""
+        imports (`runs.imported_run`), if any; `head` the commit the copy's code is."""
         template = load_template(self.config)
         variables = build_prompt_variables(
             self.config, self.history, iteration, worktree_dir,
             group=self.run_info.get("group"), members=members, rejected_diff=rejected_diff, imported=imported,
+            head=head,
         )
         return render_template(template, variables)
 
@@ -836,7 +837,8 @@ class Harness:
             self.console.print(f"  Working dir: {agent_copy.working_dir}")
         self.run_status.note(worktree=str(agent_copy.working_dir))
         prompt = self.build_prompt(iteration, agent_copy.working_dir, workspace.members,
-                                   rejected_diff=workspace.rejected_diff, imported=workspace.imported)
+                                   rejected_diff=workspace.rejected_diff, imported=workspace.imported,
+                                   head=workspace.base)
         workspace.write_prompt(prompt)
         if self.verbose:
             self.console.print(Panel(prompt.strip(), title="[bold]Agent Prompt[/bold]", border_style="dim"))

@@ -73,8 +73,11 @@ def test_import_shows_the_runs_state_and_continues_its_observations(project, mon
             f"that work left off):\n    `.autohelix-iteration/runs/{parent.run_id}/` (1 iteration, latest accepted "
             f"score 1, finished; code at `autohelix/{parent.run_id}`)")
     assert line in seen["prompt"]
-    assert "- .autohelix-iteration/notes/ — yours: this run's notes, editable, iter-N.md from this run's iteration 1" \
+    assert "- .autohelix-iteration/notes/ — yours: this run's notes, editable; numbered by this run's iterations" \
         in seen["prompt"]
+    # The parent's commit didn't land (manual): the copy's code isn't its tip.
+    assert (f"Your copy holds this run's code, not necessarily {short_id(parent.run_id)}'s: "
+            f"`git diff HEAD autohelix/{parent.run_id}` shows what differs.") in seen["prompt"]
     assert "Group `" not in seen["prompt"]
     # Its own notes start empty, versioned from its iteration 1.
     assert notes == [[]]

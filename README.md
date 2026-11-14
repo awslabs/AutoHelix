@@ -272,6 +272,7 @@ my-project/
 └── .autohelix/          # run state (gitignored)
     ├── runs/<id>/       # one persistent state directory per run
     │   ├── run.json     # identity, starting commit, target branch
+    │   ├── config.yaml  # the config the run started with (what resume uses)
     │   ├── history.jsonl # one record per iteration: results and each model call's usage/log
     │   ├── notes/       # agent's persistent notes
     │   ├── hints.md     # messages from `autohelix hint`

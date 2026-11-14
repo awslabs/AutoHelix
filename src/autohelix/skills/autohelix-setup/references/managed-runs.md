@@ -85,7 +85,9 @@ going after the target branch moved past the run (it landed and the user
 committed more), or to fork from an old run (`git checkout autohelix/<id>`
 first), start a new run that continues from it, `autohelix run <config> --import
 <id>`: it sees that run's notes and history read-only and continues its
-observations at the baseline. Budgets count each
+observations at the baseline. When the branch moved past a run that lands
+automatically, `resume` refuses; `autohelix resume <id> --land manual`
+continues the same run from its own tip without landing. Budgets count each
 invocation: `resume -n 5 --cost 3` is 5 more iterations, up to $3 more, and a
 `resume` without budget flags runs 3 more. Prefer `--until N` (stop at
 iteration N in total, safe to repeat) over `-n` (N more iterations) in scripts

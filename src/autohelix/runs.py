@@ -723,13 +723,13 @@ def _new_run_notices(project: Path, config_path: str, target: str | None,
                      group: str | None = None, imported: str | None = None,
                      base: str | None = None, land_mode: str | None = None) -> list[tuple[str, str]]:
     """What `run` says about this config's other runs: it never refuses. Runs of a
-    group are meant to run side by side, and a run landing manually never races a live
-    one to the branch, so a live one isn't worth a warning then; the `imported` run
+    group are meant to run side by side, and when either run lands manually only one of
+    them lands on its own, so a live one isn't worth a warning then; the `imported` run
     needs no pointer to itself, nor a warning when `base` has its code."""
     notices = []
     runs = project_runs(project, config_path)
-    for paths, _ in runs:
-        if not group and land_mode != "manual" and is_live(paths):
+    for paths, data in runs:
+        if not group and land_mode != "manual" and data.get("land") != "manual" and is_live(paths):
             notices.append(("warn", f"{short_id(paths.run_id)} is also running for this config. Both land on "
                             f"{target or 'their branch'}; whichever finishes second may not fast-forward "
                             f"(its commits stay on autohelix/{paths.run_id})."))

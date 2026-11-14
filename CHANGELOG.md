@@ -90,7 +90,7 @@ Added:
   `worktree`, `history`, `gates`, `observe`, `stop`, `editable`, `frozen`,
   `notes_path`, `hints`, `rejected_patch`, `rejected_diff`, `discarded`,
   `discarded_frozen`, `last` (the latest iteration's outcome, gate results and
-  observations), `time_limit`, `group`, `group_runs`. A custom template using
+  observations), `time_limit`, `group`, `group_runs`, `imported`. A custom template using
   other names gets a warning at run start. The history lines include each iteration's one-line summary.
   The goal's first line is the run's title (validation warns when it is long).
 - History records `gates` (in list order, not reached ones as `null`),
@@ -177,7 +177,51 @@ Added:
   (`prompt_template:` is relative to the config's folder).
 - A bare `resume` uses the config a bare `run` would and errors when that is
   ambiguous (name a run instead); `resume <id>` uses the config the run
-  started with. To change a run's config, edit its file.
+  started with. A run keeps its stored config; apply an edited one with
+  `run --import <id>`.
+
+### One config per run
+
+The config says what one iteration does; the budget flags say how long. A run
+is one config, `resume` is more of the same, anything else is a new run.
+
+Breaking:
+
+- **A run stores its config** as `.autohelix/runs/<id>/config.yaml` (the file's
+  text, the prompt template inlined) and always uses that copy; judges, the
+  report and `$AUTOHELIX_CONFIG` read it too. `resume` refuses before spending
+  anything when the file's parsed config differs (comment edits don't count),
+  naming `run --import <id>` and restoring the file as the ways on.
+- Runs started before this change have no stored config and can't be
+  resumed: continue one with `run --import <id>`.
+- **`resume` continues the run's own tip.** The silent fast-forward of a run
+  onto a target branch that moved past it is gone: with auto landing `resume`
+  refuses before writing anything, naming `run --import <id>` and
+  `resume <id> --land manual`; with manual landing it says so and continues.
+- The config file and the `prompt_template:` file are always frozen, whatever
+  `scope:` says.
+
+Added:
+
+- **`run --import RUN_ID`**: a new run with code from your checkout and state
+  from that run: its `run.json`, history and notes read-only in every copy
+  (`.autohelix-iteration/runs/<id>/`), its code's ref, and at the baseline each
+  observe entry's last output there as `$AUTOHELIX_PREVIOUS`. Its own notes,
+  budgets, baseline and metric reference start fresh; `run.json` records
+  `import`. A different config than the imported run's is a warning.
+- **`run --why TEXT`** and **`archive --why TEXT`**, kept in `run.json` and
+  shown on the dashboard.
+- `resume` after a `stop:` condition continues and says so ("Run k3f9 stopped
+  because …; it stops again after the next accepted iteration if that still
+  holds").
+- **The prompt explains the layout** with an import or a group: one "Where
+  things are" block names the run's own notes (editable) and iterations,
+  `rejected.patch`, each other run's state (read-only; the imported run and
+  group members said apart, with iterations, latest metrics and whether its
+  code is the copy's) and their refs. Plain runs' prompts are unchanged. New
+  prompt variable `imported`.
+- The "also running for this config" warning is quiet when either run lands
+  manually (only one of them lands on its own), as for group runs.
 
 ### Changed (breaking)
 

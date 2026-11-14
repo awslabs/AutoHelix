@@ -265,7 +265,7 @@ with several, it stops with the list (`autohelix run <name>` picks one). See
 ### 6. Several runs side by side
 
 To try a goal several ways at once (another model or prompt), write one config
-per variant, commit them, and start a run of each, each in its own terminal,
+per variant, commit them, and start one run per config in its own terminal,
 landing manually so that none lands before you compare:
 
 ```bash

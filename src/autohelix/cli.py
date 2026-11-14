@@ -480,8 +480,9 @@ def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land
 
     With --group NAME, each iteration's agent also sees the other non-archived
     runs of that group: their notes and history, and their code (each run's
-    ref, refs/autohelix/<id>). Start several, compare them on the dashboard, land the
-    winner and archive the rest.
+    ref, refs/autohelix/<id>). Groups are for runs that should build on each
+    other's work. To compare approaches, start separate runs with --land manual,
+    compare them on the dashboard, land the winner and archive the rest.
 
     With --import RUN_ID (or its last part), the new run continues from that
     one: its agents see its run.json, history and notes (read-only, in
