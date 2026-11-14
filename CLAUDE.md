@@ -30,6 +30,7 @@ uv pip install -e ".[dev]"
 - `src/autohelix/judge.py` / `review.py` - `autohelix ask` (yes/no) and `autohelix review` (feedback), read-only agent calls
 - `src/autohelix/launcher.py` - the `autohelix` launcher put first on harness commands' PATH
 - `src/autohelix/history.py` - iteration history (JSONL)
+- `src/autohelix/events.py` - run events for `autohelix wait` (read-only watcher, event schema, cursor)
 - `src/autohelix/runs.py` - run identity/paths and selection, ownership locks, ref recovery, landing, archive/delete, copies sweep
 - `src/autohelix/workspace.py` - candidate copies (`Repo`, `Copy`, `Fingerprint`), tree snapshots, write scope and judge guard
 - `src/autohelix/display.py` - live Rich display
@@ -61,6 +62,7 @@ autohelix hint         # Send a hint to the running agent (picked up next iterat
 autohelix ask          # Yes/no judgment by a read-only agent (exit 0/1/2); `ask:` gates use it
 autohelix review       # Read-only review of a change (feedback + ##autohelix metrics); `review:` observe entries use it
 autohelix report       # Agent-written analysis of the run
+autohelix wait         # Block until a run event (iteration, start, end, crash), print it as JSON; --follow, --after CURSOR
 ```
 
 ## Testing
