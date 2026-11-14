@@ -1093,5 +1093,66 @@ def report(run_id: str | None, path: str):
     console.print(f"[dim]Run page: {paths.report_html.relative_to(project_path)}[/dim]", highlight=False)
 
 
+@main.command()
+@click.argument("run_ids", nargs=-1, metavar="[RUN_ID]...")
+@click.option("--timeout", "timeout_seconds", callback=_duration_option, metavar="DURATION",
+              help="Give up after this long without an event (e.g. 30s, 10m, 1h30m): print a `timeout` "
+                   "event and exit 2.")
+@click.option("--follow", is_flag=True, help="Never exit: print one line per event, in order.")
+@click.option("--after", "cursor", metavar="CURSOR",
+              help="Continue after the event that printed this cursor (an earlier event's `cursor`).")
+@click.option("--path", "-p", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".",
+              help="Project directory (default: current dir)")
+def wait(run_ids: tuple[str, ...], timeout_seconds: int | None, follow: bool, cursor: str | None, path: Path):
+    """Block until something happens in a run, print it as one JSON line, and exit.
+
+    Events: a segment `started` (a new run or a resume), an `iteration` recorded
+    (the baseline is 0), a segment `ended`, a run `crashed` (its process is gone).
+    Watches the named runs (RUN_ID or its last part), else every run of the project,
+    runs started later included.
+
+    Each event has a `cursor`: `wait --after CURSOR` returns the next event after it,
+    at once if one is already pending, so a loop of wait, inspect, `wait --after`
+    misses nothing and repeats nothing. Without --after, only what happens from now
+    on counts (to watch a run you are about to start, take a cursor first, e.g. from
+    `wait --timeout 1s`).
+
+    With run ids, when none of them is running and nothing is pending, prints an
+    `idle` event at once. --timeout prints a `timeout` event (with a cursor) and
+    exits 2; --follow never exits and prints every event (no `idle`).
+
+    Only reads .autohelix/: safe beside running runs. Every event has `schema`
+    (fields are only ever added), `event`, `run`, `short`, `time` and `cursor`.
+    """
+    from autohelix.events import Watcher
+
+    if follow and timeout_seconds is not None:
+        raise click.UsageError("--timeout doesn't apply with --follow (it never exits).")
+    project = path.resolve()
+    ids = list(dict.fromkeys(_run_id(project, value) for value in run_ids))  # a run named twice: once
+
+    def emit(event: dict) -> None:
+        click.echo(json.dumps(event))  # flushed: pipe-friendly
+
+    try:
+        try:
+            watcher = Watcher(project, run_ids=ids or None, after=cursor)
+        except ValueError as error:
+            raise click.BadParameter(str(error), param_hint="--after") from error
+        if follow:
+            while True:
+                emit(watcher.next())
+        event = watcher.next(timeout=timeout_seconds, idle=bool(ids))
+        emit(event)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except BrokenPipeError:
+        # The reader went away (`wait --follow | head -1`): exit quietly.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        raise SystemExit(0)
+    if event["event"] == "timeout":
+        raise SystemExit(2)
+
+
 if __name__ == "__main__":
     main()
