@@ -288,7 +288,8 @@ Temporary per-phase candidate copies live outside the project, in
 `${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/` (set `AUTOHELIX_COPIES_ROOT` to move them).
 
 Each `autohelix run` starts a new run; `autohelix resume [<id>] [-n MORE]` continues
-one, `autohelix archive <id>` sets one aside and `autohelix delete <id>` removes it.
+one, `autohelix stop <id>` ends a running one after its current iteration (`--now`:
+at once), `autohelix archive <id>` sets one aside and `autohelix delete <id>` removes it.
 A run keeps the config it started with (stored with the run); to apply an edited config,
 start a new run.
 Use `--land manual` to keep validated commits on the run's `refs/autohelix/<id>` until
@@ -364,6 +365,15 @@ and run via `docker/run.sh`. See [Docker sandbox](docs/docker.md).
 `autohelix hint "..."` (run in a second terminal) drops a note the running agent picks up
 at the start of its next iteration. Useful to steer a run without stopping it. See
 [CLI → hint](docs/cli.md#autohelix-hint).
+
+</details>
+
+<details>
+<summary><b>Run events</b></summary>
+
+`autohelix wait` blocks until a run records an iteration, starts, ends or crashes, and
+prints the event as one JSON line with a cursor for the next `wait --after`: a script or
+supervising agent follows runs without polling. See [CLI → wait](docs/cli.md#autohelix-wait).
 
 </details>
 

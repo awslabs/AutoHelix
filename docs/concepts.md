@@ -411,8 +411,9 @@ harness keeps for itself is in `.internal/` folders:
 │   │   ├── 000/                # the baseline
 │   │   └── 001/ ...            # one folder per iteration (below)
 │   ├── logs/                   # run logs per segment, report.log, hook audit
-│   └── .internal/              # status.json, segments.jsonl, usage/, notes versions notes/<n>/,
-│                               # superseded attempts attempts/, report.json, the copies path
+│   └── .internal/              # status.json, segments.jsonl, stop.json (autohelix stop), usage/,
+│                               # notes versions notes/<n>/, superseded attempts attempts/,
+│                               # report.json, the copies path
 └── .internal/                  # the current run's id, lock files, helper scripts (bin/)
 ```
 
@@ -449,15 +450,28 @@ command) that started, append-only, two JSON lines each, linked by `segment`
 - `"event": "end"`: `ended_at`, `state` (`finished`, `interrupted` or
   `failed`), `stop_reason` (as in `status.json`: why the loop ended, kept when
   Ctrl-C or an error comes later, during landing or the report; `null` only when
-  the loop itself was interrupted or failed), `iterations` (how many records the
+  the loop itself was interrupted or failed, except by `autohelix stop --now`),
+  `iterations` (how many records the
   segment added to `history.jsonl`, the baseline's included: `0` when none
   completed), `last_iteration` (the run's last recorded iteration then; with
   `iterations: 0` it is the one before the segment) and `error` (what a failed
   segment failed with, one line, cut to 500 characters; else `null`).
 
+A stop reason has a `kind` and a `detail` (the line shown, "iteration budget
+reached (5)"), plus fields of its kind:
+
+- `budget`: `budget` is `iterations`, `cost` or `time`;
+- `condition`: a [stop command](config.md#stop) succeeded; `iteration`,
+  `command` and `reason`;
+- `agent`: the agent failed three times in a row; `iteration` and `error`;
+- `request`: [`autohelix stop`](cli.md#autohelix-stop) asked; `why` (or
+  `null`), `requested_at`, and `now: true` when `--now` interrupted the
+  segment (its state is then `interrupted`).
+
 A segment whose process died has a start and no end. Each line is written in
 one append and synced, and earlier lines are never rewritten: a damaged line
-loses only itself (readers skip it).
+loses only itself (readers skip it). [`autohelix wait`](cli.md#autohelix-wait)
+reports segments from this file as `started`, `ended` and `crashed` events.
 
 The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
 project; see [Candidate Copies](#candidate-copies).
@@ -494,8 +508,9 @@ that version. Everything else is reference material. A checks copy gets only
 `previous: true`); a stop copy none of it.
 
 A run is a line of work: `autohelix run` starts one, `autohelix resume` continues
-one (by default the config's most recently active), `archive` sets one aside and
-`delete` removes it. **A run keeps its config**: it stores it as `config.yaml`
+one (by default the config's most recently active), `autohelix stop` ends a
+running one after its current iteration, `archive` sets one aside and `delete`
+removes it. **A run keeps its config**: it stores it as `config.yaml`
 when it starts, and every segment, `view`, `dashboard`, `report` and the judges
 (`$AUTOHELIX_CONFIG`) use that copy. `resume` refuses before spending anything
 when the config file's parsed config differs from it (comments and formatting

@@ -148,6 +148,8 @@ class RunPaths:
     @property
     def segments(self): return self.internal / "segments.jsonl"  # one line per segment (`run_status.SegmentLog`)
     @property
+    def stop_request(self): return self.internal / "stop.json"  # `autohelix stop`'s request (`run_status`)
+    @property
     def metrics(self): return self.internal / "metrics.json"  # `$AUTOHELIX_METRICS` for stop commands
     @property
     def claude_settings(self): return self.internal / "claude_settings.json"
@@ -538,12 +540,17 @@ class RunState:
 
 @contextmanager
 def critical_section():
-    """Defer Ctrl-C until the commit, ref update, and durable record agree."""
+    """Defer Ctrl-C and SIGTERM (`autohelix stop --now`, `kill`) until the commit, ref
+    update, and durable record agree; then the first one acts as it would have. An
+    ignored signal stays ignored (a background run's SIGINT)."""
     pending = []
-    main = threading.current_thread() is threading.main_thread()
-    previous = signal.getsignal(signal.SIGINT) if main else None
-    if main:
-        signal.signal(signal.SIGINT, lambda *args: pending.append(args))
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            handler = signal.getsignal(signum)
+            if handler != signal.SIG_IGN:
+                previous[signum] = handler
+                signal.signal(signum, lambda *args: pending.append(args))
     failed = False
     try:
         yield
@@ -551,13 +558,18 @@ def critical_section():
         failed = True
         raise
     finally:
-        if main:
-            signal.signal(signal.SIGINT, previous)
+        for signum, handler in previous.items():
+            # None: a handler not installed from Python; restored as the default.
+            signal.signal(signum, signal.SIG_DFL if handler is None else handler)
         if pending and not failed:
-            if callable(previous):
-                previous(*pending[0])
-            elif previous != signal.SIG_IGN:
+            signum, frame = pending[0]
+            handler = previous[signum]
+            if callable(handler):
+                handler(signum, frame)
+            elif signum == signal.SIGINT:
                 raise KeyboardInterrupt
+            else:
+                signal.raise_signal(signum)  # the default action, now that it is restored
 
 
 def config_relative(project: Path, config: Path) -> str:

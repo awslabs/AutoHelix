@@ -62,7 +62,8 @@ def _under_way(run: dict) -> int | None:
 
 
 def _state(run: dict, now: float) -> str:
-    """One word for the row's state (archived wins over the last segment's outcome), with the phase while running."""
+    """One word for the row's state (archived wins over the last segment's outcome), with the phase while
+    running, and `(stopping)` once `autohelix stop` asked it to end."""
     if not _live(run):
         kind = "archived" if run.get("archived") else (run.get("status") or {}).get("state") or "idle"
         return WORDS.get(kind, kind)
@@ -70,7 +71,8 @@ def _state(run: dict, now: float) -> str:
     phase = "baseline" if status.get("iteration") == 0 else status.get("phase")
     since = status.get("phase_started_at")
     detail = f"{phase} {format_duration(now - since)}" if phase and isinstance(since, (int, float)) else phase
-    return f"running · {detail}" if detail else "running"
+    word = "running (stopping)" if run.get("stop_requested") else "running"
+    return f"{word} · {detail}" if detail else word
 
 
 def _spent(run: dict, now: float) -> str:

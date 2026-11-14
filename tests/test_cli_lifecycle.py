@@ -500,11 +500,13 @@ def test_the_segment_log_survives_damage_and_reports_open_segments(tmp_path):
     from autohelix.run_status import SegmentLog, read_segments
 
     path = tmp_path / "segments.jsonl"
-    SegmentLog(path).start(started_at=1.0, budget={"iterations": 3}, start_iteration=0)  # its process died
+    first = SegmentLog(path)
+    first.start(segment=first.next_number(), started_at=1.0, budget={"iterations": 3},
+                start_iteration=0)  # its process died
     with path.open("ab") as stream:
         stream.write(b"not json\n\xff\xfe{\n")  # junk and undecodable bytes
     log = SegmentLog(path)
-    log.start(started_at=2.0, budget={"iterations": 1}, start_iteration=4)
+    log.start(segment=log.next_number(), started_at=2.0, budget={"iterations": 1}, start_iteration=4)
     log.end(state="finished", stop_reason={"detail": "iteration budget reached (4)"}, last_iteration=4,
             iterations=1)
     crashed, done = read_segments(path)

@@ -9,8 +9,10 @@ import itertools
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -32,13 +34,14 @@ from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
                             claim_copies, config_relative, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
+                            WHY_LIMIT,
                             imported_run, is_live, target_ahead, target_ahead_refusal,
                             write_json, write_text)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning)
-from autohelix.run_status import RunStatus, SegmentLog
+from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
 from autohelix.formatting import format_cap, format_cost, format_total_cost
 from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
@@ -130,6 +133,27 @@ class _Evaluation:
     metrics: dict[str, float] = field(default_factory=dict)  # from the entries that succeeded
     rejection: str | None = None
     failure_output: str | None = None
+
+
+@contextmanager
+def _terminate_interrupts():
+    """While a segment runs, SIGTERM (`autohelix stop --now`, a plain `kill`) raises
+    KeyboardInterrupt, so it ends as Ctrl-C does: the iteration recorded, its agent's
+    and commands' process groups (their own sessions) killed, the run landed. Unlike
+    SIGINT it is not ignored in a run a script started in the background. Only in the
+    main thread, and only over the default action: a caller's own handler stays."""
+    if threading.current_thread() is not threading.main_thread() or signal.getsignal(signal.SIGTERM) != signal.SIG_DFL:
+        yield
+        return
+
+    def terminate(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, terminate)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
 
 def _tail(output: str, lines: int = 15) -> str:
@@ -327,6 +351,7 @@ class Harness:
             self.run_state.copies_root = claim_copies(self.paths, self.log.warn)
             self._land_attempted = False
             self._segment_started = False
+            self._segment: int | None = None  # this segment's number (segments.jsonl, status, stop requests)
             self._usage_starts: set = set()
             self._segment_target_tip: str | None = None
             self._agent_logs = {}
@@ -1467,10 +1492,16 @@ class Harness:
 
         When the loop finishes normally (not interrupted) after running at least one
         iteration, writes the run summary unless `report: false` or `report=False`.
-        However a started run stops, it then saves report.html.
+        However a started run stops, it then saves report.html. SIGTERM ends it as
+        Ctrl-C does (`_terminate_interrupts`).
         """
+        with _terminate_interrupts():
+            self._run_segment(budget, report)
+
+    def _run_segment(self, budget: Budget | None, report: bool) -> None:
         outcome = "finished"
         self._segment_started = False
+        self._segment = None
         self.run_status.data = {}
         try:
             if self._ownership._file.closed:
@@ -1488,6 +1519,7 @@ class Harness:
                 write_report(self.config, self.project_path, self.console, run_id=self.paths.run_id, _owned=True)
         except KeyboardInterrupt:
             outcome = "interrupted"
+            self._note_interrupt_request()  # in the baseline or the report (the loop notes its own)
             raise
         except BaseException:
             outcome = "failed"
@@ -1508,6 +1540,7 @@ class Harness:
                     self.run_status.stop(outcome)
                     if self._segment_started:
                         self._end_segment_log(sys.exc_info()[1])
+                        clear_stop_request(self.paths)  # answered (or too late for this segment)
                         self._write_static()
             finally:
                 try:
@@ -1577,33 +1610,36 @@ class Harness:
             return
         self._land_attempted = True
         target = self.run_info.get("target_branch")
-        try:
-            if target and self._segment_target_tip is not None and self._target_tip() != self._segment_target_tip:
+        # An interrupt (Ctrl-C, `stop --now`, a second one) waits for the landing: once
+        # attempted, the finally does not retry it.
+        with critical_section():
+            try:
+                if target and self._segment_target_tip is not None and self._target_tip() != self._segment_target_tip:
+                    if self.land_mode == "auto":
+                        raise AutoHelixRunError(
+                            f"Target {target} changed during this segment; leaving user commits untouched. "
+                            f"Review them, then use autohelix land {short_id(self.paths.run_id)} explicitly.")
+                    message = (f"Target {target} changed during this segment. Review those commits "
+                               f"before autohelix land {short_id(self.paths.run_id)}.")
+                    self.console.print(f"[yellow]{message}[/yellow]", highlight=False)
+                    self.log.warn(message)
                 if self.land_mode == "auto":
-                    raise AutoHelixRunError(
-                        f"Target {target} changed during this segment; leaving user commits untouched. "
-                        f"Review them, then use autohelix land {short_id(self.paths.run_id)} explicitly.")
-                message = (f"Target {target} changed during this segment. Review those commits "
-                           f"before autohelix land {short_id(self.paths.run_id)}.")
-                self.console.print(f"[yellow]{message}[/yellow]", highlight=False)
-                self.log.warn(message)
-            if self.land_mode == "auto":
-                before = self._target_tip()
-                land(self.paths, self.run_info, self.run_state.expected_tip)
-                count = self._commits_between(before, self.run_state.expected_tip)
-                if count:
-                    self.console.print(Text(f"  Landed {count} commit{'s' * (count != 1)} on {target}."),
-                                       highlight=False)
+                    before = self._target_tip()
+                    land(self.paths, self.run_info, self.run_state.expected_tip)
+                    count = self._commits_between(before, self.run_state.expected_tip)
+                    if count:
+                        self.console.print(Text(f"  Landed {count} commit{'s' * (count != 1)} on {target}."),
+                                           highlight=False)
+                    else:
+                        self.console.print(Text("  Nothing landed: no accepted changes."), highlight=False)
+                elif count := self._unlanded():
+                    self.console.print(Text(f"  {count} unlanded commit{'s' * (count != 1)} on "
+                                            f"autohelix/{self.paths.run_id} (manual landing)."), highlight=False)
                 else:
-                    self.console.print(Text("  Nothing landed: no accepted changes."), highlight=False)
-            elif count := self._unlanded():
-                self.console.print(Text(f"  {count} unlanded commit{'s' * (count != 1)} on "
-                                        f"autohelix/{self.paths.run_id} (manual landing)."), highlight=False)
-            else:
-                self.console.print(Text("  Nothing to land: no accepted changes."), highlight=False)
-        except Exception as e:
-            self.console.print(f"[yellow]{e}[/yellow]", highlight=False)
-            self.log.warn(f"auto-land: {e}")
+                    self.console.print(Text("  Nothing to land: no accepted changes."), highlight=False)
+            except Exception as e:
+                self.console.print(f"[yellow]{e}[/yellow]", highlight=False)
+                self.log.warn(f"auto-land: {e}")
 
     def _commits_between(self, old: str | None, new: str) -> int:
         """Commits `new` has that `old` lacks (all of them without `old`)."""
@@ -1673,13 +1709,18 @@ class Harness:
         # segment plus its own), the time cap as this segment's, counted from its start.
         cost_before = summarize_costs(self.history.cost_usages).cost_usd or 0
         self._segment_records = len(self.history.load())  # the end record counts what it adds
+        # A stop request no segment answered (its own ended first): gone before the status
+        # says running, the only time `autohelix stop` writes one.
+        clear_stop_request(self.paths)
+        # The number its start record gets: in the status, so a stop request names this segment.
+        self._segment = self.segment_log.next_number()
         # Set before the first write: from here the segment's ending writes its end record.
         self._segment_started = True
         self.run_status.start(
-            max_iterations=max_iter, run_id=self.paths.run_id,
+            max_iterations=max_iter, run_id=self.paths.run_id, segment=self._segment,
             max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
             max_time_seconds=budget.time_seconds, segment_started_at=segment_started_at)
-        self.segment_log.start(started_at=segment_started_at,
+        self.segment_log.start(segment=self._segment, started_at=segment_started_at,
                                start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
                                budget={**asdict(budget), "default": budget.default})
         self._segment_target_tip = self._target_tip()
@@ -1736,7 +1777,7 @@ class Harness:
             if baseline is not None and baseline.cost.incomplete:
                 warn_unknown_cost()
 
-        # Why the loop ended; budgets are checked after stop conditions.
+        # Why the loop ended: stop conditions, then `autohelix stop`, then budgets.
         stop_reason: dict | None = None
         if baseline_stop:
             stop_reason = self._condition_stop(baseline_stop, 0)
@@ -1745,6 +1786,9 @@ class Harness:
         try:
             for iteration in itertools.count(start_iter):
                 if stop_reason:
+                    break
+                # First right after the baseline, then after each iteration: never during one.
+                if stop_reason := self._requested_stop():
                     break
                 if stop_reason := out_of_budget():
                     break
@@ -1774,9 +1818,10 @@ class Harness:
                                highlight=False)
             self.log.info(f"run stopped — {stop_reason['detail']}")
         except KeyboardInterrupt:
-            self.run_status.stop("interrupted")
+            by = " by autohelix stop --now" if self._note_interrupt_request() else ""
+            self.run_status.stop("interrupted")  # after the note: readers see the reason with the state
             self.console.print()
-            self.console.print(f"  [yellow]Interrupted at iteration {iteration}. Progress saved.[/yellow]",
+            self.console.print(f"  [yellow]Interrupted{by} at iteration {iteration}. Progress saved.[/yellow]",
                                highlight=False)
             ran = False
         # The ending, as plain lines: stop reason (above), totals, what landed, next commands.
@@ -1784,6 +1829,28 @@ class Harness:
         self._land()
         self._print_next()
         return ran
+
+    def _requested_stop(self, now: bool = False) -> dict | None:
+        """The stop reason for this segment's `autohelix stop` request (with `now`: only a
+        `--now` one), else None. The request is the CLI's file; a bad one is no request."""
+        request = read_stop_request(self.paths, self._segment)
+        if request is None or (now and request.get("now") is not True):
+            return None
+        why = clean(request["why"], WHY_LIMIT) if isinstance(request.get("why"), str) and request["why"].strip() else None
+        requested_at = request.get("requested_at")
+        detail = "requested by autohelix stop" + " --now" * now + (f": {why}" if why else "")
+        return {"kind": "request", **({"now": True} if now else {}), "detail": detail, "why": why,
+                "requested_at": requested_at if isinstance(requested_at, (int, float)) else None}
+
+    def _note_interrupt_request(self) -> bool:
+        """After an interrupt: when `autohelix stop --now` sent it, note that as the stop
+        reason (the segment end record carries it). The state stays interrupted."""
+        if not self._segment_started or self.run_status.data.get("stop_reason"):
+            return False  # an earlier reason (the loop's own end) stands
+        if (reason := self._requested_stop(now=True)) is None:
+            return False
+        self.run_status.note(stop_reason=reason)
+        return True
 
     @staticmethod
     def _condition_stop(stop: dict[str, str], iteration: int) -> dict:
