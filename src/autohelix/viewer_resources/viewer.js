@@ -38,10 +38,18 @@ function fmtCap(v) {
 
 function fmtDuration(seconds) {
   if (!seconds && seconds !== 0) return '—';
-  const s = Math.round(seconds);
+  const s = Math.max(0, Math.round(seconds)); // clock skew: never "-5s"
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
   return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
+}
+
+// A --time cap, and the time against it, as the terminal writes them
+// (iteration_time.format_duration): "10m", "2h", "1h30m", "12m5s".
+function fmtLimit(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return `${h ? `${h}h` : ''}${m ? `${m}m` : ''}${r || (!h && !m) ? `${r}s` : ''}`;
 }
 
 function fmtClock(epochSeconds) {
@@ -861,16 +869,17 @@ function renderConfig() {
   $('config').hidden = !c?.text;
   if (!c?.text) return;
   // Budgets are not config: the latest segment's flags, as its status records them.
-  // Iterations and cost as run totals (spent before it plus its own cap); --time as its
-  // own cap, with the time since the segment started while it runs.
+  // Iterations and cost as run totals (spent before it plus its own cap); --time only
+  // while the segment runs, against its clock (run_table.time_cap; a stop reason says
+  // when time ended it).
   const s = state.status || {};
-  const running = s.state === 'running' && typeof s.segment_started_at === 'number';
+  const elapsed = s.state === 'running' && typeof s.segment_started_at === 'number'
+    ? Math.max(0, Math.floor(Date.now() / 1000 - s.segment_started_at)) : null;
   const budget = [
     s.max_iterations && `to iteration ${s.max_iterations}`,
     s.max_cost_usd && `${fmtCap(s.max_cost_usd)} total`,
-    s.max_time_seconds && (running
-      ? `${fmtDuration(Date.now() / 1000 - s.segment_started_at)} of ${fmtDuration(s.max_time_seconds)} (this segment)`
-      : `--time ${fmtDuration(s.max_time_seconds)} (last segment)`),
+    s.max_time_seconds && elapsed !== null
+      && `${fmtLimit(elapsed)} of ${fmtLimit(s.max_time_seconds)} (this segment)${elapsed >= s.max_time_seconds ? ' (time up)' : ''}`,
   ].filter(Boolean).join(' · ');
   const parts = [
     c.agent && ['Agent', c.agent],

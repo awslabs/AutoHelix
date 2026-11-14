@@ -63,68 +63,80 @@ class RunStatus:
 
 
 class SegmentLog:
-    """runs/<id>/.internal/segments.jsonl: one JSON line per segment (one `run` or
-    `resume` command), written when it starts (`ended_at`, `last_iteration`,
-    `stop_reason` and `state` null) and completed when it ends, by rewriting that
-    line. Every write replaces the whole file atomically (it holds one short line per
-    segment, and the run lock keeps one writer), so no line is ever torn; a segment
-    whose process died keeps its open line. Best-effort, like the status."""
+    """runs/<id>/.internal/segments.jsonl, append-only: for every segment (one `run`
+    or `resume` command) that started, a start record, and an end record when it
+    ended, linked by `segment` (1, 2, ... in the run). Each record is one `write()`
+    on an O_APPEND descriptor, then fsync: nothing earlier is ever rewritten, so a
+    damaged line costs only itself. A segment whose process died has no end record
+    (`read_segments` reports it open). Best-effort, like the status; the run lock
+    keeps one writer."""
 
     def __init__(self, path: Path):
         self.path = path
-        self.record: dict | None = None
+        self.segment: int | None = None
 
     def start(self, *, started_at: float, budget: dict, start_iteration: int) -> None:
-        self.record = {"started_at": started_at, "ended_at": None, "pid": os.getpid(),
-                       "host": socket.gethostname(), "budget": budget, "start_iteration": start_iteration,
-                       "last_iteration": None, "stop_reason": None, "state": None}
-        self._write(self._lines() + [self.record])
+        # Past every number in the file, end records too (a damaged start line can't make one reused).
+        self.segment = max((r["segment"] for r in _segment_records(self.path)), default=0) + 1
+        self._append({"segment": self.segment, "event": "start", "started_at": started_at, "pid": os.getpid(),
+                      "host": socket.gethostname(), "budget": budget, "start_iteration": start_iteration})
 
-    def end(self, *, state: str | None, stop_reason: dict | None, last_iteration: int) -> None:
-        """Complete the line `start` wrote (appended again if it has gone)."""
-        if self.record is None:
+    def end(self, *, state: str | None, stop_reason: dict | None, last_iteration: int | None,
+            iterations: int | None, error: str | None = None) -> None:
+        """The end record for the segment `start` began (nothing without one)."""
+        segment, self.segment = self.segment, None
+        if segment is None:
             return
-        opened, self.record = self.record, None
-        done = {**opened, "ended_at": time.time(), "last_iteration": last_iteration,
-                "stop_reason": stop_reason, "state": state}
-        lines = self._lines()
-        if lines and lines[-1] == opened:
-            lines[-1] = done
-        else:
-            lines.append(done)
-        self._write(lines)
+        self._append({"segment": segment, "event": "end", "ended_at": time.time(), "state": state,
+                      "stop_reason": stop_reason, "last_iteration": last_iteration, "iterations": iterations,
+                      "error": error})
 
-    def _lines(self) -> list:
-        return read_segments(self.path, raw=True)
-
-    def _write(self, lines: list) -> None:
+    def _append(self, record: dict) -> None:
+        data = (json.dumps(record) + "\n").encode()
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
-            tmp.write_text("".join(line if isinstance(line, str) else json.dumps(line) + "\n" for line in lines))
-            tmp.replace(self.path)
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o644)
+            try:
+                os.write(fd, data)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         except OSError:
             pass  # never break a run over it
 
 
-def read_segments(path: Path, raw: bool = False) -> list:
-    """The segment log's records, oldest first; lines that aren't JSON objects are
-    skipped (with `raw`, kept as they are, so a rewrite preserves them)."""
+def _segment_records(path: Path) -> list[dict]:
+    """The log's records (objects with an int `segment`), damaged lines skipped."""
     try:
-        text = path.read_text()
-    except (OSError, UnicodeDecodeError):
+        data = path.read_bytes()
+    except OSError:
         return []
-    records: list = []
-    for line in text.splitlines(keepends=True):
+    records = []
+    for line in data.splitlines():
         try:
             record = json.loads(line)
-        except ValueError:
-            record = None
-        if isinstance(record, dict):
+        except ValueError:  # UnicodeDecodeError included
+            continue
+        if isinstance(record, dict) and type(record.get("segment")) is int:
             records.append(record)
-        elif raw and line.strip():
-            records.append(line if line.endswith("\n") else line + "\n")
     return records
+
+
+def read_segments(path: Path) -> list[dict]:
+    """The segments in the log, oldest first: each start record with its end record's
+    fields merged in (`ended_at`, `state`, `stop_reason`, `last_iteration`,
+    `iterations`, `error`), and `open` true when it has none (still running, or its
+    process died). Lines that aren't records (damaged, undecodable) are skipped."""
+    segments: dict[int, dict] = {}
+    for record in _segment_records(path):
+        n = record["segment"]
+        fields = {k: v for k, v in record.items() if k != "event"}
+        if record.get("event") == "start":
+            segments[n] = {"ended_at": None, "state": None, "stop_reason": None, "last_iteration": None,
+                           "iterations": None, "error": None, **fields, "open": True}
+        elif record.get("event") == "end" and n in segments:
+            segments[n].update(fields, open=False)
+    return [segments[n] for n in sorted(segments)]
 
 
 def read_run_status(project: Path, run_id: str | None = None) -> dict | None:

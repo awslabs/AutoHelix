@@ -244,7 +244,7 @@ threshold, not an absolute all-inclusive financial cap.
 
 Commit the config and any scripts it uses, then start with `autohelix run
 [NAME] --path PROJECT -n 3` (`NAME` for `autohelix/NAME.yaml`, none for
-`autohelix.yaml`): always a new run, here of three iterations (an open-ended goal; `-n 1` for a single checkable task). A run keeps the config it started with
+`autohelix.yaml`): always a new run, here of three iterations (an open-ended goal; `-n 1` for a single task its gates can check). A run keeps the config it started with
 (stored in `.autohelix/runs/<id>/config.yaml`, the prompt template inlined). `resume` refuses when
 the file's parsed config has changed since (comment edits don't count): apply an edited config with a
 new run, `autohelix run [NAME] --import <id>`, or restore the file. The config and template files are

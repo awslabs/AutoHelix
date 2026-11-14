@@ -24,11 +24,12 @@ function fmtDuration(seconds) {
   return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
 }
 
-// Budgets are usually round: "10m", "2h", "1h 30m".
+// A --time cap, and the time against it, as the terminal writes them
+// (iteration_time.format_duration): "10m", "2h", "1h30m", "12m5s".
 function fmtLimit(seconds) {
-  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
-  if (seconds < 3600 && seconds % 60 === 0) return `${seconds / 60}m`;
-  return fmtDuration(seconds);
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return `${h ? `${h}h` : ''}${m ? `${m}m` : ''}${r || (!h && !m) ? `${r}s` : ''}`;
 }
 
 function fmtAgo(epochSeconds) {
@@ -74,19 +75,20 @@ function currentIteration(run) {
   return live(run) && s.iteration > p.iterations ? s.iteration : p.iterations;
 }
 
-// The latest segment's --time cap: "12m 05s of 1h (this segment)" while it runs, counted
-// from its start; "--time 1h (last segment)" once it stopped; '' without one.
-function timeCap(run) {
+// The running segment's --time against its clock (run_table.time_cap): "12m5s of 1h
+// (this segment)", short "12m5s/1h"; past the cap "(time up)". '' when the run isn't
+// running or the segment has no --time (a stop reason says when time ended it).
+function timeCap(run, short = false) {
   const s = run.status, cap = run.progress?.max_seconds;
-  if (!cap) return '';
-  if (live(run) && typeof s.segment_started_at === 'number') {
-    return `${fmtDuration(Date.now() / 1000 - s.segment_started_at)} of ${fmtLimit(cap)} (this segment)`;
-  }
-  return `--time ${fmtLimit(cap)} (last segment)`;
+  if (!cap || !live(run) || typeof s.segment_started_at !== 'number') return '';
+  const elapsed = Math.max(0, Math.floor(Date.now() / 1000 - s.segment_started_at));
+  const text = short ? `${fmtLimit(elapsed)}/${fmtLimit(cap)}` : `${fmtLimit(elapsed)} of ${fmtLimit(cap)} (this segment)`;
+  return elapsed >= cap ? `${text} (time up)` : text;
 }
 
 // Line 1: the state, with the phase while running or how long ago it stopped.
-// Line 2: time and cost so far. Stop reason and budgets (the latest segment's) are in the tooltip.
+// Line 2: time and cost so far, and while running the segment's time against its --time.
+// Stop reason, budgets (the latest segment's) and that time in full are in the tooltip.
 function statusCell(run) {
   const kind = outcome(run);
   const s = run.status;
@@ -107,12 +109,12 @@ function statusCell(run) {
     const seconds = p.seconds + (currentIteration(run) > p.iterations && s.iteration_started_at
       ? Date.now() / 1000 - s.iteration_started_at : 0);
     const cost = p.cost_usd;
-    // The run's total time (no cap) and cost, then the latest run/resume's --time: its
-    // own, never a run total. --cost is a run total (spent before it + its cap).
-    const cap = timeCap(run);
+    // The run's total time (no cap) and cost, then the running segment's time against
+    // its --time (never a run total). --cost is a run total (spent before it + its cap).
     spent = [seconds ? fmtDuration(seconds) : null,
       typeof cost === 'number' ? `$${cost.toFixed(2)}${p.cost_incomplete ? '+' : ''}` : null,
-      cap].filter(Boolean).join(' · ');
+      timeCap(run, true)].filter(Boolean).join(' · ');
+    const cap = timeCap(run);
     if (cap) notes.push(`Time budget: ${cap}`);
     if (p.max_cost_usd) notes.push(`Cost budget ${fmtMoney(p.max_cost_usd)} (run total)`);
     if (p.cost_incomplete) notes.push('Some call costs are unavailable');

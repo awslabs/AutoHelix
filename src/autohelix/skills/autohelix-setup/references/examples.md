@@ -102,6 +102,27 @@ Agree on implementation if needed. The review is an optional source of later
 feedback and is not needed to finish setup; explain the limits if the run relies
 on review alone. No numeric score is required.
 
+## A single checked task
+
+The user wants one concrete fix, such as "make the failing date-parsing test
+pass without breaking the others". The gates can decide it, so one checked
+attempt is enough to start with: no observe entry, and no review (its feedback
+would only reach a next iteration).
+
+```yaml
+goal: |
+  Fix parse_date so tests/test_dates.py::test_timezone_offset passes, without
+  changing other behavior.
+scope:
+  editable: [src/dates.py]
+gates:
+  - python -m pytest tests/
+```
+
+Launch: `autohelix run -n 1`. If the attempt is rejected, `autohelix resume <id>
+-n 2` gives it two more, with the rejected change and its gate output to learn
+from.
+
 ## Autonomous research
 
 The user wants to investigate a question rather than obtain a particular

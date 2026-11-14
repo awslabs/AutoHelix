@@ -46,7 +46,9 @@ Budgets are not config: they are flags of `autohelix run` and `resume` (`-n N`
 iterations, `--cost USD`, `--time DURATION`, for each `run` or `resume` command), so the config never
 has a `budget:` key (it is an error). The iteration count follows the goal: `-n 3`
 for an open-ended goal ("make X faster", "improve Y"), `-n 1` for a single task
-that gates or a review can check (`-n 1` is also what no flag means). Defaults
+that gates (commands or `ask:`) can check (`-n 1` is also what no flag means). A
+`review:` entry never rejects: its feedback goes to the next iteration, which a
+`-n 1` run never has, so a goal checked only by a review needs more iterations. Defaults
 otherwise: no cost or time limit, and no timeouts (no `timeout:` on gates or observe entries, no `agent.timeout`):
 the built-in defaults apply. No metric gates (`- metric: … regress:/improve:`)
 either: the agent sees the numbers and decides. Set any of these only when the

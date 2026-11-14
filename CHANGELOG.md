@@ -33,8 +33,8 @@ Breaking:
   Cost and time are checked before each iteration starts as well as after it.
   Status and `--json` record the iteration and cost caps as run totals (spent
   before + this segment's cap) and the `--time` cap as the segment's own, with
-  `segment_started_at`; the dashboard shows it as "12m 05s of 1h (this
-  segment)".
+  `segment_started_at`; while the segment runs, the dashboard shows its time
+  against the cap ("12m5s/1h", "(time up)" once past it).
 - Metric gate thresholds are percent strings (`regress: 5%`); a bare number
   is an error. Durations everywhere: a bare number (or a string of digits) is
   seconds, strings like `90s`, `30m`, `2h30m`.
@@ -226,9 +226,10 @@ Added:
   prompt variable `imported`.
 - The "also running for this config" warning is quiet when either run lands
   manually (only one of them lands on its own), as for group runs.
-- A segment log, `.autohelix/runs/<id>/.internal/segments.jsonl`: one line per
-  `run`/`resume` command with its start and end times, the budget as given,
-  its first and last iteration, the stop reason and how it ended.
+- A segment log, `.autohelix/runs/<id>/.internal/segments.jsonl`, append-only:
+  for every `run`/`resume` command that started, a start record (time, budget
+  as given, first iteration) and an end record (time, how it ended, the stop
+  reason, iterations recorded, the last one, the error of a failed one).
 
 ### Changed (breaking)
 

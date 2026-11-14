@@ -408,30 +408,38 @@ def test_no_interrupted_note_after_a_stop(project):
 
 
 def segments(paths):
-    return [json.loads(line) for line in paths.segments.read_text().splitlines()]
+    from autohelix.run_status import read_segments
+
+    return read_segments(paths.segments)
 
 
-def test_each_segment_has_a_line_in_the_segment_log(project):
+def test_each_segment_that_started_is_in_the_segment_log(project):
     paths = begun(project)
     result = cli(project, "resume", "--time", "1h", "-n", "2", "--no-report")
     assert result.exit_code == 0, result.output
     first, second = segments(paths)
+    assert (first["segment"], second["segment"]) == (1, 2)
     assert first["budget"] == {"iterations": None, "until": None, "cost_usd": None, "time_seconds": None,
                                "default": True}
-    assert (first["start_iteration"], first["last_iteration"], first["state"]) == (0, 1, "finished")
+    assert (first["start_iteration"], first["iterations"], first["last_iteration"], first["state"]) == (
+        0, 2, 1, "finished")  # the baseline and iteration 1
     assert first["stop_reason"]["detail"] == "iteration budget reached (1)"
     assert second["budget"] == {"iterations": 2, "until": None, "cost_usd": None, "time_seconds": 3600,
                                 "default": False}
-    assert (second["start_iteration"], second["last_iteration"], second["state"]) == (2, 3, "finished")
+    assert (second["start_iteration"], second["iterations"], second["last_iteration"]) == (2, 2, 3)
+    assert not first["open"] and not second["open"] and first["error"] is None
     assert first["started_at"] <= first["ended_at"] <= second["started_at"] <= second["ended_at"]
     assert second["started_at"] == status(paths)["segment_started_at"]
     assert second["pid"] == os.getpid() and second["host"] == socket.gethostname()
-    # --until already reached: no segment, no line.
+    # Append-only: a start and an end record each.
+    events = [json.loads(line)["event"] for line in paths.segments.read_text().splitlines()]
+    assert events == ["start", "end", "start", "end"]
+    # --until already reached: no segment, nothing written.
     assert cli(project, "resume", "--until", "3").exit_code == 0
     assert len(segments(paths)) == 2
 
 
-def test_an_interrupted_segment_is_completed_in_the_log(project, monkeypatch):
+def test_an_interrupted_segment_ends_in_the_log(project, monkeypatch):
     harness = Harness(project, new=True)
 
     def interrupted(iteration):
@@ -440,25 +448,71 @@ def test_an_interrupted_segment_is_completed_in_the_log(project, monkeypatch):
     monkeypatch.setattr(harness, "run_iteration", interrupted)
     harness.run(Budget(iterations=5), report=False)
     [line] = segments(harness.paths)
-    assert (line["state"], line["stop_reason"], line["last_iteration"]) == ("interrupted", None, 0)
+    assert (line["state"], line["stop_reason"], line["error"]) == ("interrupted", None, None)
+    assert (line["iterations"], line["last_iteration"]) == (1, 0)  # only the baseline
     assert line["budget"]["iterations"] == 5 and line["ended_at"] >= line["started_at"]
 
 
-def test_the_segment_log_keeps_a_crashed_segments_open_line(tmp_path):
+def test_a_failed_segment_records_its_error(project, monkeypatch):
+    harness = Harness(project, new=True)
+
+    def broken(iteration):
+        raise RuntimeError("disk\nfull")
+
+    monkeypatch.setattr(harness, "run_iteration", broken)
+    with pytest.raises(RuntimeError):
+        harness.run(Budget(iterations=2), report=False)
+    [line] = segments(harness.paths)
+    assert (line["state"], line["stop_reason"], line["error"]) == ("failed", None, "RuntimeError: disk full")
+
+
+def test_ctrl_c_while_landing_keeps_the_stop_reason(project, monkeypatch):
+    harness = Harness(project, new=True)
+
+    def land():
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(harness, "_land", land)
+    with pytest.raises(KeyboardInterrupt):
+        harness.run(Budget(iterations=1), report=False)
+    [line] = segments(harness.paths)
+    assert line["state"] == "interrupted"
+    assert line["stop_reason"]["detail"] == "iteration budget reached (1)"
+    assert line["iterations"] == 2 and line["error"] is None
+
+
+def test_ctrl_c_right_after_the_start_record_still_ends_it(project, monkeypatch):
+    harness = Harness(project, new=True)
+    original = harness.segment_log.start
+
+    def start(**fields):
+        original(**fields)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(harness.segment_log, "start", start)
+    with pytest.raises(KeyboardInterrupt):
+        harness.run(Budget(iterations=1), report=False)
+    [line] = segments(harness.paths)
+    assert not line["open"] and line["state"] == "interrupted" and line["iterations"] == 0
+
+
+def test_the_segment_log_survives_damage_and_reports_open_segments(tmp_path):
     from autohelix.run_status import SegmentLog, read_segments
 
     path = tmp_path / "segments.jsonl"
     SegmentLog(path).start(started_at=1.0, budget={"iterations": 3}, start_iteration=0)  # its process died
-    with path.open("a") as stream:
-        stream.write("not json\n")
+    with path.open("ab") as stream:
+        stream.write(b"not json\n\xff\xfe{\n")  # junk and undecodable bytes
     log = SegmentLog(path)
     log.start(started_at=2.0, budget={"iterations": 1}, start_iteration=4)
-    log.end(state="finished", stop_reason={"detail": "iteration budget reached (4)"}, last_iteration=4)
+    log.end(state="finished", stop_reason={"detail": "iteration budget reached (4)"}, last_iteration=4,
+            iterations=1)
     crashed, done = read_segments(path)
-    assert (crashed["started_at"], crashed["ended_at"], crashed["state"]) == (1.0, None, None)
-    assert (done["started_at"], done["last_iteration"], done["state"]) == (2.0, 4, "finished")
-    assert path.read_text().splitlines()[1] == "not json"  # kept as it was
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["segments.jsonl"]  # no temporary left
+    assert (crashed["segment"], crashed["open"], crashed["ended_at"], crashed["state"]) == (1, True, None, None)
+    assert (done["segment"], done["open"], done["started_at"], done["iterations"], done["state"]) == (
+        2, False, 2.0, 1, "finished")
+    assert path.read_bytes().count(b"\xff\xfe{") == 1  # nothing earlier rewritten
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["segments.jsonl"]  # no temporary files
 
 
 def test_n_help_says_more_only_on_resume(project):

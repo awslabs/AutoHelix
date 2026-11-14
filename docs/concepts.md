@@ -437,17 +437,27 @@ of truth (`jq` on it for numbers across iterations; see
 retried baseline, reuses its number: the earlier attempt's folder is moved to
 `.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
 
-`.internal/segments.jsonl` has one JSON line per segment (one `run` or
-`resume` command), written when it starts and completed when it ends:
-`started_at` and `ended_at` (epoch seconds), `budget` as given (`iterations`,
-`until`, `cost_usd`, `time_seconds`, each `null` when unset, and `default`: no
-budget flag, so the default `-n 1` applied), `start_iteration` (its first
-iteration, `0` when it captures the baseline), `last_iteration` (the run's last
-recorded iteration when it ended), `stop_reason` (as in `status.json`, `null`
-when it was interrupted or failed) and `state` (`finished`, `interrupted` or
-`failed`), plus `pid` and `host`. A segment whose process died keeps
-`ended_at: null`. Each write replaces the file atomically, so it never holds a
-torn line.
+`.internal/segments.jsonl` records every segment (one `run` or `resume`
+command) that started, append-only, two JSON lines each, linked by `segment`
+(1, 2, … in the run) and told apart by `event`:
+
+- `"event": "start"`: `started_at` (epoch seconds), `budget` as given
+  (`iterations`, `until`, `cost_usd`, `time_seconds`, each `null` when unset,
+  and `default`: no budget flag, so the default `-n 1` applied),
+  `start_iteration` (the first iteration it may run, `0` when it captures the
+  baseline), `pid` and `host`;
+- `"event": "end"`: `ended_at`, `state` (`finished`, `interrupted` or
+  `failed`), `stop_reason` (as in `status.json`: why the loop ended, kept when
+  Ctrl-C or an error comes later, during landing or the report; `null` only when
+  the loop itself was interrupted or failed), `iterations` (how many records the
+  segment added to `history.jsonl`, the baseline's included: `0` when none
+  completed), `last_iteration` (the run's last recorded iteration then; with
+  `iterations: 0` it is the one before the segment) and `error` (what a failed
+  segment failed with, one line, cut to 500 characters; else `null`).
+
+A segment whose process died has a start and no end. Each line is written in
+one append and synced, and earlier lines are never rewritten: a damaged line
+loses only itself (readers skip it).
 
 The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
 project; see [Candidate Copies](#candidate-copies).

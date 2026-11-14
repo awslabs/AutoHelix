@@ -158,22 +158,29 @@ def _run_data(iterations: int) -> dict:
             "commit": "abc1234", "run": run}
 
 
-def test_the_time_cap_is_the_segments_own():
-    """--time is shown against the segment's clock while it runs, as the cap after;
-    the run's total time has no cap."""
+def test_the_time_cap_is_the_running_segments_own():
+    """--time is shown against the segment's clock while it runs (short in the
+    dashboard's row), "(time up)" past it, nothing once the run stopped; the run's
+    total time has no cap."""
     from autohelix import run_table
 
     data = _run_data(3)
     run = data["run"]
-    assert run_table.time_cap(run, 1000) == ""  # no --time
+    assert run_table.time_cap(run, 1000) == ""  # not running
     run["status"] = {"state": "running", "iteration": 2, "segment_started_at": 1000 - 725,
                      "max_time_seconds": 3600, "phase": "agent", "phase_started_at": 990}
-    assert run_table.time_cap(run, 1000) == "12m 05s of 1h (this segment)"
-    assert "1m 00s · $1.50 · 12m 05s of 1h (this segment)" in run_table.format_run(data, now=1000)
-    run["status"].update(state="finished", max_time_seconds=5400)
-    assert run_table.time_cap(run, 1000) == "--time 1h30m (last segment)"
+    assert run_table.time_cap(run, 1000) == "12m5s of 1h (this segment)"
+    assert run_table.time_cap(run, 1000, short=True) == "12m5s/1h"
+    assert "1m 00s · $1.50 · 12m5s of 1h (this segment)" in run_table.format_run(data, now=1000)
+    run["status"].update(segment_started_at=1000 - 6000, max_time_seconds=5400)
+    assert run_table.time_cap(run, 1000, short=True) == "1h40m/1h30m (time up)"
     listing = run_table.format_runs({**data, "runs": [run]}, now=1000)
-    assert "1m 00s · $1.50 · --time 1h30m (last segment)" in listing
+    assert "1m 00s · $1.50 · 1h40m/1h30m (time up)" in listing
+    run["status"]["segment_started_at"] = 1000 + 5  # clock skew
+    assert run_table.time_cap(run, 1000, short=True) == "0s/1h30m"
+    run["status"].update(state="finished")
+    assert run_table.time_cap(run, 1000) == ""
+    assert "1h30m" not in run_table.format_runs({**data, "runs": [run]}, now=1000)
 
 
 def _screen_lines(data, log, height) -> list[str]:

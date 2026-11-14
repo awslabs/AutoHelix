@@ -85,17 +85,21 @@ def _spent(run: dict, now: float) -> str:
                                     _money(cost, p["cost_incomplete"]) if cost is not None else None]))
 
 
-def time_cap(run: dict, now: float) -> str:
-    """The latest segment's --time cap: `12m 05s of 1h (this segment)` while it runs,
-    `1h (last segment)` once it stopped, "" without one. Never a run total."""
+def time_cap(run: dict, now: float, short: bool = False) -> str:
+    """The running segment's --time against its clock: `12m5s of 1h (this segment)`,
+    or with `short` (the dashboard's row) `12m5s/1h`; past the cap `(time up)` is
+    added. "" when the run isn't running or the segment has no --time (a stopped
+    run's stop reason says when time ended it). Never a run total. Both figures in
+    the cap's format (`iteration_time.format_duration`: 1h30m)."""
     status = run.get("status") or {}
-    cap = status.get("max_time_seconds")
-    if not isinstance(cap, (int, float)) or isinstance(cap, bool) or cap <= 0:
+    cap, started = status.get("max_time_seconds"), status.get("segment_started_at")
+    if (not _live(run) or not isinstance(cap, (int, float)) or isinstance(cap, bool) or cap <= 0
+            or not isinstance(started, (int, float))):
         return ""
-    started = status.get("segment_started_at")
-    if _live(run) and isinstance(started, (int, float)):
-        return f"{format_duration(now - started)} of {format_limit(int(cap))} (this segment)"
-    return f"--time {format_limit(int(cap))} (last segment)"
+    elapsed = max(0, int(now - started))
+    text = f"{format_limit(elapsed)}/{format_limit(int(cap))}" if short else \
+        f"{format_limit(elapsed)} of {format_limit(int(cap))} (this segment)"
+    return text + " (time up)" * (elapsed >= cap)
 
 
 def _iterations(run: dict) -> str:
@@ -190,7 +194,7 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None)
                     + ([_metric(run, metric)] if metric else [])
                     + [_landing(run), "now" if _live(run) else _ago(run["last_activity"], now),
                        run.get("title") or ""])
-        spent = " · ".join(filter(None, [_spent(run, now), time_cap(run, now)]))
+        spent = " · ".join(filter(None, [_spent(run, now), time_cap(run, now, short=True)]))
         rows.append(["  " + _config_file(run), spent] + [""] * (len(head) - 3) + [_cut(_notes(run), 100)])
     return "\n".join(list(map(clean, lines)) + [""] + _table(rows, right={2, 3} if metric else {2})) + "\n"
 

@@ -1507,7 +1507,7 @@ class Harness:
                 finally:
                     self.run_status.stop(outcome)
                     if self._segment_started:
-                        self._end_segment_log()
+                        self._end_segment_log(sys.exc_info()[1])
                         self._write_static()
             finally:
                 try:
@@ -1517,15 +1517,22 @@ class Harness:
                 finally:
                     self.close()
 
-    def _end_segment_log(self) -> None:
-        """Complete this segment's line in segments.jsonl: how it ended (the status's
-        state and stop reason) and the run's last iteration."""
+    def _end_segment_log(self, error: BaseException | None) -> None:
+        """This segment's end record in segments.jsonl: how it ended (the status's state
+        and stop reason, the error it failed with), the run's last iteration and how
+        many records the segment added to the history."""
         try:
-            last = self.history.get_last_iteration()
+            records = self.history.load()
+            last = max((r.iteration for r in records), default=0)
+            added = len(records) - self._segment_records
         except Exception:  # noqa: BLE001 - the log is best-effort; the outcome stands
-            last = None
+            last = added = None
+        failure = None
+        if error is not None and not isinstance(error, KeyboardInterrupt):
+            failure = clean(f"{type(error).__name__}: {error}", 500)
         self.segment_log.end(state=self.run_status.data.get("state"),
-                             stop_reason=self.run_status.data.get("stop_reason"), last_iteration=last)
+                             stop_reason=self.run_status.data.get("stop_reason"), last_iteration=last,
+                             iterations=added, error=failure)
 
     def close(self) -> None:
         if hasattr(self, "_ownership"):
@@ -1665,6 +1672,9 @@ class Harness:
         # Status records the iteration and cost caps as run totals (spent before this
         # segment plus its own), the time cap as this segment's, counted from its start.
         cost_before = summarize_costs(self.history.cost_usages).cost_usd or 0
+        self._segment_records = len(self.history.load())  # the end record counts what it adds
+        # Set before the first write: from here the segment's ending writes its end record.
+        self._segment_started = True
         self.run_status.start(
             max_iterations=max_iter, run_id=self.paths.run_id,
             max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
@@ -1672,7 +1682,6 @@ class Harness:
         self.segment_log.start(started_at=segment_started_at,
                                start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
                                budget={**asdict(budget), "default": budget.default})
-        self._segment_started = True
         self._segment_target_tip = self._target_tip()
         flags = [self.run_info.pop("archived", None), self.run_info.pop("lifecycle", None)]
         for key, value in self._identity_changes.items():  # `resume --land` / `--group`

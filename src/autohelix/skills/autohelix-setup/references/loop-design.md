@@ -85,8 +85,9 @@ The budget is the launch command's flags, not config: `autohelix run perf -n 10
 --cost 20`. Retain the user's stated budgets and agent/model preferences. By
 default, suggest only an iteration count and no `--cost` or `--time`: `-n 3`
 for an open-ended goal ("make X faster", "improve Y"), `-n 1` for a single task
-that gates or a review can check (one checked attempt; also what no flag
-means). Leave timeouts at their defaults. Add any of these when the user asks
+that gates (commands or `ask:`) can check (one checked attempt; also what no
+flag means). Reviews never reject, and their feedback reaches only a next
+iteration, so a goal judged by a review alone needs `-n` above 1. Leave timeouts at their defaults. Add any of these when the user asks
 or the work calls for it (expensive evaluations, a deadline), and say why. Hand over the complete command line with the budget
 explained; the user can change it without touching the config, and `autohelix
 resume <id> -n N` gives a run more later. See
