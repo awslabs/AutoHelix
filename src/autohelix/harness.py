@@ -9,8 +9,10 @@ import itertools
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -130,6 +132,27 @@ class _Evaluation:
     metrics: dict[str, float] = field(default_factory=dict)  # from the entries that succeeded
     rejection: str | None = None
     failure_output: str | None = None
+
+
+@contextmanager
+def _terminate_interrupts():
+    """While a segment runs, SIGTERM (`autohelix stop --now`, a plain `kill`) raises
+    KeyboardInterrupt, so it ends as Ctrl-C does: the iteration recorded, its agent's
+    and commands' process groups (their own sessions) killed, the run landed. Unlike
+    SIGINT it is not ignored in a run a script started in the background. Only in the
+    main thread, and only over the default action: a caller's own handler stays."""
+    if threading.current_thread() is not threading.main_thread() or signal.getsignal(signal.SIGTERM) != signal.SIG_DFL:
+        yield
+        return
+
+    def terminate(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, terminate)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
 
 def _tail(output: str, lines: int = 15) -> str:
@@ -1468,8 +1491,13 @@ class Harness:
 
         When the loop finishes normally (not interrupted) after running at least one
         iteration, writes the run summary unless `report: false` or `report=False`.
-        However a started run stops, it then saves report.html.
+        However a started run stops, it then saves report.html. SIGTERM ends it as
+        Ctrl-C does (`_terminate_interrupts`).
         """
+        with _terminate_interrupts():
+            self._run_segment(budget, report)
+
+    def _run_segment(self, budget: Budget | None, report: bool) -> None:
         outcome = "finished"
         self._segment_started = False
         self._segment = None
@@ -1688,7 +1716,7 @@ class Harness:
             max_iterations=max_iter, run_id=self.paths.run_id, segment=self._segment,
             max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
             max_time_seconds=budget.time_seconds, segment_started_at=segment_started_at)
-        self.segment_log.start(started_at=segment_started_at,
+        self.segment_log.start(segment=self._segment, started_at=segment_started_at,
                                start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
                                budget={**asdict(budget), "default": budget.default})
         self._segment_target_tip = self._target_tip()

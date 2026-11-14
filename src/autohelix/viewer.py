@@ -333,12 +333,15 @@ class RunData:
         records = self.records() if self.paths.run_id else []
         total_cost = summarize_costs([usage for row in records for usage in row.cost_usages])
         iterations = self.iterations(records)
+        status = read_run_status(self.project, self.paths.run_id)
         return {
             "title": (config.title or None) if config and isinstance(config.goal, str) else None,
             "project": self.project.name,
             "goal": config.goal if config else None,
             "directions": config.metric_directions() if config else {},
-            "status": read_run_status(self.project, self.paths.run_id),
+            "status": status,
+            # `autohelix stop` asked the running segment to end, as on the run list.
+            "stop_requested": pending_stop(self.paths, status) if self.paths.run_id else None,
             "run_id": self.paths.run_id,
             "config": self._config_summary(config, config_path),
             "notes_files": sorted(self._notes_files(), key=_note_order) if self.paths.run_id else [],

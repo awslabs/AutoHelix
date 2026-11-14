@@ -112,11 +112,13 @@ function renderStatus() {
     node.textContent = `Running · writing the summary · ${fmtDuration(now - s.phase_started_at)}`;
   } else if (s.state === 'running') {
     const where = s.iteration === null ? '' : ` · ${label(s.iteration).toLowerCase()}`;
-    node.textContent = `Running${where} · ${s.phase} · ${fmtDuration(now - s.phase_started_at)}`;
+    const stopping = state.stop_requested ? ' · stopping (autohelix stop)' : '';
+    node.textContent = `Running${where} · ${s.phase} · ${fmtDuration(now - s.phase_started_at)}${stopping}`;
   } else {
     const when = s.stopped_at ? ` at ${fmtClock(s.stopped_at)}` : '';
     const words = { finished: 'Finished', interrupted: 'Interrupted', failed: 'Failed', crashed: 'Stopped unexpectedly' };
-    const why = s.state === 'finished' && s.stop_reason ? ` · ${s.stop_reason.detail}` : '';
+    // Interrupted with a reason: `autohelix stop --now` (or Ctrl-C while the ending landed).
+    const why = ['finished', 'interrupted'].includes(s.state) && s.stop_reason ? ` · ${s.stop_reason.detail}` : '';
     node.textContent = (words[s.state] || s.state) + when + why;
   }
   node.className = `status ${s.state}`;

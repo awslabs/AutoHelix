@@ -77,12 +77,13 @@ class SegmentLog:
         self.segment: int | None = None
 
     def next_number(self) -> int:
-        """The number `start` gives the next segment: past every number in the file, end
+        """The next segment's number (for `start`): past every number in the file, end
         records too (a damaged start line can't make one reused)."""
         return max((r["segment"] for r in _segment_records(self.path)), default=0) + 1
 
-    def start(self, *, started_at: float, budget: dict, start_iteration: int) -> None:
-        self.segment = self.next_number()
+    def start(self, *, segment: int, started_at: float, budget: dict, start_iteration: int) -> None:
+        """The start record of segment `segment` (`next_number()`, taken under the run lock)."""
+        self.segment = segment
         self._append({"segment": self.segment, "event": "start", "started_at": started_at, "pid": os.getpid(),
                       "host": socket.gethostname(), "budget": budget, "start_iteration": start_iteration})
 

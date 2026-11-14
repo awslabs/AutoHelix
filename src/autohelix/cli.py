@@ -477,6 +477,9 @@ def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land
     command (a segment of the run) goes on: -n N iterations (or --until N),
     --cost USD, --time DURATION, whichever comes first. Without any of them,
     1 iteration: type -n for a loop. With only --cost or --time, no iteration cap.
+    `autohelix stop` ends it after its current iteration; Ctrl-C, `kill PID`
+    (SIGTERM) or `autohelix stop --now` at once (the iteration recorded, the run
+    landed).
 
     With --group NAME, each iteration's agent also sees the other non-archived
     runs of that group: their notes and history, and their code (each run's
@@ -790,14 +793,19 @@ def _stop_run(project: Path, value: str, why: str | None, now: bool) -> tuple[st
     import socket
 
     from autohelix.run_status import write_stop_request
+    from autohelix.runs import is_live
 
     run_id = resolve_run(project, value)
+    paths = RunPaths(project, run_id)
     short = short_id(run_id)
     status = read_run_status(project, run_id) or {}
     state = status.get("state")
     if state != "running":
         last = {"crashed": "it stopped unexpectedly"}.get(state, state)
         raise RuntimeError(f"Run {short} is not running" + (f" ({last})." if last else "."))
+    # A status the process had no chance to update (SIGKILL, out of memory): its lock is free.
+    if not is_live(paths):
+        raise RuntimeError(f"Run {short} is not running (its process is gone; it stopped unexpectedly).")
     if type(status.get("segment")) is not int:
         raise RuntimeError(f"Run {short} was started by an older AutoHelix and can't be stopped this way; "
                            "press Ctrl-C in its terminal.")
@@ -809,34 +817,29 @@ def _stop_run(project: Path, value: str, why: str | None, now: bool) -> tuple[st
         if type(pid) is not int or pid <= 1 or "autohelix" not in _process_command(pid):
             raise RuntimeError(f"Run {short}'s process ({pid}) is not an autohelix process; not interrupted.")
     try:
-        write_stop_request(RunPaths(project, run_id), segment=status["segment"], why=why, now=now)
+        write_stop_request(paths, segment=status["segment"], why=why, now=now)
     except OSError as error:
         raise RuntimeError(f"Could not ask run {short} to stop: {error}") from error
     if now:
         try:
-            os.kill(pid, signal.SIGINT)  # as Ctrl-C in its terminal; the request (above) says why
+            # SIGTERM, not SIGINT: a run a script started in the background ignores SIGINT.
+            # The harness takes it as Ctrl-C; the request (above) says who sent it and why.
+            os.kill(pid, signal.SIGTERM)
         except OSError as error:
-            raise RuntimeError(f"Could not interrupt run {short} ({pid}): {error}") from error
+            raise RuntimeError(f"Could not interrupt run {short} ({pid}): {error}; it still stops after "
+                               "its current iteration.") from error
     return short, _stop_message(short, status, now)
 
 
 def _stop_message(short: str, status: dict, now: bool) -> str:
-    """What a stopped run does next, by its status's iteration and phase."""
-    iteration, phase = status.get("iteration"), status.get("phase")
-    if type(iteration) is not int:
-        iteration = None
+    """What a stopped run does next, with the iteration its status names."""
+    iteration = status.get("iteration")
+    where = "the baseline" if iteration == 0 else f"iteration {iteration}" if type(iteration) is int else None
     if now:
-        where = "the baseline" if iteration == 0 else f"iteration {iteration}" if iteration else "its start"
-        return f"Interrupting run {short} at {where}; an interrupted iteration is recorded as rejected."
-    if phase == "report":
-        return f"Run {short} is already ending (writing its summary)."
+        return f"Interrupting run {short}" + (f" ({where})." if where else ".")
     if iteration == 0:
-        return f"Run {short} stops after the baseline (running now)."
-    if iteration is not None and phase == "between iterations":
-        return f"Run {short} stops before iteration {iteration + 1}."
-    if iteration is not None:
-        return f"Run {short} stops after iteration {iteration} (running now)."
-    return f"Run {short} stops before its next iteration (it is starting)."
+        return f"Run {short} stops after the baseline."
+    return f"Run {short} stops after its current iteration" + (f" ({iteration})." if where else ".")
 
 
 @main.command()
@@ -855,8 +858,10 @@ def stop(run_ids: tuple[str, ...], path: str, why: str | None, now: bool):
     `autohelix resume RUN_ID` continues it later. Asking again replaces --why.
 
     --now also interrupts the current iteration, like Ctrl-C in the run's
-    terminal: it is recorded as rejected (interrupted), the run lands, no
-    summary is written. Only on the host the run is running on.
+    terminal (it sends SIGTERM, which a run takes as Ctrl-C; so does a plain
+    `kill PID`): an interrupted iteration is recorded as rejected, the agent's
+    and commands' processes are ended, the run lands, no summary is written.
+    Only on the host the run is running on.
 
     Exits 1 if any run could not be asked (not running, unknown id).
     """
