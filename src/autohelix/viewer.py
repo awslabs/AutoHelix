@@ -935,7 +935,7 @@ class ProjectRuns:
             config = load_config(self.project, config_file=path)[0]
             summary = {"file": relative, "goal": (config.goal.strip() or None) if isinstance(config.goal, str) else None,
                        "title": (config.title or None) if isinstance(config.goal, str) else None,
-                       "directions": config.metric_directions(), "land": config.land}
+                       "directions": config.metric_directions()}
         except Exception:
             summary = {"file": relative, "invalid": True}
         self._configs[path] = (mtime, summary)
@@ -1017,8 +1017,7 @@ class ProjectRuns:
             "target_branch": target,
             "landing": self._landing(target_tip, tip),
             "group": data.get("group"),
-            # Recorded at creation; older runs follow the config (else auto).
-            "land": data.get("land") or config.get("land") or "auto",
+            "land": data.get("land") or "auto",  # recorded at creation
             **run_notes(data),
         }
 

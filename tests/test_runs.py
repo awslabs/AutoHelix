@@ -463,7 +463,6 @@ def test_resume_keeps_its_own_tip_past_user_commits_and_land_divergence_is_safe(
 
 def test_auto_land_before_report_and_after_abort(project, monkeypatch):
     harness = Harness(project)
-    harness.config.report = True
     seen = []
 
     def report(*args, **kwargs):

@@ -27,7 +27,7 @@ def project(tmp_path):
     git(project, "config", "user.name", "Test")
     (project / "code.py").write_text("print('baseline')\n")
     (project / "autohelix.yaml").write_text(yaml.safe_dump({
-        "goal": "Make a checked change", "report": False,
+        "goal": "Make a checked change",
         "agent": {"backend": "mock", "settings": {
             "change_file": "code.py", "change_content": "# iteration {iteration}", "cost_usd": 0.1,
         }},

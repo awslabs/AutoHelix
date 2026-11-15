@@ -1,7 +1,8 @@
 """The run summary is written when a run finishes normally."""
 
-import subprocess
+from click.testing import CliRunner
 
+from autohelix.cli import main
 from autohelix.harness import Budget, Harness
 from autohelix.runs import RunPaths
 from autohelix.run_status import read_run_status
@@ -20,10 +21,11 @@ def test_no_report_when_disabled_or_nothing_ran(integration_project):  # noqa: F
     assert not report.exists()
     Harness(integration_project).run(Budget(until=1))  # iteration 1 is already done
     assert not report.exists()
-    config = integration_project / "autohelix.yaml"
-    config.write_text(config.read_text() + "report: false\n")
-    subprocess.run(["git", "commit", "-qam", "report off"], cwd=integration_project)
-    Harness(integration_project, new=True).run(Budget(until=1))  # a run keeps its config: a new one
+
+
+def test_no_report_flag_skips_the_summary(integration_project):  # noqa: F811
+    result = CliRunner().invoke(main, ["run", "-p", str(integration_project), "-n", "1", "--no-report"])
+    assert result.exit_code == 0, result.output
     assert not RunPaths(integration_project).report.exists()
 
 

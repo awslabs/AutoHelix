@@ -48,7 +48,15 @@ has a `budget:` key (it is an error). The iteration count follows the goal: `-n 
 for an open-ended goal ("make X faster", "improve Y"), `-n 1` for a single task
 that gates (commands or `ask:`) can check (`-n 1` is also what no flag means). A
 `review:` entry never rejects: its feedback goes to the next iteration, which a
-`-n 1` run never has, so a goal checked only by a review needs more iterations. Defaults
+`-n 1` run never has, so a goal checked only by a review needs more iterations.
+Landing and the run summary are flags too, never config keys (`land:` and
+`report:` are errors): a run lands automatically (fast-forwards the branch it
+started on when the command ends) unless the launch command says `--land
+manual`. Add `--land manual` when the user wants to review the code before it
+reaches their branch, will keep committing on that branch while the run goes,
+or is comparing approaches in separate runs; `--group` runs land manually
+already. Add `--no-report` only when the user asks to skip the summary (it isn't stored:
+hand it over on every `resume` command too). Defaults
 otherwise: no cost or time limit, and no timeouts (no `timeout:` on gates or observe entries, no `agent.timeout`):
 the built-in defaults apply. No metric gates (`- metric: … regress:/improve:`)
 either: the agent sees the numbers and decides. Set any of these only when the
@@ -104,7 +112,7 @@ Show the complete proposed YAML in a fenced block, including the full goal and
 every configured field. For an existing config, show the proposed replacement
 and summarize the changes. For newly generated configs, use this top-level
 order, omitting unused fields: `goal`, `scope`, `gates`, `observe`, `stop`,
-`agent`, `land`, `report`, `prompt_template`. This is a presentation
+`agent`, `prompt_template`. This is a presentation
 convention, not a validation requirement. Preserve an existing config's order
 unless reorganizing it is requested. Keep the order of entries within `gates`,
 `observe`, and `stop`: it affects execution.
@@ -190,8 +198,9 @@ budget included, and one line on why that budget: e.g. `autohelix run perf -n
 `autohelix run perf -n 3` for a first look at an open-ended goal, or `autohelix
 run fix -n 1` for one task the gates check. Always write the flags out, `-n 1`
 included. Add `--cost` or `--time` only
-for a reason (expensive evaluations, a deadline); `autohelix resume <id> -n N`
-gives more later. The complete YAML and rationale
+for a reason (expensive evaluations, a deadline), and `--land manual` when
+the code should be reviewed before it lands (say so: `autohelix land <id>`
+lands it then); `autohelix resume <id> -n N` gives more later. The complete YAML and rationale
 were shown in the proposal; repeat them only if requested or needed to explain
 a revision.
 
@@ -200,7 +209,8 @@ checkout with a commit, and the first baseline needs no uncommitted changes to
 tracked files; identify unrelated changes that still prevent launch without
 committing or discarding them. `autohelix run` creates `.autohelix/` itself.
 The launch command is `autohelix run` for `autohelix.yaml`, or
-`autohelix run <name>` for `autohelix/<name>.yaml`, followed by its budget flags.
+`autohelix run <name>` for `autohelix/<name>.yaml`, followed by its budget flags
+(and `--land manual` when chosen).
 Keep the iteration prompt's instruction to leave candidate edits uncommitted:
 AutoHelix validates and commits accepted changes. A setup commit before launch
 is different from an iteration agent or supervisor making extra commits while

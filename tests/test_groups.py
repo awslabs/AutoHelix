@@ -10,7 +10,6 @@ from click.testing import CliRunner
 
 from autohelix import workspace
 from autohelix.cli import main
-from autohelix.config import Config
 from autohelix.harness import Budget, Harness
 from autohelix.runs import RunLock, RunPaths, archive, git, short_id
 from tests.test_runs import configure
@@ -106,9 +105,6 @@ def test_group_and_landing_mode_are_stored_kept_and_changed(project):
     data = identity(grouped)
     assert "group" not in data and data["land"] == "auto"
 
-    configure(project, land="manual")  # the config's land: is the default for new runs only
-    fresh, _ = started(project)
-    assert identity(fresh)["land"] == "manual"
     explicit, _ = started(project, "--group", "perf", "--land", "auto")
     assert identity(explicit)["land"] == "auto"
 
@@ -116,20 +112,21 @@ def test_group_and_landing_mode_are_stored_kept_and_changed(project):
     assert bad.exit_code == 2 and "group must use lowercase" in bad.output
 
 
-def test_config_land_keeps_unset_apart_from_auto():
-    assert Config.from_dict({"goal": "g"}).land is None
-    assert Config.from_dict({"goal": "g", "land": "auto"}).land == "auto"
-    assert any("land must be" in issue.message for issue in Config.from_dict({"goal": "g", "land": "x"}).validate())
-
-
-def test_legacy_runs_without_a_recorded_mode_follow_the_config(project):
+def test_land_in_the_config_is_an_error_naming_the_flag(project):
     configure(project, land="manual")
+    result = cli(project, "run", "-n", "1", "--no-report")
+    assert result.exit_code != 0
+    assert "`land:` moved to the command line: `autohelix run --land auto|manual`" in result.output
+    assert not RunPaths(project).runs.exists() or not any(RunPaths(project).runs.iterdir())
+
+
+def test_runs_without_a_recorded_mode_land_automatically(project):
     paths, _ = started(project, "--land", "manual")
     data = identity(paths)
     del data["land"]
     paths.identity.write_text(json.dumps(data))
     harness = Harness(project, run_id=paths.run_id)
-    assert harness.land_mode == "manual"
+    assert harness.land_mode == "auto"
     harness.close()
 
 
@@ -293,14 +290,6 @@ def test_a_broken_member_doesnt_stop_another_run(project):
     assert result.exit_code == 0, result.output
 
 
-def test_a_group_lands_manually_even_with_land_auto_in_the_config(project):
-    configure(project, land="auto")
-    paths, _ = started(project, "--group", "g")
-    assert identity(paths)["land"] == "manual"
-    paths, _ = started(project, "--group", "g", "--land", "auto")
-    assert identity(paths)["land"] == "auto"
-
-
 def test_unchanged_notes_are_hard_links_and_a_removed_notes_folder_stays_removed(project, monkeypatch):
     from autohelix import iteration
 
@@ -333,7 +322,6 @@ def test_the_report_copy_lists_the_runs_own_ref(project, monkeypatch):
 
     paths, _ = started(project)
     monkeypatch.setattr(workspace.Copy, "create", classmethod(create))
-    configure(project, report=True)
     result = cli(project, "report", short_id(paths.run_id))
     assert result.exit_code == 0, result.output
     assert seen["refs"] == (paths.ref,)

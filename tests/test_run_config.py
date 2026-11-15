@@ -18,7 +18,7 @@ from autohelix.workspace import Scope
 CONFIG = """\
 # Why this goal: setup's reasoning, as comments.
 goal: Make a checked change  # the title
-report: false
+observe: [{name: bench, command: "true"}]
 agent:
   backend: mock
   settings:
@@ -59,11 +59,11 @@ def test_the_template_line_is_replaced_and_comments_kept(tmp_path):
     (tmp_path / "prompts").mkdir()
     (tmp_path / "prompts" / "p.md").write_text("  Indented first line\n{{ goal }}\n\n")
     config = tmp_path / "c.yaml"
-    config.write_text("# keep me\ngoal: g  # and me\nprompt_template: prompts/p.md  # gone\nreport: false\n")
+    config.write_text("# keep me\ngoal: g  # and me\nprompt_template: prompts/p.md  # gone\nstop: ['false']\n")
     text = stored_config_text(config)
     assert text.startswith("# keep me\ngoal: g  # and me\nprompt_template:  # stored when the run started\n")
-    assert text.endswith("report: false\n")
-    assert yaml.safe_load(text) == {"goal": "g", "report": False, "prompt_template": {
+    assert text.endswith("stop: ['false']\n")
+    assert yaml.safe_load(text) == {"goal": "g", "stop": ["false"], "prompt_template": {
         "file": "prompts/p.md", "text": "  Indented first line\n{{ goal }}\n\n"}}
     assert yaml.safe_load(text) == inlined(config)
 
@@ -146,7 +146,8 @@ def test_a_symlinked_config_and_template_are_frozen_as_named_and_as_resolved(tmp
 
 def test_a_comment_or_formatting_edit_resumes(started):
     (started.project / "autohelix.yaml").write_text(
-        "# reworded reasoning\n" + CONFIG.replace("report: false", "report:   false   # still off"))
+        "# reworded reasoning\n" + CONFIG.replace('observe: [{name: bench, command: "true"}]',
+                                                "observe:   [ {command: 'true',  name: bench} ]   # still there"))
     commit(started.project)
     result = cli(started.project, "resume", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
@@ -211,17 +212,20 @@ def test_a_deleted_template_continues_but_other_keys_are_compared(project):
 @pytest.mark.parametrize("edit, changed", [
     ("gates: []\nscope: {editable: null}\nstop:\n", None),
     ("prompt_template: ./prompt.md\n", None),
-    ("report: true\n", "report"),  # a default written out is a change: the message names it
+    # a default written out is a change: the message names it
+    ('observe: [{name: bench, command: "true", timeout: 1800}]\n', "observe"),
 ])
 def test_empty_values_and_path_spellings_are_not_changes(project, edit, changed):
     (project / "prompt.md").write_text("Do it: {{ goal }}\n")
-    (project / "autohelix.yaml").write_text(CONFIG.replace("report: false\n", "") + "prompt_template: prompt.md\n")
+    (project / "autohelix.yaml").write_text(CONFIG + "prompt_template: prompt.md\n")
     commit(project, "template")
     assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
     paths = RunPaths(project)
-    text = CONFIG.replace("report: false\n", "") + "prompt_template: prompt.md\n"
+    text = CONFIG + "prompt_template: prompt.md\n"
     if edit.startswith("prompt_template"):
         text = text.replace("prompt_template: prompt.md\n", edit)
+    elif edit.startswith("observe"):
+        text = text.replace('observe: [{name: bench, command: "true"}]\n', edit)
     else:
         text += edit
     (project / "autohelix.yaml").write_text(text)

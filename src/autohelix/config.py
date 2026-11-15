@@ -72,7 +72,7 @@ class ConfigIssue:
 DEFAULT_CHECK_TIMEOUT = 1800
 
 KNOWN_TOP_LEVEL_KEYS = {
-    "goal", "agent", "prompt_template", "scope", "gates", "observe", "stop", "land", "report",
+    "goal", "agent", "prompt_template", "scope", "gates", "observe", "stop",
 }
 
 # Keys of the first config format: each is an error naming its replacement.
@@ -87,6 +87,9 @@ RENAMED_TOP_LEVEL_KEYS = {
     "name": "`name:` is gone: runs are named after the config file; use autohelix/<name>.yaml",
     "budget": ("`budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` "
                "(also `resume`; `agent.timeout` limits one iteration)"),
+    "land": ("`land:` moved to the command line: `autohelix run --land auto|manual` (also `resume`; "
+             "default auto, manual with --group)"),
+    "report": "`report:` moved to the command line: `autohelix run --no-report` (also `resume`)",
 }
 
 ENTRY_AGENT_KEYS = ("backend", "model", "reasoning_effort", "timeout", "command")
@@ -160,8 +163,6 @@ class Config:
     agent: AgentConfig = field(default_factory=AgentConfig)
     editable: list[str] = field(default_factory=list)
     frozen: list[str] = field(default_factory=list)
-    report: bool = True  # write a summary (report.md) when a run finishes
-    land: str | None = None  # the landing mode of new runs; unset: auto (manual with --group)
     # A Jinja file replacing the built-in agent prompt, resolved against the config file's folder;
     # `prompt_template_text` is its text when the config is a run's stored copy (which inlines it).
     prompt_template: Path | None = None
@@ -224,9 +225,6 @@ class Config:
 
         for message in self._parse_errors:
             error(message)
-
-        if self.land is not None and self.land not in ("auto", "manual"):
-            error("land must be auto or manual")
 
         # Check for unknown keys (typo detection)
         if raw_data is not None:
@@ -321,8 +319,6 @@ class Config:
             agent=agent,
             editable=editable,
             frozen=frozen,
-            report=data.get("report") is not False,
-            land=data.get("land"),
             _parse_errors=errors,
         )
 
@@ -851,7 +847,7 @@ def _normalized(value: Any) -> Any:
 def config_changes(stored: dict[str, Any], current: dict[str, Any]) -> list[str]:
     """The top-level keys whose parsed values differ: comments and formatting don't count,
     nor empty values (`_normalized`) or how `prompt_template.file` spells the path
-    (`./p.md`). Defaults written out (`report: true`) and other spellings (`10m`, `600`)
+    (`./p.md`). Defaults written out (`agent: {backend: claude}`) and other spellings (`10m`, `600`)
     do: the refusal names the keys."""
     def normalized(data: dict[str, Any]) -> dict[str, Any]:
         data = _normalized(data)

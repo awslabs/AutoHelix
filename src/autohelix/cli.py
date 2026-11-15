@@ -277,8 +277,8 @@ def _segment_options(command):
         click.option("--no-report", is_flag=True, help="Don't write the run summary when the run finishes"),
         click.option("--land", "land_mode", type=click.Choice(["auto", "manual"]),
                      help="Fast-forward the target branch at the end of each segment (auto) or leave it to "
-                          "`autohelix land` (manual). Stored with the run; a new run's default is the config's "
-                          "land:, else auto (manual with --group)."),
+                          "`autohelix land` (manual). Stored with the run; a new run's default is auto "
+                          "(manual with --group)."),
     ]):
         command = option(command)
     return command
@@ -857,8 +857,9 @@ def stop(run_ids: tuple[str, ...], path: str, why: str | None, now: bool):
     """End running runs after their current iteration (RUN_ID or its last part).
 
     The iteration under way is never interrupted; the segment then ends as when
-    its budget runs out: it lands (auto landing), writes the summary (report:)
-    and the run page. Asked during the baseline, it stops after the baseline.
+    its budget runs out: it lands (auto landing), writes the summary (unless
+    --no-report) and the run page. Asked during the baseline, it stops after
+    the baseline.
     `autohelix resume RUN_ID` continues it later. Asking again replaces --why.
 
     --now also interrupts the current iteration, like Ctrl-C in the run's
