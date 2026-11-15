@@ -18,17 +18,6 @@ from autohelix.judge import JudgeError, judge_config
 from autohelix.review import build_system_prompt, parse_review, review_budget, review_schema
 from autohelix.usage_log import read_usage
 
-HARNESS_ENV = ("AUTOHELIX_CANDIDATE", "AUTOHELIX_BASE", "AUTOHELIX_PROJECT", "AUTOHELIX_SCRATCH",
-               "AUTOHELIX_PREVIOUS", "AUTOHELIX_COMMAND_DEADLINE", "AUTOHELIX_CONFIG", "AUTOHELIX_USAGE_FILE",
-               "AUTOHELIX_LOG_DIR", "AUTOHELIX_RUN_DIR")
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch):
-    for name in HARNESS_ENV:
-        monkeypatch.delenv(name, raising=False)
-
-
 def git(cwd, *args) -> str:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
 

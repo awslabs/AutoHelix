@@ -127,7 +127,7 @@ gates:
         assert harness._codex_time_left_hook_path is None
         assert harness._time_left_script is not None  # still there to run on demand
         assert harness.config.agent.timeout == 3600
-        out = capsys.readouterr().out
+        out = " ".join(capsys.readouterr().out.split())  # wrapped at the width
         assert "found 0.140.0" in out and "Running without time-left hints" in out
     finally:
         harness.close()
