@@ -537,7 +537,10 @@ to `.autohelix/runs/<id>/report.md`: what was achieved, which changes
 mattered, what didn't work, what to try next, and anything worth checking
 before relying on the results. An interrupted run gets no summary; run
 [`autohelix report`](cli.md#autohelix-report) to write one. Pass `--no-report`
-to `run` or `resume` to skip it (a `report:` key is an error naming the flag). The call uses the same agent backend and model as the run, with a
+to `run` or `resume` to skip it; it counts for that command only, not stored
+with the run like `--land`, so pass it to each `resume` too (a `report:` key
+is an error naming the flag). The call uses the same agent backend and model
+as the run, with a
 timeout of `agent.timeout` capped at 15 minutes. Its time and cost are shown
 next to the summary in `autohelix view` and `report.html`; the cost is not
 counted against `--cost`.
@@ -560,8 +563,8 @@ replacement; there are no aliases and no migration.
 | `agent.type` | `agent.backend` | `` `agent.type` is now `agent.backend` `` |
 | `agent.timeout_seconds` | `agent.timeout` (a duration) | `` `agent.timeout_seconds` is now `agent.timeout` (a duration such as 30m) `` |
 | `budget:` (`iterations`, `cost`, `time`) | the `run`/`resume` flags `-n`, `--cost`, `--time`, per segment (see [CLI → Budgets](cli.md#budgets)) | `` `budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`; ...) `` |
-| `land:` | `run --land auto\|manual` (also `resume`), stored with the run; default `auto`, `manual` with `--group` | `` `land:` moved to the command line: `autohelix run --land manual` (also `resume`; ...) `` |
-| `report:` | `run --no-report` (also `resume`) | `` `report:` moved to the command line: `autohelix run --no-report` (also `resume`) `` |
+| `land:` | `run --land auto\|manual` (also `resume`), stored with the run; default `auto`, `manual` with `--group` | `` `land:` moved to the command line: `autohelix run --land auto\|manual` (also `resume`; ...) `` |
+| `report:` | `run --no-report` (also `resume`; per command, not stored) | `` `report:` moved to the command line: `autohelix run --no-report` (also `resume`) `` |
 | `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | as `budget:` |
 | `agent.settings.model` | `agent.model` | `` `agent.settings.model` is now `agent.model` `` |
 | a bare number as the threshold (`max_regression_pct: 5` was one; `regress: 5` now) | `regress: 5%` | `write the percentage with %, e.g. 5%, got 5` |

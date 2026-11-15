@@ -87,7 +87,7 @@ RENAMED_TOP_LEVEL_KEYS = {
     "name": "`name:` is gone: runs are named after the config file; use autohelix/<name>.yaml",
     "budget": ("`budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` "
                "(also `resume`; `agent.timeout` limits one iteration)"),
-    "land": ("`land:` moved to the command line: `autohelix run --land manual` (also `resume`; "
+    "land": ("`land:` moved to the command line: `autohelix run --land auto|manual` (also `resume`; "
              "default auto, manual with --group)"),
     "report": "`report:` moved to the command line: `autohelix run --no-report` (also `resume`)",
 }

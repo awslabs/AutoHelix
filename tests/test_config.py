@@ -236,7 +236,7 @@ class TestOldKeys:
          "`budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`"),
         ({"budget": None}, "`budget:` moved to the command line"),
         ({"budget": {"iteration_time": "1h"}}, "`agent.timeout` limits one iteration"),
-        ({"land": "manual"}, "`land:` moved to the command line: `autohelix run --land manual` (also `resume`"),
+        ({"land": "manual"}, "`land:` moved to the command line: `autohelix run --land auto|manual` (also `resume`"),
         ({"land": "auto"}, "`land:` moved to the command line"),
         ({"report": False}, "`report:` moved to the command line: `autohelix run --no-report` (also `resume`)"),
         ({"report": True}, "`report:` moved to the command line"),

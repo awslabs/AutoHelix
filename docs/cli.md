@@ -165,7 +165,7 @@ commands use: iteration copies are made from the commit. Do it before the first
 | `--import RUN_ID` | [Continue from another run](#continuing-from-another-run): its notes and history, read-only, in every iteration, and its last observe outputs at the baseline |
 | `--why TEXT` | Why this run is started: one line (at most 300 characters), stored in `run.json` and shown on the dashboard |
 | `--verbose` | Show agent command details, file paths, heartbeats |
-| `--no-report` | Don't write the run summary when the run finishes |
+| `--no-report` | Don't write the run summary when this segment finishes (not stored: pass it to each `resume` too) |
 
 `run` always starts a **new** run, with its own notes and history; to
 continue one, use [`autohelix resume`](#autohelix-resume). It never refuses

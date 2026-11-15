@@ -116,7 +116,7 @@ def test_land_in_the_config_is_an_error_naming_the_flag(project):
     configure(project, land="manual")
     result = cli(project, "run", "-n", "1", "--no-report")
     assert result.exit_code != 0
-    assert "`land:` moved to the command line: `autohelix run --land manual`" in result.output
+    assert "`land:` moved to the command line: `autohelix run --land auto|manual`" in result.output
     assert not RunPaths(project).runs.exists() or not any(RunPaths(project).runs.iterdir())
 
 
@@ -322,7 +322,6 @@ def test_the_report_copy_lists_the_runs_own_ref(project, monkeypatch):
 
     paths, _ = started(project)
     monkeypatch.setattr(workspace.Copy, "create", classmethod(create))
-    configure(project, report=True)
     result = cli(project, "report", short_id(paths.run_id))
     assert result.exit_code == 0, result.output
     assert seen["refs"] == (paths.ref,)

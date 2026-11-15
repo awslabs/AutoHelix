@@ -55,7 +55,8 @@ started on when the command ends) unless the launch command says `--land
 manual`. Add `--land manual` when the user wants to review the code before it
 reaches their branch, will keep committing on that branch while the run goes,
 or is comparing approaches in separate runs; `--group` runs land manually
-already. Add `--no-report` only when the user asks to skip the summary. Defaults
+already. Add `--no-report` only when the user asks to skip the summary (it isn't stored:
+hand it over on every `resume` command too). Defaults
 otherwise: no cost or time limit, and no timeouts (no `timeout:` on gates or observe entries, no `agent.timeout`):
 the built-in defaults apply. No metric gates (`- metric: … regress:/improve:`)
 either: the agent sees the numbers and decides. Set any of these only when the

@@ -39,7 +39,9 @@ Breaking:
   flags): the config says what one iteration does, the launch how it runs and
   is delivered. `run --land manual` (stored with the run; `resume --land`
   changes it) replaces `land: manual`; new runs land `auto`, or `manual` with
-  `--group`. `run --no-report` (also `resume`) replaces `report: false`.
+  `--group`. `run --no-report` replaces `report: false`; it counts for that
+  command only, so pass it to each `resume` too. A run whose stored config
+  has either key can't be resumed: continue it with `run --import <id>`.
 - Metric gate thresholds are percent strings (`regress: 5%`); a bare number
   is an error. Durations everywhere: a bare number (or a string of digits) is
   seconds, strings like `90s`, `30m`, `2h30m`.
