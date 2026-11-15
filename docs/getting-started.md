@@ -220,11 +220,11 @@ iteration as it ends, with a live row for the one under way:
              time    cost   speed ↑
   · base                       46.9
   ✓ 1         31s   $0.15  17,481.5 373×
-  ✗ 2      2m 23s   $0.48  pytest -q test_sort.py
+  ✗ 2      2m 23s   $0.48  pytest -q test_sort.py failed (exit 1)
   ⠹ 3      1m 12s  agent · Edit sort.py
 ```
 
-✓ is accepted, ✗ rejected with the reason; the change is against the baseline. When
+✓ is accepted, with each metric's change from the baseline; ✗ is rejected, with the reason. When
 the segment ends, the end block says why, how each metric moved, what landed on your
 branch and what to type next (see [CLI → What it prints](cli.md#what-it-prints)).
 

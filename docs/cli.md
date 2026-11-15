@@ -79,13 +79,13 @@ no commit yet, or uncommitted changes to tracked files):
   Git      main · clean
   ────────────────────────────────────────────────────────────────────────────
   How do you want to write it?
-  ❯ With an agent   it asks what you want to achieve, then writes the config
-    Empty config    the commented template, to edit by hand
+  ❯ With an agent       it asks what you want, then drafts the config
+    From the template   the commented template, to edit by hand
 ```
 
 (In a colour terminal 80 or more columns wide, the AutoHelix mark is beside the
 header.) In a terminal, `setup` then asks whether to set up the loop with an agent or
-write an empty config. When several agents are installed (looked for in the
+write the commented template. When several agents are installed (looked for in the
 order `claude`, `codex`, `opencode`), it then asks which one. Choose with ↑/↓
 and Enter, or an option's number; Enter alone takes the first, Esc or Ctrl-C
 cancels. With an agent, `setup` is replaced by that agent's usual interactive
@@ -99,7 +99,7 @@ validates, and commits the setup.
 installed into the agent's settings, and the skill always matches the installed
 AutoHelix. Setup gives the launch command; it starts a run only when requested.
 
-An empty config is the commented template; `setup` then lists what to do next:
+From the template, `setup` writes the commented template, then lists what to do next:
 
 ```
   Wrote    autohelix.yaml  the commented template
@@ -108,7 +108,11 @@ An empty config is the commented template; `setup` then lists what to do next:
            autohelix run
   or       autohelix setup --agent claude  an agent drafts it with you
            autohelix skill install --agent claude  for your own agent sessions
-``` Without a terminal (a script), `setup` writes the
+```
+
+Outside a git checkout, or in one without a commit, the first step is the git
+command that fixes it (`git init && git add -A && git commit -m 'init'`). Without a
+terminal (a script), `setup` writes the
 template unless `--agent` is given. Without an agent on `PATH` it writes the
 template too.
 
@@ -187,38 +191,41 @@ commands use: iteration copies are made from the commit. Do it before the first
   Gates    pytest -q test_sort.py · speed regress 5%
   Observe  bench (speed ↑, mem_mb ↓)
   Scope    editable: sort.py
-  Budget   8 iterations · $10.00 · 30m each
+  Budget   7 iterations · $10.00 · 30m each
   ────────────────────────────────────────────────────────────────────────────
              time    cost   speed ↑         mem_mb ↓
   · base                       46.9              120
   ✓ 1         31s   $0.15  17,481.5 373×         118 -2%
-  ✗ 2      2m 23s   $0.48  pytest -q test_sort.py
+  ✗ 2      2m 23s   $0.48  pytest -q test_sort.py failed (exit 1)
   ✓ 3      2m 06s   $0.32  35,310.7 753×          96 -20%
   ✗ 4     30m 00s   $1.10  agent timed out (30m)
-  ✗ 5      1m 48s   $0.29    33,002 704×         140 +17%
+  ✗ 5      1m 48s   $0.29    33,002              140
           speed 6.5% worse than iter 3 (5% allowed)
+          discarded, outside the scope: autohelix.yaml (frozen), notes.txt
   ✓ 6      1m 51s   $0.31  57,520.8 1226×         95 -21%
+  ✗ 7          4s          agent failed: claude exited 1: rate limited
 
   ────────────────────────────────────────────────────────────────────────────
-  Done      iteration budget reached (6)
+  Done      iteration budget reached (7)
   speed     46.9 → 57,520.8  1226×  iter 6
   mem_mb    120 → 95  -21%  iter 6
-  run       6 iterations · 3 accepted · 38m 39s · $3.02
+  run       7 iterations · 3 accepted · 38m 43s · $2.65
   landed    3 commits on main
             1  Replace bubble sort with a merge/insertion hybrid
             3  Switch to built-in sorted() with key caching
             6  Avoid the defensive list copy; sort in place
   next      autohelix view krp3 · autohelix resume krp3 -n 5
   page      .autohelix/runs/20261115-1402-sorting-krp3/report.html
+  summary   .autohelix/runs/20261115-1402-sorting-krp3/report.md
 ```
 
 The header names the run (its id's last part, which every command accepts), what it
 runs and the budget; in a terminal the AutoHelix mark stands beside it. Then one row
-per iteration: ✓ accepted or ✗ rejected, its time and cost, each metric's value with
-its change from the baseline (`373×`, `-21%`; green or red only on accepted rows, a
-rejection's values are dimmed), and for a rejection why: the gate that failed, a
-metric gate's comparison with the iteration it compares against, or the agent's
-failure. A reason that doesn't fit goes on the line under the row, with failed
+per iteration: ✓ accepted or ✗ rejected, its time and cost, each metric's value
+(an accepted row with its change from the baseline, `373×`, `-21%`, in green or red;
+a rejection's values dimmed, without a change), and for a rejection why: the gate
+that failed (`pytest -q failed (exit 1)`, `ask: … answered no`), a metric gate's
+comparison with the iteration it compares against, or the agent's failure. A reason that doesn't fit goes on the line under the row, with failed
 observe entries and discarded out-of-scope paths. While an iteration runs, a live row
 shows its time and phase (`agent · Edit sort.py`, `gates · pytest -q`, `observe ·
 bench`, `stop`). The end block says how the segment ended (`Done`, `Stopped`,
@@ -326,8 +333,8 @@ autohelix resume --until 30 --time 2h   # up to iteration 30, starting none afte
 The header names the budget in effect ("3 more iterations (to 8) · $5.00
 more · 2h", or "1 iteration (default)"). The run's status records the
 iteration and cost caps as run totals and the `--time` cap as this segment's
-own; while the segment runs, the dashboard shows its time against that cap
-("12m5s of 2h (this segment)", "(time up)" once past it), and the run's total
+own; while the segment runs, the dashboard shows what is left of that cap
+("47m 55s left", "time up" once past it), and the run's total
 time without a cap (see [JSON output](#json-output)). Every segment that starts
 is also recorded in `.autohelix/runs/<id>/.internal/segments.jsonl` (see
 [Concepts → Runs and run state](concepts.md#runs-and-run-state)).
@@ -598,7 +605,7 @@ autohelix dashboard [-p PATH] --json
 autohelix dashboard [-p PATH] --web [--port 8765] [--open]
 ```
 
-By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C, under a header that names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). A row has the run's short id and name (`krp3 sorting`, what every command accepts); its state (`running` in the accent colour, `running (stopping)` once [`autohelix stop`](#autohelix-stop) asked it to end); iterations, of the latest segment's cap; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: `landed`, or how many accepted commits the run's target branch lacks (`2 to land`, or `2 diverged` when it can no longer fast-forward); when the run was last active; and the goal's title (its first line). The dim line under it has the phase while running, the group, the config file, time and cost so far (the run's total, no cap) and, while a segment with `--time` runs, its time against that cap (`12m5s/1h`, `1h40m/1h30m (time up)` once past it; the web page's tooltip says "12m5s of 1h (this segment)"), and the run's notes: why it was started (`run --why`) and the run it continues from (`run --import`). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
+By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C, under a header that names the checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). A row has the run's short id and name (`krp3 sorting`, what every command accepts); its state (`running` in the accent colour, `running (stopping)` once [`autohelix stop`](#autohelix-stop) asked it to end); iterations, of the latest segment's cap; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: `landed`, or how many accepted commits the run's target branch lacks (`2 to land`, or `2 diverged` when it can no longer fast-forward); what a running run is doing (`agent 1m 12s`, `gates 30s`), else when it was last active; and the goal's title (its first line), which goes on its own line under the row when the terminal is too narrow for it whole. The dim line under it has the group, the config file (only when the run isn't named after it), time and cost so far (`spent 38m 43s · $2.65`: the run's total, no cap) and, while a segment with `--time` runs, what is left of it (`47m 55s left`, `time up` once past it; the web page's tooltip says "12m5s of 1h (this segment)"), and the run's notes: why it was started (`run --why`) and the run it continues from (`run --import`). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
 
 `--web` serves the same rows as a live page instead (`--port`, default 8765, and `--open` go with it). There the metric's change against the run's own baseline is in the tooltip, and the metric is picked from a menu in the column header. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel). Archived runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view --web`](#autohelix-view) page. It is the same server as `autohelix view --web`, with the same `127.0.0.1`-only binding.
 

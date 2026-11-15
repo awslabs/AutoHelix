@@ -62,9 +62,9 @@ SETUP_QUESTION = "How do you want to write it?"
 
 def setup_options(found: list[str]) -> list[tuple[str, str]]:
     """The menu `setup` asks SETUP_QUESTION with, given the agents found."""
-    drafts = "it asks what you want to achieve, then writes the config"
+    drafts = "it asks what you want, then drafts the config"
     with_agent = f"With {SETUP_AGENTS[found[0]]}" if len(found) == 1 else "With an agent"
-    return [(with_agent, drafts), ("Empty config", "the commented template, to edit by hand")]
+    return [(with_agent, drafts), ("From the template", "the commented template, to edit by hand")]
 
 
 def _found_agents() -> list[str]:
@@ -211,7 +211,8 @@ def setup(name: str | None, path: str, agent: str | None):
                                    + (f" Found: {', '.join(found)}." if found else ""))
     home = Path.home()
     folder = f"~/{project.relative_to(home)}" if project.is_relative_to(home) and project != home else str(project)
-    fields = terminal.setup_fields(folder, relative, exists, [SETUP_AGENTS[a] for a in found], _git_field(project))
+    git_field, git_fix = _git_field(project)
+    fields = terminal.setup_fields(folder, relative, exists, [SETUP_AGENTS[a] for a in found], git_field)
     console.print()
     terminal.print_lines(console, terminal.header(terminal.title("setup", version=terminal.version()), fields,
                                                   console.width, terminal.shows_mark(console)))
@@ -241,18 +242,19 @@ def setup(name: str | None, path: str, agent: str | None):
             f.write(CONFIG_TEMPLATE)
     except OSError as e:
         raise click.ClickException(f"Could not write {shown}: {e}") from e
-    steps = ["edit it: the goal, scope, gates and observe entries", "commit it, with any scripts its commands use",
-             f"autohelix run{named}{elsewhere}"]
-    also = [(f"autohelix setup{named}{elsewhere} --agent {found[0]}", "an agent drafts it with you"),
-            (f"autohelix skill install --agent {found[0]}", "for your own agent sessions")] if found else []
+    steps = terminal.setup_steps(f"autohelix run{named}{elsewhere}", git_fix)
+    also = terminal.setup_also(f"autohelix setup{named}{elsewhere}", found[0] if found else None)
     terminal.print_lines(console, terminal.setup_written(shown, steps, also, console.width))
 
 
-def _git_field(project: Path) -> tuple:
-    """setup's Git field: `main · clean`, or what a run would refuse (yellow): no git
-    checkout with a commit, or uncommitted changes to tracked files."""
+def _git_field(project: Path) -> tuple[tuple, str | None]:
+    """setup's Git field (`main · clean`, or what a run would refuse, in yellow: no git
+    checkout with a commit, or uncommitted changes to tracked files), and the git
+    command that makes the folder runnable, when the problem has one (a next step)."""
     if problem := _git_problem(project):
-        return problem, "yellow"
+        lines = problem.splitlines()
+        fix = next((line.removeprefix("Run: ") for line in lines if line.startswith("Run: ")), None)
+        return ("\n".join(line for line in lines if not line.startswith("Run: ")), "yellow"), fix
 
     def git(*args: str) -> str:
         return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True).stdout.strip()
@@ -260,8 +262,9 @@ def _git_field(project: Path) -> tuple:
     branch = git("symbolic-ref", "--short", "-q", "HEAD") or f"detached at {git('rev-parse', '--short', 'HEAD')}"
     changed = len(git("status", "--porcelain", "--untracked-files=no").splitlines())
     if changed:
-        return f"{branch} · {changed} uncommitted change{'s' * (changed != 1)} (a run needs them committed)", "yellow"
-    return (f"{branch} · clean",)
+        return (f"{branch} · {changed} uncommitted change{'s' * (changed != 1)} (a run needs them committed)",
+                "yellow"), None
+    return (f"{branch} · clean",), None
 
 
 main.add_command(setup)
@@ -615,7 +618,7 @@ def delete(run_ids: tuple[str, ...], path: str, force: bool):
     for value in run_ids:
         paths = RunPaths(project, _run_id(project, value))
         try:
-            delete_run(paths, force=force, warn=lambda message: click.echo(f"Warning: {message}", err=True))
+            delete_run(paths, force=force, warn=lambda message: click.echo(f"  ! {message}", err=True))
         except RuntimeError as e:
             raise click.ClickException(str(e)) from e
         click.echo(f"Deleted {short_id(paths.run_id)}.")
@@ -978,7 +981,9 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
     from autohelix.live import run_config
 
     console = Console()
-    terminal.print_lines(console, run_table.view_lines(data, console.width, config=run_config(RunPaths(path, selected))))
+    paths = RunPaths(path, selected)
+    terminal.print_lines(console, run_table.view_lines(data, console.width, config=run_config(paths),
+                                                       rows=run_table.history_rows(paths)))
 
 
 def _how_to_start(project: Path) -> str:

@@ -110,15 +110,16 @@ def test_rejected_row_dims_its_values_and_says_why():
     [row] = _rows(120).add(Row(4, False, {"speed": 40.0}, 72, 0.42, reason="gate failed: ask: keeps the public API?",
                                gates=[{"text": "pytest -q", "kind": "command", "passed": True},
                                       {"text": "ask: keeps the public API?", "kind": "command", "passed": False}, {}]))
-    assert row.plain.rstrip().endswith("  ask: keeps the public API?") and " 40 -14% " in row.plain
+    assert row.plain.rstrip().endswith("  ask: keeps the public API? failed") and " 40 " in row.plain
+    assert "-14%" not in row.plain  # no change from the baseline: the reason says how it compares
     value = row.plain.index(" 40 ") + 1
     assert [span.style for span in row.spans if span.start <= value < span.end] == ["dim"]
 
 
 def test_a_row_without_values_says_why_in_their_place():
     [row] = _rows(80).add(Row(2, False, {}, 5, 0.1, reason="gate failed: pytest -q",
-                              gates=[{"text": "pytest -q", "kind": "command", "passed": False}, {}, {}]))
-    assert row.plain.split()[-2:] == ["pytest", "-q"] and row.plain.index("pytest") < 40
+                              gates=[{"text": "pytest -q", "kind": "command", "passed": False, "return_code": 1}, {}, {}]))
+    assert row.plain.split()[-4:] == ["pytest", "-q", "failed", "(exit", "1)"][-4:] and row.plain.index("pytest") < 40
 
 
 def test_a_long_reason_goes_under_the_row_and_is_cut_to_the_width():
@@ -255,5 +256,5 @@ def test_rejected_row_in_a_run(project):
     _configure(project, gates=['test "$AUTOHELIX_ITERATION" = 0'], scope={"editable": ["hello.py"]})
     result, _, _ = _run(project)
     rows = [line for line in result.output.splitlines() if line.startswith("  ✗ 1")]
-    assert len(rows) == 1 and rows[0].rstrip().endswith('test "$AUTOHELIX_ITERATION" = 0')
+    assert len(rows) == 1 and rows[0].rstrip().endswith('test "$AUTOHELIX_ITERATION" = 0 failed (exit 1)')
     assert result.output.count('test "$AUTOHELIX_ITERATION" = 0') == 2  # the header's Gates, the row

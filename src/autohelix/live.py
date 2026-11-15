@@ -22,6 +22,7 @@ from autohelix import run_table
 from autohelix.display import LiveDisplay
 from autohelix.formatting import clean, format_duration
 from autohelix.replay import LogTail
+from autohelix.terminal import earlier_line
 from autohelix.safe_open import open_run_log
 from autohelix.run_status import read_run_status, running_iteration
 from autohelix.runs import RunPaths, load_run_config
@@ -179,19 +180,19 @@ def fit(parts: tuple[list, list[list], list], height: int) -> list:
     while kept and sum(map(len, kept)) > room:
         kept.pop(0)
     hidden = len(rows) - len(base) - len(kept)
-    more = Text(f"  … {hidden} earlier iteration{'' if hidden == 1 else 's'}", style="dim")
-    lines = head + [line for row in base + [[more]] + kept for line in row] + tail
+    lines = head + [line for row in base + [[earlier_line(hidden)]] + kept for line in row] + tail
     return lines[:max(height, 1)]
 
 
-def _read_run(runs: ProjectRuns, project: Path, run_id: str | None) -> tuple[dict, object] | str | None:
-    """The run's `view --json` data and its stored config (None if unreadable), an error
-    to show, or None while there is no run."""
+def _read_run(runs: ProjectRuns, project: Path, run_id: str | None) -> tuple[dict, object, list] | str | None:
+    """The run's `view --json` data, its stored config and its history's rows (each None
+    if unreadable), an error to show, or None while there is no run."""
     try:
         selected = RunPaths(project, run_id).run_id
         if not selected or not runs.exists(selected):
             return None
-        return runs.run(selected), run_config(RunPaths(project, selected))
+        paths = RunPaths(project, selected)
+        return runs.run(selected), run_config(paths), run_table.history_rows(paths)
     except Exception as exc:  # noqa: BLE001 - shown, and retried on the next read
         return f"Cannot read the run: {exc}"
 
@@ -205,7 +206,7 @@ def run_config(paths: RunPaths):
         return None
 
 
-def view_screen(data: tuple[dict, object] | str | None, log: LogFollower, status: dict | None, height: int,
+def view_screen(data: tuple[dict, object, list] | str | None, log: LogFollower, status: dict | None, height: int,
                 width: int = 100) -> Group:
     """The run's screen on top, the log panel below it, the status line last.
 
@@ -216,7 +217,7 @@ def view_screen(data: tuple[dict, object] | str | None, log: LogFollower, status
     elif isinstance(data, str):
         parts = ([Text(clean(data))], [], [])
     else:
-        parts = run_table.view_parts(data[0], width, config=data[1])
+        parts = run_table.view_parts(data[0], width, config=data[1], rows=data[2])
     room = height - 2  # the status line, and a spare line so the terminal doesn't scroll
     lines = fit(parts, room - (MIN_LOG_LINES if log.display else 0)) if parts else []
     log_height = room - len(lines)

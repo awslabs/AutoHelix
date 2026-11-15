@@ -4,11 +4,11 @@
   ⣴⠙⢦      ⡴⠊⣧   Gates    pytest -q test_sort.py · speed regress 5%
   ⠙⠦⠬⠤⢤⡀⢀⡤⠄⡇⠴⠋   Observe  bench (speed ↑, mem_mb ↓)
     ⠘⢦⣤⠵⠫⣤⡴⠃     Scope    editable: sort.py
-                 Budget   8 iterations · $10.00 · 30m each
+                 Budget   7 iterations · $10.00 · 30m each
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
              time    cost   speed ↑         mem_mb ↓
   · base                       46.9              120
   ✓ 1         31s   $0.15  17,481.5 373×         118 -2%
-  ✗ 2      2m 23s   $0.48  pytest -q test_sort.py
+  ✗ 2      2m 23s   $0.48  pytest -q test_sort.py failed (exit 1)
   ✓ 3      2m 06s   $0.32  35,310.7 753×          96 -20%
   ⠋ 4      1m 12s  agent · Edit sort.py

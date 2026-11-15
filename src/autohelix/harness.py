@@ -611,7 +611,7 @@ class Harness:
         if message:
             self._codex_time_left_hook_path = None
             text = f"{message} Running without time-left hints; agent.timeout still stops the agent."
-            self.console.print(f"[yellow]Warning:[/yellow] {text}", highlight=False)
+            self._warn(text)
             self.log.warn(text)
 
     def build_prompt(self, iteration: int, worktree_dir: Path, members=(), rejected_diff: str = "",
@@ -1627,13 +1627,10 @@ class Harness:
                     before = self._target_tip()
                     land(self.paths, self.run_info, self.run_state.expected_tip)
                     count = self._commits_between(before, self.run_state.expected_tip)
-                    self._landing = (("landed", f"{count} commit{'s' * (count != 1)} on {target}", None) if count
-                                     else ("landed", "nothing (no accepted changes)", "dim"))
-                elif count := self._unlanded():
-                    self._landing = ("unlanded", f"{count} commit{'s' * (count != 1)} on autohelix/{self.paths.run_id}"
-                                                 " (manual landing)", None)
+                    self._landing = terminal.landing(count, target)
                 else:
-                    self._landing = ("landed", "nothing (no accepted changes)", "dim")
+                    self._landing = terminal.landing(0, target, self._unlanded(), f"autohelix/{self.paths.run_id}",
+                                                     "manual landing")
             except Exception as e:
                 self._landing = ("landed", f"not landed: {e}", "yellow")
                 self.log.warn(f"auto-land: {e}")
@@ -1888,9 +1885,7 @@ class Harness:
                 landed = []
             more = landed[:-5]
             short = short_id(self.paths.run_id)
-            commands = [f"autohelix view {short}", f"autohelix resume {short} -n 5"]
-            if self.land_mode == "manual" and self._unlanded():
-                commands.append(f"autohelix land {short}")
+            commands = terminal.next_commands(short, land=self.land_mode == "manual" and bool(self._unlanded()))
             lines = table.ending(outcome, spent=format_total_cost(self.history.cost_usages), landing=self._landing,
                                  landed=landed, commands=commands, files=self._files,
                                  more_landed=f"… {len(more)} earlier · autohelix view {short}" if more else "")

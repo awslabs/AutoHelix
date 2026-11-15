@@ -455,7 +455,7 @@ def test_dashboard_json_and_once(measured_project):
     assert rows[short_id(first)].split()[1:5] == ["finished", "2/2", "120", "landed"]
     assert rows[short_id(first)].endswith("Test the integration")
     assert rows[short_id(second)].split()[1:6] == ["finished", "1/1", "130", "1", "to"]
-    assert "    autohelix.yaml · " in result.output
+    assert "    spent " in result.output and "autohelix.yaml · " not in result.output  # runs are named after it
 
     assert "no run has metric" in _cli("dashboard", "-p", project, "--once", "--metric", "nope").output.lower()
     assert _cli("dashboard", "-p", project, "--metric", "speed", "--json").exit_code == 2
@@ -482,7 +482,7 @@ def test_view_json_and_once(measured_project):
     assert rows[1].split()[:2] == ["✓", "1"] and rows[1].split()[-2:] == ["110", "+10%"]
     assert "  Done      iteration budget reached (2)" in lines
     assert "  speed     100 → 120  +20%  iter 2" in lines
-    assert f"  landed    on {data['branch']}" in lines
+    assert f"  landed    2 commits on {data['branch']}" in lines
     assert f"  next      autohelix resume {short_id(first)} -n 5" in lines
     manual = [line.rstrip() for line in _cli("view", second, "-p", project, "--once").output.splitlines()]
     assert f"  unlanded  1 commit on autohelix/{second}" in manual
@@ -517,9 +517,9 @@ def test_table_shows_the_iteration_under_way():
     header = {"schema": 1, "project": "p", "host": "h", "path": "/x", "path_display": "/x", "branch": None,
               "commit": "abc1234"}
     listing = format_runs({**header, "runs": [run]}, now=1000).splitlines()
-    assert listing[1] == "  Project  h:/x · detached @ abc1234"
-    assert listing[5].split() == ["r1", "running", "3/5", "—", "now"]
-    assert listing[6].strip() == "gates 30s · a.yaml · 2m 40s · $1.50+"  # 60s done + 100s under way
+    assert listing[1] == "  Project  /x · detached @ abc1234"
+    assert listing[5].split() == ["r1", "running", "3/5", "—", "gates", "30s"]  # active: what it is doing
+    assert listing[6].strip() == "a.yaml · spent 2m 40s · $1.50+"  # 60s done + 100s under way
     one = format_run({**header, "run": run}, now=1000).splitlines()
     assert one[0].endswith(" · run r1 · p · running")
     assert one[-1].split() == ["⠋", "3", "1m", "40s", "gates"]  # the iteration's own time so far

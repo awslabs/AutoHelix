@@ -6,5 +6,5 @@
     ⠘⢦⣤⠵⠫⣤⡴⠃
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   How do you want to write it?
-  ❯ With an agent   it asks what you want to achieve, then writes the config
-    Empty config    the commented template, to edit by hand
+  ❯ With an agent       it asks what you want, then drafts the config
+    From the template   the commented template, to edit by hand

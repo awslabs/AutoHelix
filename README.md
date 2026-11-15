@@ -142,7 +142,7 @@ bundled setup skill (nothing is installed), or writes the commented template
 the agreed setup. With the template, edit it using the
 [configuration reference](#configuration) and commit the intended setup changes.
 Then launch with `autohelix run -n 3` (a bare `autohelix run` is one iteration): one
-row per iteration (✓ accepted, ✗ rejected and why, each metric against the baseline),
+row per iteration (✓ accepted with each metric against the baseline, ✗ rejected and why),
 then what landed and what to type next ([what it prints](docs/cli.md#what-it-prints)).
 For several loops in one project, `autohelix setup perf` writes
 `autohelix/perf.yaml`, which `autohelix run perf` runs. Other commands are

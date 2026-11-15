@@ -318,7 +318,8 @@ class Table:
             shown = number(value) if isinstance(value, (int, float)) else ""
             line.append(f"  {shown:>{self.value_width[name]}}", style="dim" if dim else "bold")
             if self.show_change:
-                delta = change(value, reference) if row.iteration else ""
+                # Rejected rows show no change: their reason says how they compare with the tip.
+                delta = change(value, reference) if row.iteration and row.accepted else ""
                 style = "dim" if dim or not delta else GREEN if better(value, reference, self.directions[name]) else RED
                 line.append(" ")
                 line.append(f"{delta:<{CHANGE}}", style=style)
@@ -348,8 +349,7 @@ class Table:
             if row.iteration not in hidden:
                 lines += added
             if hidden and row.iteration == hidden[-1]:
-                lines.append(Text(f"  … {len(hidden)} earlier iteration{'s' * (len(hidden) != 1)} · "
-                                  f"autohelix view {short}", style="dim"))
+                lines.append(earlier_line(len(hidden), short))
         return lines + [Text(f"  resumed {clock(now)}", style="dim")]
 
     def _remember(self, row: Row) -> None:
@@ -398,10 +398,7 @@ class Table:
 
     def live(self, iteration: int, seconds: float, what: str, frame: int = 0) -> Text:
         """The row of the iteration under way: spinner, number, time so far, `phase · activity`."""
-        return cut(_parts(("  ", None), (SPINNER[frame % len(SPINNER)] + " ", TEAL),
-                           (f"{'base' if iteration == 0 else iteration:<{LABEL - 2}}", None), ("  ", None),
-                           (f"{format_duration(seconds):>{TIME}}", None), ("  ", None), (clean(what), "dim")),
-                    self.width)
+        return live_line("base" if iteration == 0 else str(iteration), seconds, what, frame, self.width)
 
     # --- the end block ---
 
@@ -464,6 +461,14 @@ class Table:
         return lines
 
 
+def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int = 200) -> Text:
+    """A live row: spinner, label (an iteration's number; blank for the summary step),
+    time so far in the time column, `phase · activity`."""
+    return cut(_parts(("  ", None), (SPINNER[frame % len(SPINNER)] + " ", TEAL), (f"{label:<{LABEL - 2}}", None),
+                      ("  ", None), (f"{format_duration(seconds):>{TIME}}", None), ("  ", None), (clean(what), "dim")),
+               width)
+
+
 def outcome(stop: dict | None, error: BaseException | None, interrupted_at: int | None) -> tuple[str, str, str | None]:
     """The end block's first line: (word, detail, style). `Error` (red) for an
     exception, `Interrupted` (yellow) for Ctrl-C or `autohelix stop --now`, `Done` for
@@ -481,8 +486,8 @@ def outcome(stop: dict | None, error: BaseException | None, interrupted_at: int 
 
 
 def rejection(row: Row, gates: list, directions: dict, tip: dict[str, tuple[float, int]]) -> str:
-    """Why `row` was rejected, in the words every screen uses: the failing gate's text
-    (`pytest -q`, `ask: keeps the API?`), a metric gate as `speed 6.5% worse than iter 3
+    """Why `row` was rejected, in the words every screen uses: the failing gate
+    (`pytest -q failed (exit 1)`, `ask: keeps the API? answered no`), a metric gate as `speed 6.5% worse than iter 3
     (5% allowed)` (with the config's `gates`), else the harness's reason without its
     `gate failed:` prefix."""
     gates = list(gates) if len(row.gates) == len(gates) else [None] * len(row.gates)
@@ -493,11 +498,49 @@ def rejection(row: Row, gates: list, directions: dict, tip: dict[str, tuple[floa
             if hasattr(gate, "metric") and (text := _metric_rejection(gate, item, tip, directions.get(gate.metric))):
                 return text
         elif item.get("kind") == "command" and not item.get("reason"):
-            return clean(item.get("text"))
+            return failed_gate(clean(item.get("text")), item.get("return_code"))
     reason = clean(row.reason or "rejected")
     for prefix in ("gate failed: ", "metric gate: "):
         reason = reason.removeprefix(prefix)
     return reason
+
+
+def failed_gate(text: str, code) -> str:
+    """A failed command gate: `pytest -q failed (exit 1)`; an `ask:` gate answering
+    no (exit 1) `ask: keeps the API? answered no`."""
+    if text.startswith("ask:") and code == 1:
+        return f"{text} answered no"
+    exit_code = isinstance(code, int) and not isinstance(code, bool) and code > 0
+    return f"{text} failed" + (f" (exit {code})" if exit_code else "")
+
+
+def earlier_line(hidden: int, short: str | None = None) -> Text:
+    """`… 4 earlier iterations · autohelix view krp3`: rows left out above."""
+    more = f" · autohelix view {short}" if short else ""
+    return Text(f"  … {hidden} earlier iteration{'s' * (hidden != 1)}{more}", style="dim")
+
+
+def commits(n: int) -> str:
+    return f"{n} commit{'s' * (n != 1)}"
+
+
+def landing(landed: int, target: str | None, unlanded: int = 0, branch: str = "", note: str = "",
+            style: str | None = None) -> tuple[str, str, str | None]:
+    """The end block's landing line (label, text, style): `landed  3 commits on main`,
+    `unlanded  1 commit on autohelix/<id> (manual landing)`, `landed  nothing (no
+    accepted changes)`."""
+    if unlanded:
+        return "unlanded", f"{commits(unlanded)} on {branch}" + (f" ({note})" if note else ""), style
+    if landed:
+        return "landed", f"{commits(landed)} on {target}", style
+    return "landed", "nothing (no accepted changes)", "dim"
+
+
+def next_commands(short: str, view: bool = True, land: bool = False) -> list[str]:
+    """What to type after a run: look at it (`view`: not from the view itself), continue
+    it, and land it when commits wait for a manual landing."""
+    return ([f"autohelix view {short}"] * view + [f"autohelix resume {short} -n 5"]
+            + [f"autohelix land {short}"] * land)
 
 
 def _metric_rejection(gate, item: dict, tip: dict, direction: str | None) -> str | None:
@@ -546,6 +589,21 @@ def setup_fields(project: str, config: str, exists: bool, agents: list[str], git
     found = " · ".join(agents) + " (found on PATH)" if agents else "none found (claude, codex or opencode on PATH)"
     return [("Project", project, None), ("Config", f"{config} ({'exists' if exists else 'new'})", None),
             ("Agents", found), ("Git", *git)]
+
+
+def setup_steps(run_command: str, git_fix: str | None = None) -> list[str]:
+    """What to do after `setup` wrote the template: make the folder a git checkout
+    first when it isn't one (`git_fix`), edit, commit, run."""
+    return [*([git_fix] if git_fix else []), "edit it: the goal, scope, gates and observe entries",
+            "commit it, with any scripts its commands use", run_command]
+
+
+def setup_also(setup_command: str, agent: str | None) -> list[tuple[str, str]]:
+    """The commands that do more than the template (none without an agent found)."""
+    if not agent:
+        return []
+    return [(f"{setup_command} --agent {agent}", "an agent drafts it with you"),
+            (f"autohelix skill install --agent {agent}", "for your own agent sessions")]
 
 
 def setup_written(shown: str, steps: list[str], also: list[tuple[str, str]], width: int) -> list[Text]:

@@ -226,4 +226,4 @@ class TestLiveDisplay:
         d.handle_event(AgentEvent(kind=AgentEventKind.TOOL_INPUT, text='{"file_path": "/x/sort.py"}',
                                   metadata={"tool_name": "Edit"}))
         plain = d.render(65).plain
-        assert plain.endswith(" 1m 05s  Edit sort.py")
+        assert plain.endswith(" 1m 05s  Test Agent · Edit sort.py")

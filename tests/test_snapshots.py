@@ -31,7 +31,8 @@ CONFIG = Config.from_dict({
 
 
 def _gates(command: bool | None, metric: bool | None = None, **values) -> list[dict]:
-    return [{"text": "pytest -q test_sort.py", "kind": "command", "passed": command},
+    return [{"text": "pytest -q test_sort.py", "kind": "command", "passed": command,
+             "return_code": None if command is None else 0 if command else 1},
             {"text": "speed regress 5%", "kind": "metric", "passed": metric, **values}]
 
 
@@ -61,27 +62,29 @@ def _header(width: int, budget: Budget, done: int = 0, show_mark: bool = True) -
 
 
 def _ending(table: Table, stop: dict, first: int = 1) -> list:
+    """The end block as the harness assembles it (`Harness._print_ending`): auto landing
+    of this segment's commits, the run's cost so far."""
     landed = [row for row in table.rows if row.iteration >= first and row.accepted and row.commit]
-    return table.ending(terminal.outcome(stop, None, None), spent="$3.02",
-                        landing=("landed", f"{len(landed)} commit{'s' * (len(landed) != 1)} on main", None), landed=landed,
-                        commands=["autohelix view krp3", "autohelix resume krp3 -n 5"],
+    return table.ending(terminal.outcome(stop, None, None), spent=terminal.money(sum(r.cost or 0 for r in table.rows)),
+                        landing=terminal.landing(len(landed), "main"), landed=landed,
+                        commands=terminal.next_commands("krp3"),
                         files=[("page", ".autohelix/runs/20261115-1402-sorting-krp3/report.html"),
                                ("summary", ".autohelix/runs/20261115-1402-sorting-krp3/report.md")])
 
 
 def run_screen(width: int, show_mark: bool = True) -> list:
-    """`autohelix run -n 8`, finished."""
+    """`autohelix run -n 7 --cost 10`, finished."""
     table = Table.of(CONFIG, width)
-    lines = _header(width, Budget(iterations=8, cost_usd=10), show_mark=show_mark)
+    lines = _header(width, Budget(iterations=7, cost_usd=10), show_mark=show_mark)
     for row in ROWS:
         lines += table.add(row)
-    return lines + _ending(table, {"kind": "budget", "detail": "iteration budget reached (8)"})
+    return lines + _ending(table, {"kind": "budget", "detail": "iteration budget reached (7)"})
 
 
 def live_screen(width: int) -> list:
-    """`autohelix run -n 8` while iteration 4's agent edits a file."""
+    """`autohelix run -n 7 --cost 10` while iteration 4's agent edits a file."""
     table = Table.of(CONFIG, width)
-    lines = _header(width, Budget(iterations=8, cost_usd=10))
+    lines = _header(width, Budget(iterations=7, cost_usd=10))
     for row in ROWS[:4]:
         lines += table.add(row)
     return lines + [table.live(4, 72, "agent · Edit sort.py")]
@@ -116,22 +119,20 @@ def setup_screen(width: int, picked: int | None = None) -> list:
         return lines + [Text("  " + SETUP_QUESTION)] + [Text(click.unstyle(option_line(options, i, 0, width - 1)))
                                                         for i in range(len(options))]
     lines.append(Text(f"  {SETUP_QUESTION} {options[picked][0]}"))
-    steps = ["edit it: the goal, scope, gates and observe entries", "commit it, with any scripts its commands use",
-             "autohelix run"]
-    also = [("autohelix setup --agent claude", "an agent drafts it with you"),
-            ("autohelix skill install --agent claude", "for your own agent sessions")]
-    return lines + terminal.setup_written("autohelix.yaml", steps, also, width)
+    steps = terminal.setup_steps("autohelix run")
+    return lines + terminal.setup_written("autohelix.yaml", steps, terminal.setup_also("autohelix setup", "claude"), width)
 
 
-def setup_problem_screen(width: int) -> list:
-    """`autohelix setup` outside git, piped: the Git field says why a run would refuse."""
-    fields = terminal.setup_fields("~/code/sorting", "autohelix/perf.yaml", False, [],
-                                   ("Not a git repository. AutoHelix requires git.\n"
-                                    "Run: git init && git add -A && git commit -m 'init'", "yellow"))
+def setup_problem_screen(width: int, folder: Path) -> list:
+    """`autohelix setup perf` outside git, no agent found, piped: the Git field says why a
+    run would refuse, and the first step fixes it."""
+    from autohelix.cli import _git_field
+
+    git, fix = _git_field(folder)
+    fields = terminal.setup_fields("~/code/sorting", "autohelix/perf.yaml", False, [], git)
     lines = terminal.header(terminal.title("setup", version="0.3.0"), fields, width, show_mark=False)
-    steps = ["edit it: the goal, scope, gates and observe entries", "commit it, with any scripts its commands use",
-             "autohelix run perf"]
-    return lines + terminal.setup_written("autohelix/perf.yaml", steps, [], width)
+    steps = terminal.setup_steps("autohelix run perf", fix)
+    return lines + terminal.setup_written("autohelix/perf.yaml", steps, terminal.setup_also("", None), width)
 
 
 # --- view and dashboard: the `--json` payloads of the run above ---
@@ -150,9 +151,9 @@ def _payload_row(row: Row) -> dict:
 def _run_payload(running: bool) -> dict:
     rows = ROWS[:4] if running else ROWS
     status = ({"state": "running", "phase": "agent", "iteration": 4, "iteration_started_at": T - 72,
-               "phase_started_at": T - 72, "max_iterations": 8} if running else
+               "phase_started_at": T - 72, "max_iterations": 7} if running else
               {"state": "finished", "phase": None, "iteration": 7, "stopped_at": T,
-               "stop_reason": {"kind": "budget", "detail": "iteration budget reached (8)"}})
+               "stop_reason": {"kind": "budget", "detail": "iteration budget reached (7)"}})
     return {"id": "20261115-1402-sorting-krp3", "name": "sorting", "archived": False, "last_activity": T - 30,
             "config_file": "autohelix/sorting.yaml", "config_missing": False, "config_invalid": False,
             "goal": CONFIG.goal, "title": CONFIG.title, "status": status, "stop_requested": None,
@@ -160,7 +161,8 @@ def _run_payload(running: bool) -> dict:
             "metrics": {"iteration": 6 if not running else 3, "values": [
                 {"name": "speed", "value": 57520.8 if not running else 35310.7, "baseline": 46.9, "direction": "higher"},
                 {"name": "mem_mb", "value": 95.0 if not running else 96.0, "baseline": 120.0, "direction": "lower"}]},
-            "progress": {"iterations": len(rows) - 1, "max_iterations": 8, "cost_usd": 3.02 if not running else 0.95,
+            "progress": {"iterations": len(rows) - 1, "max_iterations": 7,
+                         "cost_usd": round(sum(r.cost or 0 for r in rows), 2),
                          "cost_incomplete": False, "seconds": sum(r.seconds or 0 for r in rows), "max_cost_usd": 10.0,
                          "max_seconds": None},
             "target_branch": "main", "landing": {"commits": 0, "fast_forward": True},
@@ -175,14 +177,17 @@ def view_screen(width: int, running: bool = False) -> list:
     """`autohelix view --once` of the run above: finished, or while iteration 4 runs."""
     from autohelix.run_table import view_lines
 
-    return view_lines({**PROJECT, "run": _run_payload(running)}, width, now=T, config=CONFIG)
+    return view_lines({**PROJECT, "run": _run_payload(running)}, width, now=T, config=CONFIG,
+                      rows=ROWS[:4] if running else ROWS)
 
 
 def dashboard_screen(width: int) -> list:
     """`autohelix dashboard --once`: the run above, a second one running, one archived."""
     from autohelix.run_table import dashboard_lines
 
-    perf = {**_run_payload(True), "id": "20261115-1530-perf-m2xq", "name": "perf", "group": "speed",
+    perf = _run_payload(True)
+    perf["status"].update(max_time_seconds=3600, segment_started_at=T - 372)  # `run --time 1h`
+    perf = {**perf, "id": "20261115-1530-perf-m2xq", "name": "perf", "group": "speed",
             "title": "Cut the memory use of sort_list.", "config_file": "autohelix/perf.yaml",
             "why": "try a lower memory bound", "landing": {"commits": 2, "fast_forward": True}}
     old = {**_run_payload(False), "id": "20261110-0900-old-a1b2", "archived": True}
@@ -200,7 +205,7 @@ SCREENS = {
     **{f"dashboard-{w}": (lambda w=w: dashboard_screen(w)) for w in WIDTHS},
     **{f"setup-{w}": (lambda w=w: setup_screen(w)) for w in WIDTHS},
     **{f"setup-template-{w}": (lambda w=w: setup_screen(w, picked=1)) for w in WIDTHS},
-    "setup-no-git-80": lambda: setup_problem_screen(80),
+    "setup-no-git-80": "setup_problem_screen",
     **{f"run-{w}": (lambda w=w: run_screen(w)) for w in WIDTHS},
     **{f"run-live-{w}": (lambda w=w: live_screen(w)) for w in WIDTHS},
     **{f"resume-{w}": (lambda w=w: resume_screen(w)) for w in WIDTHS},
@@ -212,9 +217,21 @@ def _text(lines) -> str:
     return "".join(line.plain.rstrip() + "\n" for line in lines)
 
 
+@pytest.fixture
+def outside_git(tmp_path, monkeypatch) -> Path:
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    return tmp_path
+
+
+def _render(name: str, folder: Path) -> list:
+    if name == "setup-no-git-80":  # a real folder outside git
+        return setup_problem_screen(80, folder)
+    return SCREENS[name]()
+
+
 @pytest.mark.parametrize("name", sorted(SCREENS))
-def test_snapshot(name):
-    text = _text(SCREENS[name]())
+def test_snapshot(name, outside_git):
+    text = _text(_render(name, outside_git))
     path = SNAPSHOTS / f"{name}.txt"
     if os.environ.get("AUTOHELIX_UPDATE_SNAPSHOTS"):
         SNAPSHOTS.mkdir(exist_ok=True)
@@ -224,6 +241,6 @@ def test_snapshot(name):
 
 
 @pytest.mark.parametrize("name", sorted(SCREENS))
-def test_screens_fit_their_width(name):
+def test_screens_fit_their_width(name, outside_git):
     width = int(name.rsplit("-", 1)[-1]) if name[-1].isdigit() else 100
-    assert all(line.cell_len <= width for line in SCREENS[name]())
+    assert all(line.cell_len <= width for line in _render(name, outside_git))

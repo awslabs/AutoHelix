@@ -14,7 +14,7 @@ from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind
 from autohelix.formatting import clean, format_duration  # noqa: F401 - clean: re-exported
-from autohelix.terminal import SPINNER, TEAL
+from autohelix.terminal import live_line
 
 
 class LiveDisplay:
@@ -138,10 +138,10 @@ class LiveDisplay:
         return self._render_compact()
 
     def _render_compact(self) -> Text:
-        """One line: `⠋ <title>  1m 05s  <activity>`."""
-        frame = SPINNER[int(_time.monotonic() * 10) % len(SPINNER)]
-        return Text.assemble(("  ", ""), (frame, TEAL), f" {self.title}  {format_duration(self._elapsed)}",
-                             (f"  {self.activity}" if self.activity else "", "dim"))
+        """The run's live row for a step after the iterations (`terminal.live_line`):
+        `⠋        12s  summary · Edit report.md`."""
+        what = f"{self.title} · {self.activity}" if self.activity else self.title
+        return live_line("", self._elapsed, what, int(_time.monotonic() * 10))
 
     def _render_verbose(self, height: int | None = None) -> Panel:
         """Full rolling log with event history."""

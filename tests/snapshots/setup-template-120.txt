@@ -5,7 +5,7 @@
   ⠙⠦⠬⠤⢤⡀⢀⡤⠄⡇⠴⠋   Git      main · clean
     ⠘⢦⣤⠵⠫⣤⡴⠃
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  How do you want to write it? Empty config
+  How do you want to write it? From the template
 
   Wrote    autohelix.yaml  the commented template
   next     edit it: the goal, scope, gates and observe entries

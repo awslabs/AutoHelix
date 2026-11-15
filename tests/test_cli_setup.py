@@ -253,8 +253,8 @@ def test_outside_git_writes_and_warns(tmp_path, monkeypatch):
     result = setup()
     assert result.exit_code == 0, result.output
     assert (tmp_path / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
-    assert field(result, "Git") == ("Not a git repository. AutoHelix requires git. "
-                                    "Run: git init && git add -A && git commit -m 'init'")
+    assert field(result, "Git") == "Not a git repository. AutoHelix requires git."
+    assert "  next     git init && git add -A && git commit -m 'init'" in lines(result)  # the first step
 
 
 def test_a_repository_without_commits_warns(tmp_path, monkeypatch):
@@ -264,8 +264,8 @@ def test_a_repository_without_commits_warns(tmp_path, monkeypatch):
     result = setup()
     assert result.exit_code == 0, result.output
     assert (tmp_path / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
-    assert field(result, "Git") == ("No commits yet; a run starts from a commit. "
-                                    "Run: git add -A && git commit -m 'init'")
+    assert field(result, "Git") == "No commits yet; a run starts from a commit."
+    assert "  next     git add -A && git commit -m 'init'" in lines(result)
 
 
 @pytest.mark.parametrize("where", ["bare", "git-dir"])
@@ -508,8 +508,8 @@ def test_one_agent_asks_once_and_the_default_starts_it(project, monkeypatch, exe
     assert result.exit_code == 0, result.output
     assert "autohelix  v" in flat_lines(result) and " · setup" in flat_lines(result)
     assert field(result, "Config") == "autohelix.yaml (new)"
-    assert "  How do you want to write it?\n  1. With Codex     it asks what you want to achieve" in flat_lines(result)
-    assert "  2. Empty config   the commented template, to edit by hand\n  Choose [1]:" in flat_lines(result)
+    assert "  How do you want to write it?\n  1. With Codex          it asks what you want, then drafts the config" in flat_lines(result)
+    assert "  2. From the template   the commented template, to edit by hand\n  Choose [1]:" in flat_lines(result)
     assert "  Starting Codex with the AutoHelix setup skill…" in lines(result)
     assert "Which agent?" not in result.output
     assert [argv[0] for _, argv, _ in execs] == ["codex"]
