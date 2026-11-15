@@ -266,6 +266,81 @@ def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, r
     assert len(created) >= 2 and set(created) == {"Iteration 1 · agent"}
 
 
+def _running(data: dict, started: float) -> dict:
+    """`data` while iteration 3 runs (its agent phase started at `started`)."""
+    data["run"]["status"] = {"state": "running", "phase": "agent", "iteration": 3,
+                             "iteration_started_at": started, "phase_started_at": started}
+    data["run"]["progress"]["iterations"] = 2
+    return data
+
+
+def test_the_view_times_its_live_row_when_drawn(tmp_path):
+    """The live row's clock and spinner come from the time it is drawn, not when the
+    screen was built: the screen can stay up between rereads and still move."""
+    from autohelix.terminal import LiveRow
+
+    log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()))
+    started = time.time() - 72
+    status = {"state": "running", "phase": "agent", "iteration": 3}
+    screen = W.view_screen((_running(_run_data(3), started), W.run_table.Saved()), log, status, 40)
+    row = next(part for part in screen.renderables if isinstance(part, LiveRow))
+    now = [started + 72]
+    row.clock = lambda: now[0]
+
+    def drawn() -> str:
+        out = io.StringIO()
+        Console(file=out, width=100, force_terminal=False).print(row)
+        return out.getvalue().rstrip()
+
+    first = drawn()
+    now[0] += 61.25
+    second = drawn()
+    assert first.split()[1:] == ["3", "1m", "12s", "agent"]
+    assert second.split()[1:] == ["3", "2m", "13s", "agent"] and second[2] != first[2]  # a new spinner frame
+    # `--once` is a fixed line at the time given.
+    once = W.run_table.format_run(_running(_run_data(3), started), W.run_table.Saved(), now=started + 72)
+    assert once.splitlines()[-1].split()[1:] == ["3", "1m", "12s", "agent"]
+
+
+def test_a_live_view_keeps_a_blank_line_at_the_bottom(tmp_path):
+    log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()))
+    data = (_running(_run_data(3), time.time()), W.run_table.Saved())
+    running = W.view_screen(data, log, {"state": "running", "phase": "agent", "iteration": 3}, 40).renderables
+    assert running[-1].plain == "" and running[-2].plain.startswith("Running")
+    stopped = W.view_screen((_run_data(3), W.run_table.Saved()), log, {"state": "finished"}, 40).renderables
+    assert stopped[-1].plain.startswith("Finished")
+
+
+def test_the_view_rereads_the_run_only_when_it_changed(tmp_path, monkeypatch, run_paths):
+    """Rereading the run (history, config, git) is slow: the view does it when the status
+    or the run's files change, or after REREAD_SECONDS, not on every poll."""
+    status = RunStatus(tmp_path)
+    status.start()
+    status.phase("agent", 1)
+    reads = []
+    monkeypatch.setattr(W, "_read_run", lambda *a: reads.append(1))
+    polls = iter(range(8))
+    clock = [time.monotonic()]
+
+    def sleep(_):
+        clock[0] += 2  # 18 s in all: under REREAD_SECONDS
+        n = next(polls, None)
+        if n is None:
+            raise KeyboardInterrupt
+        if n == 3:
+            with open(run_paths.history, "a") as f:  # an iteration ended
+                f.write("{}\n")
+        if n == 5:
+            status.phase("checks", 1)
+
+    fake = _Clock(sleep)
+    fake.monotonic = lambda: clock[0]
+    monkeypatch.setattr(W, "time", fake)
+    with pytest.raises(KeyboardInterrupt):
+        W.view(tmp_path, None, Console(file=io.StringIO()))
+    assert len(reads) == 3  # the first poll, the history, the status
+
+
 def test_the_views_live_row_names_the_observe_entry():
     data = _run_data(3)
     data["run"]["status"] = {"state": "running", "phase": "benchmark", "entry": "bench", "iteration": 3,

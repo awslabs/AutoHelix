@@ -231,14 +231,15 @@ def _live_what(run: dict) -> str:
     return " · ".join(filter(None, [_phase(run), clean(entry), "stopping" if run.get("stop_requested") else ""]))
 
 
-def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = None
-               ) -> tuple[list[Text], list[list[Text]], list[Text]]:
+def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = None, live: bool = False
+               ) -> tuple[list[Text], list[list[Text]], list]:
     """`view`'s screen in three parts: the header and column header; each iteration's
     lines (its row and the lines under it); then the live row of the iteration under
     way, or the end block. `saved` (`Saved.read`): the stored config gives the header's
     fields and the metric gates' wording (without it, the payload's); the rows are the
     history's. When the history can't be read, the end block is the outcome only: the
-    totals and landing would be counted from nothing."""
+    totals and landing would be counted from nothing. With `live`, the live row is a
+    `terminal.LiveRow` timed when it is drawn (the live `view`), else a line at `now`."""
     now = time.time() if now is None else now
     run, config = data["run"], saved.config
     short = short_id(run["id"])
@@ -265,10 +266,10 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
     if (under_way := _under_way(run)) is not None or _live(run):
         status = run["status"]
         started = status.get("iteration_started_at") if under_way is not None else status.get("phase_started_at")
-        seconds = now - started if isinstance(started, (int, float)) else 0
-        what = _live_what(run)
-        tail = [table.live(under_way if under_way is not None else status.get("iteration") or 0, seconds, what,
-                           int(now * 10))]
+        row = terminal.LiveRow(table, under_way if under_way is not None else status.get("iteration") or 0,
+                               start=started if isinstance(started, (int, float)) else now, clock=time.time)
+        row.set(_live_what(run))
+        tail = [row if live else row.line(now)]
     elif saved.rows is None:
         tail = [Text(), terminal.rule(width), *table.outcome_lines(_outcome(run))]
     else:

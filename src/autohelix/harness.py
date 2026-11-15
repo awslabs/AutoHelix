@@ -469,8 +469,10 @@ class Harness:
 
     @contextmanager
     def _showing(self, renderable):
-        """Show `renderable` live, transient: in the Live already showing (the whole
-        iteration's, so its row stays up between phases), else in a new one."""
+        """Show `renderable` live, transient, with a blank line under it: in the Live
+        already showing (the whole iteration's, so its row stays up between phases), else
+        in a new one."""
+        renderable = terminal.with_room(renderable)  # not on the terminal's last line
         outer = getattr(self, "_live_display", None)
         if outer is not None:
             previous = outer.renderable

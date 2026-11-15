@@ -28,8 +28,10 @@ from autohelix.run_status import read_run_status, running_iteration
 from autohelix.runs import RunPaths
 from autohelix.viewer import ProjectRuns
 
-POLL_SECONDS = 0.3  # the log
-TABLE_SECONDS = 5  # rereading the runs (history, config, git), unless the status changed
+POLL_SECONDS = 0.3  # the log and the run's status
+TABLE_SECONDS = 5  # rereading the runs (history, config, git) for `dashboard`
+REREAD_SECONDS = 60  # `view`: rereading the run (~200 ms) when none of its files changed (git state)
+REFRESH_PER_SECOND = 10  # `view`: redrawing (the live row's spinner and clock are timed at draw time)
 MIN_LOG_LINES = 5  # the log panel at its smallest: borders, header lines, one line of output
 STOPPED = {"finished": "Finished", "interrupted": "Interrupted", "failed": "Failed",
            "crashed": "Stopped unexpectedly"}
@@ -197,9 +199,28 @@ def _read_run(runs: ProjectRuns, project: Path, run_id: str | None) -> tuple[dic
         return f"Cannot read the run: {exc}"
 
 
+def _changes(project: Path, run_id: str | None) -> tuple:
+    """What says the run's files changed since the last read (cheap: `stat` only): the
+    current run, and its run.json, history and stop request (the status is compared whole)."""
+    paths = RunPaths(project, run_id)
+
+    def stamp(path: Path):
+        try:
+            info = path.stat()
+        except OSError:
+            return None
+        return info.st_mtime_ns, info.st_size
+
+    if not paths.run_id:
+        return (None,)
+    return paths.run_id, *(stamp(path) for path in (paths.identity, paths.history, paths.stop_request))
+
+
 def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollower, status: dict | None, height: int,
                 width: int = 100) -> Group:
-    """The run's screen on top, the log panel below it, the status line last.
+    """The run's screen on top, the log panel below it, the status line last, and while
+    the run is live a blank line under it (not on the terminal's last line). The live row
+    is timed when drawn (`terminal.LiveRow`).
 
     On a short terminal the log panel shrinks first, then the oldest iteration rows go, then the panel.
     """
@@ -209,29 +230,34 @@ def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollowe
         parts = ([Text(clean(data))], [], [])
     else:
         run, saved = data
-        parts = run_table.view_parts(run, saved, width)
-    room = height - 2  # the status line, and a spare line so the terminal doesn't scroll
+        parts = run_table.view_parts(run, saved, width, live=True)
+    running = bool(status) and status.get("state") == "running"
+    # The status line, a spare line so the terminal doesn't scroll, the blank line under a live run.
+    room = height - 2 - running
     lines = fit(parts, room - (MIN_LOG_LINES if log.display else 0)) if parts else []
     log_height = room - len(lines)
     if parts and (log_height < MIN_LOG_LINES or (parts[2] and lines[-1] is not parts[2][-1])):
         lines = fit(parts, room)  # no room for the log beside the whole end block: the table gets it all
         log_height = room - len(lines)
-    return Group(*lines, *log.render(status, height=log_height))
+    return Group(*lines, *log.render(status, height=log_height), *[Text()] * running)
 
 
 def view(project: Path, backend: str | None = None, console: Console | None = None, *,
          run_id: str | None = None) -> None:
-    """Follow a run (the current one unless `run_id`) until interrupted, across its segments."""
+    """Follow a run (the current one unless `run_id`) until interrupted, across its segments.
+    The run is reread when its status or files change (`_changes`), else every
+    REREAD_SECONDS; the screen is redrawn REFRESH_PER_SECOND times a second meanwhile."""
     console = console or Console()
     runs = ProjectRuns(project)
     log = LogFollower(project, backend, console, run_id)
     data, read_at, seen = None, None, None
-    with Live(console=console, refresh_per_second=4) as live:
+    with Live(console=console, refresh_per_second=REFRESH_PER_SECOND) as live:
         while True:
             status = read_run_status(project, run_id)
             log.poll(status)
-            if read_at is None or status != seen or time.monotonic() - read_at >= TABLE_SECONDS:
-                data, read_at, seen = _read_run(runs, project, run_id), time.monotonic(), status
+            state = (status, _changes(project, run_id))
+            if read_at is None or state != seen or time.monotonic() - read_at >= REREAD_SECONDS:
+                data, read_at, seen = _read_run(runs, project, run_id), time.monotonic(), state
             live.update(view_screen(data, log, status, console.size.height, console.width))
             time.sleep(POLL_SECONDS)
 

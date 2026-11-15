@@ -103,6 +103,7 @@ def write_report(config: Config, project: Path, console, *, run_id: str | None =
 
     from autohelix.agents import AgentConfig, AgentEvent, create_agent
     from autohelix.display import LiveDisplay
+    from autohelix.terminal import with_room
 
     paths = RunPaths(project, run_id)
     if not paths.run_id:
@@ -138,7 +139,7 @@ def write_report(config: Config, project: Path, console, *, run_id: str | None =
                        refs=(paths.ref,))  # the prompt names `autohelix/<id>`
     started = time.monotonic()
     try:
-        with Live(display, console=console, refresh_per_second=10, transient=True):
+        with Live(with_room(display), console=console, refresh_per_second=10, transient=True):
             result = agent.run(
                 worktree_path=copy.working_dir,
                 prompt=build_report_prompt(config, project, draft, paths.run_id),

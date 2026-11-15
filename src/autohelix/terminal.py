@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from rich.console import Group
 from rich.text import Text
 
 from autohelix.formatting import clean, format_duration
@@ -241,6 +242,10 @@ TIME = 7  # "30m 00s"
 COST = 6  # "$12.34"
 CHANGE = 6  # "0.083×"
 INDENT = 2 + LABEL + 2  # where the time column starts: notes and long reasons go under it
+# Space between the columns after the label (time, cost, each metric, the reason) and
+# between a value and its change: roomy when the width allows, else compact.
+SPACED, COMPACT = (4, 2), (2, 1)
+REASON_ROOM = 40  # spaced only if a typical reason still fits on the row after the values
 
 
 class Table:
@@ -250,7 +255,8 @@ class Table:
     Stateful, as rows arrive: `add` returns a row's lines (the column header before the
     first), and keeps the baseline and each metric's tip value (the value a metric gate
     compares with) for later rows and the end block. Columns that don't fit the width
-    are dropped: cost first, then the changes."""
+    are dropped: cost first, then the changes. The columns are spaced (`SPACED`) when
+    that leaves `REASON_ROOM` after them, else compact (80 columns, many metrics)."""
 
     def __init__(self, directions: dict[str, str], width: int, gates: list = (), timeout: float | None = None):
         """`directions`: metric -> "higher"/"lower", in column order; `gates`: the
@@ -263,6 +269,9 @@ class Table:
         self.heads = [f"{name} {'↓' if direction == 'lower' else '↑'}" for name, direction in self.directions.items()]
         self.value_width = {name: max(len(head), 8) for name, head in zip(self.directions, self.heads)}
         self.show_cost = self.show_change = True
+        self.gap, self.sep = SPACED
+        if self._metrics_end() + REASON_ROOM > self.width:
+            self.gap, self.sep = COMPACT
         if self._metrics_end() > self.width:
             self.show_cost = False
         if self._metrics_end() > self.width:
@@ -278,16 +287,19 @@ class Table:
         return cls(config.metric_directions(), width, config.gates, config.agent.timeout)
 
     def _metrics_start(self) -> int:
-        return 2 + LABEL + 2 + TIME + (2 + COST) * self.show_cost + 2
+        return 2 + LABEL + 2 + TIME + (self.gap + COST) * self.show_cost + self.gap
 
     def _metrics_end(self) -> int:
         """The column where the reason starts on a row with values."""
-        return self._metrics_start() + sum(w + (1 + CHANGE) * self.show_change + 2 for w in self.value_width.values())
+        return self._metrics_start() + sum(w + (self.sep + CHANGE) * self.show_change + self.gap
+                                           for w in self.value_width.values())
 
     def column_header(self) -> Text:
-        line = Text(" " * (2 + LABEL + 2) + f"{'time':>{TIME}}" + f"  {'cost':>{COST}}" * self.show_cost, style="dim")
+        gap = " " * self.gap
+        line = Text(" " * (2 + LABEL + 2) + f"{'time':>{TIME}}" + f"{gap}{'cost':>{COST}}" * self.show_cost, style="dim")
         for name, head in zip(self.directions, self.heads):
-            line.append(f"  {head:>{self.value_width[name]}}" + " " * (1 + CHANGE) * self.show_change, style="dim")
+            line.append(f"{gap}{head:>{self.value_width[name]}}" + " " * (self.sep + CHANGE) * self.show_change,
+                        style="dim")
         return cut(line, self.width)
 
     def heading(self) -> list[Text]:
@@ -307,18 +319,19 @@ class Table:
             glyph, label = ("✗", RED), (str(row.iteration), None)
         line = _parts(("  ", None), (glyph[0] + " ", glyph[1]), (f"{label[0]:<{LABEL - 2}}", label[1]), ("  ", None),
                       (f"{format_duration(row.seconds) if row.seconds else '':>{TIME}}", None))
+        gap = " " * self.gap
         if self.show_cost:
-            line.append(f"  {money(row.cost, row.cost_incomplete):>{COST}}")
+            line.append(f"{gap}{money(row.cost, row.cost_incomplete):>{COST}}")
         dim = not row.accepted and row.iteration > 0
         for name in self.directions:
             value, reference = row.metrics.get(name), self.baseline.get(name)
             shown = number(value) if isinstance(value, (int, float)) else ""
-            line.append(f"  {shown:>{self.value_width[name]}}", style="dim" if dim else "bold")
+            line.append(f"{gap}{shown:>{self.value_width[name]}}", style="dim" if dim else "bold")
             if self.show_change:
                 # Rejected rows show no change: their reason says how they compare with the tip.
                 delta = change(value, reference) if row.iteration and row.accepted else ""
                 style = "dim" if dim or not delta else GREEN if better(value, reference, self.directions[name]) else RED
-                line.append(" ")
+                line.append(" " * self.sep)
                 line.append(f"{delta:<{CHANGE}}", style=style)
         reason, style = self._reason(row)
         line.rstrip()
@@ -394,7 +407,7 @@ class Table:
     def live(self, iteration: int, seconds: float, what: str, frame: int = 0) -> Text:
         """The row of the iteration under way: spinner, number, time so far, the phase
         (`agent`, `observe · bench`) in the cost column."""
-        return live_line("base" if iteration == 0 else str(iteration), seconds, what, frame, self.width)
+        return live_line("base" if iteration == 0 else str(iteration), seconds, what, frame, self.width, self.gap)
 
     # --- the end block ---
 
@@ -467,12 +480,19 @@ class Table:
         return lines
 
 
-def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int = 200) -> Text:
+def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int = 200, gap: int = COMPACT[0]) -> Text:
     """A live row: spinner, label (an iteration's number; blank for the summary step),
-    time so far in the time column, the phase."""
+    time so far in the time column, then (`gap` after it, where the cost column starts)
+    the phase."""
     return cut(_parts(("  ", None), (SPINNER[frame % len(SPINNER)] + " ", TEAL), (f"{label:<{LABEL - 2}}", None),
-                      ("  ", None), (f"{format_duration(seconds):>{TIME}}", None), ("  ", None), (clean(what), "dim")),
-               width)
+                      ("  ", None), (f"{format_duration(seconds):>{TIME}}", None), (" " * gap, None),
+                      (clean(what), "dim")), width)
+
+
+def with_room(renderable) -> Group:
+    """`renderable` with a blank line under it: a live row shown at the bottom of the
+    terminal doesn't sit on its last line (gone with the live display)."""
+    return Group(renderable, Text())
 
 
 def outcome(stop: dict | None, error: BaseException | None, interrupted_at: int | None) -> tuple[str, str, str | None]:
@@ -584,25 +604,30 @@ def _metric_rejection(gate, item: dict, tip: dict, direction: str | None) -> str
 
 
 class LiveRow:
-    """The iteration under way as a live renderable (`Table.live`): one clock from
-    its start, the phase (`agent`, `gates`, `observe`, `stop`), and for `observe` the
-    entry (`observe · bench`)."""
+    """The iteration under way as a live renderable (`Table.live`): its time and the
+    spinner's frame come from `clock` when it is drawn, so it moves at the display's
+    rate whatever builds the screen. One clock from `start` (default: now), the phase
+    (`agent`, `gates`, `observe`, `stop`), and for `observe` the entry (`observe · bench`)."""
 
-    def __init__(self, table: Table, iteration: int):
-        self.table = table
-        self.restart(iteration)
+    def __init__(self, table: Table, iteration: int, start: float | None = None, clock=time.monotonic):
+        self.table, self.clock = table, clock
+        self.restart(iteration, start)
 
-    def restart(self, iteration: int) -> None:
-        self.iteration, self.start = iteration, time.monotonic()
+    def restart(self, iteration: int, start: float | None = None) -> None:
+        self.iteration, self.start = iteration, self.clock() if start is None else start
         self.phase, self.detail = "agent" if iteration else "gates", ""
 
     def set(self, phase: str, detail: str = "") -> None:
         self.phase, self.detail = phase, detail
 
-    def __rich_console__(self, console, options):
-        now = time.monotonic()
+    def line(self, now: float | None = None) -> Text:
+        """The row at `now` (by `clock`; default: now)."""
+        now = self.clock() if now is None else now
         what = f"{self.phase} · {self.detail}" if self.detail else self.phase
-        yield self.table.live(self.iteration, now - self.start, what, int(now * 10))
+        return self.table.live(self.iteration, max(now - self.start, 0), what, int(now * 10))
+
+    def __rich_console__(self, console, options):
+        yield self.line()
 
 
 # --- setup -------------------------------------------------------------------------

@@ -278,9 +278,9 @@ def test_rejected_row_in_a_run(project):
     assert result.output.count('test "$AUTOHELIX_ITERATION" = 0') == 2  # the header's Gates, the row
 
 
-def test_the_live_row_shows_the_phase_only(project):
+def test_the_live_row_shows_the_phase_only_with_room_under_it(project):
     """In a terminal, the live row says `agent` (not the agent's tool call), `gates` (not
-    the command), `observe · bench` (the entry)."""
+    the command), `observe · bench` (the entry), with a blank line under it while live."""
     import io
     import re
 
@@ -300,3 +300,21 @@ def test_the_live_row_shows_the_phase_only(project):
     phases = {line.split(maxsplit=3)[-1].strip() for line in frames}
     assert {"agent", "gates", "observe · bench"} <= phases, phases
     assert not any("Write" in p or "distinctive-gate" in p or "sleep" in p for p in phases), phases
+    # Each frame is the row and a blank line under it (the row then a newline, never the
+    # cursor left at its end): the row is not on the terminal's last line.
+    after = [m.group(1) for m in re.finditer(r"  [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] [^\r\n\x1b]*(.)", out.getvalue(), re.S)]
+    assert after and set(after) == {"\n"}, after
+
+
+@pytest.mark.parametrize("width, spacing", [(80, terminal.COMPACT), (120, terminal.SPACED)])
+def test_columns_are_spaced_when_the_width_allows(width, spacing):
+    """Roomier columns where a reason still fits after the values; today's at 80. The
+    values stay right-aligned under their headings, the live row's phase in the cost column."""
+    table = Table({"speed": "higher", "mem_mb": "lower"}, width)
+    assert (table.gap, table.sep) == spacing
+    head = table.column_header().plain
+    row = table.add(Row(0, True, {"speed": 46.9, "mem_mb": 120}))[-1].plain
+    assert row.index("46.9") + len("46.9") == head.index("speed ↑") + len("speed ↑")
+    assert row.index("120") + len("120") == head.index("mem_mb ↓") + len("mem_mb ↓")
+    live = table.live(1, 72, "agent").plain
+    assert live.index("agent") == head.index("cost") + len("cost") - terminal.COST
