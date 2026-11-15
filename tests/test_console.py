@@ -119,7 +119,7 @@ def test_rejected_row_dims_its_values_and_says_why():
 def test_a_row_without_values_says_why_in_their_place():
     [row] = _rows(80).add(Row(2, False, {}, 5, 0.1, reason="gate failed: pytest -q",
                               gates=[{"text": "pytest -q", "kind": "command", "passed": False, "return_code": 1}, {}, {}]))
-    assert row.plain.split()[-4:] == ["pytest", "-q", "failed", "(exit", "1)"][-4:] and row.plain.index("pytest") < 40
+    assert row.plain.rstrip().endswith("pytest -q failed (exit 1)") and row.plain.index("pytest") < 40
 
 
 def test_a_long_reason_goes_under_the_row_and_is_cut_to_the_width():
@@ -227,6 +227,19 @@ def test_ending_with_manual_landing(project):
     assert ending[2] == f"  unlanded  1 commit on autohelix/{run_id} (manual landing)"
     assert ending[3:6] == [f"  next      autohelix view {short}", f"            autohelix resume {short} -n 5",
                            f"            autohelix land {short}"]  # one per line when they don't fit
+
+
+def test_ending_when_landing_fails(project, monkeypatch):
+    import autohelix.harness
+
+    def refuse(*_):
+        raise RuntimeError("main is checked out elsewhere")
+
+    monkeypatch.setattr(autohelix.harness, "land", refuse)
+    _configure(project, scope={"editable": ["hello.py"]})
+    result, _, _ = _run(project)
+    assert result.exit_code == 0, result.output
+    assert "  landing   failed: main is checked out elsewhere" in _ending(result.output)
 
 
 def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):

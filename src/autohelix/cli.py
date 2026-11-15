@@ -118,29 +118,30 @@ def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[st
     return ["opencode", str(project), "--prompt", prompt]
 
 
-def _git_problem(project: Path) -> str | None:
-    """Why `run` refuses this folder (not a git checkout with a commit to start from), or
-    None: `run` raises it, `setup` (which needs no git) warns with it. (`main` has dropped
-    inherited GIT_* variables, so this is the checkout's own repository.)"""
+def _git_problem(project: Path) -> tuple[str, str | None] | None:
+    """Why `run` refuses this folder (not a git checkout with a commit to start from) and
+    the git command that fixes it, when there is one; None when a run can start here.
+    `run` raises it, `setup` (which needs no git) shows it. (`main` has dropped inherited
+    GIT_* variables, so this is the checkout's own repository.)"""
     def git(*args: str):
         return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True)
 
     try:
         inside = git("rev-parse", "--is-inside-work-tree")
     except OSError as e:
-        return f"git not found ({e}); AutoHelix requires git."
+        return f"git not found ({e}); AutoHelix requires git.", None
     if inside.returncode:
         if "not a git repository" not in inside.stderr.lower():  # e.g. dubious ownership (safe.directory)
-            return f"git failed in {project}:\n{inside.stderr.strip()}"
-        return "Not a git repository. AutoHelix requires git.\nRun: git init && git add -A && git commit -m 'init'"
+            return f"git failed in {project}:\n{inside.stderr.strip()}", None
+        return "Not a git repository. AutoHelix requires git.", "git init && git add -A && git commit -m 'init'"
     if inside.stdout.strip() != "true":
         return (f"{project} is not in a git working tree (a bare repository, or inside .git/); "
-                "run AutoHelix in a checkout.")
+                "run AutoHelix in a checkout."), None
     if git("rev-parse", "--verify", "-q", "HEAD").returncode:
         if git("for-each-ref", "--count=1", "refs/heads/").stdout.strip():
             return ("HEAD has no commit yet (a new or orphan branch); a run starts from a commit. "
-                    "Commit on it, or switch to a branch that has one.")
-        return "No commits yet; a run starts from a commit.\nRun: git add -A && git commit -m 'init'"
+                    "Commit on it, or switch to a branch that has one."), None
+        return "No commits yet; a run starts from a commit.", "git add -A && git commit -m 'init'"
     return None
 
 
@@ -251,10 +252,9 @@ def _git_field(project: Path) -> tuple[tuple, str | None]:
     """setup's Git field (`main · clean`, or what a run would refuse, in yellow: no git
     checkout with a commit, or uncommitted changes to tracked files), and the git
     command that makes the folder runnable, when the problem has one (a next step)."""
-    if problem := _git_problem(project):
-        lines = problem.splitlines()
-        fix = next((line.removeprefix("Run: ") for line in lines if line.startswith("Run: ")), None)
-        return ("\n".join(line for line in lines if not line.startswith("Run: ")), "yellow"), fix
+    if found := _git_problem(project):
+        problem, fix = found
+        return (problem, "yellow"), fix
 
     def git(*args: str) -> str:
         return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True).stdout.strip()
@@ -317,8 +317,9 @@ def _git_project(path: str) -> Path:
     """The project directory, refused before anything (.autohelix/ included) is
     created there unless it is in a git checkout with a commit to start from."""
     project = Path(path).resolve()
-    if problem := _git_problem(project):
-        raise click.ClickException(problem)
+    if found := _git_problem(project):
+        problem, fix = found
+        raise click.ClickException(problem + (f"\nRun: {fix}" if fix else ""))
     return project
 
 
@@ -978,12 +979,9 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
     from rich.console import Console
 
     from autohelix import terminal
-    from autohelix.live import run_config
 
     console = Console()
-    paths = RunPaths(path, selected)
-    terminal.print_lines(console, run_table.view_lines(data, console.width, config=run_config(paths),
-                                                       rows=run_table.history_rows(paths)))
+    terminal.print_lines(console, run_table.view_lines(data, console.width, **run_table.saved(RunPaths(path, selected))))
 
 
 def _how_to_start(project: Path) -> str:

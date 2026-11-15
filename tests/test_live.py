@@ -21,7 +21,7 @@ def _status(**info) -> dict:
 def test_status_line():
     now = time.time()
     assert W.status_line(None).startswith("No run recorded yet")
-    assert W.status_line(_status(phase="checks", phase_started_at=now - 20), now) == "Running · iteration 2 · checks · 20s"
+    assert W.status_line(_status(phase="checks", phase_started_at=now - 20), now) == "Running · iteration 2 · gates · 20s"
     assert W.status_line(_status(iteration=0, phase="baseline", phase_started_at=now), now) == "Running · measuring the baseline · 0s"
     assert W.status_line(_status(phase="report", phase_started_at=now - 75), now) == "Running · writing the summary · 1m 15s"
     finished = W.status_line({"state": "finished", "stopped_at": now})
@@ -185,14 +185,14 @@ def test_the_time_cap_is_the_running_segments_own():
     assert run_table.time_cap(run, 1000) == ""  # not running
     run["status"] = {"state": "running", "iteration": 2, "segment_started_at": 1000 - 725,
                      "max_time_seconds": 3600, "phase": "agent", "phase_started_at": 990}
-    assert run_table.time_cap(run, 1000) == "47m 55s left"
+    assert run_table.time_cap(run, 1000) == "47m 55s of 1h left"  # the cap as --time spells it
     assert "left" not in run_table.format_run(data, now=1000)  # the view's live row has the iteration's time
     run["status"].update(segment_started_at=1000 - 6000, max_time_seconds=5400)
-    assert run_table.time_cap(run, 1000) == "time up"
+    assert run_table.time_cap(run, 1000) == "1h30m time up"
     listing = run_table.format_runs({**data, "runs": [run]}, now=1000)
-    assert "spent 1m 00s · $1.50 · time up" in listing
+    assert "spent 1m 00s · $1.50 · 1h30m time up" in listing
     run["status"]["segment_started_at"] = 1000 + 5  # clock skew
-    assert run_table.time_cap(run, 1000) == "1h 30m left"
+    assert run_table.time_cap(run, 1000) == "1h 30m of 1h30m left"
     run["status"].update(state="finished")
     assert run_table.time_cap(run, 1000) == ""
     assert "1h30m" not in run_table.format_runs({**data, "runs": [run]}, now=1000)
@@ -201,7 +201,11 @@ def test_the_time_cap_is_the_running_segments_own():
 def _screen_lines(data, log, height) -> list[str]:
     out = io.StringIO()
     console = Console(file=out, width=100, height=height, force_terminal=False)
-    console.print(W.view_screen((data, None, None), log, {"state": "finished"}, height))
+    from autohelix.terminal import Row
+
+    rows = [Row(r["iteration"], r["accepted"], r["metrics"], r["seconds"], r["cost"], commit=f"c{r['iteration']}",
+                summary=r["summary"]) for r in data["run"]["iterations"]]
+    console.print(W.view_screen((data, {"rows": rows}), log, {"state": "finished"}, height))
     return out.getvalue().splitlines()
 
 

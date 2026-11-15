@@ -86,16 +86,18 @@ def _spent(run: dict, now: float) -> str:
 
 
 def time_cap(run: dict, now: float) -> str:
-    """What is left of the running segment's --time: `47m 55s left`, past it `time
-    up`. "" when the run isn't running or the segment has no --time (a stopped run's
-    stop reason says when time ended it). Never a run total."""
+    """What is left of the running segment's --time: `47m 55s of 1h left`, past it
+    `1h time up`. "" when the run isn't running or the segment has no --time (a stopped
+    run's stop reason says when time ended it). Never a run total."""
     status = run.get("status") or {}
     cap, started = status.get("max_time_seconds"), status.get("segment_started_at")
     if (not _live(run) or not isinstance(cap, (int, float)) or isinstance(cap, bool) or cap <= 0
             or not isinstance(started, (int, float))):
         return ""
+    from autohelix.iteration_time import format_duration as format_limit
+
     left = int(cap) - max(0, int(now - started))
-    return f"{format_duration(left)} left" if left > 0 else "time up"
+    return f"{format_duration(left)} of {format_limit(cap)} left" if left > 0 else f"{format_limit(cap)} time up"
 
 
 def _iterations(run: dict) -> str:
@@ -158,26 +160,25 @@ def _plain(lines: list[Text]) -> str:
 # --- one run (`view`) ---------------------------------------------------------------
 
 
-def history_rows(paths) -> list[Row] | None:
-    """The run's rows from its history (as `run` printed them), or None if unreadable."""
+def saved(paths) -> dict:
+    """What `view` reads beside the `view --json` payload (`view_parts`' keywords): the
+    run's stored config (None: an old run, an invalid file), its rows from the history
+    (as `run` printed them; None if unreadable) and the report files it has written."""
     from autohelix.history import History
+    from autohelix.runs import load_run_config
 
     try:
-        return [Row.of(r) for r in sorted(History(paths.project, paths.run_id).load(), key=lambda r: r.iteration)
+        config = load_run_config(paths)[0]
+    except Exception:  # noqa: BLE001 - `view` shows what the payload has
+        config = None
+    try:
+        rows = [Row.of(r) for r in sorted(History(paths.project, paths.run_id).load(), key=lambda r: r.iteration)
                 if r.iteration > 0 or r.accepted]
-    except Exception:  # noqa: BLE001 - `view` then shows the payload's rows
-        return None
-
-
-def row_of(item: dict) -> Row:
-    """A `view --json` iteration as a row, when the history isn't at hand (`history_rows`).
-    The payload has no commit or agent error: an agent failure shows the harness's
-    reason, and a metric gate's reference is named by its value, not its iteration."""
-    return Row(iteration=item["iteration"], accepted=item["accepted"], metrics=item.get("metrics") or {},
-               seconds=item.get("seconds"), cost=item.get("cost"), cost_incomplete=item.get("cost_incomplete", False),
-               reason=item.get("reason"), summary=item.get("summary") if item["accepted"] else None,
-               gates=item.get("gates") or [], observe=item.get("observe") or [],
-               discarded=item.get("discarded") or [], discarded_frozen=item.get("discarded_frozen") or [])
+    except Exception:  # noqa: BLE001 - `view` says so
+        rows = None
+    files = [(label, terminal.shown_path(path)) for label, path in (("page", paths.report_html),
+                                                                     ("summary", paths.report)) if path.is_file()]
+    return {"config": config, "rows": rows, "files": files}
 
 
 def _outcome(run: dict) -> tuple[str, str, str | None]:
@@ -195,23 +196,26 @@ def _outcome(run: dict) -> tuple[str, str, str | None]:
 
 
 def _landed(run: dict, made: int) -> tuple[str, str, str | None] | None:
-    """The end block's landing line (`terminal.landing`) from `view --json`'s `landing`
-    (commits not yet on the target) and the `made` commits of the run."""
+    """The end block's landing line from `view --json`'s `landing` (commits not yet on
+    the target) and the `made` commits of the run."""
     landing, target = run.get("landing"), run.get("target_branch")
     if not landing or not target:
         return None
-    n, diverged = landing["commits"], not landing["fast_forward"]
-    return terminal.landing(max(made - n, 0), target, n, f"autohelix/{run['id']}",
-                            f"{target} has moved on" if diverged else "", "yellow" if diverged else None)
+    if n := landing["commits"]:
+        diverged = not landing["fast_forward"]
+        return terminal.unlanded(n, f"autohelix/{run['id']}", f"{target} has moved on" if diverged else "",
+                                 "yellow" if diverged else None)
+    return terminal.landed(made, target)
 
 
 def view_parts(data: dict, width: int = 100, now: float | None = None, config=None,
-               rows: list[Row] | None = None) -> tuple[list[Text], list[list[Text]], list[Text]]:
+               rows: list[Row] | None = None, files: list[tuple[str, str]] = ()
+               ) -> tuple[list[Text], list[list[Text]], list[Text]]:
     """`view`'s screen in three parts: the header and column header; each iteration's
     lines (its row and the lines under it); then the live row of the iteration under
-    way, or the end block. `config`: the run's stored config (`runs.load_run_config`),
-    for the header's fields and the metric gates' wording; without it, the payload's.
-    `rows`: the run's history (`history_rows`); without them, the payload's (`row_of`)."""
+    way, or the end block. The keywords are what `saved` reads: `config`, the run's
+    stored config, for the header's fields and the metric gates' wording (without it,
+    the payload's); `rows`, the history's (None: unreadable); `files`, the report's."""
     now = time.time() if now is None else now
     run = data["run"]
     short = short_id(run["id"])
@@ -230,8 +234,9 @@ def view_parts(data: dict, width: int = 100, now: float | None = None, config=No
                       width)
     fields += [("Group", run.get("group") or ""), ("Notes", _notes(run))]
     head = terminal.header(title, fields, width, show_mark=False) + table.heading()
-    known = rows is not None  # the history's rows know their commits
-    rows = [table.add(row) for row in (rows if known else map(row_of, run["iterations"]))]
+    if rows is None:
+        head.append(Text("  The run's history can't be read: no rows to show.", style="dim"))
+    rows = [table.add(row) for row in rows or []]
     if (under_way := _under_way(run)) is not None or _live(run):
         status = run["status"]
         started = status.get("iteration_started_at") if under_way is not None else status.get("phase_started_at")
@@ -241,26 +246,23 @@ def view_parts(data: dict, width: int = 100, now: float | None = None, config=No
                            int(now * 10))]
     else:
         landed = [r for r in table.rows if r.accepted and r.iteration > 0]
-        made = sum(1 for r in landed if r.commit) if known else run.get("accepted") or 0
-        landing = _landed(run, made)
+        landing = _landed(run, sum(1 for r in landed if r.commit))
         can_land = bool(landing and landing[0] == "unlanded" and (run.get("landing") or {}).get("fast_forward"))
         commands = terminal.next_commands(short, view=False, land=can_land)
         tail = table.ending(_outcome(run), spent=terminal.money(run["progress"]["cost_usd"],
                                                                  run["progress"]["cost_incomplete"]),
-                            landing=landing, landed=landed, commands=commands, files=[])
+                            landing=landing, landed=landed, commands=commands, files=list(files))
     return head, rows, tail
 
 
-def view_lines(data: dict, width: int = 100, now: float | None = None, config=None,
-               rows: list[Row] | None = None) -> list[Text]:
-    head, rows, tail = view_parts(data, width, now, config, rows)
+def view_lines(data: dict, width: int = 100, now: float | None = None, **saved) -> list[Text]:
+    head, rows, tail = view_parts(data, width, now, **saved)
     return head + [line for row in rows for line in row] + tail
 
 
-def format_run(data: dict, now: float | None = None, width: int = 100, config=None,
-               rows: list[Row] | None = None) -> str:
-    """`view --once` as plain text."""
-    return _plain(view_lines(data, width, now, config, rows))
+def format_run(data: dict, now: float | None = None, width: int = 100, **saved) -> str:
+    """`view --once` as plain text (`saved`: `view_parts`' keywords)."""
+    return _plain(view_lines(data, width, now, **saved))
 
 
 # --- the project's runs (`dashboard`) -------------------------------------------------
@@ -291,13 +293,13 @@ def dashboard_lines(data: dict, width: int = 100, metric: str | None = None, now
     directions = _directions(shown)
     metric = metric or next(iter(directions), None)
     arrow = f" {'↓' if directions.get(metric) == 'lower' else '↑'}" if metric in directions else ""
-    head = ["run", "state", "iter"] + ([metric + arrow] if metric else []) + ["landing", "active"]
+    head = ["run", "state", "iter"] + ([metric + arrow] if metric else []) + ["landing", "activity"]
     right = {2, 3} if metric else {2}
-    rows: list[tuple[list[str], str | None, str, str]] = []  # cells, the state's style, goal, the line under it
+    rows: list[tuple[list[str], str | None, str, str, str]] = []  # cells, the state's style, goal, the line under it, notes
     for run in shown:
         if run.get("error"):
             rows.append(([short_id(run["id"]), "unreadable"] + [""] * (len(head) - 2), terminal.RED, "",
-                         clean(run["error"])))
+                         clean(run["error"]), ""))
             continue
         value = next((v["value"] for v in (run["metrics"] or {}).get("values", []) if v["name"] == metric), None)
         name = " ".join(filter(None, [short_id(run["id"]), run.get("name")]))
@@ -305,14 +307,14 @@ def dashboard_lines(data: dict, width: int = 100, metric: str | None = None, now
         cells = [name, _word(run), _iterations(run)] + ([terminal.number(value)] if metric else []) + \
             [_landing(run), _phase(run, now) if _live(run) else _ago(run["last_activity"], now)]
         under = [run.get("group") and f"group {run['group']}", _config_file(run, unless_named=True), _spent(run, now),
-                 time_cap(run, now), _notes(run)]
+                 time_cap(run, now)]
         rows.append((cells, terminal.TEAL if _live(run) else STATE_STYLES.get(_word(run)), clean(run.get("title")),
-                     " · ".join(filter(None, under))))
+                     " · ".join(filter(None, under)), clean(_notes(run))))
     cells = [[clean(cell) for cell in row] for row in [head] + [cells for cells, *_ in rows]]
     widths = [max(len(row[i]) for row in cells) for i in range(len(head))]
     # The goal is the last column when every run's fits whole; else it goes under its row.
     used = 2 + sum(widths) + 2 * len(widths)
-    goal_column = all(used + len(goal) <= width for _, _, goal, _ in rows)
+    goal_column = all(used + len(goal) <= width for _, _, goal, *_ in rows)
     if goal_column:
         cells[0].append("goal")
         widths.append(0)
@@ -321,14 +323,17 @@ def dashboard_lines(data: dict, width: int = 100, metric: str | None = None, now
         return "  ".join(c.rjust(w) if i in right else c.ljust(w) for i, (c, w) in enumerate(zip(row, widths))).rstrip()
 
     lines.append(terminal.cut(Text("  " + line(cells[0]), style="dim"), width))
-    for row, (_, style, goal, under) in zip(cells[1:], rows):
+    for row, (_, style, goal, under, notes) in zip(cells[1:], rows):
         text = Text("  " + line(row + [goal] * goal_column))
         text.stylize(style or "", 2 + widths[0] + 2, 2 + widths[0] + 2 + widths[1])
         lines.append(terminal.cut(text, width))
         if goal and not goal_column:
             lines.append(terminal.cut(Text("    " + goal), width))
-        if under:
-            lines.append(terminal.cut(Text("    " + under, style="dim"), width))
+        # Dim under the row: group, config, spend, then the notes, on their own line when they don't fit.
+        both = " · ".join(filter(None, [under, notes]))
+        for text in [both] if 4 + len(both) <= width else [under, notes]:
+            if text:
+                lines.append(terminal.cut(Text("    " + text, style="dim"), width))
     return lines
 
 

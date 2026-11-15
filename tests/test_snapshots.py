@@ -7,8 +7,10 @@ After an intended change of the output, rewrite them and review the diff:
 """
 
 import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -66,10 +68,12 @@ def _ending(table: Table, stop: dict, first: int = 1) -> list:
     of this segment's commits, the run's cost so far."""
     landed = [row for row in table.rows if row.iteration >= first and row.accepted and row.commit]
     return table.ending(terminal.outcome(stop, None, None), spent=terminal.money(sum(r.cost or 0 for r in table.rows)),
-                        landing=terminal.landing(len(landed), "main"), landed=landed,
-                        commands=terminal.next_commands("krp3"),
-                        files=[("page", ".autohelix/runs/20261115-1402-sorting-krp3/report.html"),
-                               ("summary", ".autohelix/runs/20261115-1402-sorting-krp3/report.md")])
+                        landing=terminal.landed(len(landed), "main"), landed=landed,
+                        commands=terminal.next_commands("krp3"), files=FILES)
+
+
+FILES = [("page", ".autohelix/runs/20261115-1402-sorting-krp3/report.html"),
+         ("summary", ".autohelix/runs/20261115-1402-sorting-krp3/report.md")]
 
 
 def run_screen(width: int, show_mark: bool = True) -> list:
@@ -123,12 +127,13 @@ def setup_screen(width: int, picked: int | None = None) -> list:
     return lines + terminal.setup_written("autohelix.yaml", steps, terminal.setup_also("autohelix setup", "claude"), width)
 
 
-def setup_problem_screen(width: int, folder: Path) -> list:
-    """`autohelix setup perf` outside git, no agent found, piped: the Git field says why a
-    run would refuse, and the first step fixes it."""
+def setup_problem_screen(width: int) -> list:
+    """`autohelix setup perf` outside git (a real empty folder), no agent found, piped:
+    the Git field says why a run would refuse, and the first step fixes it."""
     from autohelix.cli import _git_field
 
-    git, fix = _git_field(folder)
+    with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, GIT_CEILING_DIRECTORIES=folder):
+        git, fix = _git_field(Path(folder))
     fields = terminal.setup_fields("~/code/sorting", "autohelix/perf.yaml", False, [], git)
     lines = terminal.header(terminal.title("setup", version="0.3.0"), fields, width, show_mark=False)
     steps = terminal.setup_steps("autohelix run perf", fix)
@@ -178,7 +183,7 @@ def view_screen(width: int, running: bool = False) -> list:
     from autohelix.run_table import view_lines
 
     return view_lines({**PROJECT, "run": _run_payload(running)}, width, now=T, config=CONFIG,
-                      rows=ROWS[:4] if running else ROWS)
+                      rows=ROWS[:4] if running else ROWS, files=FILES)
 
 
 def dashboard_screen(width: int) -> list:
@@ -205,7 +210,7 @@ SCREENS = {
     **{f"dashboard-{w}": (lambda w=w: dashboard_screen(w)) for w in WIDTHS},
     **{f"setup-{w}": (lambda w=w: setup_screen(w)) for w in WIDTHS},
     **{f"setup-template-{w}": (lambda w=w: setup_screen(w, picked=1)) for w in WIDTHS},
-    "setup-no-git-80": "setup_problem_screen",
+    "setup-no-git-80": lambda: setup_problem_screen(80),
     **{f"run-{w}": (lambda w=w: run_screen(w)) for w in WIDTHS},
     **{f"run-live-{w}": (lambda w=w: live_screen(w)) for w in WIDTHS},
     **{f"resume-{w}": (lambda w=w: resume_screen(w)) for w in WIDTHS},
@@ -217,21 +222,9 @@ def _text(lines) -> str:
     return "".join(line.plain.rstrip() + "\n" for line in lines)
 
 
-@pytest.fixture
-def outside_git(tmp_path, monkeypatch) -> Path:
-    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
-    return tmp_path
-
-
-def _render(name: str, folder: Path) -> list:
-    if name == "setup-no-git-80":  # a real folder outside git
-        return setup_problem_screen(80, folder)
-    return SCREENS[name]()
-
-
 @pytest.mark.parametrize("name", sorted(SCREENS))
-def test_snapshot(name, outside_git):
-    text = _text(_render(name, outside_git))
+def test_snapshot(name):
+    text = _text(SCREENS[name]())
     path = SNAPSHOTS / f"{name}.txt"
     if os.environ.get("AUTOHELIX_UPDATE_SNAPSHOTS"):
         SNAPSHOTS.mkdir(exist_ok=True)
@@ -241,6 +234,6 @@ def test_snapshot(name, outside_git):
 
 
 @pytest.mark.parametrize("name", sorted(SCREENS))
-def test_screens_fit_their_width(name, outside_git):
+def test_screens_fit_their_width(name):
     width = int(name.rsplit("-", 1)[-1]) if name[-1].isdigit() else 100
-    assert all(line.cell_len <= width for line in _render(name, outside_git))
+    assert all(line.cell_len <= width for line in SCREENS[name]())

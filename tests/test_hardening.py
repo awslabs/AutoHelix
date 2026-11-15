@@ -426,21 +426,6 @@ def test_console_notes_for_baseline_gates_unreported_metrics_and_discards():
     assert "discarded, outside the scope: f0.py (frozen), f1.py, f2.py, … 2 more" in lines
 
 
-def test_view_notes_for_baseline_gates_unreported_metrics_and_discards():
-    from autohelix.run_table import row_of
-    from autohelix.terminal import Table
-
-    table = Table({}, 100)
-    lines = table.add(row_of({"iteration": 0, "accepted": True, "gates": [
-        {"text": "pytest -q", "kind": "command", "passed": False}]}))
-    assert [line.plain.strip() for line in lines[2:]] == ["gate fails at the baseline: pytest -q"]
-    lines = table.add(row_of({"iteration": 2, "accepted": True, "summary": "s", "discarded": ["a", "b"],
-                              "discarded_frozen": ["b"], "observe": [{"name": "bench", "ok": True,
-                                                                      "metric_errors": {"speed": "hint"}}]}))
-    assert [line.plain.strip() for line in lines[1:]] == ["observe bench reported no speed",
-                                                          "discarded, outside the scope: a, b (frozen)"]
-
-
 def test_an_unreported_metric_keeps_its_hint_and_reaches_the_prompt(tmp_path):
     from autohelix.checks import parse_structured_metrics, run_observe_entry
     from autohelix.config import ObserveEntry

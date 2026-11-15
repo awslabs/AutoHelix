@@ -1517,7 +1517,7 @@ class Harness:
 
                 self.run_status.phase("report")
                 if write_report(self.config, self.project_path, self.console, run_id=self.paths.run_id, _owned=True):
-                    self._files.append(("summary", self._shown_path(self.paths.report)))
+                    self._files.append(("summary", terminal.shown_path(self.paths.report)))
         except KeyboardInterrupt:
             outcome = "interrupted"
             self._note_interrupt_request()  # in the baseline or the report (the loop notes its own)
@@ -1627,12 +1627,12 @@ class Harness:
                     before = self._target_tip()
                     land(self.paths, self.run_info, self.run_state.expected_tip)
                     count = self._commits_between(before, self.run_state.expected_tip)
-                    self._landing = terminal.landing(count, target)
+                    self._landing = terminal.landed(count, target)
                 else:
-                    self._landing = terminal.landing(0, target, self._unlanded(), f"autohelix/{self.paths.run_id}",
-                                                     "manual landing")
+                    self._landing = terminal.unlanded(self._unlanded(), f"autohelix/{self.paths.run_id}",
+                                                      "manual landing")
             except Exception as e:
-                self._landing = ("landed", f"not landed: {e}", "yellow")
+                self._landing = terminal.not_landed(e)
                 self.log.warn(f"auto-land: {e}")
 
     def _commits_between(self, old: str | None, new: str) -> int:
@@ -1646,16 +1646,9 @@ class Harness:
 
         try:
             path = write_static(self.project_path, run_id=self.paths.run_id)
-            self._files.insert(0, ("page", self._shown_path(path)))
+            self._files.insert(0, ("page", terminal.shown_path(path)))
         except Exception as e:  # noqa: BLE001 - never hide the run's own outcome
             self._warn(f"Could not save report.html: {e}")
-
-    def _shown_path(self, path: Path) -> str:
-        """A file the ending names: relative to the current folder when inside it."""
-        try:
-            return str(path.relative_to(Path.cwd()))
-        except ValueError:
-            return str(path)
 
     def _run(self, budget: Budget) -> bool:
         """Returns True if the loop ran at least one iteration and was not interrupted."""
@@ -1881,7 +1874,7 @@ class Harness:
             table = self._rows()
             first = self._segment_first
             landed = [row for row in table.rows if row.iteration >= first and row.accepted and row.commit]
-            if self._landing and self._landing[1].startswith("nothing"):
+            if self._landing and self._landing[1] == terminal.NOTHING_LANDED:
                 landed = []
             more = landed[:-5]
             short = short_id(self.paths.run_id)

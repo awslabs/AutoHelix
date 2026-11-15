@@ -449,7 +449,7 @@ def test_dashboard_json_and_once(measured_project):
     assert lines[1].startswith("  Project  ") and lines[1].endswith(" @ " + subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip())
     assert lines[2].startswith("  Runs     2 runs") and lines[2].endswith("1 archived (not listed; see --json)")
-    assert lines[4].split() == ["run", "state", "iter", "speed", "↑", "landing", "active", "goal"]
+    assert lines[4].split() == ["run", "state", "iter", "speed", "↑", "landing", "activity", "goal"]
     rows = {line.split()[0]: line for line in lines[5:] if not line.startswith("    ")}
     assert set(rows) == {short_id(first), short_id(second)}
     assert rows[short_id(first)].split()[1:5] == ["finished", "2/2", "120", "landed"]
@@ -518,7 +518,7 @@ def test_table_shows_the_iteration_under_way():
               "commit": "abc1234"}
     listing = format_runs({**header, "runs": [run]}, now=1000).splitlines()
     assert listing[1] == "  Project  /x · detached @ abc1234"
-    assert listing[5].split() == ["r1", "running", "3/5", "—", "gates", "30s"]  # active: what it is doing
+    assert listing[5].split() == ["r1", "running", "3/5", "—", "gates", "30s"]  # activity: what it is doing
     assert listing[6].strip() == "a.yaml · spent 2m 40s · $1.50+"  # 60s done + 100s under way
     one = format_run({**header, "run": run}, now=1000).splitlines()
     assert one[0].endswith(" · run r1 · p · running")

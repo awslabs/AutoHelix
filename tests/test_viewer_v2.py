@@ -261,7 +261,7 @@ def test_terminal_tables_show_gates_summaries_and_titles(project):
     listing = [line.rstrip() for line in run_table.format_runs(runs.runs()).splitlines()]
     heading = next(i for i, line in enumerate(listing) if line.split()[:1] == ["run"])
     assert listing[heading].split()[-1] == "goal" and listing[heading + 1].endswith("Make the sort faster")
-    lines = [line.rstrip() for line in run_table.format_run(runs.run("test")).splitlines()]
+    lines = [line.rstrip() for line in run_table.format_run(runs.run("test"), **run_table.saved(RunPaths(project, "test"))).splitlines()]
     assert "  Goal     Make the sort faster" in lines
     rows = lines[next(i for i, line in enumerate(lines) if line.lstrip().startswith("time")) + 1:]
     assert rows[:5] == ["  · base                         10",
@@ -272,7 +272,7 @@ def test_terminal_tables_show_gates_summaries_and_titles(project):
     assert "  accepted  1  Use the built-in sort" in lines  # no landing to list it under
 
     # On a short terminal, an iteration leaves with the lines under it; the baseline stays.
-    head, iterations, tail = run_table.view_parts(runs.run("test"))
+    head, iterations, tail = run_table.view_parts(runs.run("test"), **run_table.saved(RunPaths(project, "test")))
     cut = [line.plain.rstrip() for line in fit((head, iterations, tail), len(head) + len(tail) + 3)]
     assert cut[len(head):len(head) + 3] == [rows[0], "  … 1 earlier iteration", rows[4]]
 
@@ -397,9 +397,9 @@ def test_terminal_cells_carry_no_control_characters(project):
     RunPaths(project, "test").config.write_text(CONFIG.replace("goal: |\n  Make the sort faster\n",
                                                            'goal: "Make \\e[2J it faster"\n#'))
     runs = ProjectRuns(project)
-    for text in (run_table.format_run(runs.run("test")), run_table.format_runs(runs.runs())):
+    for text in (run_table.format_run(runs.run("test"), **run_table.saved(RunPaths(project, "test"))), run_table.format_runs(runs.runs())):
         assert not re.search(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]", text)
-    lines = run_table.format_run(runs.run("test")).splitlines()
+    lines = run_table.format_run(runs.run("test"), **run_table.saved(RunPaths(project, "test"))).splitlines()
     rows = lines[next(i for i, line in enumerate(lines) if line.lstrip().startswith("time")) + 1:]
     assert sum(1 for line in rows if line[2:3] in ("✓", "✗", "·")) == 3  # no fake row
     assert "  Goal     Make it faster" in lines  # the escape sequence removed whole

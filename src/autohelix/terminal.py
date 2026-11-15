@@ -412,7 +412,7 @@ class Table:
         iterations = [row for row in self.rows if row.iteration > 0]
         accepted = sum(row.accepted for row in iterations)
         seconds = sum(row.seconds or 0 for row in iterations)
-        labels = [outcome[0], *self.directions, "summary", "unlanded", "accepted"]
+        labels = [outcome[0], *self.directions, "summary", "unlanded", "accepted", "landing"]
         width = max(FIELD, max(len(label) for label in labels) + 2)
 
         def field(label: str, *parts: tuple[str, str | None], style: str | None = "dim") -> Text:
@@ -524,23 +524,45 @@ def commits(n: int) -> str:
     return f"{n} commit{'s' * (n != 1)}"
 
 
-def landing(landed: int, target: str | None, unlanded: int = 0, branch: str = "", note: str = "",
-            style: str | None = None) -> tuple[str, str, str | None]:
+NOTHING_LANDED = "nothing (no accepted changes)"
+
+
+def landed(count: int, target: str) -> tuple[str, str, str | None]:
     """The end block's landing line (label, text, style): `landed  3 commits on main`,
-    `unlanded  1 commit on autohelix/<id> (manual landing)`, `landed  nothing (no
-    accepted changes)`."""
-    if unlanded:
-        return "unlanded", f"{commits(unlanded)} on {branch}" + (f" ({note})" if note else ""), style
-    if landed:
-        return "landed", f"{commits(landed)} on {target}", style
-    return "landed", "nothing (no accepted changes)", "dim"
+    `landed  nothing (no accepted changes)`."""
+    return ("landed", f"{commits(count)} on {target}", None) if count else ("landed", NOTHING_LANDED, "dim")
+
+
+def unlanded(count: int, branch: str, note: str = "", style: str | None = None) -> tuple[str, str, str | None]:
+    """`unlanded  1 commit on autohelix/<id> (manual landing)`."""
+    return "unlanded", f"{commits(count)} on {branch}" + (f" ({note})" if note else ""), style
+
+
+def not_landed(error) -> tuple[str, str, str | None]:
+    """`landing  failed: <why>` (yellow): the run's commits stay on its branch."""
+    return "landing", f"failed: {clean(error)}", "yellow"
 
 
 def next_commands(short: str, view: bool = True, land: bool = False) -> list[str]:
     """What to type after a run: look at it (`view`: not from the view itself), continue
     it, and land it when commits wait for a manual landing."""
-    return ([f"autohelix view {short}"] * view + [f"autohelix resume {short} -n 5"]
-            + [f"autohelix land {short}"] * land)
+    commands = []
+    if view:
+        commands.append(f"autohelix view {short}")
+    commands.append(f"autohelix resume {short} -n 5")
+    if land:
+        commands.append(f"autohelix land {short}")
+    return commands
+
+
+def shown_path(path) -> str:
+    """A file the end block names: relative to the current folder when inside it."""
+    from pathlib import Path
+
+    try:
+        return str(Path(path).relative_to(Path.cwd()))
+    except ValueError:
+        return str(path)
 
 
 def _metric_rejection(gate, item: dict, tip: dict, direction: str | None) -> str | None:

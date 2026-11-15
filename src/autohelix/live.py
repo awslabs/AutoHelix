@@ -25,7 +25,7 @@ from autohelix.replay import LogTail
 from autohelix.terminal import earlier_line
 from autohelix.safe_open import open_run_log
 from autohelix.run_status import read_run_status, running_iteration
-from autohelix.runs import RunPaths, load_run_config
+from autohelix.runs import RunPaths
 from autohelix.viewer import ProjectRuns
 
 POLL_SECONDS = 0.3  # the log
@@ -59,7 +59,8 @@ def _status_line(status: dict | None, now: float | None = None) -> str:
         return f"Running · measuring the baseline · {since}"
     n = status.get("iteration")
     where = "" if n is None else " · baseline" if n == 0 else f" · iteration {n}"
-    return f"Running{where} · {status.get('phase')} · {since}"
+    phase = status.get("phase")
+    return f"Running{where} · {run_table.PHASES.get(phase, phase)} · {since}"  # the live row's words
 
 
 def log_for(project: Path, status: dict | None, current: Path | None, run_id: str | None = None) -> tuple[Path, str, float] | None:
@@ -184,29 +185,20 @@ def fit(parts: tuple[list, list[list], list], height: int) -> list:
     return lines[:max(height, 1)]
 
 
-def _read_run(runs: ProjectRuns, project: Path, run_id: str | None) -> tuple[dict, object, list] | str | None:
-    """The run's `view --json` data, its stored config and its history's rows (each None
-    if unreadable), an error to show, or None while there is no run."""
+def _read_run(runs: ProjectRuns, project: Path, run_id: str | None) -> tuple[dict, dict] | str | None:
+    """The run's `view --json` data and what `view` reads beside it (`run_table.saved`),
+    an error to show, or None while there is no run."""
     try:
         selected = RunPaths(project, run_id).run_id
         if not selected or not runs.exists(selected):
             return None
         paths = RunPaths(project, selected)
-        return runs.run(selected), run_config(paths), run_table.history_rows(paths)
+        return runs.run(selected), run_table.saved(paths)
     except Exception as exc:  # noqa: BLE001 - shown, and retried on the next read
         return f"Cannot read the run: {exc}"
 
 
-def run_config(paths: RunPaths):
-    """The run's stored config, or None (an old run, an invalid file): `view` then
-    shows what the payload has."""
-    try:
-        return load_run_config(paths)[0]
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def view_screen(data: tuple[dict, object, list] | str | None, log: LogFollower, status: dict | None, height: int,
+def view_screen(data: tuple[dict, dict] | str | None, log: LogFollower, status: dict | None, height: int,
                 width: int = 100) -> Group:
     """The run's screen on top, the log panel below it, the status line last.
 
@@ -217,7 +209,7 @@ def view_screen(data: tuple[dict, object, list] | str | None, log: LogFollower, 
     elif isinstance(data, str):
         parts = ([Text(clean(data))], [], [])
     else:
-        parts = run_table.view_parts(data[0], width, config=data[1], rows=data[2])
+        parts = run_table.view_parts(data[0], width, **data[1])
     room = height - 2  # the status line, and a spare line so the terminal doesn't scroll
     lines = fit(parts, room - (MIN_LOG_LINES if log.display else 0)) if parts else []
     log_height = room - len(lines)
