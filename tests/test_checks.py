@@ -180,3 +180,39 @@ class TestInterruptCleanup:
             run_observe_entry(observable, cwd=MagicMock())
 
         mock_kill.assert_called_once_with(proc, grace=CHECK_KILL_GRACE)
+
+
+class TestNoTerminalInput:
+    """Gate, observe and stop commands never get the harness's stdin: run from a terminal,
+    that is the user's TTY (Rich in a gate would measure the user's window, and a command
+    reading input would wait for the user)."""
+
+    @pytest.fixture
+    def terminal_stdin(self):
+        """fd 0 is a terminal, as when `autohelix run` is started from a shell."""
+        import os
+        import pty
+
+        leader, follower = pty.openpty()
+        saved = os.dup(0)
+        os.dup2(follower, 0)
+        try:
+            yield
+        finally:
+            os.dup2(saved, 0)
+            for fd in (saved, follower, leader):
+                os.close(fd)
+
+    SCRIPT = "if [ -t 0 ]; then echo tty; else echo no-tty; fi; cat; echo read-to-end"
+
+    def test_gate_and_stop_commands(self, terminal_stdin, tmp_path):
+        result = run_command(self.SCRIPT, cwd=tmp_path, timeout=10)  # `stop:` runs through it too
+        assert result.passed and not result.timed_out
+        assert result.stdout.split() == ["no-tty", "read-to-end"]
+
+    def test_observe_commands(self, terminal_stdin, tmp_path):
+        entry = ObserveEntry(name="probe", command=self.SCRIPT + "; echo '##autohelix[x=1]'",
+                             metrics={"x": "higher"})
+        result = run_observe_entry(entry, cwd=tmp_path, timeout=10)
+        assert result.values == {"x": 1.0}
+        assert result.stdout.split()[:2] == ["no-tty", "read-to-end"]

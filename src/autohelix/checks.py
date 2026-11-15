@@ -173,7 +173,8 @@ def _drain(proc) -> tuple[str, str]:
 
 def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str], phase: str,
              on_progress: ProgressCallback | None) -> _Execution:
-    """Run a shell command in its own process group. The whole group is killed when the
+    """Run a shell command in its own process group, with no input (stdin is /dev/null,
+    also when the harness runs in a terminal). The whole group is killed when the
     command ends (whatever its background children were doing, and however it ends), at
     the timeout, and on an interrupt. A timed-out command keeps the output it wrote."""
     start = time.monotonic()
@@ -186,6 +187,7 @@ def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str], phase: 
             command,
             shell=True,
             cwd=cwd,
+            stdin=subprocess.DEVNULL,  # never the user's terminal: no prompts, no TTY size
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
