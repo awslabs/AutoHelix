@@ -220,10 +220,10 @@ class TestLiveDisplay:
         assert isinstance(panel, Panel)
         assert isinstance(panel.renderable, Group)
 
-    def test_compact_mode_shows_title_time_and_activity(self):
-        """Compact mode: spinner, title, elapsed time and the latest activity."""
+    def test_compact_mode_shows_title_and_time_only(self):
+        """Compact mode (the summary step's live row): spinner, elapsed time and the title; no tool call."""
         d = self._make_display(verbose=False)
         d.handle_event(AgentEvent(kind=AgentEventKind.TOOL_INPUT, text='{"file_path": "/x/sort.py"}',
                                   metadata={"tool_name": "Edit"}))
         plain = d.render(65).plain
-        assert plain.endswith(" 1m 05s  Test Agent · Edit sort.py")
+        assert plain.endswith(" 1m 05s  Test Agent")

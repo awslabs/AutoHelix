@@ -86,12 +86,12 @@ def run_screen(width: int, show_mark: bool = True) -> list:
 
 
 def live_screen(width: int) -> list:
-    """`autohelix run -n 7 --cost 10` while iteration 4's agent edits a file."""
+    """`autohelix run -n 7 --cost 10` while iteration 4's agent works (the phase only)."""
     table = Table.of(CONFIG, width)
     lines = _header(width, Budget(iterations=7, cost_usd=10))
     for row in ROWS[:4]:
         lines += table.add(row)
-    return lines + [table.live(4, 72, "agent · Edit sort.py")]
+    return lines + [table.live(4, 72, "agent")]
 
 
 def resume_screen(width: int) -> list:
@@ -257,4 +257,4 @@ def test_view_says_what_waits_for_a_manual_landing():
     run = {**_run_payload(False), "land": "manual", "landing": {"commits": 3, "fast_forward": True}}
     text = _text(view_lines({**PROJECT, "run": run}, Saved(CONFIG, ROWS, []), 120, now=T))
     assert "  unlanded  3 commits on autohelix/20261115-1402-sorting-krp3 (manual landing)\n" in text
-    assert "  next      autohelix resume krp3 -n 5 · autohelix land krp3\n" in text
+    assert "  next      autohelix resume krp3 · autohelix land krp3\n" in text

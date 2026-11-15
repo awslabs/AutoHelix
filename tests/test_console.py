@@ -207,7 +207,7 @@ def test_ending_after_landing(project):
     assert ending[1] == "  speed     3"  # no accepted change measured it again
     assert ending[2].startswith("  run       1 iteration · 1 accepted")
     assert ending[3] == "  landed    1 commit on main"
-    assert ending[4] == f"  next      autohelix view {short} · autohelix resume {short} -n 5"
+    assert ending[4] == f"  next      autohelix view {short} · autohelix resume {short}"
     assert ending[5].startswith("  page      ") and ending[5].endswith(f"{run_id}/report.html")
     assert len(ending) == 6
 
@@ -225,8 +225,7 @@ def test_ending_with_manual_landing(project):
     assert result.exit_code == 0, result.output
     ending = _ending(result.output)
     assert ending[2] == f"  unlanded  1 commit on autohelix/{run_id} (manual landing)"
-    assert ending[3:6] == [f"  next      autohelix view {short}", f"            autohelix resume {short} -n 5",
-                           f"            autohelix land {short}"]  # one per line when they don't fit
+    assert ending[3] == f"  next      autohelix view {short} · autohelix resume {short} · autohelix land {short}"
 
 
 def test_ending_when_landing_fails(project, monkeypatch):
@@ -277,3 +276,27 @@ def test_rejected_row_in_a_run(project):
     rows = [line for line in result.output.splitlines() if line.startswith("  ✗ 1")]
     assert len(rows) == 1 and rows[0].rstrip().endswith('test "$AUTOHELIX_ITERATION" = 0 failed (exit 1)')
     assert result.output.count('test "$AUTOHELIX_ITERATION" = 0') == 2  # the header's Gates, the row
+
+
+def test_the_live_row_shows_the_phase_only(project):
+    """In a terminal, the live row says `agent` (not the agent's tool call), `gates` (not
+    the command), `observe · bench` (the entry)."""
+    import io
+    import re
+
+    from rich.console import Console
+
+    from autohelix.harness import Harness
+
+    _configure(project, gates=["sleep 0.4 && echo distinctive-gate"],
+               observe=[{"name": "bench", "command": "sleep 0.4 && echo '##autohelix[speed=3]'",
+                         "metrics": {"speed": "higher"}}], scope={"editable": ["hello.py"]})
+    harness = Harness(project)
+    out = io.StringIO()
+    harness.console = Console(file=out, force_terminal=True, color_system=None, width=100)
+    harness.run(Budget(iterations=1), report=False)
+    shown = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out.getvalue())  # cursor moves between frames
+    frames = [line for line in re.split(r"[\r\n]", shown) if re.match(r"\s+[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ", line)]
+    phases = {line.split(maxsplit=3)[-1].strip() for line in frames}
+    assert {"agent", "gates", "observe · bench"} <= phases, phases
+    assert not any("Write" in p or "distinctive-gate" in p or "sleep" in p for p in phases), phases

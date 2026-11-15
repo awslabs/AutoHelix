@@ -27,6 +27,6 @@
             1  Replace bubble sort with a merge/insertion hybrid
             3  Switch to built-in sorted() with key caching
             6  Avoid the defensive list copy; sort in place
-  next      autohelix resume krp3 -n 5
+  next      autohelix resume krp3
   page      .autohelix/runs/20261115-1402-sorting-krp3/report.html
   summary   .autohelix/runs/20261115-1402-sorting-krp3/report.md

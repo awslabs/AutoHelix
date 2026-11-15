@@ -29,7 +29,7 @@ from autohelix.config import (ConfigError, MetricGate, config_changes, find_conf
                               parse_config, run_command, template_path)
 from autohelix.costs import summarize_costs
 from autohelix import terminal
-from autohelix.display import LiveDisplay, activity, clean
+from autohelix.display import LiveDisplay, clean
 from autohelix.terminal import LiveRow, Row, budget_text
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
@@ -716,7 +716,6 @@ class Harness:
 
         def on_event(event: AgentEvent) -> None:
             display.handle_event(event)
-            row.set("agent", display.activity)
 
         try:
             # Export the hook env whenever anything needs it. require_notes wires
@@ -1022,10 +1021,6 @@ class Harness:
 
         row = self._live_row()
         row.set("gates")
-
-        def progress(phase: str, command: str, _elapsed: float) -> None:
-            if phase == "gate":
-                row.set("gates", self._gate_text(command))
         if not baseline:
             self.log.info(f"iter {iteration} gates started")
             self.run_status.phase("checks")
@@ -1034,7 +1029,7 @@ class Harness:
         try:
             with self._showing(row):
                 run_gate_commands(self.config.gate_commands(), checks.working_dir, project_path=self.project_path,
-                                  extra_env=command_env, after_command=verify_gate, on_progress=progress,
+                                  extra_env=command_env, after_command=verify_gate,
                                   stop_on_failure=not baseline, per_command=gate_call, on_result=gate_result)
                 failed = next((r for r in evaluation.constraints if not r.passed), None)
                 # At the baseline, gate commands only guard against mutation; failing is fine.
@@ -1048,7 +1043,7 @@ class Harness:
                         self.log.info(f"iter {iteration} observe started")
                     try:
                         self._observe(workspace, iteration, checks, evaluation, command_env, records,
-                                      verify=verify, progress=progress, notes=notes)
+                                      verify=verify, notes=notes)
                     finally:
                         self.run_status.note(entry=None)
         finally:
@@ -1070,7 +1065,7 @@ class Harness:
             raise CandidateRejected(violation)
 
     def _observe(self, workspace: IterationWorkspace, iteration: int, checks, evaluation: _Evaluation,
-                 command_env: dict, records, *, verify, progress, notes: list[str]) -> None:
+                 command_env: dict, records, *, verify, notes: list[str]) -> None:
         """Observe entries in order (see `_evaluate`), each with its own call folder and,
         as `$AUTOHELIX_PREVIOUS`, a copy of its output from the last accepted iteration
         in which it succeeded; in a run that imports another (`run --import`), until the
@@ -1110,7 +1105,7 @@ class Harness:
                        "AUTOHELIX_PREVIOUS": str(folders["previous"]) if "previous" in folders else None,
                        "AUTOHELIX_LOG_DIR": str(folders["logs"]), "PATH": command_path(folders["bin"])}
                 result = run_observe_entry(entry, checks.working_dir, project_path=self.project_path,
-                                           on_progress=progress, extra_env=env)
+                                           extra_env=env)
                 record = result.record()
                 evaluation.observe.append(record)  # before captures: a capture problem can't lose it
                 # Stored before anything can reject: a rejected iteration keeps its output.
@@ -1360,7 +1355,7 @@ class Harness:
         stop = workspace.stop_copy()
         try:
             row = self._live_row()
-            row.set("stop", "")
+            row.set("stop")
             with self._showing(row):
                 results = run_stop_checks(self.config, stop.working_dir, project_path=self.project_path, extra_env=env,
                                           per_command=stop_call, on_result=stop_result)

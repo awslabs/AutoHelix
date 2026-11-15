@@ -1,8 +1,8 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Live display of agent and reviewer sessions: the verbose panel, a compact one-line
-form, and the agent's latest activity for the run's live row (`terminal.LiveRow`)."""
+"""Live display of agent and reviewer sessions: the verbose panel, and a compact
+one-line form (the run's live row for the summary step)."""
 
 import time as _time
 from collections import deque
@@ -36,7 +36,6 @@ class LiveDisplay:
         self.title = title
         self.border_style = border_style
         self.verbose = verbose
-        self.activity = ""  # the latest `activity(event)`
         self._state: dict = {
             "entries": deque(maxlen=max_entries),
             "active_label": None,
@@ -95,7 +94,6 @@ class LiveDisplay:
     def _handle_event(self, event: AgentEvent) -> None:
         """Core event handler."""
         self._state["events"] += 1
-        self.activity = activity(event) or self.activity
         label, style = event_presenter(event)
         if event.kind == AgentEventKind.TOOL_USE:
             self._state["tools"] += 1
@@ -138,10 +136,9 @@ class LiveDisplay:
         return self._render_compact()
 
     def _render_compact(self) -> Text:
-        """The run's live row for a step after the iterations (`terminal.live_line`):
-        `⠋        12s  summary · Edit report.md`."""
-        what = f"{self.title} · {self.activity}" if self.activity else self.title
-        return live_line("", self._elapsed, what, int(_time.monotonic() * 10))
+        """The run's live row for a step after the iterations (`terminal.live_line`), the
+        phase only: `⠋        12s  summary`."""
+        return live_line("", self._elapsed, self.title, int(_time.monotonic() * 10))
 
     def _render_verbose(self, height: int | None = None) -> Panel:
         """Full rolling log with event history."""
@@ -231,31 +228,3 @@ def event_presenter(event: AgentEvent) -> tuple[str, str]:
     return "raw", "yellow"
 
 
-def activity(event: AgentEvent) -> str:
-    """What an agent event says it is doing, in a few words: `Edit sort.py`,
-    `Bash pytest -q`, `thinking`; "" for events that don't say."""
-    import json
-    import os
-
-    if event.kind == AgentEventKind.TOOL_USE:
-        return clean(event.text, 60)
-    if event.kind == AgentEventKind.TOOL_INPUT and not event.metadata.get("stream"):
-        tool = clean(event.metadata.get("tool_name") or "tool")
-        try:
-            data = json.loads(event.text)
-        except (TypeError, ValueError):
-            return tool
-        if not isinstance(data, dict):
-            return tool
-        for key in ("file_path", "path", "notebook_path"):
-            if isinstance(data.get(key), str):
-                return clean(f"{tool} {os.path.basename(data[key])}", 60)
-        for key in ("command", "pattern", "url", "description"):
-            if isinstance(data.get(key), str):
-                return clean(f"{tool} {data[key]}", 60)
-        return tool
-    if event.kind == AgentEventKind.THINKING:
-        return "thinking"
-    if event.kind == AgentEventKind.ASSISTANT_TEXT:
-        return "writing"
-    return ""

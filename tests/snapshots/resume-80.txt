@@ -26,6 +26,6 @@
   run       8 iterations · 4 accepted · 40m 21s · $2.92
   landed    1 commit on main
             8  Use a radix sort for small integer keys
-  next      autohelix view krp3 · autohelix resume krp3 -n 5
+  next      autohelix view krp3 · autohelix resume krp3
   page      .autohelix/runs/20261115-1402-sorting-krp3/report.html
   summary   .autohelix/runs/20261115-1402-sorting-krp3/report.md

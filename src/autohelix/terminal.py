@@ -392,7 +392,8 @@ class Table:
         return notes
 
     def live(self, iteration: int, seconds: float, what: str, frame: int = 0) -> Text:
-        """The row of the iteration under way: spinner, number, time so far, `phase · activity`."""
+        """The row of the iteration under way: spinner, number, time so far, the phase
+        (`agent`, `observe · bench`) in the cost column."""
         return live_line("base" if iteration == 0 else str(iteration), seconds, what, frame, self.width)
 
     # --- the end block ---
@@ -468,7 +469,7 @@ class Table:
 
 def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int = 200) -> Text:
     """A live row: spinner, label (an iteration's number; blank for the summary step),
-    time so far in the time column, `phase · activity`."""
+    time so far in the time column, the phase."""
     return cut(_parts(("  ", None), (SPINNER[frame % len(SPINNER)] + " ", TEAL), (f"{label:<{LABEL - 2}}", None),
                       ("  ", None), (f"{format_duration(seconds):>{TIME}}", None), ("  ", None), (clean(what), "dim")),
                width)
@@ -551,7 +552,7 @@ def next_commands(short: str, view: bool = True, land: bool = False) -> list[str
     commands = []
     if view:
         commands.append(f"autohelix view {short}")
-    commands.append(f"autohelix resume {short} -n 5")
+    commands.append(f"autohelix resume {short}")
     if land:
         commands.append(f"autohelix land {short}")
     return commands
@@ -584,7 +585,8 @@ def _metric_rejection(gate, item: dict, tip: dict, direction: str | None) -> str
 
 class LiveRow:
     """The iteration under way as a live renderable (`Table.live`): one clock from
-    its start, the phase (`agent`, `gates`, `observe`, `stop`) and what it is doing."""
+    its start, the phase (`agent`, `gates`, `observe`, `stop`), and for `observe` the
+    entry (`observe · bench`)."""
 
     def __init__(self, table: Table, iteration: int):
         self.table = table

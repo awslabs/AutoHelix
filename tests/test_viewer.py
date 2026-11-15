@@ -483,10 +483,10 @@ def test_view_json_and_once(measured_project):
     assert "  Done      iteration budget reached (2)" in lines
     assert "  speed     100 → 120  +20%  iter 2" in lines
     assert f"  landed    2 commits on {data['branch']}" in lines
-    assert f"  next      autohelix resume {short_id(first)} -n 5" in lines
+    assert f"  next      autohelix resume {short_id(first)}" in lines
     manual = [line.rstrip() for line in _cli("view", second, "-p", project, "--once").output.splitlines()]
     assert f"  unlanded  1 commit on autohelix/{second} (manual landing)" in manual  # as run says it
-    assert f"  next      autohelix resume {short_id(second)} -n 5 · autohelix land {short_id(second)}" in manual
+    assert f"  next      autohelix resume {short_id(second)} · autohelix land {short_id(second)}" in manual
 
     missing = _cli("view", "missing-zzzz", "-p", project, "--json")
     assert missing.exit_code == 1 and "missing-zzzz" in missing.output

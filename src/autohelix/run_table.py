@@ -223,6 +223,14 @@ def _can_land(run: dict) -> bool:
     return bool(run.get("target_branch") and landing.get("commits") and landing.get("fast_forward"))
 
 
+def _live_what(run: dict) -> str:
+    """The live row's words for a running run: the phase (`agent`, `gates`), an observe
+    entry's name (`observe · bench`), `stopping` once `autohelix stop` asked."""
+    status = run["status"]
+    entry = status.get("entry") if status.get("phase") == "benchmark" and isinstance(status.get("entry"), str) else ""
+    return " · ".join(filter(None, [_phase(run), clean(entry), "stopping" if run.get("stop_requested") else ""]))
+
+
 def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = None
                ) -> tuple[list[Text], list[list[Text]], list[Text]]:
     """`view`'s screen in three parts: the header and column header; each iteration's
@@ -258,7 +266,7 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
         status = run["status"]
         started = status.get("iteration_started_at") if under_way is not None else status.get("phase_started_at")
         seconds = now - started if isinstance(started, (int, float)) else 0
-        what = " · ".join(filter(None, [_phase(run), "stopping" if run.get("stop_requested") else ""]))
+        what = _live_what(run)
         tail = [table.live(under_way if under_way is not None else status.get("iteration") or 0, seconds, what,
                            int(now * 10))]
     elif saved.rows is None:

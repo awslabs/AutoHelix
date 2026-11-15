@@ -264,3 +264,12 @@ def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, r
     with pytest.raises(KeyboardInterrupt):
         W.view(tmp_path, "claude", Console(file=io.StringIO()))
     assert len(created) >= 2 and set(created) == {"Iteration 1 · agent"}
+
+
+def test_the_views_live_row_names_the_observe_entry():
+    data = _run_data(3)
+    data["run"]["status"] = {"state": "running", "phase": "benchmark", "entry": "bench", "iteration": 3,
+                             "iteration_started_at": 928, "phase_started_at": 990}
+    data["run"]["progress"]["iterations"] = 2
+    row = W.run_table.format_run(data, W.run_table.Saved(), now=1000).splitlines()[-1]
+    assert row.split()[1:] == ["3", "1m", "12s", "observe", "·", "bench"]
