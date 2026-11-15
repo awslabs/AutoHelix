@@ -123,7 +123,7 @@ def write_report(config: Config, project: Path, console, *, run_id: str | None =
     ), heartbeat_seconds=30)
     log_path = paths.logs / "report.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    display = LiveDisplay(console=console, title="writing summary", verbose=False)
+    display = LiveDisplay(console=console, title="summary", verbose=False)
 
     def on_event(event: AgentEvent) -> None:
         display.handle_event(event)
@@ -170,11 +170,5 @@ def write_report(config: Config, project: Path, console, *, run_id: str | None =
     info = {"last_iteration": last, "written_at": time.time(), "seconds": seconds,
             "cost_usd": (result.usage or {}).get("cost_usd")}
     paths.report_info.write_text(json.dumps(info))
-    report = paths.report
-    try:
-        report = report.relative_to(Path.cwd())
-    except ValueError:
-        pass
-    console.print(f"  [dim]Summary: {report}[/dim]", highlight=False, soft_wrap=True)
     return True
 

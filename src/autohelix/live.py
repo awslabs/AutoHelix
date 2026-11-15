@@ -3,8 +3,8 @@
 
 """The live terminal views: `autohelix dashboard` and `autohelix view`.
 
-`dashboard` redraws the run table (run_table.format_runs). `view` shows one
-run's table (run_table.format_run) above the log being written for what the
+`dashboard` redraws the run table (run_table.dashboard_lines). `view` shows one
+run's screen (run_table.view_parts) above the log being written for what the
 run is doing, which its status (runs/<id>/.internal/status.json) says: the
 agent's during an iteration, an `ask`/`review` call's transcript while gate,
 observe or stop commands make one (live from its call folder, then stored), the
@@ -20,11 +20,11 @@ from rich.text import Text
 
 from autohelix import run_table
 from autohelix.display import LiveDisplay
-from autohelix.formatting import format_duration
+from autohelix.formatting import clean, format_duration
 from autohelix.replay import LogTail
 from autohelix.safe_open import open_run_log
 from autohelix.run_status import read_run_status, running_iteration
-from autohelix.runs import RunPaths
+from autohelix.runs import RunPaths, load_run_config
 from autohelix.viewer import ProjectRuns
 
 POLL_SECONDS = 0.3  # the log
@@ -37,7 +37,7 @@ STOPPED = {"finished": "Finished", "interrupted": "Interrupted", "failed": "Fail
 def status_line(status: dict | None, now: float | None = None) -> str:
     """One line, worded like the viewer's status (the stop reason and phase come from
     the run's files: no control characters)."""
-    return run_table.clean(_status_line(status, now))
+    return clean(_status_line(status, now))
 
 
 def _status_line(status: dict | None, now: float | None = None) -> str:
@@ -111,7 +111,7 @@ def transcript_for(paths: RunPaths, status: dict | None) -> tuple[str, str] | No
         value = usage.get("log")
         if paths.readable_log(value, n):
             source = usage.get("source")
-            return value, run_table.clean(source) if isinstance(source, str) and source else "call"
+            return value, clean(source) if isinstance(source, str) and source else "call"
     return None
 
 
@@ -165,54 +165,65 @@ class LogFollower:
         return parts + [Text(status_line(status), style="dim")]
 
 
-def _lines(text: str) -> Text:
-    """Table text as it is printed, one terminal line per line (cut at the right edge, not
-    wrapped), with no control characters but the line breaks."""
-    return Text("\n".join(map(run_table.clean, text.rstrip("\n").split("\n"))), no_wrap=True, overflow="ellipsis")
+def fit(parts: tuple[list, list[list], list], height: int) -> list:
+    """The run's screen (`run_table.view_parts`) in `height` lines: the oldest iteration
+    rows go first (with the lines under them), the baseline, header, live row and end
+    block stay; then, if still too tall, the lines at the bottom."""
+    head, rows, tail = parts
+    lines = head + [line for row in rows for line in row] + tail
+    if len(lines) <= height:
+        return lines
+    base = rows[:1] if rows and rows[0] and rows[0][0].plain.lstrip().startswith("· base") else []
+    kept = list(rows[len(base):])
+    room = height - len(head) - len(tail) - sum(map(len, base)) - 1  # the `… N earlier` line
+    while kept and sum(map(len, kept)) > room:
+        kept.pop(0)
+    hidden = len(rows) - len(base) - len(kept)
+    more = Text(f"  … {hidden} earlier iteration{'' if hidden == 1 else 's'}", style="dim")
+    lines = head + [line for row in base + [[more]] + kept for line in row] + tail
+    return lines[:max(height, 1)]
 
 
-def fit(text: str, height: int) -> str:
-    """The run's table in `height` lines: the oldest iteration rows go first (with the
-    lines under them: summary, failures), the header and column names stay."""
-    lines = text.rstrip("\n").split("\n")
-    if len(lines) <= height or "" not in lines:
-        return "\n".join(lines[:max(height, 1)])
-    head = lines.index("") + 2  # the run's lines, the blank line, the column names
-    keep = max(0, height - head - 1)
-    rows = lines[head:]
-    # An iteration's own row has its number in the ITER column; the lines under it don't.
-    starts = lambda part: [line for line in part if line[:len("ITER")].strip()]  # noqa: E731
-    kept = rows[len(rows) - keep:] if keep else []
-    while kept and not kept[0][:len("ITER")].strip():
-        kept = kept[1:]  # don't start with the lines under a row that was left out
-    hidden = len(starts(rows)) - len(starts(kept))
-    more = f"  … {hidden} earlier iteration{'' if hidden == 1 else 's'}"
-    return "\n".join(lines[:head] + [more] + kept)
-
-
-def _read_run(runs: ProjectRuns, project: Path, run_id: str | None) -> dict | str | None:
-    """The run's `view --json` data, an error to show, or None while there is no run."""
+def _read_run(runs: ProjectRuns, project: Path, run_id: str | None) -> tuple[dict, object] | str | None:
+    """The run's `view --json` data and its stored config (None if unreadable), an error
+    to show, or None while there is no run."""
     try:
         selected = RunPaths(project, run_id).run_id
         if not selected or not runs.exists(selected):
             return None
-        return runs.run(selected)
+        return runs.run(selected), run_config(RunPaths(project, selected))
     except Exception as exc:  # noqa: BLE001 - shown, and retried on the next read
         return f"Cannot read the run: {exc}"
 
 
-def view_screen(data: dict | str | None, log: LogFollower, status: dict | None, height: int) -> Group:
-    """The run's table on top, the log panel below it, the status line last.
+def run_config(paths: RunPaths):
+    """The run's stored config, or None (an old run, an invalid file): `view` then
+    shows what the payload has."""
+    try:
+        return load_run_config(paths)[0]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def view_screen(data: tuple[dict, object] | str | None, log: LogFollower, status: dict | None, height: int,
+                width: int = 100) -> Group:
+    """The run's screen on top, the log panel below it, the status line last.
 
     On a short terminal the log panel shrinks first, then the oldest iteration rows go, then the panel.
     """
-    table = "" if data is None else data if isinstance(data, str) else run_table.format_run(data)
+    if data is None:
+        parts = None
+    elif isinstance(data, str):
+        parts = ([Text(clean(data))], [], [])
+    else:
+        parts = run_table.view_parts(data[0], width, config=data[1])
     room = height - 2  # the status line, and a spare line so the terminal doesn't scroll
-    lines = fit(table, room - (MIN_LOG_LINES if log.display else 0)) if table else ""
-    log_height = room - (lines.count("\n") + 1 if lines else 0)
-    if log_height < MIN_LOG_LINES and table:
-        lines = fit(table, room)  # no room for the log: the table gets it all
-    return Group(*([_lines(lines)] if lines else []), *log.render(status, height=log_height))
+    lines = fit(parts, room - (MIN_LOG_LINES if log.display else 0)) if parts else []
+    log_height = room - len(lines)
+    if parts and (log_height < MIN_LOG_LINES or (parts[2] and lines[-1] is not parts[2][-1])):
+        lines = fit(parts, room)  # no room for the log beside the whole end block: the table gets it all
+        log_height = room - len(lines)
+    return Group(*lines, *log.render(status, height=log_height))
 
 
 def view(project: Path, backend: str | None = None, console: Console | None = None, *,
@@ -228,7 +239,7 @@ def view(project: Path, backend: str | None = None, console: Console | None = No
             log.poll(status)
             if read_at is None or status != seen or time.monotonic() - read_at >= TABLE_SECONDS:
                 data, read_at, seen = _read_run(runs, project, run_id), time.monotonic(), status
-            live.update(view_screen(data, log, status, console.size.height))
+            live.update(view_screen(data, log, status, console.size.height, console.width))
             time.sleep(POLL_SECONDS)
 
 
@@ -238,7 +249,7 @@ def dashboard(project: Path, console: Console | None = None, *, metric: str | No
     runs = ProjectRuns(project)
     with Live(console=console, auto_refresh=False) as live:
         while True:
-            table = run_table.format_runs(runs.runs(), metric=metric)
-            footer = Text(f"Updated {time.strftime('%H:%M:%S')} · Ctrl-C to stop", style="dim")
-            live.update(Group(_lines(table), Text(""), footer), refresh=True)
+            lines = run_table.dashboard_lines(runs.runs(), console.width, metric=metric)
+            footer = Text(f"  updated {time.strftime('%H:%M:%S')} · Ctrl-C to stop", style="dim")
+            live.update(Group(*lines, Text(""), footer), refresh=True)
             time.sleep(TABLE_SECONDS)

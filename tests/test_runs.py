@@ -745,13 +745,9 @@ def test_refused_first_start_creates_no_identity(project, problem):
     assert not git(project, "for-each-ref", "--format=%(refname)", "refs/autohelix/").stdout.strip()
 
 
-def test_manual_mode_warns_when_target_moves_during_segment(project, monkeypatch):
+def test_manual_mode_warns_when_target_moves_during_segment(project, monkeypatch, capsys):
     harness = Harness(project, land_mode="manual")
     target = harness.run_info["target_branch"]
-    printed = []
-    original = harness.console.print
-    monkeypatch.setattr(harness.console, "print", lambda *a, **k: (printed.append(" ".join(map(str, a))),
-                                                                    original(*a, **k)))
     real = harness.run_agent
 
     def agent(cwd, prompt, iteration):
@@ -760,7 +756,7 @@ def test_manual_mode_warns_when_target_moves_during_segment(project, monkeypatch
 
     monkeypatch.setattr(harness, "run_agent", agent)
     harness.run(Budget(until=1), report=False)
-    assert any(f"Target {target} changed during this segment" in line for line in printed)
+    assert f"! Target {target} changed during this segment" in " ".join(capsys.readouterr().out.split())
 
 
 def test_ask_from_an_agent_without_log_dir_records_absolute_log(tmp_path, monkeypatch):

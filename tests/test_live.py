@@ -150,17 +150,17 @@ def test_dashboard_metric_goes_with_the_table(tmp_path, flags):
 def test_live_dashboard_draws_the_table_until_ctrl_c(tmp_path, monkeypatch, run_paths):
     _stop_after(monkeypatch, polls=2)
     reads = []
-    real = W.run_table.format_runs
-    monkeypatch.setattr(W.run_table, "format_runs", lambda data, **k: reads.append(k) or real(data, **k))
+    real = W.run_table.dashboard_lines
+    monkeypatch.setattr(W.run_table, "dashboard_lines", lambda data, *a, **k: reads.append(k) or real(data, *a, **k))
     out = io.StringIO()
     with pytest.raises(KeyboardInterrupt):
         W.dashboard(tmp_path, Console(file=out, width=100, force_terminal=False))
     assert len(reads) == 2  # redrawn after the first sleep
-    assert "1 run" in out.getvalue() and "Ctrl-C to stop" in out.getvalue()
+    assert "Runs     1 run" in out.getvalue() and "Ctrl-C to stop" in out.getvalue()
     # Through the CLI, Ctrl-C ends it quietly.
     _stop_after(monkeypatch)
     result = _cli("dashboard", "-p", tmp_path)
-    assert result.exit_code == 0 and "RUN" in result.output, result.output
+    assert result.exit_code == 0 and "dashboard" in result.output, result.output
 
 
 def _run_data(iterations: int) -> dict:
@@ -188,7 +188,7 @@ def test_the_time_cap_is_the_running_segments_own():
                      "max_time_seconds": 3600, "phase": "agent", "phase_started_at": 990}
     assert run_table.time_cap(run, 1000) == "12m5s of 1h (this segment)"
     assert run_table.time_cap(run, 1000, short=True) == "12m5s/1h"
-    assert "1m 00s · $1.50 · 12m5s of 1h (this segment)" in run_table.format_run(data, now=1000)
+    assert "12m5s of 1h" not in run_table.format_run(data, now=1000)  # the view's live row has the iteration's time
     run["status"].update(segment_started_at=1000 - 6000, max_time_seconds=5400)
     assert run_table.time_cap(run, 1000, short=True) == "1h40m/1h30m (time up)"
     listing = run_table.format_runs({**data, "runs": [run]}, now=1000)
@@ -203,7 +203,7 @@ def test_the_time_cap_is_the_running_segments_own():
 def _screen_lines(data, log, height) -> list[str]:
     out = io.StringIO()
     console = Console(file=out, width=100, height=height, force_terminal=False)
-    console.print(W.view_screen(data, log, {"state": "finished"}, height))
+    console.print(W.view_screen((data, None), log, {"state": "finished"}, height))
     return out.getvalue().splitlines()
 
 
@@ -214,26 +214,29 @@ def test_on_a_short_terminal_the_log_shrinks_first(tmp_path):
         log.display._append_entry("Agent", f"step {i}", "white")
     data = _run_data(5)
 
+    def row(n):  # an iteration's row: `✓ 4   30s   $0.10   104 +4%`
+        return lambda line: line.split()[:2] == ["✓", str(n)]
+
     tall = _screen_lines(data, log, 60)
-    assert tall[0].startswith("r1 · finished") and any("change 4" in line for line in tall)
+    assert tall[0].endswith(" · run r1 · p · finished") and any(map(row(4), tall))
     assert any("step 29" in line for line in tall) and any("step 5" in line for line in tall)
     assert tall[-1].startswith("Finished")
 
-    short = _screen_lines(data, log, 20)
-    assert len(short) <= 19
-    assert short[0].startswith("r1 · finished") and sum("change" in line for line in short) == 5  # the table stays
+    short = _screen_lines(data, log, 30)
+    assert len(short) <= 29
+    assert short[0].endswith("finished") and all(any(map(row(n), short)) for n in range(1, 5))  # the table stays
     assert any("step 29" in line for line in short) and not any("step 5" in line for line in short)  # newest output
 
-    tiny = _screen_lines(_run_data(40), log, 20)
-    assert len(tiny) <= 19
-    assert tiny[0].startswith("r1 · finished") and any("ITER" in line for line in tiny)
-    assert any("earlier" in line for line in tiny) and any("change 39" in line for line in tiny)
-    assert not any(line.endswith("change 1") for line in tiny)  # the oldest rows went
+    tiny = _screen_lines(_run_data(40), log, 30)
+    assert len(tiny) <= 29
+    assert tiny[0].endswith("finished") and any(line.lstrip().startswith("time") for line in tiny)
+    assert any("earlier" in line for line in tiny) and any(map(row(39), tiny))
+    assert not any(map(row(1), tiny))  # the oldest rows went
     assert any("step 29" in line for line in tiny) and tiny[-1].startswith("Finished")
 
-    cramped = _screen_lines(_run_data(40), log, 12)  # no room for the log: the table keeps the screen
-    assert len(cramped) <= 11 and cramped[0].startswith("r1 · finished") and cramped[-1].startswith("Finished")
-    assert not any("step" in line for line in cramped) and any("change 39" in line for line in cramped)
+    cramped = _screen_lines(_run_data(40), log, 21)  # no room for the log: the table keeps the screen
+    assert len(cramped) <= 20 and cramped[0].endswith("finished") and cramped[-1].startswith("Finished")
+    assert not any("step" in line for line in cramped) and any(map(row(39), cramped))
 
 
 def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, run_paths):

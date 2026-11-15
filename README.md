@@ -141,7 +141,9 @@ bundled setup skill (nothing is installed), or writes the commented template
 `autohelix.yaml`. With an agent, review the proposal before it saves and commits
 the agreed setup. With the template, edit it using the
 [configuration reference](#configuration) and commit the intended setup changes.
-Then launch with `autohelix run -n 3` (a bare `autohelix run` is one iteration).
+Then launch with `autohelix run -n 3` (a bare `autohelix run` is one iteration): one
+row per iteration (✓ accepted, ✗ rejected and why, each metric against the baseline),
+then what landed and what to type next ([what it prints](docs/cli.md#what-it-prints)).
 For several loops in one project, `autohelix setup perf` writes
 `autohelix/perf.yaml`, which `autohelix run perf` runs. Other commands are
 described in the [CLI reference](docs/cli.md).
@@ -326,8 +328,9 @@ zero. See [Concepts → Reviews](docs/concepts.md#reviews) and
 <details>
 <summary><b>Viewer and run page</b></summary>
 
-`autohelix view` follows a run in the terminal: its status and iterations, with the
-agent's live output below; `autohelix dashboard` lists all runs. `autohelix view --web`
+`autohelix view` follows a run in the terminal: the same screen `autohelix run` prints
+(header, one row per iteration, the live row or the end block), with the agent's live
+output below; `autohelix dashboard` lists all runs. `autohelix view --web`
 serves a live page for a run on 127.0.0.1: status, metric chart, iterations with gates
 (and their output), notes, diffs, observations (reviews included), stop checks and agent activity, and the run summary once it is written. When a run stops, AutoHelix saves the same page as one file,
 `.autohelix/runs/<id>/report.html`, to open in a browser or share. See

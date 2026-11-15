@@ -31,12 +31,9 @@ from autohelix.workspace import SCRUBBED_GIT_ENV
 
 def _get_version() -> str:
     """Get version from package metadata."""
-    from importlib.metadata import PackageNotFoundError, version
+    from autohelix.terminal import version
 
-    try:
-        return version("autohelix")
-    except PackageNotFoundError:
-        return "dev"
+    return version()
 
 
 @click.group()
@@ -58,6 +55,16 @@ CONFIG_TEMPLATE = (
 
 # The agents `setup` offers, in the order it looks for them: executable -> name.
 SETUP_AGENTS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}
+
+
+SETUP_QUESTION = "How do you want to write it?"
+
+
+def setup_options(found: list[str]) -> list[tuple[str, str]]:
+    """The menu `setup` asks SETUP_QUESTION with, given the agents found."""
+    drafts = "it asks what you want to achieve, then writes the config"
+    with_agent = f"With {SETUP_AGENTS[found[0]]}" if len(found) == 1 else "With an agent"
+    return [(with_agent, drafts), ("Empty config", "the commented template, to edit by hand")]
 
 
 def _found_agents() -> list[str]:
@@ -194,33 +201,31 @@ def setup(name: str | None, path: str, agent: str | None):
         raise click.ClickException(f"{CONFIG_DIR}/ already has {', '.join(Path(c).name for c in others)}, which "
                                    f"{CONFIG_FILE} would shadow for a bare `autohelix run`. "
                                    f"Name this one: `autohelix setup <name>{elsewhere}`.")
-    git_warning = _git_problem(project)
+    from rich.console import Console
 
-    def warn_git():
-        if git_warning:
-            click.echo(click.style(f"Warning: {git_warning}", fg="yellow"), err=True)
+    from autohelix import terminal
 
-    if agent is not None:
-        if agent not in found:
-            raise click.ClickException(f"--agent {agent}: {SETUP_AGENTS[agent]} (`{agent}`) is not on PATH."
-                                       + (f" Found: {', '.join(found)}." if found else ""))
-    elif found and _interactive():
+    console = Console()
+    if agent is not None and agent not in found:
+        raise click.ClickException(f"--agent {agent}: {SETUP_AGENTS[agent]} (`{agent}`) is not on PATH."
+                                   + (f" Found: {', '.join(found)}." if found else ""))
+    home = Path.home()
+    folder = f"~/{project.relative_to(home)}" if project.is_relative_to(home) and project != home else str(project)
+    fields = terminal.setup_fields(folder, relative, exists, [SETUP_AGENTS[a] for a in found], _git_field(project))
+    console.print()
+    terminal.print_lines(console, terminal.header(terminal.title("setup", version=terminal.version()), fields,
+                                                  console.width, terminal.shows_mark(console)))
+    if agent is None and found and _interactive():
         from autohelix.menu import choose
 
-        click.echo("  " + click.style("AutoHelix", bold=True) + click.style(f" {_get_version()}", dim=True)
-                   + f" · setup · {relative}")
-        click.echo("  " + click.style(f"{'Project':<9}", dim=True) + str(project) + "\n")
-        drafts = "it proposes the config, then saves and commits when you agree"
-        with_agent = (f"With {SETUP_AGENTS[found[0]]}", drafts) if len(found) == 1 else ("With an agent", drafts)
-        if choose("How do you want to write it?",
-                  [with_agent, ("Empty config", "the commented template, to edit by hand")]) == 0:
+        if choose(SETUP_QUESTION, setup_options(found)) == 0:
             agent = found[0] if len(found) == 1 else found[
                 choose("Which agent?", [(SETUP_AGENTS[a], "") for a in found])]
 
     if agent is not None:
         argv = _agent_argv(agent, project, relative, exists)
-        warn_git()
-        click.echo(f"Starting {SETUP_AGENTS[agent]} with the AutoHelix setup skill…")
+        console.print(f"\n  Starting {SETUP_AGENTS[agent]} with the AutoHelix setup skill…", style="dim",
+                      highlight=False)
         sys.stdout.flush()
         sys.stderr.flush()
         os.chdir(project)
@@ -236,20 +241,27 @@ def setup(name: str | None, path: str, agent: str | None):
             f.write(CONFIG_TEMPLATE)
     except OSError as e:
         raise click.ClickException(f"Could not write {shown}: {e}") from e
-    click.echo(f"Wrote {shown}.")
-    warn_git()
-    click.echo("Next:\n"
-               "  1. Edit it: the goal (its first line is the run's title), scope, gates, observe.\n"
-               "  2. Commit it, and any scripts its commands use (runs start from a commit).\n"
-               f"  3. autohelix run{named}{elsewhere}")
-    if found:
-        click.echo(f"An agent can draft the gates and observe entries with you: "
-                   f"`autohelix setup{named}{elsewhere} --agent {found[0]}`.\n"
-                   f"For your usual agent sessions: `autohelix skill install --agent {found[0]}`.")
-    else:
-        click.echo("No coding agent found (claude, codex or opencode on PATH).\n"
-                   f"With one, `autohelix setup{named}{elsewhere} --agent <agent>` drafts the gates and "
-                   "observe entries with you.")
+    steps = ["edit it: the goal, scope, gates and observe entries", "commit it, with any scripts its commands use",
+             f"autohelix run{named}{elsewhere}"]
+    also = [(f"autohelix setup{named}{elsewhere} --agent {found[0]}", "an agent drafts it with you"),
+            (f"autohelix skill install --agent {found[0]}", "for your own agent sessions")] if found else []
+    terminal.print_lines(console, terminal.setup_written(shown, steps, also, console.width))
+
+
+def _git_field(project: Path) -> tuple:
+    """setup's Git field: `main · clean`, or what a run would refuse (yellow): no git
+    checkout with a commit, or uncommitted changes to tracked files."""
+    if problem := _git_problem(project):
+        return problem, "yellow"
+
+    def git(*args: str) -> str:
+        return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True).stdout.strip()
+
+    branch = git("symbolic-ref", "--short", "-q", "HEAD") or f"detached at {git('rev-parse', '--short', 'HEAD')}"
+    changed = len(git("status", "--porcelain", "--untracked-files=no").splitlines())
+    if changed:
+        return f"{branch} · {changed} uncommitted change{'s' * (changed != 1)} (a run needs them committed)", "yellow"
+    return (f"{branch} · clean",)
 
 
 main.add_command(setup)
@@ -957,7 +969,16 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
         data = runs.run(selected)
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
-    click.echo(json.dumps(data, indent=2) if as_json else run_table.format_run(data), nl=as_json)
+    if as_json:
+        click.echo(json.dumps(data, indent=2))
+        return
+    from rich.console import Console
+
+    from autohelix import terminal
+    from autohelix.live import run_config
+
+    console = Console()
+    terminal.print_lines(console, run_table.view_lines(data, console.width, config=run_config(RunPaths(path, selected))))
 
 
 def _how_to_start(project: Path) -> str:
@@ -1026,7 +1047,12 @@ def dashboard(path: Path, once: bool, as_json: bool, web: bool, port: int | None
     if metric and metric not in names:
         raise click.ClickException(f"No run has metric {metric!r}" + (f"; known: {', '.join(names)}" if names else ""))
     if mode == "once":
-        click.echo(run_table.format_runs(data, metric=metric), nl=False)
+        from rich.console import Console
+
+        from autohelix import terminal
+
+        console = Console()
+        terminal.print_lines(console, run_table.dashboard_lines(data, console.width, metric=metric))
         return
     from autohelix.live import dashboard as live_dashboard
 
@@ -1094,7 +1120,11 @@ def report(run_id: str | None, path: str):
     from autohelix.viewer import write_static
 
     write_static(project_path, run_id=run_id)
-    console.print(f"[dim]Run page: {paths.report_html.relative_to(project_path)}[/dim]", highlight=False)
+    from rich.text import Text
+
+    for label, file in (("summary", paths.report), ("page", paths.report_html)):
+        shown = file.relative_to(Path.cwd()) if file.is_relative_to(Path.cwd()) else file
+        console.print(Text.assemble("  ", (f"{label:<9}", "dim"), str(shown)), highlight=False)
 
 
 @main.command()

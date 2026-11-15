@@ -1,8 +1,8 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Console output: live display of agent and reviewer sessions, and the run's
-transcript (header, baseline and iteration rows)."""
+"""Live display of agent and reviewer sessions: the verbose panel, a compact one-line
+form, and the agent's latest activity for the run's live row (`terminal.LiveRow`)."""
 
 import time as _time
 from collections import deque
@@ -13,10 +13,8 @@ from rich.segment import Segment
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind
-from autohelix.formatting import clean, format_delta  # noqa: F401 - clean: re-exported
-
-
-_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+from autohelix.formatting import clean, format_duration  # noqa: F401 - clean: re-exported
+from autohelix.terminal import SPINNER, TEAL
 
 
 class LiveDisplay:
@@ -33,13 +31,12 @@ class LiveDisplay:
         border_style: str = "blue",
         verbose: bool = False,
         max_entries: int = 10,
-        iteration: int | None = None,
     ):
         self.console = console
         self.title = title
         self.border_style = border_style
         self.verbose = verbose
-        self._iteration = iteration
+        self.activity = ""  # the latest `activity(event)`
         self._state: dict = {
             "entries": deque(maxlen=max_entries),
             "active_label": None,
@@ -98,6 +95,7 @@ class LiveDisplay:
     def _handle_event(self, event: AgentEvent) -> None:
         """Core event handler."""
         self._state["events"] += 1
+        self.activity = activity(event) or self.activity
         label, style = event_presenter(event)
         if event.kind == AgentEventKind.TOOL_USE:
             self._state["tools"] += 1
@@ -140,28 +138,16 @@ class LiveDisplay:
         return self._render_compact()
 
     def _render_compact(self) -> Text:
-        """Spinner line: ⠋ iter N ─ time."""
-        frame_idx = int(_time.monotonic() * 10) % len(_SPINNER_FRAMES)
-        frame = _SPINNER_FRAMES[frame_idx]
-
-        mins, secs = divmod(self._elapsed, 60)
-        time_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
-
-        if self._iteration and self.title == "review":
-            label = f"iter {self._iteration} (review)"
-        elif self._iteration:
-            label = f"iter {self._iteration}"
-        else:
-            label = self.title
-        return Text(f"  {frame} {label} ─ {time_str}", style="dim")
+        """One line: `⠋ <title>  1m 05s  <activity>`."""
+        frame = SPINNER[int(_time.monotonic() * 10) % len(SPINNER)]
+        return Text.assemble(("  ", ""), (frame, TEAL), f" {self.title}  {format_duration(self._elapsed)}",
+                             (f"  {self.activity}" if self.activity else "", "dim"))
 
     def _render_verbose(self, height: int | None = None) -> Panel:
         """Full rolling log with event history."""
-        mins, secs = divmod(self._elapsed, 60)
-        time_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
         header = Text.assemble(
             ("Elapsed ", "dim"),
-            (time_str, "bold"),
+            (format_duration(self._elapsed), "bold"),
             ("  |  Events ", "dim"),
             (str(self._state["events"]), "bold"),
             ("  |  Tools ", "dim"),
@@ -245,196 +231,31 @@ def event_presenter(event: AgentEvent) -> tuple[str, str]:
     return "raw", "yellow"
 
 
-# -- The run's transcript: header, a baseline line, two lines per iteration -------
+def activity(event: AgentEvent) -> str:
+    """What an agent event says it is doing, in a few words: `Edit sort.py`,
+    `Bash pytest -q`, `thinking`; "" for events that don't say."""
+    import json
+    import os
 
-LABEL = 11  # "  iter 12  ": where the duration column (and the summary line) starts
-
-
-def _line(width: int, *parts: tuple[str, str]) -> Text:
-    """One console line from (text, style) parts, cut to `width` with an ellipsis."""
-    line = Text(no_wrap=True, overflow="ellipsis")
-    for text, style in parts:
-        line.append(text, style=style)
-    line.truncate(width, overflow="ellipsis")
-    return line
-
-
-def budget_text(budget, done: int) -> str:
-    """The budget in effect for a segment after iteration `done` (a `harness.Budget`):
-    `3 more iterations (to 8) · $5.00 more · 1h`, `no iteration cap · $5.00 more`; a new
-    run says `3 iterations · $5.00`."""
-    from autohelix.formatting import format_cap
-    from autohelix.iteration_time import format_duration
-
-    more = " more" if done else ""
-    last = budget.last_iteration(done)
-    if last is None:
-        parts = ["no iteration cap"]
-    else:
-        n = max(last - done, 0)
-        notes = ["default"] * budget.default + [f"to {last}"] * bool(done)
-        parts = [f"{n}{more} iteration{'s' * (n != 1)}" + (f" ({', '.join(notes)})" if notes else "")]
-    if budget.cost_usd is not None:
-        parts.append(format_cap(budget.cost_usd) + more)
-    if budget.time_seconds is not None:
-        parts.append(format_duration(budget.time_seconds))
-    return " · ".join(parts)
-
-
-def header_lines(config, run_id: str, label: str, budget, done: int = 0, width: int = 100) -> list[Text]:
-    """`AutoHelix · run <short> · <label>` (the run's name, else the project's), then Goal, Agent, Gates, Observe, Scope and
-    Budget lines (each only if it has something to say), each cut to `width`. `budget` is
-    the segment's (`budget_text`), `done` the run's last iteration before it."""
-    from autohelix.iteration_time import format_duration
-    from autohelix.runs import short_id
-
-    title = Text("  ")
-    title.append("AutoHelix", style="bold")
-    title.append(f" · run {short_id(run_id)} · {clean(label)}")
-    agent = config.agent.backend + (f" ({config.agent.model})" if config.agent.model else "")
-    if config.agent.timeout is not None:
-        agent += f" · {format_duration(config.agent.timeout)} per iteration"
-    observe = []
-    for entry in config.observe:
-        metrics = ", ".join(f"{name} {'↑' if direction == 'higher' else '↓'}"
-                            for name, direction in entry.metrics.items())
-        observe.append(f"{entry.name} ({metrics})" if metrics else entry.name)
-    scope = []
-    if config.editable:
-        scope.append("editable: " + ", ".join(config.editable))
-    if frozen := config.frozen_names():
-        scope.append("frozen: " + ", ".join(frozen))
-    rows = [("Goal", config.title), ("Agent", agent), ("Gates", " · ".join(g.text for g in config.gates)),
-            ("Observe", " · ".join(observe)), ("Scope", " · ".join(scope)), ("Budget", budget_text(budget, done))]
-    lines = [title]
-    for label, value in rows:
-        if value:
-            lines.append(_line(max(width, 40), ("  ", ""), (f"{label:<9}", "dim"), (clean(value), "")))
-    return lines
-
-
-class Transcript:
-    """The console lines for a run's evaluations, in fixed columns: iteration, duration,
-    cost, each command metric with its change from the baseline, then the outcome
-    (`✓ accepted`, or `✗` and the failing gate or reason) and review numbers as a
-    change from the last accepted value (`missing 3 → 2`). Below a row, dimmed: the
-    agent's summary and failed observe entries. Empty columns stay blank."""
-
-    def __init__(self, config, width: int):
-        self.directions = config.metric_directions()
-        reviewed = {name for entry in config.observe if entry.review is not None for name in entry.metrics}
-        self.columns = [name for name in self.directions if name not in reviewed]
-        self.tracked = [name for name in self.directions if name in reviewed]
-        self.width = max(width, 40)
-        self.timeout = config.agent.timeout
-
-    def _metrics(self, metrics: dict, baseline: dict | None) -> list[tuple[str, str]]:
-        parts = []
-        for name in self.columns:
-            value = metrics.get(name)
-            if not isinstance(value, (int, float)):
-                parts.append((" " * (len(name) + 1 + 9 + 8), ""))
-                continue
-            delta, style = "", ""
-            reference = (baseline or {}).get(name)
-            if baseline is not None and isinstance(reference, (int, float)):
-                delta = format_delta(value, reference).replace(" ", "")
-                if delta:
-                    better = value > reference if self.directions.get(name) != "lower" else value < reference
-                    style = "green" if better else "red"
-            parts.append((f"{name} {value:<9g}", ""))
-            parts.append((f"{delta:<8}", style))
-        return parts
-
-    def baseline(self, record) -> list[Text]:
-        """The baseline's line (its metrics, review numbers), and failed entries."""
-        parts = [(f"{'  baseline':<{LABEL + 9 + 8}}", "dim"), *self._metrics(record.metrics, None)]
-        tracked = self._tracked(record.metrics, {})
-        if tracked:
-            parts.append((tracked, "dim"))
-        return [_line(self.width, *parts), *self._notes(record, summary=False)]
-
-    def row(self, record, baseline: dict, previous: dict) -> list[Text]:
-        """An iteration's two lines (more with failed observe entries). `baseline`: the
-        baseline's metrics; `previous`: the last accepted values before this one."""
-        from autohelix.formatting import format_duration
-
-        wall_ms = record.usage.get("wall_clock_ms", record.usage.get("duration_ms"))
-        duration = format_duration(wall_ms / 1000) if wall_ms else ""
-        cost = record.cost.cost_usd
-        cost_text = "" if cost is None else f"${cost:.2f}" + ("+" if record.cost.incomplete else "")
-        parts = [(f"  {'iter ' + str(record.iteration):<{LABEL - 2}}", "dim"), (f"{duration:>7}  ", ""),
-                 (f"{cost_text:>6}  ", ""), *self._metrics(record.metrics, baseline)]
-        tracked = self._tracked(record.metrics, previous)
-        used = sum(len(text) for text, _ in parts) + len(tracked) + 2
-        if record.accepted:
-            parts.append(("✓ accepted", "green"))
-        else:
-            reason = Text("✗ " + self._rejection(record), style="red", no_wrap=True)
-            reason.truncate(max(self.width - used, 12), overflow="ellipsis")
-            parts.append((reason.plain, "red"))
-        if tracked:
-            parts.append((tracked, "dim"))
-        return [_line(self.width, *parts), *self._notes(record)]
-
-    def _rejection(self, record) -> str:
-        """`agent timed out (30m)`, `agent failed: <error>`, or the failing gate / reason."""
-        error = getattr(record, "agent_error", None)
-        if error is None:
-            return outcome_reason(record.reason)
-        if clean(error).startswith("timed out"):
-            from autohelix.iteration_time import format_duration
-
-            return f"agent timed out ({format_duration(self.timeout)})" if self.timeout else "agent timed out"
-        return f"agent failed: {clean(error)}"
-
-    def _tracked(self, metrics: dict, previous: dict) -> str:
-        shown = []
-        for name in self.tracked:
-            value = metrics.get(name)
-            if not isinstance(value, (int, float)):
-                continue
-            before = previous.get(name)
-            shown.append(f"{name} {before:g} → {value:g}" if isinstance(before, (int, float)) and before != value
-                         else f"{name} {value:g}")
-        return ("  · " + " · ".join(shown)) if shown else ""
-
-    def _notes(self, record, summary: bool = True) -> list[Text]:
-        """The dim lines under a row: the agent's summary; at the baseline, gates that
-        failed (they don't reject there, but every iteration will fail them); failed
-        observe entries and metrics an entry didn't report; discarded paths."""
-        lines = []
-        indent = " " * LABEL
-        if summary and record.summary:
-            lines.append(_line(self.width, (indent + clean(record.summary), "dim")))
-        if record.iteration == 0:
-            failed_gates = [f"gate failed at the baseline: {clean(gate.get('text'))}"
-                            for gate in record.gates if gate.get("kind") == "command" and gate.get("passed") is False]
-            for note in failed_gates:
-                lines.append(_line(self.width, (indent + note, "yellow")))
-        failed = []
-        for item in record.observe:
-            if not item.get("ok", True):
-                failed.append(f"observe {clean(item.get('name'))} failed ({clean(item.get('error'))})")
-            elif item.get("metric_errors"):
-                missing = ", ".join(clean(name) for name in item["metric_errors"])
-                failed.append(f"observe {clean(item.get('name'))} reported no {missing}")
-        if failed:
-            lines.append(_line(self.width, (indent + " · ".join(failed), "dim")))
-        if record.discarded:
-            frozen = set(record.discarded_frozen)
-            shown = ", ".join(clean(p) + (" (frozen)" if p in frozen else "") for p in record.discarded[:3])
-            more = f", … ({len(record.discarded)} paths)" if len(record.discarded) > 3 else ""
-            count = len(record.discarded)
-            lines.append(_line(self.width, (f"{indent}discarded {count} out-of-scope change{'s' * (count != 1)}: "
-                                            f"{shown}{more}", "dim")))
-        return lines
-
-
-def outcome_reason(reason: str | None) -> str:
-    """A rejection as the row's status shows it: the failing gate's text, or the reason."""
-    reason = clean(reason or "rejected")
-    for prefix in ("gate failed: ", "metric gate: "):
-        if reason.startswith(prefix):
-            return reason.removeprefix(prefix)
-    return reason
+    if event.kind == AgentEventKind.TOOL_USE:
+        return clean(event.text, 60)
+    if event.kind == AgentEventKind.TOOL_INPUT and not event.metadata.get("stream"):
+        tool = clean(event.metadata.get("tool_name") or "tool")
+        try:
+            data = json.loads(event.text)
+        except (TypeError, ValueError):
+            return tool
+        if not isinstance(data, dict):
+            return tool
+        for key in ("file_path", "path", "notebook_path"):
+            if isinstance(data.get(key), str):
+                return clean(f"{tool} {os.path.basename(data[key])}", 60)
+        for key in ("command", "pattern", "url", "description"):
+            if isinstance(data.get(key), str):
+                return clean(f"{tool} {data[key]}", 60)
+        return tool
+    if event.kind == AgentEventKind.THINKING:
+        return "thinking"
+    if event.kind == AgentEventKind.ASSISTANT_TEXT:
+        return "writing"
+    return ""

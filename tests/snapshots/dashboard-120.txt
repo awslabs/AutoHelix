@@ -1,0 +1,9 @@
+  autohelix  v0.3.0 · dashboard · sorting
+  Project  devbox:~/code/sorting · main @ 4d05f32
+  Runs     2 runs · $6.99 spent · 1 archived (not listed; see --json)
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  run           state     iter   speed ↑  landing    active    goal
+  m2xq perf     running    4/8  35,310.7  2 to land  now       Cut the memory use of sort_list.
+    agent 1m 12s · group speed · autohelix/perf.yaml · 6m 12s · $0.95 · why: try a lower memory bound
+  krp3 sorting  finished   7/8  57,520.8  landed     just now  Make sort_list faster in sort.py.
+    autohelix/sorting.yaml · 38m 43s · $3.02

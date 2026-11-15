@@ -66,7 +66,25 @@ autohelix setup [NAME] [-p PATH] [--agent claude|codex|opencode]
 | `--path`, `-p` | Project directory (default: current dir) |
 | `--agent` | Draft the config with this agent, skipping the selection menu |
 
-In a terminal, `setup` first asks whether to set up the loop with an agent or
+`setup` first prints a header: the project folder, the config it writes (new,
+or there to complete), the coding agents found on `PATH`, and the git branch and
+whether it is clean (in yellow when a run would refuse the folder: no git checkout,
+no commit yet, or uncommitted changes to tracked files):
+
+```
+  autohelix  v0.3.0 · setup
+  Project  ~/code/sorting
+  Config   autohelix.yaml (new)
+  Agents   Claude Code · Codex (found on PATH)
+  Git      main · clean
+  ────────────────────────────────────────────────────────────────────────────
+  How do you want to write it?
+  ❯ With an agent   it asks what you want to achieve, then writes the config
+    Empty config    the commented template, to edit by hand
+```
+
+(In a colour terminal 80 or more columns wide, the AutoHelix mark is beside the
+header.) In a terminal, `setup` then asks whether to set up the loop with an agent or
 write an empty config. When several agents are installed (looked for in the
 order `claude`, `codex`, `opencode`), it then asks which one. Choose with ↑/↓
 and Enter, or an option's number; Enter alone takes the first, Esc or Ctrl-C
@@ -81,8 +99,16 @@ validates, and commits the setup.
 installed into the agent's settings, and the skill always matches the installed
 AutoHelix. Setup gives the launch command; it starts a run only when requested.
 
-An empty config is the commented template; then edit it, commit it, and run
-`autohelix run [NAME]`. Without a terminal (a script), `setup` writes the
+An empty config is the commented template; `setup` then lists what to do next:
+
+```
+  Wrote    autohelix.yaml  the commented template
+  next     edit it: the goal, scope, gates and observe entries
+           commit it, with any scripts its commands use
+           autohelix run
+  or       autohelix setup --agent claude  an agent drafts it with you
+           autohelix skill install --agent claude  for your own agent sessions
+``` Without a terminal (a script), `setup` writes the
 template unless `--agent` is given. Without an agent on `PATH` it writes the
 template too.
 
@@ -91,8 +117,9 @@ template written earlier) can be revised after reviewing and agreeing on the
 agent's proposal; without it, an existing config is an error. A bare `setup`
 is refused when `autohelix/` already has configs: `autohelix.yaml` would take
 over a bare `autohelix run`, so name the
-new one. `setup` doesn't need git and creates no `.autohelix/`; it warns when
-`run` would refuse the folder (no git repository, or no commit yet).
+new one. `setup` doesn't need git and creates no `.autohelix/`; its Git line
+says when `run` would refuse the folder (no git repository, or no commit yet).
+All screens are drawn in [tests/snapshots/](../tests/snapshots/) (`setup-*.txt`).
 
 `autohelix init` is another name for `setup`; its old PATH argument is now `-p PATH`.
 
@@ -151,6 +178,58 @@ commands use: iteration copies are made from the commit. Do it before the first
 `run`: with auto landing, a later commit on the branch makes `resume` refuse
 (see [`resume`](#autohelix-resume)), leaving `run --import` or `--land manual`.
 
+### What it prints
+
+```text
+  autohelix  v0.3.0 · run krp3 · sorting · 14:02
+  Goal     Make sort_list faster in sort.py.
+  Agent    claude (sonnet)
+  Gates    pytest -q test_sort.py · speed regress 5%
+  Observe  bench (speed ↑, mem_mb ↓)
+  Scope    editable: sort.py
+  Budget   8 iterations · $10.00 · 30m each
+  ────────────────────────────────────────────────────────────────────────────
+             time    cost   speed ↑         mem_mb ↓
+  · base                       46.9              120
+  ✓ 1         31s   $0.15  17,481.5 373×         118 -2%
+  ✗ 2      2m 23s   $0.48  pytest -q test_sort.py
+  ✓ 3      2m 06s   $0.32  35,310.7 753×          96 -20%
+  ✗ 4     30m 00s   $1.10  agent timed out (30m)
+  ✗ 5      1m 48s   $0.29    33,002 704×         140 +17%
+          speed 6.5% worse than iter 3 (5% allowed)
+  ✓ 6      1m 51s   $0.31  57,520.8 1226×         95 -21%
+
+  ────────────────────────────────────────────────────────────────────────────
+  Done      iteration budget reached (6)
+  speed     46.9 → 57,520.8  1226×  iter 6
+  mem_mb    120 → 95  -21%  iter 6
+  run       6 iterations · 3 accepted · 38m 39s · $3.02
+  landed    3 commits on main
+            1  Replace bubble sort with a merge/insertion hybrid
+            3  Switch to built-in sorted() with key caching
+            6  Avoid the defensive list copy; sort in place
+  next      autohelix view krp3 · autohelix resume krp3 -n 5
+  page      .autohelix/runs/20261115-1402-sorting-krp3/report.html
+```
+
+The header names the run (its id's last part, which every command accepts), what it
+runs and the budget; in a terminal the AutoHelix mark stands beside it. Then one row
+per iteration: ✓ accepted or ✗ rejected, its time and cost, each metric's value with
+its change from the baseline (`373×`, `-21%`; green or red only on accepted rows, a
+rejection's values are dimmed), and for a rejection why: the gate that failed, a
+metric gate's comparison with the iteration it compares against, or the agent's
+failure. A reason that doesn't fit goes on the line under the row, with failed
+observe entries and discarded out-of-scope paths. While an iteration runs, a live row
+shows its time and phase (`agent · Edit sort.py`, `gates · pytest -q`, `observe ·
+bench`, `stop`). The end block says how the segment ended (`Done`, `Stopped`,
+`Interrupted`, `Error`), each metric from the baseline to the run's tip, the totals,
+what landed with this segment's accepted summaries, what to type next and the files
+written. `resume` shows the baseline and the last 5 rows before `resumed HH:MM`.
+
+Narrower terminals drop the cost column, then the changes. Without a terminal (a
+pipe, a log file) or colours there is no mark and no live row. The renders at 80 and
+120 columns are in [`tests/snapshots/`](../tests/snapshots/).
+
 ### Options
 
 | Option | Description |
@@ -196,7 +275,7 @@ One `run` or `resume` command is a **segment**, with its own
 the viewer is advisory, while a process-held file lock enforces ownership.
 
 A failed or timed-out main-agent call records a rejected attempt (unchecked,
-`agent failed: …` in the console row, `agent timed out (30m)` for a timeout),
+`agent failed: …` in red in the console row, `agent timed out (30m)` for a timeout),
 consumes its number, and the loop goes on to the next iteration; budgets apply
 as for any rejection. Three failed calls in a row stop the run ("the agent failed
 3 times in a row: …"), with landing and the report as at any segment end.
@@ -494,9 +573,9 @@ autohelix view [RUN_ID] [-p PATH] --once | --json
 autohelix view [RUN_ID] [-p PATH] --web [--port 8765] [--open]
 ```
 
-`RUN_ID` (or its last part) picks the run; the default is the current run. By default the terminal shows, on top, the run's status, time and cost (with the running segment's time against its `--time`, as on the [dashboard](#autohelix-dashboard)), landing, the latest accepted metrics against the baseline, and one row per iteration, refreshed as the run goes. Below that is the live output of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (agent, checks, benchmark, …) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out. When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/` (and, for a judge or review call still running, its transcript in the run's copies folder).
+`RUN_ID` (or its last part) picks the run; the default is the current run. By default the terminal shows, on top, the run's own screen as `autohelix run` prints it: the header (goal, agent, gates, observe entries, scope, budget, and the run's state in the title line), one row per iteration under the column header (outcome, time, cost, each metric with its change from the baseline, why a rejection was rejected), then the live row of the iteration under way (its time so far and phase: agent, gates, observe, stop) or, once the run stopped, its end block (how it ended, each metric's baseline → latest accepted value, totals, what landed with the accepted summaries, and what to type next), refreshed as the run goes. Below that is the live output of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (agent, checks, benchmark, …) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out (the baseline stays). When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/` (and, for a judge or review call still running, its transcript in the run's copies folder).
 
-`--once` prints the top part (status and iteration table) once as text and exits. `--json` prints the run once and exits, for scripts and agents managing runs: the run's row from [`dashboard --json`](#json-output) under `run`, plus `iterations`, one entry per iteration with `iteration`, `accepted`, `metrics`, `summary` (the agent's one-line summary; for records without one, the commit subject, or why it was rejected), `reason` (why it was rejected, `null` otherwise), `cost`, `cost_incomplete`, `seconds`, `gates` (in config order: `text`, `kind` (`command` or `metric`), `passed` (`true`, `false`, or `null` when not reached), and for commands that ran `return_code`, `duration_s` and, failed, the `output` tail; for checked metric gates `value`, `reference` and, failed, `reason`), `observe` (the entries that ran, in order: `name`, `ok`, `return_code`, `error`, `metrics`, `duration_s`) and `discarded` (paths outside the editable scope whose changes were dropped). In the text table a rejected iteration shows the gate that failed, with the agent's summary, failed observe entries and discarded paths on the lines under it. Use one of `--once`, `--json` and `--web` at a time.
+`--once` prints the top part once and exits (`tests/snapshots/view-*.txt` shows it). `--json` prints the run once and exits, for scripts and agents managing runs: the run's row from [`dashboard --json`](#json-output) under `run`, plus `iterations`, one entry per iteration with `iteration`, `accepted`, `metrics`, `summary` (the agent's one-line summary; for records without one, the commit subject, or why it was rejected), `reason` (why it was rejected, `null` otherwise), `cost`, `cost_incomplete`, `seconds`, `gates` (in config order: `text`, `kind` (`command` or `metric`), `passed` (`true`, `false`, or `null` when not reached), and for commands that ran `return_code`, `duration_s` and, failed, the `output` tail; for checked metric gates `value`, `reference` and, failed, `reason`), `observe` (the entries that ran, in order: `name`, `ok`, `return_code`, `error`, `metrics`, `duration_s`) and `discarded` (paths outside the editable scope whose changes were dropped). In the text table a rejected iteration shows the gate that failed (a metric gate as `speed 6.5% worse than iter 3 (5% allowed)`), with failed observe entries and discarded paths on the lines under it. Use one of `--once`, `--json` and `--web` at a time.
 
 `--web` serves a browser view of a run's `.autohelix/` state instead (`--port`, default 8765, and `--open` go with it). The header shows the goal's title (its first line) and run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed). The left side shows the best metric value with total time and cost, the metric over time, and one row per iteration with the agent's one-line summary (and, for a rejection, the gate that failed). The right side starts with the run summary once one is written (see [Configuration → Report](config.md#report)), then has one card per iteration with: why it was rejected; changes outside the editable scope that were discarded; the gates in list order (passed, failed with its output, or pending), each with its stored output (`iterations/NNN/gates/<k>/`: command, stdout, stderr and an `ask:` gate's judge transcript); its notes (`notes/iter-N.md`, as saved with the iteration); the iteration's own changes (from the commit it started from to its frozen tree, rejected attempts included while their ref is kept) and the changes against the baseline; one section per observe entry (`iterations/NNN/observe/<name>/`: status, metrics, stdout, stderr and captured files; a review's text as Markdown); the stop commands that ran after it (`iterations/NNN/stop/<k>/`, the one that stopped the run marked); and agent and judge activity (`iterations/NNN/agent.log` and the transcripts, live while they run). Paths are below `.autohelix/runs/<id>/`. Click a row or chart point to open that card. Notes that are not tied to an iteration are listed under Shared notes.
 
@@ -519,7 +598,7 @@ autohelix dashboard [-p PATH] --json
 autohelix dashboard [-p PATH] --web [--port 8765] [--open]
 ```
 
-By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C: the id, with its group after it (`20261111-1432-k3f9 (perf)`); the status (with the phase while running; `running (stopping)` once [`autohelix stop`](#autohelix-stop) asked it to end), with time and cost so far underneath (the run's total, no cap) and, while a segment with `--time` runs, its time against that cap (`12m5s/1h`, `1h40m/1h30m (time up)` once past it; `view` and the web page's tooltip say "12m5s of 1h (this segment)"); iterations, of the latest segment's cap; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: how many accepted commits the run's target branch lacks, and whether it can still fast-forward or has diverged; when the run was last active; and the goal's title (its first line), with the run's notes under it: why it was started (`run --why`) and the run it continues from (`run --import`). The header names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
+By default the terminal shows one row per run in `.autohelix/runs/`, redrawn every 5 seconds until Ctrl-C, under a header that names the machine and checkout and shows the number of runs and the project's total cost, including archived runs (deleted runs no longer count). A row has the run's short id and name (`krp3 sorting`, what every command accepts); its state (`running` in the accent colour, `running (stopping)` once [`autohelix stop`](#autohelix-stop) asked it to end); iterations, of the latest segment's cap; one metric from the latest accepted iteration (`--metric`, default the first one of the most recently active run); landing: `landed`, or how many accepted commits the run's target branch lacks (`2 to land`, or `2 diverged` when it can no longer fast-forward); when the run was last active; and the goal's title (its first line). The dim line under it has the phase while running, the group, the config file, time and cost so far (the run's total, no cap) and, while a segment with `--time` runs, its time against that cap (`12m5s/1h`, `1h40m/1h30m (time up)` once past it; the web page's tooltip says "12m5s of 1h (this segment)"), and the run's notes: why it was started (`run --why`) and the run it continues from (`run --import`). Live runs come first; archived runs are only counted. `--once` prints the table once and exits. `--json` prints every run once, archived ones too, and exits (see [JSON output](#json-output)). Use one of `--once`, `--json` and `--web` at a time.
 
 `--web` serves the same rows as a live page instead (`--port`, default 8765, and `--open` go with it). There the metric's change against the run's own baseline is in the tooltip, and the metric is picked from a menu in the column header. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every dashboard is `localhost` over an SSH tunnel). Archived runs are hidden until you click their count in the header. Click a row for that run's [`autohelix view --web`](#autohelix-view) page. It is the same server as `autohelix view --web`, with the same `127.0.0.1`-only binding.
 

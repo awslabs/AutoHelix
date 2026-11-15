@@ -404,7 +404,7 @@ def _cli(*args):
     from click.testing import CliRunner
     from autohelix.cli import main
 
-    return CliRunner().invoke(main, list(map(str, args)))
+    return CliRunner(env={"COLUMNS": "200"}).invoke(main, list(map(str, args)))  # long paths fit on a line
 
 
 @pytest.fixture
@@ -444,17 +444,18 @@ def test_dashboard_json_and_once(measured_project):
 
     result = _cli("dashboard", "-p", project, "--once")
     assert result.exit_code == 0, result.output
-    lines = result.output.splitlines()
-    assert lines[0].startswith(f"test_project  ") and lines[0].endswith(" @ " + subprocess.run(
+    lines = [line.rstrip() for line in result.output.splitlines()]
+    assert lines[0].startswith("  autohelix  v") and lines[0].endswith(" · dashboard · test_project")
+    assert lines[1].startswith("  Project  ") and lines[1].endswith(" @ " + subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip())
-    assert lines[1].startswith("2 runs") and lines[1].endswith("1 archived (not listed; see --json)")
-    assert lines[3].split() == ["RUN", "STATUS", "ITER", "speed", "LANDING", "ACTIVE", "GOAL"]
-    rows = {line.split()[0]: line for line in lines[4:] if not line.startswith(" ")}
-    assert set(rows) == {first, second}
-    assert rows[first].split()[1:5] == ["finished", "2/2", "120.0", "landed"]
-    assert rows[first].endswith("Test the integration")
-    assert rows[second].split()[1:7] == ["finished", "1/1", "130.0", "1", "commit", "to"]
-    assert "  autohelix.yaml" in result.output
+    assert lines[2].startswith("  Runs     2 runs") and lines[2].endswith("1 archived (not listed; see --json)")
+    assert lines[4].split() == ["run", "state", "iter", "speed", "↑", "landing", "active", "goal"]
+    rows = {line.split()[0]: line for line in lines[5:] if not line.startswith("    ")}
+    assert set(rows) == {short_id(first), short_id(second)}
+    assert rows[short_id(first)].split()[1:5] == ["finished", "2/2", "120", "landed"]
+    assert rows[short_id(first)].endswith("Test the integration")
+    assert rows[short_id(second)].split()[1:6] == ["finished", "1/1", "130", "1", "to"]
+    assert "    autohelix.yaml · " in result.output
 
     assert "no run has metric" in _cli("dashboard", "-p", project, "--once", "--metric", "nope").output.lower()
     assert _cli("dashboard", "-p", project, "--metric", "speed", "--json").exit_code == 2
@@ -473,15 +474,19 @@ def test_view_json_and_once(measured_project):
     assert json.loads(_cli("view", "-p", project, "--json").output)["run"]["id"] == RunPaths(project).run_id
 
     text = _cli("view", first, "-p", project, "--once").output
-    lines = text.splitlines()
-    assert lines[0] == f"{first} · finished"
-    assert lines[1].startswith("autohelix.yaml · ") and lines[1].endswith(f"iterations 2/2 · landed ({data['branch']})")
-    assert "Stopped: iteration budget reached (2)" in text
-    assert "Goal: Test the integration" in text
-    assert "Latest accepted (iteration 2): speed 120.0 ↑ 20.0%" in text
-    table = lines[lines.index("") + 1:]
-    assert table[0].split() == ["ITER", "OK", "speed", "COST", "TIME", "SUMMARY"]
-    assert table[1].split()[:3] == ["0", "✓", "100.0"] and table[1].endswith("baseline")
+    lines = [line.rstrip() for line in text.splitlines()]
+    assert lines[0].startswith("  autohelix  v") and lines[0].endswith(f" · run {short_id(first)} · test_project · finished")
+    assert "  Goal     Test the integration" in lines
+    rows = lines[lines.index(next(line for line in lines if line.lstrip().startswith("time"))) + 1:]
+    assert rows[0].split() == ["·", "base", "100"]
+    assert rows[1].split()[:2] == ["✓", "1"] and rows[1].split()[-2:] == ["110", "+10%"]
+    assert "  Done      iteration budget reached (2)" in lines
+    assert "  speed     100 → 120  +20%  iter 2" in lines
+    assert f"  landed    on {data['branch']}" in lines
+    assert f"  next      autohelix resume {short_id(first)} -n 5" in lines
+    manual = [line.rstrip() for line in _cli("view", second, "-p", project, "--once").output.splitlines()]
+    assert f"  unlanded  1 commit on autohelix/{second}" in manual
+    assert f"  next      autohelix resume {short_id(second)} -n 5 · autohelix land {short_id(second)}" in manual
 
     missing = _cli("view", "missing-zzzz", "-p", project, "--json")
     assert missing.exit_code == 1 and "missing-zzzz" in missing.output
@@ -490,12 +495,12 @@ def test_view_json_and_once(measured_project):
     config = project / "autohelix.yaml"
     config.write_text(config.read_text().replace("Test the integration", '" "'))
     printed = _cli("view", first, "-p", project, "--once")
-    assert printed.exit_code == 0 and "Goal: Test the integration" in printed.output
+    assert printed.exit_code == 0 and "  Goal     Test the integration\n" in printed.output
     stored = RunPaths(project, first).config
     stored.chmod(0o644)  # stored read-only
     stored.write_text(stored.read_text().replace("Test the integration", '" "'))
     printed = _cli("view", first, "-p", project, "--once")
-    assert printed.exit_code == 0 and "Goal:" not in printed.output
+    assert printed.exit_code == 0 and "Goal" not in printed.output
 
 
 def test_table_shows_the_iteration_under_way():
@@ -512,23 +517,25 @@ def test_table_shows_the_iteration_under_way():
     header = {"schema": 1, "project": "p", "host": "h", "path": "/x", "path_display": "/x", "branch": None,
               "commit": "abc1234"}
     listing = format_runs({**header, "runs": [run]}, now=1000).splitlines()
-    assert listing[0] == "p  h:/x · detached @ abc1234"
-    assert listing[4].split() == ["r1", "running", "·", "checks", "30s", "3/5", "—", "now"]
-    assert listing[5].split() == ["a.yaml", "2m", "40s", "·", "$1.50+"]  # 60s done + 100s under way
+    assert listing[1] == "  Project  h:/x · detached @ abc1234"
+    assert listing[5].split() == ["r1", "running", "3/5", "—", "now"]
+    assert listing[6].strip() == "gates 30s · a.yaml · 2m 40s · $1.50+"  # 60s done + 100s under way
     one = format_run({**header, "run": run}, now=1000).splitlines()
-    assert one[0] == "r1 · running · checks 30s · iteration 3"
-    assert one[-1].split() == ["3", "…", "running", "·", "checks", "30s"]
+    assert one[0].endswith(" · run r1 · p · running")
+    assert one[-1].split() == ["⠋", "3", "1m", "40s", "gates"]  # the iteration's own time so far
 
 
 def test_live_view_shows_the_run_table_and_where_it_stopped(measured_project, monkeypatch):
     from tests.test_live import _stop_after
 
     project, first, second, gone = measured_project
+    monkeypatch.setenv("LINES", "60")  # room for the run's screen and the log under it
     _stop_after(monkeypatch, polls=2)
     result = _cli("view", short_id(first), "-p", project)
     assert result.exit_code == 0, result.output
-    assert f"{first} · finished" in result.output and "Goal: Test the integration" in result.output
-    assert "ITER  OK  speed" in result.output and "Iteration 2 · agent" in result.output
+    assert f"run {short_id(first)} · test_project · finished" in result.output
+    assert "  Goal     Test the integration" in result.output
+    assert "Done      iteration budget reached (2)" in result.output and "Iteration 2 · agent" in result.output
     assert "Finished at " in result.output and "Stopped watching. The run is unaffected." in result.output
 
 

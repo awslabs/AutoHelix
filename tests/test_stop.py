@@ -77,7 +77,7 @@ def test_a_request_during_the_baseline_stops_after_the_baseline(project):
     assert result.exit_code == 0, result.output
     paths = RunPaths(project)
     assert iterations(paths) == [0]
-    assert "Stopped: requested by autohelix stop" in result.output
+    assert "  Stopped   requested by autohelix stop" in result.output
     reason = status(paths)["stop_reason"]
     assert isinstance(reason.pop("requested_at"), float)
     assert reason == {"kind": "request", "detail": "requested by autohelix stop", "why": None}
@@ -168,7 +168,7 @@ def test_an_interrupt_with_a_now_request_notes_it_as_the_stop_reason(project, mo
     [segment] = read_segments(paths.segments)
     assert segment["state"] == "interrupted" and segment["stop_reason"] == reason
     assert not paths.stop_request.exists()
-    assert "Interrupted by autohelix stop --now at iteration 1" in capsys.readouterr().out
+    assert "Interrupted by autohelix stop --now at iteration 1" in " ".join(capsys.readouterr().out.split())
 
 
 def test_ctrl_c_with_a_graceful_request_pending_is_a_plain_interrupt(project, monkeypatch):
@@ -411,7 +411,7 @@ def test_stop_now_ends_a_background_run_that_ignores_sigint(project, tmp_path):
             process.kill()
             process.wait()
     log_text = (tmp_path / "run.log").read_text()
-    assert "Interrupted by autohelix stop --now at iteration 1" in log_text, log_text
+    assert "Interrupted by autohelix stop --now at iteration 1" in " ".join(log_text.split()), log_text
     data = status(paths)
     assert data["state"] == "interrupted"
     assert data["stop_reason"]["kind"] == "request" and data["stop_reason"]["now"] is True
@@ -446,9 +446,10 @@ def test_the_run_row_shows_a_pending_request(project, running):
     asked = data["run"]["stop_requested"]
     assert asked["why"] == "enough" and asked["now"] is False and isinstance(asked["requested_at"], float)
     assert data["run"]["status"]["segment"] == 2
-    assert "running (stopping) · agent" in run_table.format_run(data)
+    assert " · running (stopping)\n" in run_table.format_run(data)  # the title
+    assert "agent · stopping" in run_table.format_run(data)  # the live row
     listing = ProjectRuns(project).runs()
-    assert "running (stopping)" in run_table.format_runs(listing)
+    assert "running (stopping)" in run_table.format_runs(listing, width=200)
     # Another segment's request, or a run that isn't running: nothing pending.
     write_stop_request(running, segment=1, why=None, now=False)
     assert ProjectRuns(project).run(running.run_id)["run"]["stop_requested"] is None

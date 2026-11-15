@@ -46,6 +46,18 @@ def keys(data: bytes) -> list[bytes]:
     return found
 
 
+def option_line(options: list[Option], i: int, current: int, width: int) -> str:
+    """`  ❯ With an agent   it asks …`: option `i` of the arrow-key menu, labels aligned,
+    the detail dim and cut to `width`, the pointer and bold label on `current`."""
+    label, detail = options[i]
+    text = f"  {'❯' if i == current else ' '} {label:<{max(len(label) for label, _ in options)}}"
+    detail = f"   {detail}" if detail else ""
+    room = width - len(text)
+    detail = detail if len(detail) <= room else (detail[:max(room - 1, 0)] + "…" if room > 1 else "")
+    styled = click.style(text[:3], fg="cyan") + click.style(text[3:], bold=True) if i == current else text
+    return styled + click.style(detail, dim=True)
+
+
 def choose(title: str, options: list[Option], default: int = 0) -> int:
     """The index of the option picked with ↑/↓ (or k/j) and Enter, or its number.
 
@@ -66,20 +78,14 @@ def choose(title: str, options: list[Option], default: int = 0) -> int:
     current = default
 
     def line(i: int) -> str:
-        label, detail = options[i]
-        text = f"{'❯' if i == current else ' '} {i + 1}. {label}"
-        detail = f"  {detail}" if detail else ""
-        room = width - len(text)
-        detail = detail if len(detail) <= room else (detail[:max(room - 1, 0)] + "…" if room > 1 else "")
-        styled = click.style(text, fg="cyan", bold=True) if i == current else text
-        return styled + click.style(detail, dim=True)
+        return option_line(options, i, current, width)
 
     def draw() -> None:
         for i in range(len(options)):
             out.write("\r\x1b[2K" + line(i) + "\n")
         out.flush()
 
-    out.write(click.style(title, bold=True) + "\n\x1b[?25l")  # hide the cursor while choosing
+    out.write("  " + click.style(title, bold=True) + "\n\x1b[?25l")  # hide the cursor while choosing
     draw()
     picked = -1
     try:
@@ -99,7 +105,7 @@ def choose(title: str, options: list[Option], default: int = 0) -> int:
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
         # Fold the menu into one line: the title and the answer.
-        out.write(f"\x1b[{len(options) + 1}A\r\x1b[J" + click.style(title, bold=True))
+        out.write(f"\x1b[{len(options) + 1}A\r\x1b[J  " + click.style(title, bold=True))
         out.write((" " + click.style(options[picked][0], fg="cyan") if picked >= 0 else "") + "\n\x1b[?25h")
         out.flush()
     if picked < 0:
@@ -108,7 +114,8 @@ def choose(title: str, options: list[Option], default: int = 0) -> int:
 
 
 def _numbered(title: str, options: list[Option], default: int) -> int:
-    click.echo(title)
+    click.echo("  " + click.style(title, bold=True))
+    labels = max(len(label) for label, _ in options)
     for i, (label, detail) in enumerate(options, 1):
-        click.echo(f"  {i}. {label}" + (click.style(f"  {detail}", dim=True) if detail else ""))
-    return click.prompt("Choose", type=click.IntRange(1, len(options)), default=default + 1) - 1
+        click.echo(f"  {i}. {label:<{labels}}" + (click.style(f"   {detail}", dim=True) if detail else ""))
+    return click.prompt("  Choose", type=click.IntRange(1, len(options)), default=default + 1) - 1
