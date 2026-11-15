@@ -14,12 +14,14 @@ as plain text.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from rich.text import Text
 
 from autohelix import terminal
 from autohelix.formatting import clean, format_cap, format_duration
+from autohelix.iteration_time import format_limit
 from autohelix.runs import short_id
 from autohelix.terminal import Row, Table
 
@@ -86,18 +88,17 @@ def _spent(run: dict, now: float) -> str:
 
 
 def time_cap(run: dict, now: float) -> str:
-    """What is left of the running segment's --time: `47m 55s of 1h left`, past it
-    `1h time up`. "" when the run isn't running or the segment has no --time (a stopped
-    run's stop reason says when time ended it). Never a run total."""
+    """What is left of the running segment's --time: `47m 55s left (--time 1h)`, past
+    it `time up (--time 1h)` (the limit as the flag spells it). "" when the run isn't
+    running or the segment has no --time (a stopped run's stop reason says when time
+    ended it). Never a run total."""
     status = run.get("status") or {}
     cap, started = status.get("max_time_seconds"), status.get("segment_started_at")
     if (not _live(run) or not isinstance(cap, (int, float)) or isinstance(cap, bool) or cap <= 0
             or not isinstance(started, (int, float))):
         return ""
-    from autohelix.iteration_time import format_duration as format_limit
-
     left = int(cap) - max(0, int(now - started))
-    return f"{format_duration(left)} of {format_limit(cap)} left" if left > 0 else f"{format_limit(cap)} time up"
+    return f"{format_duration(left)} left (--time {format_limit(cap)})" if left > 0 else f"time up (--time {format_limit(cap)})"
 
 
 def _iterations(run: dict) -> str:
@@ -160,25 +161,33 @@ def _plain(lines: list[Text]) -> str:
 # --- one run (`view`) ---------------------------------------------------------------
 
 
-def saved(paths) -> dict:
-    """What `view` reads beside the `view --json` payload (`view_parts`' keywords): the
-    run's stored config (None: an old run, an invalid file), its rows from the history
-    (as `run` printed them; None if unreadable) and the report files it has written."""
-    from autohelix.history import History
-    from autohelix.runs import load_run_config
+@dataclass
+class Saved:
+    """What `view` reads beside the `view --json` payload: the run's stored config
+    (None: an old run, an invalid file), its rows from the history (as `run` printed
+    them; None if unreadable) and the report files it has written (label, path)."""
 
-    try:
-        config = load_run_config(paths)[0]
-    except Exception:  # noqa: BLE001 - `view` shows what the payload has
-        config = None
-    try:
-        rows = [Row.of(r) for r in sorted(History(paths.project, paths.run_id).load(), key=lambda r: r.iteration)
-                if r.iteration > 0 or r.accepted]
-    except Exception:  # noqa: BLE001 - `view` says so
-        rows = None
-    files = [(label, terminal.shown_path(path)) for label, path in (("page", paths.report_html),
-                                                                     ("summary", paths.report)) if path.is_file()]
-    return {"config": config, "rows": rows, "files": files}
+    config: object = None
+    rows: list[Row] | None = field(default_factory=list)
+    files: list[tuple[str, str]] = field(default_factory=list)
+
+    @classmethod
+    def read(cls, paths) -> "Saved":
+        from autohelix.history import History
+        from autohelix.runs import load_run_config
+
+        try:
+            config = load_run_config(paths)[0]
+        except Exception:  # noqa: BLE001 - `view` shows what the payload has
+            config = None
+        try:
+            records = sorted(History(paths.project, paths.run_id).load(), key=lambda r: r.iteration)
+            rows = [Row.of(r) for r in records if r.iteration > 0 or r.accepted]
+        except Exception:  # noqa: BLE001 - `view` says so
+            rows = None
+        files = [(label, terminal.shown_path(path))
+                 for label, path in (("page", paths.report_html), ("summary", paths.report)) if path.is_file()]
+        return cls(config, rows, files)
 
 
 def _outcome(run: dict) -> tuple[str, str, str | None]:
@@ -197,27 +206,33 @@ def _outcome(run: dict) -> tuple[str, str, str | None]:
 
 def _landed(run: dict, made: int) -> tuple[str, str, str | None] | None:
     """The end block's landing line from `view --json`'s `landing` (commits not yet on
-    the target) and the `made` commits of the run."""
+    the target) and the `made` commits of the run, noted as `run` notes them."""
     landing, target = run.get("landing"), run.get("target_branch")
     if not landing or not target:
         return None
     if n := landing["commits"]:
-        diverged = not landing["fast_forward"]
-        return terminal.unlanded(n, f"autohelix/{run['id']}", f"{target} has moved on" if diverged else "",
-                                 "yellow" if diverged else None)
+        if not landing["fast_forward"]:
+            return terminal.unlanded(n, f"autohelix/{run['id']}", f"{target} has moved on", "yellow")
+        return terminal.unlanded(n, f"autohelix/{run['id']}", "manual landing" if run.get("land") == "manual" else "")
     return terminal.landed(made, target)
 
 
-def view_parts(data: dict, width: int = 100, now: float | None = None, config=None,
-               rows: list[Row] | None = None, files: list[tuple[str, str]] = ()
+def _can_land(run: dict) -> bool:
+    """Whether `autohelix land` would fast-forward the target onto the run's commits."""
+    landing = run.get("landing") or {}
+    return bool(run.get("target_branch") and landing.get("commits") and landing.get("fast_forward"))
+
+
+def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = None
                ) -> tuple[list[Text], list[list[Text]], list[Text]]:
     """`view`'s screen in three parts: the header and column header; each iteration's
     lines (its row and the lines under it); then the live row of the iteration under
-    way, or the end block. The keywords are what `saved` reads: `config`, the run's
-    stored config, for the header's fields and the metric gates' wording (without it,
-    the payload's); `rows`, the history's (None: unreadable); `files`, the report's."""
+    way, or the end block. `saved` (`Saved.read`): the stored config gives the header's
+    fields and the metric gates' wording (without it, the payload's); the rows are the
+    history's. When the history can't be read, the end block is the outcome only: the
+    totals and landing would be counted from nothing."""
     now = time.time() if now is None else now
-    run = data["run"]
+    run, config = data["run"], saved.config
     short = short_id(run["id"])
     title = terminal.title(f"run {short}", run.get("name") or data.get("project"), _word(run),
                            version=terminal.version())
@@ -233,10 +248,12 @@ def view_parts(data: dict, width: int = 100, now: float | None = None, config=No
         table = Table(_directions([run]) or {name: "higher" for r in run["iterations"] for name in r["metrics"] or {}},
                       width)
     fields += [("Group", run.get("group") or ""), ("Notes", _notes(run))]
-    head = terminal.header(title, fields, width, show_mark=False) + table.heading()
-    if rows is None:
-        head.append(Text("  The run's history can't be read: no rows to show.", style="dim"))
-    rows = [table.add(row) for row in rows or []]
+    head = terminal.header(title, fields, width, show_mark=False)
+    if saved.rows is None:  # no column header over no rows
+        head.append(Text("  ! The run's history can't be read: no iterations to show.", style="yellow"))
+    else:
+        head += table.heading()
+    rows = [table.add(row) for row in saved.rows or []]
     if (under_way := _under_way(run)) is not None or _live(run):
         status = run["status"]
         started = status.get("iteration_started_at") if under_way is not None else status.get("phase_started_at")
@@ -244,25 +261,26 @@ def view_parts(data: dict, width: int = 100, now: float | None = None, config=No
         what = " · ".join(filter(None, [_phase(run), "stopping" if run.get("stop_requested") else ""]))
         tail = [table.live(under_way if under_way is not None else status.get("iteration") or 0, seconds, what,
                            int(now * 10))]
+    elif saved.rows is None:
+        tail = [Text(), terminal.rule(width), *table.outcome_lines(_outcome(run))]
     else:
         landed = [r for r in table.rows if r.accepted and r.iteration > 0]
-        landing = _landed(run, sum(1 for r in landed if r.commit))
-        can_land = bool(landing and landing[0] == "unlanded" and (run.get("landing") or {}).get("fast_forward"))
-        commands = terminal.next_commands(short, view=False, land=can_land)
+        commands = terminal.next_commands(short, view=False, land=_can_land(run))
         tail = table.ending(_outcome(run), spent=terminal.money(run["progress"]["cost_usd"],
                                                                  run["progress"]["cost_incomplete"]),
-                            landing=landing, landed=landed, commands=commands, files=list(files))
+                            landing=_landed(run, sum(1 for r in landed if r.commit)), landed=landed,
+                            commands=commands, files=list(saved.files))
     return head, rows, tail
 
 
-def view_lines(data: dict, width: int = 100, now: float | None = None, **saved) -> list[Text]:
-    head, rows, tail = view_parts(data, width, now, **saved)
+def view_lines(data: dict, saved: Saved, width: int = 100, now: float | None = None) -> list[Text]:
+    head, rows, tail = view_parts(data, saved, width, now)
     return head + [line for row in rows for line in row] + tail
 
 
-def format_run(data: dict, now: float | None = None, width: int = 100, **saved) -> str:
-    """`view --once` as plain text (`saved`: `view_parts`' keywords)."""
-    return _plain(view_lines(data, width, now, **saved))
+def format_run(data: dict, saved: Saved, now: float | None = None, width: int = 100) -> str:
+    """`view --once` as plain text."""
+    return _plain(view_lines(data, saved, width, now))
 
 
 # --- the project's runs (`dashboard`) -------------------------------------------------
@@ -331,9 +349,11 @@ def dashboard_lines(data: dict, width: int = 100, metric: str | None = None, now
             lines.append(terminal.cut(Text("    " + goal), width))
         # Dim under the row: group, config, spend, then the notes, on their own line when they don't fit.
         both = " · ".join(filter(None, [under, notes]))
-        for text in [both] if 4 + len(both) <= width else [under, notes]:
-            if text:
-                lines.append(terminal.cut(Text("    " + text, style="dim"), width))
+        if 4 + len(both) <= width:
+            texts = [both]
+        else:
+            texts = [under, notes]
+        lines += [terminal.cut(Text("    " + text, style="dim"), width) for text in texts if text]
     return lines
 
 

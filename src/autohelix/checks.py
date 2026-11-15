@@ -444,7 +444,7 @@ def run_observe_entry(
 ) -> ObserveResult:
     """Run an observe entry and extract its declared metric values from the output.
     A review entry's numbers count only from `##autohelix[name=value]` lines."""
-    from autohelix.iteration_time import format_duration
+    from autohelix.iteration_time import format_limit
 
     timeout = timeout if timeout is not None else mc.timeout
     env = _command_env(project_path, cwd, timeout, extra_env)
@@ -460,7 +460,7 @@ def run_observe_entry(
         )
 
     if run.timed_out:
-        return failed(f"timed out after {format_duration(int(timeout))}", -1)
+        return failed(f"timed out after {format_limit(int(timeout))}", -1)
     if run.error is not None:
         return failed(f"could not run: {run.error}", -1)
     if run.return_code != 0:

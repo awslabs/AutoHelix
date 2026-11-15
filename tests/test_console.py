@@ -232,14 +232,20 @@ def test_ending_with_manual_landing(project):
 def test_ending_when_landing_fails(project, monkeypatch):
     import autohelix.harness
 
+    why = "main is checked out in another worktree; leaving user commits untouched, use autohelix land explicitly"
+
     def refuse(*_):
-        raise RuntimeError("main is checked out elsewhere")
+        raise RuntimeError(why)
 
     monkeypatch.setattr(autohelix.harness, "land", refuse)
     _configure(project, scope={"editable": ["hello.py"]})
-    result, _, _ = _run(project)
+    result, short, _ = _run(project)
     assert result.exit_code == 0, result.output
-    assert "  landing   failed: main is checked out elsewhere" in _ending(result.output)
+    ending = _ending(result.output)
+    start = next(i for i, line in enumerate(ending) if line.startswith("  landing "))
+    end = next(i for i, line in enumerate(ending) if line.startswith("  next "))
+    assert " ".join(" ".join(ending[start:end]).split()) == f"landing failed: {why}"  # wrapped, not cut
+    assert f"autohelix land {short}" in "\n".join(ending[end:])  # the commits wait on the run's branch
 
 
 def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):

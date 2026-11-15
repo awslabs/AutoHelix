@@ -1500,7 +1500,8 @@ class Harness:
         self._segment_started = False
         self._segment = None
         self.run_status.data = {}
-        self._landing = None  # what landed (`_land`), the files written: for the ending
+        self._landing = None  # the ending's landing line (`_land`), the files written: for the ending
+        self._landed_count: int | None = None  # commits auto landing put on the target (None: none landed)
         self._files: list[tuple[str, str]] = []
         self._interrupted_at: int | None = None
         self._segment_first = 1
@@ -1604,8 +1605,8 @@ class Harness:
 
     def _land(self) -> None:
         """Auto-land at segment end; in every mode, refuse/warn if the target moved.
-        Keeps what landed for the ending (`_landing`): `N commits on <branch>`, `N
-        commits on autohelix/<id> (manual landing)`, or nothing."""
+        Keeps what landed for the ending (`_landing`: `N commits on <branch>`, `N
+        commits on autohelix/<id> (manual landing)`, `failed: …`; `_landed_count`)."""
         if not self._segment_started or self._land_attempted:
             return
         self._land_attempted = True
@@ -1626,8 +1627,8 @@ class Harness:
                 if self.land_mode == "auto":
                     before = self._target_tip()
                     land(self.paths, self.run_info, self.run_state.expected_tip)
-                    count = self._commits_between(before, self.run_state.expected_tip)
-                    self._landing = terminal.landed(count, target)
+                    self._landed_count = self._commits_between(before, self.run_state.expected_tip)
+                    self._landing = terminal.landed(self._landed_count, target)
                 else:
                     self._landing = terminal.unlanded(self._unlanded(), f"autohelix/{self.paths.run_id}",
                                                       "manual landing")
@@ -1874,11 +1875,12 @@ class Harness:
             table = self._rows()
             first = self._segment_first
             landed = [row for row in table.rows if row.iteration >= first and row.accepted and row.commit]
-            if self._landing and self._landing[1] == terminal.NOTHING_LANDED:
+            if self._landed_count == 0:  # auto landing found nothing new on the target
                 landed = []
             more = landed[:-5]
             short = short_id(self.paths.run_id)
-            commands = terminal.next_commands(short, land=self.land_mode == "manual" and bool(self._unlanded()))
+            # `autohelix land` whenever commits wait: a manual run, or an auto landing that failed.
+            commands = terminal.next_commands(short, land=self._landed_count is None and bool(self._unlanded()))
             lines = table.ending(outcome, spent=format_total_cost(self.history.cost_usages), landing=self._landing,
                                  landed=landed, commands=commands, files=self._files,
                                  more_landed=f"… {len(more)} earlier · autohelix view {short}" if more else "")

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from autohelix.iteration_time import format_duration, parse_duration
+from autohelix.iteration_time import format_limit, parse_duration
 
 
 def test_parse_duration_none_or_empty():
@@ -49,13 +49,13 @@ def test_parse_duration_invalid():
         parse_duration("1h2h")  # duplicate unit
 
 
-def test_format_duration():
-    assert format_duration(0) == "0s"
-    assert format_duration(45) == "45s"
-    assert format_duration(60) == "1m"
-    assert format_duration(3600) == "1h"
-    assert format_duration(5400) == "1h30m"
-    assert format_duration(8130) == "2h15m30s"
+def test_format_limit():
+    assert format_limit(0) == "0s"
+    assert format_limit(45) == "45s"
+    assert format_limit(60) == "1m"
+    assert format_limit(3600) == "1h"
+    assert format_limit(5400) == "1h30m"
+    assert format_limit(8130) == "2h15m30s"
 
 
 def test_config_parses_agent_timeout():

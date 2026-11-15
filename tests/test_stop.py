@@ -446,8 +446,9 @@ def test_the_run_row_shows_a_pending_request(project, running):
     asked = data["run"]["stop_requested"]
     assert asked["why"] == "enough" and asked["now"] is False and isinstance(asked["requested_at"], float)
     assert data["run"]["status"]["segment"] == 2
-    assert " · running (stopping)\n" in run_table.format_run(data, **run_table.saved(running))  # the title
-    assert "agent · stopping" in run_table.format_run(data, **run_table.saved(running))  # the live row
+    shown = run_table.format_run(data, run_table.Saved.read(running))
+    assert " · running (stopping)\n" in shown  # the title
+    assert "agent · stopping" in shown  # the live row
     listing = ProjectRuns(project).runs()
     assert "running (stopping)" in run_table.format_runs(listing, width=200)
     # Another segment's request, or a run that isn't running: nothing pending.
@@ -456,7 +457,8 @@ def test_the_run_row_shows_a_pending_request(project, running):
     write_stop_request(running, segment=2, why=None, now=False)
     set_status(running, state="finished")
     data = ProjectRuns(project).run(running.run_id)
-    assert data["run"]["stop_requested"] is None and "stopping" not in run_table.format_run(data, **run_table.saved(running))
+    assert data["run"]["stop_requested"] is None
+    assert "stopping" not in run_table.format_run(data, run_table.Saved.read(running))
     assert RunData(project, running.run_id).state()["stop_requested"] is None
     set_status(running, state="running")
     assert RunData(project, running.run_id).state()["stop_requested"]["now"] is False  # the run page

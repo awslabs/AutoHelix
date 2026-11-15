@@ -75,8 +75,9 @@ def parse_duration(value: str | int | float | None) -> int | None:
     return total if total > 0 else None
 
 
-def format_duration(seconds: int) -> str:
-    """Format a duration in seconds as a compact string."""
+def format_limit(seconds: int) -> str:
+    """A limit (`agent.timeout`, `--time`) as the config and flags spell it: `30m`,
+    `1h30m`, `12m5s`. Measured times use `formatting.format_duration` (`1m 02s`)."""
     if seconds < 0:
         return "0s"
     hours, rem = divmod(seconds, 3600)

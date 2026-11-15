@@ -185,20 +185,19 @@ def fit(parts: tuple[list, list[list], list], height: int) -> list:
     return lines[:max(height, 1)]
 
 
-def _read_run(runs: ProjectRuns, project: Path, run_id: str | None) -> tuple[dict, dict] | str | None:
-    """The run's `view --json` data and what `view` reads beside it (`run_table.saved`),
+def _read_run(runs: ProjectRuns, project: Path, run_id: str | None) -> tuple[dict, run_table.Saved] | str | None:
+    """The run's `view --json` data and what `view` reads beside it (`run_table.Saved`),
     an error to show, or None while there is no run."""
     try:
         selected = RunPaths(project, run_id).run_id
         if not selected or not runs.exists(selected):
             return None
-        paths = RunPaths(project, selected)
-        return runs.run(selected), run_table.saved(paths)
+        return runs.run(selected), run_table.Saved.read(RunPaths(project, selected))
     except Exception as exc:  # noqa: BLE001 - shown, and retried on the next read
         return f"Cannot read the run: {exc}"
 
 
-def view_screen(data: tuple[dict, dict] | str | None, log: LogFollower, status: dict | None, height: int,
+def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollower, status: dict | None, height: int,
                 width: int = 100) -> Group:
     """The run's screen on top, the log panel below it, the status line last.
 
@@ -209,7 +208,8 @@ def view_screen(data: tuple[dict, dict] | str | None, log: LogFollower, status: 
     elif isinstance(data, str):
         parts = ([Text(clean(data))], [], [])
     else:
-        parts = run_table.view_parts(data[0], width, **data[1])
+        run, saved = data
+        parts = run_table.view_parts(run, saved, width)
     room = height - 2  # the status line, and a spare line so the terminal doesn't scroll
     lines = fit(parts, room - (MIN_LOG_LINES if log.display else 0)) if parts else []
     log_height = room - len(lines)

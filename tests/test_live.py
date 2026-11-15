@@ -178,24 +178,22 @@ def _run_data(iterations: int) -> dict:
 def test_the_time_cap_is_the_running_segments_own():
     """What is left of --time is shown against the segment's clock while it runs,
     "time up" past it, nothing once the run stopped; the run's total time has no cap."""
-    from autohelix import run_table
-
     data = _run_data(3)
     run = data["run"]
-    assert run_table.time_cap(run, 1000) == ""  # not running
+    assert W.run_table.time_cap(run, 1000) == ""  # not running
     run["status"] = {"state": "running", "iteration": 2, "segment_started_at": 1000 - 725,
                      "max_time_seconds": 3600, "phase": "agent", "phase_started_at": 990}
-    assert run_table.time_cap(run, 1000) == "47m 55s of 1h left"  # the cap as --time spells it
-    assert "left" not in run_table.format_run(data, now=1000)  # the view's live row has the iteration's time
+    assert W.run_table.time_cap(run, 1000) == "47m 55s left (--time 1h)"  # the cap as --time spells it
+    assert "left" not in W.run_table.format_run(data, W.run_table.Saved(), now=1000)  # the view's live row has the iteration's time
     run["status"].update(segment_started_at=1000 - 6000, max_time_seconds=5400)
-    assert run_table.time_cap(run, 1000) == "1h30m time up"
-    listing = run_table.format_runs({**data, "runs": [run]}, now=1000)
-    assert "spent 1m 00s · $1.50 · 1h30m time up" in listing
+    assert W.run_table.time_cap(run, 1000) == "time up (--time 1h30m)"
+    listing = W.run_table.format_runs({**data, "runs": [run]}, now=1000)
+    assert "spent 1m 00s · $1.50 · time up (--time 1h30m)" in listing
     run["status"]["segment_started_at"] = 1000 + 5  # clock skew
-    assert run_table.time_cap(run, 1000) == "1h 30m of 1h30m left"
+    assert W.run_table.time_cap(run, 1000) == "1h 30m left (--time 1h30m)"
     run["status"].update(state="finished")
-    assert run_table.time_cap(run, 1000) == ""
-    assert "1h30m" not in run_table.format_runs({**data, "runs": [run]}, now=1000)
+    assert W.run_table.time_cap(run, 1000) == ""
+    assert "1h30m" not in W.run_table.format_runs({**data, "runs": [run]}, now=1000)
 
 
 def _screen_lines(data, log, height) -> list[str]:
@@ -205,7 +203,7 @@ def _screen_lines(data, log, height) -> list[str]:
 
     rows = [Row(r["iteration"], r["accepted"], r["metrics"], r["seconds"], r["cost"], commit=f"c{r['iteration']}",
                 summary=r["summary"]) for r in data["run"]["iterations"]]
-    console.print(W.view_screen((data, {"rows": rows}), log, {"state": "finished"}, height))
+    console.print(W.view_screen((data, W.run_table.Saved(rows=rows)), log, {"state": "finished"}, height))
     return out.getvalue().splitlines()
 
 

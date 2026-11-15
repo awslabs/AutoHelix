@@ -981,7 +981,8 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
     from autohelix import terminal
 
     console = Console()
-    terminal.print_lines(console, run_table.view_lines(data, console.width, **run_table.saved(RunPaths(path, selected))))
+    saved = run_table.Saved.read(RunPaths(path, selected))
+    terminal.print_lines(console, run_table.view_lines(data, saved, console.width))
 
 
 def _how_to_start(project: Path) -> str:

@@ -178,12 +178,13 @@ PROJECT = {"schema": 1, "project": "sorting", "host": "devbox", "path": "/home/m
            "path_display": "~/code/sorting", "branch": "main", "commit": "4d05f32"}
 
 
-def view_screen(width: int, running: bool = False) -> list:
-    """`autohelix view --once` of the run above: finished, or while iteration 4 runs."""
-    from autohelix.run_table import view_lines
+def view_screen(width: int, running: bool = False, readable: bool = True) -> list:
+    """`autohelix view --once` of the run above: finished, or while iteration 4 runs;
+    `readable=False`: its history can't be read."""
+    from autohelix.run_table import Saved, view_lines
 
-    return view_lines({**PROJECT, "run": _run_payload(running)}, width, now=T, config=CONFIG,
-                      rows=ROWS[:4] if running else ROWS, files=FILES)
+    saved = Saved(CONFIG, (ROWS[:4] if running else ROWS) if readable else None, FILES)
+    return view_lines({**PROJECT, "run": _run_payload(running)}, saved, width, now=T)
 
 
 def dashboard_screen(width: int) -> list:
@@ -207,6 +208,7 @@ def _version(monkeypatch):
 SCREENS = {
     **{f"view-{w}": (lambda w=w: view_screen(w)) for w in WIDTHS},
     **{f"view-live-{w}": (lambda w=w: view_screen(w, running=True)) for w in WIDTHS},
+    "view-unreadable-80": lambda: view_screen(80, readable=False),
     **{f"dashboard-{w}": (lambda w=w: dashboard_screen(w)) for w in WIDTHS},
     **{f"setup-{w}": (lambda w=w: setup_screen(w)) for w in WIDTHS},
     **{f"setup-template-{w}": (lambda w=w: setup_screen(w, picked=1)) for w in WIDTHS},
@@ -237,3 +239,22 @@ def test_snapshot(name):
 def test_screens_fit_their_width(name):
     width = int(name.rsplit("-", 1)[-1]) if name[-1].isdigit() else 100
     assert all(line.cell_len <= width for line in SCREENS[name]())
+
+
+def test_an_unreadable_history_shows_the_outcome_only():
+    """Totals and landing would be counted from no rows, so the end block stops after
+    the outcome; the warning is yellow, like every warning."""
+    lines = view_screen(80, readable=False)
+    [warning] = [line for line in lines if "history can't be read" in line.plain]
+    assert warning.style == "yellow"
+    assert lines[-1].plain.split() == ["Done", "iteration", "budget", "reached", "(7)"]
+
+
+def test_view_says_what_waits_for_a_manual_landing():
+    """Like `run`'s end block: the commits on the run's branch, why, and `autohelix land`."""
+    from autohelix.run_table import Saved, view_lines
+
+    run = {**_run_payload(False), "land": "manual", "landing": {"commits": 3, "fast_forward": True}}
+    text = _text(view_lines({**PROJECT, "run": run}, Saved(CONFIG, ROWS, []), 120, now=T))
+    assert "  unlanded  3 commits on autohelix/20261115-1402-sorting-krp3 (manual landing)\n" in text
+    assert "  next      autohelix resume krp3 -n 5 · autohelix land krp3\n" in text

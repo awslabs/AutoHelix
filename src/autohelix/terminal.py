@@ -21,6 +21,7 @@ from datetime import datetime
 from rich.text import Text
 
 from autohelix.formatting import clean, format_duration
+from autohelix.iteration_time import format_limit
 
 GREEN = "#10b981"  # the logo's green: ✓, better
 RED = "#d77a7a"  # muted: ✗, worse
@@ -165,8 +166,6 @@ def title(*parts: str, version: str) -> list[tuple[str, str | None]]:
 def run_fields(config, budget: str) -> list[tuple[str, str]]:
     """A run's header fields: Goal, Agent, Gates, Observe, Scope, Budget (`budget`:
     `budget_text`, the timeout added as `30m each`)."""
-    from autohelix.iteration_time import format_duration as format_limit
-
     observe = []
     for entry in config.observe:
         metrics = ", ".join(f"{name} {'↓' if direction == 'lower' else '↑'}" for name, direction in entry.metrics.items())
@@ -188,8 +187,6 @@ def budget_text(budget, done: int) -> str:
     `3 more iterations (to 8) · $5.00 more · 1h`, `no iteration cap · $5.00 more`; a new
     run says `3 iterations · $5.00`."""
     from autohelix.formatting import format_cap
-    from autohelix.iteration_time import format_duration as format_limit
-
     more = " more" if done else ""
     last = budget.last_iteration(done)
     if last is None:
@@ -367,8 +364,6 @@ class Table:
             return "", None
         if row.agent_error is not None:
             if clean(row.agent_error).startswith("timed out"):
-                from autohelix.iteration_time import format_duration as format_limit
-
                 return ("agent timed out" + (f" ({format_limit(self.timeout)})" if self.timeout else ""), RED)
             return f"agent failed: {clean(row.agent_error)}", RED
         return rejection(row, self.gates, self.directions, self.tip), None
@@ -402,28 +397,38 @@ class Table:
 
     # --- the end block ---
 
+    def _label_width(self, *labels: str) -> int:
+        """The end block's label column: the widest label (metric names included) + 2."""
+        return max(FIELD, max(len(label) for label in [*labels, *self.directions]) + 2)
+
+    def _wrapped(self, label: str, text: str, style: str | None, label_style: str, width: int) -> list[Text]:
+        """A labelled end-block line wrapped, never cut: an error must be readable whole."""
+        parts = textwrap.wrap(clean(text), max(self.width - 2 - width, 20)) or [""]
+        return [field_line(label if i == 0 else "", (part, style), width=self.width, label_width=width,
+                           label_style=label_style) for i, part in enumerate(parts)]
+
+    def outcome_lines(self, outcome: tuple[str, str, str | None], width: int = 0) -> list[Text]:
+        """The end block's first line (`Done`, `Stopped`, `Interrupted`, `Error`: word,
+        detail, style), wrapped; the detail is red for an error, else plain."""
+        word, detail, style = outcome
+        return self._wrapped(word, detail, style if style == RED else None, f"bold {style}" if style else "bold",
+                             width or self._label_width(word))
+
     def ending(self, outcome: tuple[str, str, str | None], *, spent: str, landing: tuple[str, str, str | None] | None,
                landed: list[Row], commands: list[str], files: list[tuple[str, str]],
                more_landed: str = "") -> list[Text]:
-        """After a rule: the outcome (`Done`, `Stopped`, `Interrupted`, `Error`: word,
-        detail, style), each metric's baseline → tip value with its change, the run's
-        totals, what landed (`landing`: label, text, style) with the accepted summaries
-        of `landed`, then what to type next and the files written (label, path)."""
+        """After a rule: the outcome, each metric's baseline → tip value with its change,
+        the run's totals, what landed (`landing`: label, text, style) with the accepted
+        summaries of `landed`, then what to type next and the files written (label, path)."""
         iterations = [row for row in self.rows if row.iteration > 0]
         accepted = sum(row.accepted for row in iterations)
         seconds = sum(row.seconds or 0 for row in iterations)
-        labels = [outcome[0], *self.directions, "summary", "unlanded", "accepted", "landing"]
-        width = max(FIELD, max(len(label) for label in labels) + 2)
+        width = self._label_width(outcome[0], "summary", "unlanded", "accepted", "landing")
 
         def field(label: str, *parts: tuple[str, str | None], style: str | None = "dim") -> Text:
             return field_line(label, *parts, width=self.width, label_width=width, label_style=style)
 
-        word, detail, style = outcome
-        lines = [Text(), rule(self.width)]
-        # Wrapped, never cut: an error must be readable whole.
-        for i, part in enumerate(textwrap.wrap(clean(detail), max(self.width - 2 - width, 20)) or [""]):
-            lines.append(field(word if i == 0 else "", (part, style if style == RED else None),
-                                    style=f"bold {style}" if style else "bold"))
+        lines = [Text(), rule(self.width), *self.outcome_lines(outcome, width)]
         for name, direction in self.directions.items():
             base, (tip, where) = self.baseline.get(name), self.tip.get(name, (None, None))
             if tip is None:
@@ -441,7 +446,7 @@ class Table:
                                                    + [spent] * bool(spent)), None)))
         if landing:
             label, text, landing_style = landing
-            lines.append(field(label, (clean(text), landing_style)))
+            lines += self._wrapped(label, text, landing_style, "dim", width)
         summaries = landed[-5:] if any(row.summary for row in landed) else []
         for i, row in enumerate(summaries):  # under the landing line, else on their own
             summary = clean(row.summary)
@@ -524,13 +529,10 @@ def commits(n: int) -> str:
     return f"{n} commit{'s' * (n != 1)}"
 
 
-NOTHING_LANDED = "nothing (no accepted changes)"
-
-
 def landed(count: int, target: str) -> tuple[str, str, str | None]:
     """The end block's landing line (label, text, style): `landed  3 commits on main`,
     `landed  nothing (no accepted changes)`."""
-    return ("landed", f"{commits(count)} on {target}", None) if count else ("landed", NOTHING_LANDED, "dim")
+    return ("landed", f"{commits(count)} on {target}", None) if count else ("landed", "nothing (no accepted changes)", "dim")
 
 
 def unlanded(count: int, branch: str, note: str = "", style: str | None = None) -> tuple[str, str, str | None]:

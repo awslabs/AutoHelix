@@ -485,7 +485,7 @@ def test_view_json_and_once(measured_project):
     assert f"  landed    2 commits on {data['branch']}" in lines
     assert f"  next      autohelix resume {short_id(first)} -n 5" in lines
     manual = [line.rstrip() for line in _cli("view", second, "-p", project, "--once").output.splitlines()]
-    assert f"  unlanded  1 commit on autohelix/{second}" in manual
+    assert f"  unlanded  1 commit on autohelix/{second} (manual landing)" in manual  # as run says it
     assert f"  next      autohelix resume {short_id(second)} -n 5 · autohelix land {short_id(second)}" in manual
 
     missing = _cli("view", "missing-zzzz", "-p", project, "--json")
@@ -504,7 +504,7 @@ def test_view_json_and_once(measured_project):
 
 
 def test_table_shows_the_iteration_under_way():
-    from autohelix.run_table import format_run, format_runs
+    from autohelix.run_table import Saved, format_run, format_runs
 
     run = {"id": "r1", "config_file": "a.yaml", "accepted": 1, "target_branch": None,
            "landing": None, "last_activity": 990, "metrics": None, "goal": None,
@@ -520,7 +520,7 @@ def test_table_shows_the_iteration_under_way():
     assert listing[1] == "  Project  /x · detached @ abc1234"
     assert listing[5].split() == ["r1", "running", "3/5", "—", "gates", "30s"]  # activity: what it is doing
     assert listing[6].strip() == "a.yaml · spent 2m 40s · $1.50+"  # 60s done + 100s under way
-    one = format_run({**header, "run": run}, now=1000).splitlines()
+    one = format_run({**header, "run": run}, Saved(), now=1000).splitlines()
     assert one[0].endswith(" · run r1 · p · running")
     assert one[-1].split() == ["⠋", "3", "1m", "40s", "gates"]  # the iteration's own time so far
 
