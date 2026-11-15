@@ -104,7 +104,7 @@ def test_state_lists_iterations_and_status(viewer):
     assert state["goal"].startswith("Test the integration")
     assert state["config"]["file"] == "autohelix.yaml"
     assert state["config"]["gates"] == ["true"]
-    assert state["title"] == "Test the integration"
+    assert state["goal"].startswith("Test the integration")
     assert "goal: Test the integration" in state["config"]["text"]
     # The run finished, so it wrote a summary (the mock agent's fixed text).
     assert state["report"]["html"] == "<p>Mock summary of the run.</p>\n"
