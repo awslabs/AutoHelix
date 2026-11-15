@@ -53,10 +53,27 @@ def test_run_status_records_iteration_start(tmp_path, run_paths):
     assert status.data["iteration_started_at"] >= first and status.data["iteration"] == 2
 
 
+class _Clock:
+    """`time` for live.py with its own `sleep`. Patching `time.sleep` itself also counts sleeps
+    elsewhere in the process (subprocess's timed wait for a slow git), which could stop the view
+    before its first frame."""
+
+    def __init__(self, sleep):
+        self.sleep = sleep
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
 def _stop_after(monkeypatch, polls=1):
     """Make the live loops stop (Ctrl-C) at their `polls`-th sleep."""
     calls = iter(range(polls - 1))
-    monkeypatch.setattr(W.time, "sleep", lambda s: next(calls, None) is None and (_ for _ in ()).throw(KeyboardInterrupt))
+
+    def sleep(_):
+        if next(calls, None) is None:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(W, "time", _Clock(sleep))
 
 
 def _watch_once(tmp_path, monkeypatch, polls=1) -> str:
@@ -240,7 +257,7 @@ def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, r
         status.start()
         status.phase("agent", 1)
         status.note(log=str(log), calls=[{"role": "agent", "log": str(log.relative_to(run_paths.run_dir))}])  # rerun: new iteration_started_at
-    monkeypatch.setattr(W.time, "sleep", sleep)
+    monkeypatch.setattr(W, "time", _Clock(sleep))
     with pytest.raises(KeyboardInterrupt):
         W.view(tmp_path, "claude", Console(file=io.StringIO()))
     assert len(created) >= 2 and set(created) == {"Iteration 1 · agent"}

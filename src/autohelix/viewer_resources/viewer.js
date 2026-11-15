@@ -194,8 +194,8 @@ function bestSoFar() {
 }
 
 function renderStats() {
-  // Best metric, then run totals (as in the terminal's run summary): time over finished
-  // iterations; cost also includes the baseline's calls.
+  // Best metric, then run totals (as in the terminal's run summary): time over the
+  // iterations (finished, and the running one so far); cost also includes the baseline's calls.
   const its = state.iterations.filter((r) => r.iteration > 0);
   const cost = state.cost;
   const stats = [];
@@ -203,10 +203,15 @@ function renderStats() {
     const best = [...bestSoFar().values()].at(-1);
     stats.push([`Best ${metric}`, fmtNumber(best), deltaEl(best, baselineValue())]);
   }
-  if (its.length) {
+  // The running iteration counts from its start, so the total moves while it runs.
+  const live = liveIteration();
+  const started = state.status?.iteration_started_at;
+  const running = live > 0 && !its.some((r) => r.iteration === live) && typeof started === 'number'
+    ? Math.max(0, Date.now() / 1000 - started) : null;
+  if (its.length || running !== null) {
     const timed = its.filter((r) => typeof r.seconds === 'number');
-    stats.push(['Time', timed.length
-      ? fmtDuration(timed.reduce((sum, r) => sum + r.seconds, 0)) + (timed.length < its.length ? ' (incomplete)' : '')
+    stats.push(['Time', timed.length || running !== null
+      ? fmtDuration(timed.reduce((sum, r) => sum + r.seconds, running ?? 0)) + (timed.length < its.length ? ' (incomplete)' : '')
       : '—']);
   }
   if (its.length || typeof cost?.cost_usd === 'number' || cost?.incomplete) {
@@ -264,15 +269,27 @@ function renderChart() {
     const i = Math.round((k / xTicks) * n);
     children.push(svgEl('text', { x: x(i), y: H - 4, 'text-anchor': 'middle', class: 'axis' }, String(i)));
   }
-  // Step line: best accepted value so far.
+  // Step line: best accepted value so far, carried on to the running iteration.
   let d = '';
   for (const r of state.iterations) {
     const b = best.get(r.iteration);
     if (b === null) continue;
     d += d ? ` H${x(r.iteration)} V${y(b)}` : `M${x(r.iteration)} ${y(b)}`;
   }
-  if (d && liveIteration() !== null) d += ` H${x(n)}`;
+  const live = liveIteration();
+  if (d && live !== null) d += ` H${x(n)}`;
   children.push(svgEl('path', { d, class: 'best-line' }));
+  // The running iteration: a hollow ring at the end of the line (no result yet).
+  const bestNow = best.get(state.iterations.at(-1).iteration);
+  if (live !== null && live > state.iterations.at(-1).iteration && bestNow != null) {
+    const ring = svgEl('circle', {
+      cx: x(live), cy: y(bestNow), r: live === selected ? 6 : 5,
+      class: `dot live${live === selected ? ' selected' : ''}`,
+    });
+    ring.append(svgEl('title', {}, `${label(live)}: running`));
+    ring.addEventListener('click', () => select(live));
+    children.push(ring);
+  }
   for (const r of points) {
     const dot = svgEl('circle', {
       cx: x(r.iteration), cy: y(r.metrics[metric]), r: r.iteration === selected ? 6 : 4,
@@ -460,8 +477,9 @@ function cardEl(i) {
   attempt.node.addEventListener('toggle', () => attempt.node.open && loadAttempt(card));
   node.addEventListener('toggle', () => {
     if (!node.open) return;
-    if (selected !== i) { selected = i; followLive = i === liveIteration(); render(); }
-    refreshCards();
+    // Opened by hand: select it like a row click (closing the others now, not on the next poll).
+    if (selected !== i) select(i);
+    else refreshCards();
   });
   return card;
 }
@@ -1037,22 +1055,33 @@ function runNotes(run) {
     run.archive_why && `archived: ${run.archive_why}`].filter(Boolean).join(' · ');
 }
 
+// "20261114-2333-sorting-1q3w" -> name "sorting-1q3w", started "2026-11-14 23:33";
+// "20261114-2333-1q3w" -> "Run 1q3w".
+function splitRunId(id) {
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})-(.+)$/.exec(id || '');
+  if (!m) return { name: id || null, started: '' };
+  // A run of autohelix.yaml has no name, only the suffix: "Run 1q3w" rather than a bare code.
+  const name = m[6].includes('-') ? m[6] : `Run ${m[6]}`;
+  return { name, started: `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` };
+}
+
 function render() {
   const names = metricNames();
   if (!names.includes(metric)) metric = names[0] || null;
-  // The page is about one run: the goal's title (its first line) heads it, the run id and
-  // project sit above as the way back to the list. The rest of the goal is below the title.
+  // The page is about one run: its id heads it (name and suffix, as typed in `resume 1q3w`;
+  // the start time muted beside them), the goal below; the project above is the way back.
   const project = state.project;
-  const title = state.title || state.run_id || project;
+  const { name, started } = splitRunId(state.run_id);
+  const title = name || project;
   setText('title', title);
-  document.title = `${title} · ${state.run_id || project} · AutoHelix${SNAPSHOT ? ' report' : ''}`;
+  setText('title-date', started);
+  if (state.run_id) $('title').title = state.run_id;
+  document.title = `${title} · AutoHelix${SNAPSHOT ? ' report' : ''}`;
   if (SNAPSHOT) {
     show('kind', true);
-    setText('kind', [project, state.run_id, `run report · saved ${fmtClock(SNAPSHOT.saved_at)}`].filter(Boolean).join(' · '));
-  } else if (state.run_id) { show('crumbs', true); setText('crumb-project', project); setText('crumb-run', state.run_id); }
-  const goal = (state.goal || '').trim();
-  const [first, ...rest] = goal.split('\n');
-  setText('goal', state.title && first.trim() === state.title ? rest.join('\n').trim() : goal);
+    setText('kind', [project, `run report · saved ${fmtClock(SNAPSHOT.saved_at)}`].filter(Boolean).join(' · '));
+  } else if (state.run_id) { show('crumbs', true); setText('crumb-project', project); }
+  setText('goal', (state.goal || '').trim());
   // Why the run exists (run --why), what it continues from (run --import), why it was archived.
   const why = runNotes(state);
   setText('why', why);

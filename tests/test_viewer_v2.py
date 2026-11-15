@@ -128,9 +128,9 @@ def get_json(url):
 
 # ---------- web API ----------
 
-def test_title_and_config_in_state(server):
+def test_goal_and_config_in_state(server):
     state = get_json(server + "/api/state")
-    assert state["title"] == "Make the sort faster"
+    assert state["goal"].startswith("Make the sort faster")
     assert state["config"]["gates"] == ["pytest -q", "speed regress 5%"]
     assert [(o["name"], o["review"]) for o in state["config"]["observe"]] == [("bench", False), ("review", True)]
     assert "reviewer" not in state["config"] and "artifacts" not in state
@@ -444,7 +444,7 @@ def test_config_is_parsed_again_only_when_its_file_changes(project, monkeypatch)
     assert len(calls) == 1
     config = RunPaths(project, "test").config
     config.write_text(config.read_text().replace("Make the sort faster", "Make the sort much faster"))
-    assert data.state()["title"] == "Make the sort much faster" and len(calls) == 2
+    assert data.state()["goal"].startswith("Make the sort much faster") and len(calls) == 2
 
 
 ASK_LINE = json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Judged: yes"}]}}) + "\n"

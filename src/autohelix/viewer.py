@@ -335,7 +335,6 @@ class RunData:
         iterations = self.iterations(records)
         status = read_run_status(self.project, self.paths.run_id)
         return {
-            "title": (config.title or None) if config and isinstance(config.goal, str) else None,
             "project": self.project.name,
             "goal": config.goal if config else None,
             "directions": config.metric_directions() if config else {},

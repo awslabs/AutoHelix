@@ -162,10 +162,11 @@ function metricCell(run) {
 
 function landingCell(run) {
   const target = run.target_branch;
-  if (!target) return el('td', { className: 'muted', textContent: '—', title: 'Started on a detached HEAD: land with autohelix land --into <branch>' });
+  // Words rather than a bare dash: each case says why there is nothing to land.
+  if (!target) return el('td', { className: 'muted', textContent: 'detached', title: 'Started on a detached HEAD: land with autohelix land --into <branch>' });
   const l = run.landing;
-  if (!l) return el('td', { className: 'muted', textContent: '—', title: `Branch ${target} or the run's commits are not available` });
-  if (l.commits === 0) return el('td', { className: 'muted', textContent: run.accepted ? 'landed' : '—', title: run.accepted ? `Everything accepted is in ${target}` : 'Nothing accepted yet' });
+  if (!l) return el('td', { className: 'muted', textContent: 'unavailable', title: `Branch ${target} or the run's commits are not available` });
+  if (l.commits === 0) return el('td', { className: 'muted', textContent: run.accepted ? 'landed' : 'nothing yet', title: run.accepted ? `Everything accepted is in ${target}` : 'Nothing accepted yet' });
   const n = `${l.commits} commit${l.commits === 1 ? '' : 's'}`;
   if (l.fast_forward) {
     return el('td', { title: `${n} not in ${target} yet; ${target} can fast-forward: autohelix land ${run.id}` }, `${n} to land`);
@@ -181,26 +182,37 @@ function lastActiveCell(run) {
   return el('td', { className: 'muted', title }, live(run) ? 'now' : fmtAgo(run.last_activity) || '—');
 }
 
+// As on the run page (viewer.js splitRunId): "20261114-2333-sorting-1q3w" -> "sorting-1q3w"
+// started "2026-11-14 23:33"; a run of autohelix.yaml has no name: "Run 1q3w".
+function splitRunId(id) {
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})-(.+)$/.exec(id || '');
+  if (!m) return { name: id, started: '' };
+  return { name: m[6].includes('-') ? m[6] : `Run ${m[6]}`, started: `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` };
+}
+
 function runRow(run) {
   const href = `/run/${encodeURIComponent(run.id)}/`;
+  const { name, started } = splitRunId(run.id);
   const file = run.config_file && run.config_file
     + (run.config_missing ? ' (not stored)' : run.config_invalid ? ' (invalid)' : '');
   const notes = [run.why && `Why: ${run.why}`, run.import?.run && `continues from ${run.import.run}`,
     run.archive_why && `archived: ${run.archive_why}`].filter(Boolean).join(' · ');
   const tr = el('tr', { className: run.archived ? 'archived' : '', tabIndex: 0 },
-    el('td', {}, el('a', { className: 'run-id', href, textContent: run.id }),
+    el('td', {}, el('a', { className: 'run-id', href, textContent: name, title: run.id }),
       run.group ? el('span', { className: 'muted', title: 'Group: runs that see each other\'s notes and code' },
         ` (${run.group})`) : null,
-      // The goal's first line; the full goal on hover.
-      run.title ? el('div', { className: 'run-title', textContent: run.title, title: run.goal || run.title }) : null,
-      // Why it was started, what it continues from, why it was archived: run.json's notes, as text.
-      notes ? el('div', { className: 'status-sub run-why', textContent: notes, title: notes }) : null,
+      started ? el('span', { className: 'run-date', textContent: started, title: 'Started' }) : null,
       file ? el('div', { className: 'status-sub run-config', textContent: file, title: 'Config file' }) : null),
     statusCell(run),
     iterationsCell(run),
     ...(metric ? [metricCell(run)] : []),
     landingCell(run),
-    lastActiveCell(run));
+    lastActiveCell(run),
+    // Last, as in the terminal table: the goal's first line (the full goal on hover), and below it
+    // why the run was started, what it continues from, why it was archived (run.json's notes, as text).
+    el('td', {},
+      run.title ? el('div', { className: 'run-title', textContent: run.title, title: run.goal || run.title }) : null,
+      notes ? el('div', { className: 'status-sub run-why', textContent: notes, title: notes }) : null));
   tr.addEventListener('click', (e) => { if (!e.target.closest('a')) location.href = href; });
   tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') location.href = href; });
   return tr;
