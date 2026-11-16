@@ -1514,8 +1514,7 @@ class Harness:
                 from autohelix.report import write_report
 
                 self.run_status.phase("report")
-                if write_report(self.config, self.project_path, self.console, run_id=self.paths.run_id, _owned=True,
-                                phase_at=self._rows().phase_at()):
+                if write_report(self.config, self.project_path, self.console, run_id=self.paths.run_id, _owned=True):
                     self._files.append(("summary", terminal.shown_path(self.paths.report)))
         except KeyboardInterrupt:
             outcome = "interrupted"

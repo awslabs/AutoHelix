@@ -221,7 +221,7 @@ iteration as it ends, with a live row for the one under way:
   · base                       46.9
   ✓ 1         31s   $0.15  17,481.5 373×
   ✗ 2      2m 23s   $0.48  pytest -q test_sort.py failed (exit 1)
-  ⠹ 3      1m 12s                           agent
+  ⠹ 3      1m 12s  agent
 ```
 
 ✓ is accepted, with each metric's change from the baseline; ✗ is rejected, with the reason. When

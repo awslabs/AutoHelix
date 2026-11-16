@@ -310,7 +310,7 @@ def test_the_live_row_shows_the_phase_only_with_room_under_it(project):
 def test_columns_are_spaced_when_the_width_allows(width, spacing):
     """Roomier columns where a reason still fits after the values; today's at 80 (with no
     metric too). The values stay right-aligned under their headings, the live row's phase
-    at the end of the row where a rejection's reason goes, the summary step's row too."""
+    right after the time (under no column), the summary step's row too."""
     from rich.console import Console
 
     from autohelix.display import LiveDisplay
@@ -319,14 +319,11 @@ def test_columns_are_spaced_when_the_width_allows(width, spacing):
     assert (Table({"a": "higher"} | {f"m{i}": "lower" for i in range(4)}, 120).gap) == terminal.COMPACT[0]
     table = Table({"speed": "higher", "mem_mb": "lower"}, width)
     assert (table.gap, table.sep) == spacing
-    summary = LiveDisplay(Console(), "summary", phase_at=table.phase_at()).render(72).plain
+    summary = LiveDisplay(Console(), "summary").render(72).plain
     assert summary.index("summary") == table.live(1, 72, "agent").plain.index("agent")
     head = table.column_header().plain
     row = table.add(Row(0, True, {"speed": 46.9, "mem_mb": 120}))[-1].plain
     assert row.index("46.9") + len("46.9") == head.index("speed ↑") + len("speed ↑")
     assert row.index("120") + len("120") == head.index("mem_mb ↓") + len("mem_mb ↓")
     live = table.live(1, 72, "agent").plain
-    rejected = table.add(Row(2, False, {"speed": 40.0, "mem_mb": 130}, 5, 0.1, reason="slower"))[0].plain
-    assert live.index("agent") == rejected.index("slower")  # after the values, like a reason
-    narrow = Table({"speed": "higher", "mem_mb": "lower"}, 60).live(1, 72, "observe · a-long-entry-name").plain
-    assert narrow.index("observe") == head.index("time") + len("time") + 2  # doesn't fit there: after the time
+    assert live.index("agent") == head.index("time") + len("time") + 2

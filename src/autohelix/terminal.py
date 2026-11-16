@@ -409,14 +409,8 @@ class Table:
 
     def live(self, iteration: int, seconds: float, what: str, frame: int = 0) -> Text:
         """The row of the iteration under way: spinner, number, time so far, the phase
-        (`agent`, `observe · bench`) at the end of the row (`phase_at`)."""
-        return live_line("base" if iteration == 0 else str(iteration), seconds, what, frame, self.width,
-                         self.phase_at())
-
-    def phase_at(self) -> int:
-        """Where a live row's phase starts: after the values' columns, where a rejected
-        row with values puts its reason."""
-        return self._metrics_end()
+        (`agent`, `observe · bench`) right after the time."""
+        return live_line("base" if iteration == 0 else str(iteration), seconds, what, frame, self.width)
 
     # --- the end block ---
 
@@ -489,19 +483,13 @@ class Table:
         return lines
 
 
-def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int = 200,
-              phase_at: int | None = None) -> Text:
+def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int = 200) -> Text:
     """A live row: spinner, label (an iteration's number; blank for the summary step),
-    time so far in the time column, then the phase from column `phase_at` (the table's
-    `phase_at()`: where a rejected row's reason goes after its values) when it fits
-    there, else two spaces after the time."""
-    line = _parts(("  ", None), (SPINNER[frame % len(SPINNER)] + " ", TEAL), (f"{label:<{LABEL - 2}}", None),
-                  ("  ", None), (f"{format_duration(seconds):>{TIME}}", None))
-    what = clean(what)
-    at = phase_at if phase_at and phase_at + len(what) <= width else line.cell_len + 2
-    line.append(" " * max(at - line.cell_len, 2))
-    line.append(what, style="dim")
-    return cut(line, width)
+    time so far in the time column, then the phase two spaces after it: with the time,
+    not under a column (the cost and values aren't known yet)."""
+    return cut(_parts(("  ", None), (SPINNER[frame % len(SPINNER)] + " ", TEAL), (f"{label:<{LABEL - 2}}", None),
+                      ("  ", None), (f"{format_duration(seconds):>{TIME}}", None), ("  ", None), (clean(what), "dim")),
+               width)
 
 
 def with_room(renderable) -> Group:

@@ -31,13 +31,11 @@ class LiveDisplay:
         border_style: str = "blue",
         verbose: bool = False,
         max_entries: int = 10,
-        phase_at: int | None = None,
     ):
         self.console = console
         self.title = title
         self.border_style = border_style
         self.verbose = verbose
-        self.phase_at = phase_at  # the compact row's phase column: the run table's (`Table.phase_at`)
         self._state: dict = {
             "entries": deque(maxlen=max_entries),
             "active_label": None,
@@ -140,7 +138,7 @@ class LiveDisplay:
     def _render_compact(self) -> Text:
         """The run's live row for a step after the iterations (`terminal.live_line`), the
         phase only: `⠋        12s  summary`."""
-        return live_line("", self._elapsed, self.title, int(_time.monotonic() * 10), phase_at=self.phase_at)
+        return live_line("", self._elapsed, self.title, int(_time.monotonic() * 10))
 
     def _render_verbose(self, height: int | None = None) -> Panel:
         """Full rolling log with event history."""

@@ -227,9 +227,8 @@ a rejection's values dimmed, without a change), and for a rejection why: the gat
 that failed (`pytest -q failed (exit 1)`, `ask: … answered no`), a metric gate's
 comparison with the iteration it compares against, or the agent's failure. A reason that doesn't fit goes on the line under the row, with failed
 observe entries and discarded out-of-scope paths. While an iteration runs, a live row
-shows its time and, at the end of the row where a rejection's reason goes, its
-phase (`agent`, `gates`, `observe · bench` with the entry running, `stop`), with
-two blank lines under it. The end block says how the segment ended (`Done`, `Stopped`,
+shows its time and phase (`agent`, `gates`, `observe · bench` with the entry
+running, `stop`), with two blank lines under it. The end block says how the segment ended (`Done`, `Stopped`,
 `Interrupted`, `Error`), each metric from the baseline to the run's tip, the totals,
 what landed with this segment's accepted summaries (`landing  failed: …` in yellow
 when auto landing couldn't, the commits then waiting for `autohelix land`), what to
