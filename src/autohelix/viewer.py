@@ -50,6 +50,7 @@ from autohelix.replay import LogTail
 from autohelix.report import read_report_info
 from autohelix.run_status import pending_stop, read_run_status, running_iteration
 from autohelix.state import read_stored_config_path
+from autohelix.terminal import RED, Row, Table
 from autohelix.workspace import ITERATION_DIR
 
 MAX_TEXT = 256 * 1024
@@ -339,8 +340,6 @@ class RunData:
         for the console's red, and `tip`: whether it moved the tip, the latest accepted
         measurement (as the run list, `ProjectRuns._metrics`). Returns the tip,
         `{metric: {value, iteration}}`."""
-        from autohelix.terminal import RED, Row, Table
-
         table = Table.of(config, 200) if config else Table({}, 200)
         for record, row in zip(records, rows):
             line = Row.of(record)
@@ -373,7 +372,7 @@ class RunData:
         total_cost = summarize_costs([usage for row in records for usage in row.cost_usages])
         iterations = self.iterations(records)
         tip = self._words(config, records, iterations)
-        status = with_phase_word(read_run_status(self.project, self.paths.run_id))
+        status = with_words(read_run_status(self.project, self.paths.run_id))
         return {
             "project": self.project.name,
             "goal": config.goal if config else None,
@@ -912,15 +911,21 @@ RUN_ID = r"[a-z0-9][a-z0-9-]{0,50}"
 JSON_SCHEMA = 1
 
 
-def with_phase_word(status: dict | None) -> dict | None:
-    """The status with `phase_word`: its phase in the words `view` and the console's live
-    row use (`run_table.PHASES`: gates, observe, stop, ...; `baseline` at iteration 0). The
-    stored names stay as they are; this is where the pages get the words."""
+def with_words(status: dict | None) -> dict | None:
+    """The status with the console's words for it (the stored values stay as they are;
+    this is where the pages get the words): `phase_word`, what a running run is doing as
+    the live row says it (`run_table._phase`: agent, gates, observe, stop, summary;
+    `baseline` at iteration 0), and for a run that isn't running `outcome`, the end
+    block's first line (`run_table._outcome`: {word: Done, detail: iteration budget
+    reached (14), error: whether the console writes it red})."""
     if not status:
         return status
-    phase = status.get("phase")
-    word = "baseline" if status.get("iteration") == 0 and phase != "report" else run_table.PHASES.get(phase, phase)
-    return {**status, "phase_word": word or ""}
+    run = {"status": status}
+    words = {"phase_word": run_table._phase(run)}
+    if status.get("state") != "running":
+        word, detail, style = run_table._outcome(run)
+        words["outcome"] = {"word": word, "detail": detail, "error": style == RED}
+    return {**status, **words}
 
 
 def run_notes(data: dict) -> dict:
@@ -1202,9 +1207,10 @@ def make_server(project: Path, port: int = 8765, *, run_id: str | None = None) -
             elif path == "/api/runs":
                 with lock:
                     payload = dashboard.runs()
-                for row in payload["runs"]:
+                for row in payload["runs"]:  # the console dashboard's words (`run_table._word`)
+                    row["state_word"] = "unreadable" if row.get("error") else run_table._word(row)
                     if row.get("status"):
-                        row["status"] = with_phase_word(row["status"])
+                        row["status"] = with_words(row["status"])
                 return 200, payload
             elif match := re.fullmatch(rf"/api/run/({RUN_ID})(/.+)", path):
                 if (rd := run_data(match[1])) and (response := run_route(rd, match[2])):

@@ -104,7 +104,9 @@ h1 { margin: 0; font-size: 22px; font-weight: 650; }
 .iterations .value { text-align: right; white-space: nowrap; }
 .iterations .dim { color: var(--muted); }
 /* the summary takes the room that is left, on one line (the full text in the panel) */
-.iterations td.summary { width: 100%; max-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.iterations td.summary { width: 100%; max-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iterations td.summary.why { color: var(--muted); }
+.iterations td.summary.error { color: var(--bad); }
 .iterations td.summary.live { color: var(--accent); }
 .mark { white-space: nowrap; }
 .mark.accepted { color: var(--good); }
@@ -167,18 +169,18 @@ h1 { margin: 0; font-size: 22px; font-weight: 650; }
 .prose table { border-collapse: collapse; margin: 8px 0; }
 .prose th, .prose td { border: 1px solid var(--line); padding: 3px 8px; }
 
-/* diffs: one folding block per file */
+/* diffs: one block per file (several files: each folding on its own) */
 .diff-file > summary { padding: 2px 0; font-size: 12px; }
-.diff-file > pre { margin: 4px 0 8px; white-space: pre; overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; padding: 2px 0; }
-.diff-file .line { display: grid; grid-template-columns: 3.5em 3.5em 1.6em max-content; min-height: 1.5em; }
-.diff-file .ln { color: var(--muted); text-align: right; padding-right: 8px; user-select: none; opacity: 0.8; }
-.diff-file .sign { color: var(--muted); text-align: center; user-select: none; }
-.diff-file .code { padding-right: 12px; }
-.diff-file .add { background: color-mix(in srgb, var(--good) 14%, transparent); }
-.diff-file .add .sign { color: var(--good); }
-.diff-file .del { background: color-mix(in srgb, var(--bad) 14%, transparent); }
-.diff-file .del .sign { color: var(--bad); }
-.diff-file .gap { color: var(--muted); background: var(--code); padding: 1px 0 1px 7.6em; font-style: italic; }
+pre.diff { margin: 4px 0 8px; white-space: pre; overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; padding: 2px 0; }
+.diff .line { display: grid; grid-template-columns: 3.5em 3.5em 1.6em max-content; min-height: 1.5em; }
+.diff .ln { color: var(--muted); text-align: right; padding-right: 8px; user-select: none; opacity: 0.8; }
+.diff .sign { color: var(--muted); text-align: center; user-select: none; }
+.diff .code { padding-right: 12px; }
+.diff .add { background: color-mix(in srgb, var(--good) 14%, transparent); }
+.diff .add .sign { color: var(--good); }
+.diff .del { background: color-mix(in srgb, var(--bad) 14%, transparent); }
+.diff .del .sign { color: var(--bad); }
+.diff .gap { color: var(--muted); background: var(--code); padding: 1px 0 1px 7.6em; font-style: italic; }
 
 /* activity */
 .log { display: flex; flex-direction: column; gap: 6px; }

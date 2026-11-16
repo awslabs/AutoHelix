@@ -18,15 +18,13 @@ function fmtAgo(epochSeconds) {
   return new Date(epochSeconds * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-// One word for the row's state; archived wins over the last segment's outcome.
+// The row's state, for its colour; the word is the console dashboard's (`state_word`).
 function outcome(run) {
   if (run.error) return 'error';
   if (live(run)) return 'running';
   if (run.archived) return 'archived';
   return run.status?.state || 'idle';
 }
-
-const WORDS = { crashed: 'stopped unexpectedly', idle: 'not started', error: 'unreadable' };
 
 // The iteration under way while running, otherwise the last one finished.
 function currentIteration(run) {
@@ -35,20 +33,18 @@ function currentIteration(run) {
 }
 
 // Line 1: the state and what a running run is doing (`agent 1m 12s`), else when it was
-// last active. Line 2: time (baseline included) and cost so far, and the --time left.
+// last active. Line 2: time (baseline included) and cost so far, and what is left of --time.
 // Stop reason, budgets and dates are in the tooltip.
 function statusCell(run) {
   const kind = outcome(run);
   const s = run.status;
   const p = run.progress;
   const notes = [];
-  let word = WORDS[kind] || kind;
   let activity = '';
   if (kind === 'running') {
     activity = `${s.phase_word} ${fmtDuration(Date.now() / 1000 - s.phase_started_at)}`;
-    const asked = run.stop_requested; // `autohelix stop`: it ends after this iteration
+    const asked = run.stop_requested; // `autohelix stop`: it ends after this iteration ("running (stopping)")
     if (asked) {
-      word = 'running (stopping)';
       notes.push(`Stop requested${asked.now ? ' (--now)' : ''}${asked.why ? `: ${asked.why}` : ''}`);
     }
   } else if (kind === 'error') {
@@ -64,14 +60,12 @@ function statusCell(run) {
     // A running iteration's time so far is included; its cost arrives when it ends.
     const seconds = p.seconds + (currentIteration(run) > p.iterations && s.iteration_started_at
       ? Date.now() / 1000 - s.iteration_started_at : 0);
-    spent = [fmtDuration(seconds), fmtMoney(p.cost_usd, p.cost_incomplete), timeCap(s, true)].filter(Boolean).join(' · ');
-    const cap = timeCap(s);
-    if (cap) notes.push(`Time budget: ${cap}`);
+    spent = [fmtDuration(seconds), fmtMoney(p.cost_usd, p.cost_incomplete), timeCap(s)].filter(Boolean).join(' · ');
     if (p.max_cost_usd) notes.push(`Cost budget ${fmtCap(p.max_cost_usd)} (run total)`);
     if (p.cost_incomplete) notes.push('Some call costs are unknown');
   }
   return el('td', { title: notes.join('\n') },
-    el('div', {}, el('span', { className: `state ${kind}`, textContent: word }),
+    el('div', {}, el('span', { className: `state ${kind}`, textContent: run.state_word }),
       activity ? el('span', { className: 'muted', textContent: ` ${activity}` }) : null),
     spent ? el('div', { className: 'sub', textContent: spent }) : null);
 }

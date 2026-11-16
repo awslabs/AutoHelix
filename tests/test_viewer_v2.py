@@ -210,17 +210,26 @@ def test_gates_pending_while_running(project, server):
     # The phase in the console's words, on both pages; the stored name as it is.
     status = get_json(server + "/api/state")["status"]
     assert (status["phase"], status["phase_word"]) == ("checks", "gates")
-    assert get_json(server + "/api/runs")["runs"][0]["status"]["phase_word"] == "gates"
+    row = get_json(server + "/api/runs")["runs"][0]
+    assert (row["status"]["phase_word"], row["state_word"]) == ("gates", "running")
 
 
-def test_phase_words_are_the_consoles():
-    from autohelix.run_table import PHASES
-    from autohelix.viewer import with_phase_word
+def test_status_words_are_the_consoles():
+    from autohelix import run_table
+    from autohelix.viewer import with_words
 
-    words = [with_phase_word({"phase": phase, "iteration": n})["phase_word"]
-             for phase, n in [("agent", 2), ("checks", 2), ("benchmark", 2), ("checks", 0), ("report", 0)]]
-    assert words == ["agent", PHASES["checks"], PHASES["benchmark"], "baseline", PHASES["report"]]
-    assert with_phase_word(None) is None
+    words = [with_words({"state": "running", "phase": phase, "iteration": n})["phase_word"]
+             for phase, n in [("agent", 2), ("checks", 2), ("benchmark", 2), ("checks", 0)]]
+    assert words == ["agent", run_table.PHASES["checks"], run_table.PHASES["benchmark"], "baseline"]
+    assert "outcome" not in with_words({"state": "running", "phase": "agent", "iteration": 2})
+    # A run that isn't running: the end block's first line, red where the console's is.
+    for status in ({"state": "finished", "stop_reason": {"kind": "budget", "detail": "iteration budget reached (14)"}},
+                   {"state": "finished", "stop_reason": {"kind": "agent", "detail": "the agent failed 3 times"}},
+                   {"state": "crashed"}, {"state": "interrupted"}, {"state": "failed"}):
+        word, detail, style = run_table._outcome({"status": status})
+        assert with_words(status)["outcome"] == {"word": word, "detail": detail, "error": style == run_table.terminal.RED}
+    assert with_words({"state": "crashed"})["outcome"]["error"] is True
+    assert with_words(None) is None
 
 
 def test_attempt_diff(project, server):

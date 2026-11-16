@@ -73,11 +73,16 @@ def test_durations_money_and_caps():
     assert js(("fmtMoney", 4.339), ("fmtMoney", 4.339, True), ("fmtMoney", None)) == ["$4.34", "$4.34+", ""]
 
 
-def test_time_left_against_the_segments_cap():
+def test_time_left_as_the_console_says_it():
+    from autohelix.run_table import time_cap
+
     running = {"state": "running", "max_time_seconds": 3600, "segment_started_at": 1000}
-    assert js(("timeCap", running, False, 1725), ("timeCap", running, True, 1725), ("timeCap", running, True, 5000),
-              ("timeCap", {**running, "state": "finished"}, False, 1725), ("timeCap", None)) == [
-        "12m5s of 1h (this segment)", "12m5s/1h", "1h6m40s/1h (time up)", "", ""]
+    cases = [(running, 1725), (running, 4599), (running, 5000), ({**running, "max_time_seconds": 5400}, 1000),
+             ({**running, "state": "finished"}, 1725), ({**running, "max_time_seconds": None}, 1725)]
+    assert js(*[("timeCap", status, now) for status, now in cases]) == [
+        time_cap({"status": status}, now) for status, now in cases]
+    assert js(("timeCap", running, 1725))[0] == "47m 55s left (--time 1h)"
+    assert js(("timeCap", None)) == [""]
 
 
 @pytest.mark.parametrize("run, running, text, hint", [

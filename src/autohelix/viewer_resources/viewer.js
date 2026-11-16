@@ -37,6 +37,15 @@ function changeEl(value, reference, direction) {
   return el('span', { className: `change ${cls}`, textContent: text });
 }
 
+// Replace a node's children only when `key` (what they are made from) changed: hover
+// titles, focus and open folds survive the polls that change nothing.
+function rebuild(node, key, build) {
+  if (node.dataset.key === key) return false;
+  node.dataset.key = key;
+  node.replaceChildren(...build());
+  return true;
+}
+
 // ---------- status ----------
 
 function liveIteration() {
@@ -46,24 +55,23 @@ function liveIteration() {
 
 const since = (t) => (typeof t === 'number' ? fmtDuration(Date.now() / 1000 - t) : '');
 
-// Running: where and what, with how long it has been at it; else the console end
-// block's first line: Done / Stopped / Interrupted / Error, and why.
+// Running: where and what, with how long it has been at it, as `view`'s status line
+// (`Running · iteration 3 · gates · 12s`); else the console end block's first line (the
+// server's `outcome`: Done / Stopped / Interrupted / Error, and why), red where it is.
 function renderStatus() {
   const s = state.status;
   const node = $('status');
   node.className = `status ${s ? s.state : 'idle'}`;
   if (!s) { node.textContent = 'No run recorded'; return; }
   if (s.state === 'running') {
-    const where = s.phase === 'report' || s.iteration === 0 || s.iteration === null ? '' : ` · iteration ${s.iteration}`;
-    const stopping = state.stop_requested ? ' · stopping (autohelix stop)' : '';
-    node.textContent = `Running${where} · ${s.phase_word} ${since(s.phase_started_at)}${stopping}`;
+    const where = s.iteration > 0 && s.phase !== 'report' && `iteration ${s.iteration}`;
+    node.textContent = ['Running', where, s.phase_word, since(s.phase_started_at), state.stop_requested && 'stopping']
+      .filter(Boolean).join(' · ');
     return;
   }
-  const kind = s.stop_reason?.kind;
-  const word = { interrupted: 'Interrupted', failed: 'Error', crashed: 'Stopped unexpectedly' }[s.state]
-    || (['budget', 'condition'].includes(kind) ? 'Done' : 'Stopped');
-  node.textContent = [word, s.stop_reason?.detail, s.stopped_at && fmtClock(s.stopped_at)].filter(Boolean).join(' · ');
-  if (kind === 'agent') node.className = 'status failed';
+  const o = s.outcome || {};
+  node.textContent = [o.word, o.detail, s.stopped_at && fmtClock(s.stopped_at)].filter(Boolean).join(' · ');
+  if (o.error) node.className = 'status failed';
 }
 
 // ---------- report, shared notes ----------
@@ -107,11 +115,7 @@ function renderSharedNotes() {
   const files = (state.notes_files || []).filter((name) => !/^iter-\d+\.md$/.test(name));
   show('shared-notes', files.length > 0);
   setText('shared-count', files.join(' · '));
-  const list = $('shared-list');
-  const key = JSON.stringify(files);
-  if (list.dataset.key === key) return;
-  list.dataset.key = key;
-  list.replaceChildren(...files.map((name) => {
+  rebuild($('shared-list'), JSON.stringify(files), () => files.map((name) => {
     const body = el('div', { className: 'prose' });
     const item = el('details', { className: 'note' }, el('summary', { textContent: name }), body);
     item.addEventListener('toggle', async () => {
@@ -125,10 +129,10 @@ function renderSharedNotes() {
 
 // ---------- stats ----------
 
-// As the console's end block: each metric's baseline → tip (the server's: the latest
-// accepted value with a commit, what landing delivers) and its change, then iterations,
-// time and cost (the server's totals, the baseline's included; a running iteration's
-// time so far added), landing.
+// As the console's end block: each metric's tip (the server's: the latest accepted
+// value, as the run list shows it) and its change against the baseline, then iterations
+// (as the run list counts them), time and cost (the server's totals, the baseline's
+// included; a running iteration's time so far added), landing.
 function renderStats() {
   const run = state.run;
   const cost = state.cost;
@@ -138,26 +142,26 @@ function renderStats() {
     const tip = state.tip?.[name];
     if (!tip) continue;
     const moved = tip.iteration > 0 && tip.value !== base;
-    stats.push([name, [fmtNumber(tip.value), moved ? changeEl(tip.value, base, state.directions[name]) : null],
+    stats.push([name, fmtNumber(tip.value), moved ? [tip.value, base, state.directions[name]] : null,
       !moved ? 'baseline' : isNumber(base) ? `from ${fmtNumber(base)} · iter ${tip.iteration}` : `iter ${tip.iteration}`]);
   }
-  const its = state.iterations.filter((r) => r.iteration > 0);
   const live = liveIteration();
-  if (its.length || live) {
-    const accepted = its.filter((r) => r.accepted).length;
-    stats.push(['Iterations', [String(its.length)], `${accepted} accepted${live ? ` · iteration ${live} under way` : ''}`]);
+  const last = state.iterations.at(-1)?.iteration || 0;
+  if (run && (last || live)) {
+    const n = Math.max(last, live || 0), cap = state.status?.max_iterations;
+    stats.push(['Iterations', cap ? `${n}/${cap}` : String(n), null, `${run.accepted} accepted`]);
   }
   if (run) {
     const started = state.status?.iteration_started_at;
     const running = live !== null && !row(live) && typeof started === 'number' ? Date.now() / 1000 - started : 0;
-    stats.push(['Time', [fmtDuration(run.seconds + running) || '—']]);
-    stats.push(['Cost', [fmtMoney(cost.cost_usd, cost.incomplete) || '—'], cost.incomplete ? 'some call costs unknown' : '']);
+    stats.push(['Time', fmtDuration(run.seconds + running) || '—', null, '']);
+    stats.push(['Cost', fmtMoney(cost.cost_usd, cost.incomplete) || '—', null, cost.incomplete ? 'some call costs unknown' : '']);
     const landing = landingWords(run, state.status?.state === 'running');
-    if (landing.text !== '—') stats.push(['Landing', [landing.text], landing.hint]);
+    if (landing.text !== '—') stats.push(['Landing', landing.text, null, landing.hint]);
   }
-  $('stats').replaceChildren(...stats.map(([k, value, sub]) => el('div', { className: 'stat' },
+  rebuild($('stats'), JSON.stringify(stats), () => stats.map(([k, value, change, sub]) => el('div', { className: 'stat' },
     el('span', { className: 'stat-label', textContent: k }),
-    el('span', { className: 'stat-value' }, ...value),
+    el('span', { className: 'stat-value' }, value, change && changeEl(...change)),
     sub ? el('span', { className: 'stat-sub', textContent: sub }) : null)));
 }
 
@@ -191,7 +195,7 @@ function renderChart() {
   const n = Math.max(1, last, live ?? 0);
   const lo = Math.min(...values), hi = Math.max(...values);
   const log = lo > 0 && hi / lo > 20; // big speedups are unreadable on a linear axis
-  const ticks = log ? logTicks(lo, hi) : linearTicks(lo, hi);
+  const { ticks, decimals } = log ? logTicks(lo, hi) : linearTicks(lo, hi);
   const f = (v) => (log ? Math.log10(v) : v);
   const [y0, y1] = [f(ticks[0]), f(ticks.at(-1))];
   const x = (i) => pad.l + (i / n) * (W - pad.l - pad.r);
@@ -200,10 +204,11 @@ function renderChart() {
   for (const v of ticks) {
     children.push(svgEl('line', { x1: pad.l, x2: W - pad.r, y1: y(v), y2: y(v), class: 'grid' }));
     children.push(svgEl('text', { x: pad.l - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'axis' },
-      fmtTick(v, log ? null : ticks[1] - ticks[0])));
+      fmtTick(v, decimals)));
   }
   const dir = state.directions[metric];
   setText('scale', [dir && `${dir} is better`, log && 'log scale'].filter(Boolean).join(' · '));
+  // Built every poll (cheap); put in the page only when it changed (dot tooltips stay put).
   const step = Math.ceil(n / 10); // whole iterations, evenly spaced
   for (let i = 0; i <= n; i += step) {
     children.push(svgEl('text', { x: x(i), y: H - 4, 'text-anchor': 'middle', class: 'axis' }, String(i)));
@@ -226,33 +231,33 @@ function renderChart() {
   for (const r of points) {
     dot(r.iteration, r.metrics[metric], r.accepted ? 'accepted' : 'rejected', `${label(r.iteration)}: ${fmtNumber(r.metrics[metric])}`);
   }
-  svg.replaceChildren(...children);
+  rebuild(svg, JSON.stringify([metric, points.map((r) => [r.iteration, r.metrics[metric], r.accepted, r.tip]), live, last, selected]),
+    () => children);
 }
 
-// Axis ticks: powers of ten on a log axis, round steps on a linear one.
+// Axis ticks: powers of ten on a log axis (written 10, 1K, 10K), round steps on a
+// linear one, with as many decimals as the step has (0.25 → 2), so close ticks stay distinct.
 function logTicks(lo, hi) {
   const ticks = [];
   for (let k = Math.floor(Math.log10(lo)); k <= Math.ceil(Math.log10(hi)); k++) ticks.push(10 ** k);
-  return ticks;
+  return { ticks, decimals: null };
 }
 
 function linearTicks(lo, hi) {
-  if (lo === hi) return [lo];
+  if (lo === hi) return { ticks: [lo], decimals: null };
   const raw = (hi - lo) / 4;
-  const mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+  const power = Math.floor(Math.log10(raw));
+  const m = [1, 2, 2.5, 5, 10].find((k) => k * 10 ** power >= raw);
+  const step = m * 10 ** power;
   const ticks = [];
   for (let v = Math.floor(lo / step) * step; v <= hi + step * 1e-9; v += step) ticks.push(Number(v.toPrecision(12)));
   if (ticks.at(-1) < hi) ticks.push(ticks.at(-1) + step);
-  return ticks;
+  return { ticks, decimals: Math.max(0, -power + (m === 2.5 ? 1 : 0) - (m === 10 ? 1 : 0)) };
 }
 
 const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumSignificantDigits: 3 });
-// Log axis: 10, 1K, 10K. Linear: as many decimals as the step has, so close ticks stay distinct.
-function fmtTick(v, step) {
-  if (!step) return compact.format(v);
-  let decimals = 0;
-  while (decimals < 12 && Math.abs(step * 10 ** decimals - Math.round(step * 10 ** decimals)) > 1e-9) decimals++;
+function fmtTick(v, decimals) {
+  if (decimals === null) return compact.format(v);
   return v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
@@ -265,18 +270,12 @@ function renderRows() {
   const names = metricNames();
   const arrow = (n) => ({ higher: ' ↑', lower: ' ↓' }[state.directions[n]] || '');
   const head = ['#', '', ...names.map((n) => n + arrow(n)), 'Summary', 'Time', 'Cost'];
-  const columns = $('columns');
-  if (columns.dataset.key !== head.join('\n')) {
-    columns.dataset.key = head.join('\n');
-    columns.replaceChildren(...head.map((h, i) => el('th', {
-      textContent: h, className: i >= 2 && i < 2 + names.length ? 'value' : i > 2 + names.length ? 'num' : '' })));
-  }
+  rebuild($('columns'), head.join('\n'), () => head.map((h, i) => el('th', {
+    textContent: h, className: i >= 2 && i < 2 + names.length ? 'value' : i > 2 + names.length ? 'num' : '' })));
   const live = liveIteration();
   const running = live !== null && !row(live) ? live : null; // the row under way, not recorded yet
   const box = $('rows');
-  const key = JSON.stringify([head, state.iterations, running, running !== null && state.status.phase_word]);
-  if (box.dataset.key !== key) {
-    box.dataset.key = key;
+  rebuild(box, JSON.stringify([head, state.iterations, running, running !== null && state.status.phase_word]), () => {
     const rows = state.iterations.map((r) => {
       const outcome = r.iteration === 0 ? 'baseline' : r.accepted ? 'accepted' : 'rejected';
       const why = whyOf(r);
@@ -288,7 +287,7 @@ function renderRows() {
         ...names.map((name) => el('td', { className: `value${outcome === 'rejected' ? ' dim' : ''}` },
           valueText(r.metrics?.[name]),
           outcome === 'accepted' ? changeEl(r.metrics?.[name], baselineValue(name), state.directions[name]) : null)),
-        el('td', { className: `summary${why?.error ? ' error' : ''}`, title: [summary, ...(r.notes || []).map((n) => n.text)].join('\n') },
+        el('td', { className: `summary${why ? ' why' : ''}${why?.error ? ' error' : ''}`, title: [summary, ...(r.notes || []).map((n) => n.text)].join('\n') },
           summary, ...notes),
         el('td', { className: 'num', textContent: fmtDuration(r.seconds) }),
         el('td', { className: 'num', textContent: fmtMoney(r.cost, r.cost_incomplete) || '—' }),
@@ -302,8 +301,8 @@ function renderRows() {
         el('td', { className: 'num', id: 'live-time' }), el('td'),
       ]));
     }
-    box.replaceChildren(...rows);
-  }
+    return rows;
+  });
   if (running !== null) setText('live-time', since(state.status.iteration_started_at));
   for (const tr of box.children) tr.classList.toggle('selected', Number(tr.dataset.iteration) === selected);
 }
@@ -446,7 +445,7 @@ function renderPanel() {
   const gates = d.gates || [];
   const byGate = gates.some((g) => g.passed === false);
   const full = r?.accepted === false && !byGate ? r.reason || r.summary : null;
-  const reason = full !== why?.text ? full : null; // the title says it already
+  const reason = full && !(why && full.includes(why.text)) ? full : null; // the title says it already
   show('panel-reason', !!(reason || (!byGate && d.failure_output)));
   $('panel-reason').replaceChildren(...[reason && el('p', { textContent: reason }),
     !byGate && d.failure_output && el('pre', { textContent: d.failure_output })].filter(Boolean));
@@ -519,7 +518,7 @@ function changesSection(d, live, defaultOpen) {
   fill(s, count, JSON.stringify([text, error, discarded, panel.diff?.loading]), () => [
     discarded.length ? el('p', { className: 'muted' }, 'Outside the scope, discarded: ',
       ...discarded.flatMap((p, i) => [i ? ', ' : '', el('code', { textContent: p }), frozen.has(p) ? ' (frozen)' : ''])) : null,
-    ...files.map((f) => diffFileEl(f, files.length === 1)),
+    ...(files.length === 1 ? [diffEl(files[0])] : files.map(diffFileEl)),
     !text && el('p', { className: 'muted', textContent: error
       || (SNAPSHOT ? 'Not saved in this file; see autohelix view --web.' : panel.diff?.loading ? 'Loading…' : 'No changes.') }),
   ].filter(Boolean));
@@ -693,15 +692,20 @@ function parseDiff(text) {
   return files;
 }
 
-// One file of a diff, folding on its own (`path +a −d`); its fold is kept by path.
-function diffFileEl(f, only) {
-  const item = el('details', { className: 'diff-file', open: panel.diffOpen.get(f.path) ?? only },
+// One file's rows: old and new line numbers, sign, code.
+function diffEl(f) {
+  return el('pre', { className: 'diff' }, ...f.rows.map(([kind, a, b, sign, code]) => (kind === 'gap'
+    ? el('div', { className: 'gap', textContent: a })
+    : el('div', { className: `line ${kind}` }, el('span', { className: 'ln', textContent: a }),
+      el('span', { className: 'ln', textContent: b }), el('span', { className: 'sign', textContent: sign }),
+      el('span', { className: 'code', textContent: code })))));
+}
+
+// Of several files, each folds on its own (`path +a −d`, folded first); kept by path.
+function diffFileEl(f) {
+  const item = el('details', { className: 'diff-file', open: panel.diffOpen.get(f.path) ?? false },
     el('summary', {}, el('code', { textContent: f.path }), el('span', { className: 'muted', textContent: ` +${f.add} −${f.del}` })),
-    el('pre', {}, ...f.rows.map(([kind, a, b, sign, code]) => (kind === 'gap'
-      ? el('div', { className: 'gap', textContent: a })
-      : el('div', { className: `line ${kind}` }, el('span', { className: 'ln', textContent: a }),
-        el('span', { className: 'ln', textContent: b }), el('span', { className: 'sign', textContent: sign }),
-        el('span', { className: 'code', textContent: code }))))));
+    diffEl(f));
   item.addEventListener('toggle', () => panel.diffOpen.set(f.path, item.open));
   return item;
 }
@@ -825,8 +829,8 @@ function renderConfig() {
   const pre = $('config-text');
   if (c.missing) { // a run started by an older AutoHelix: never its source file instead
     summary.title = '';
-    summary.replaceChildren(el('b', { textContent: 'Config' }),
-      el('span', { className: 'config-file', textContent: `${c.file}: not stored with this run` }));
+    rebuild(summary, c.file, () => [el('b', { textContent: 'Config' }),
+      el('span', { className: 'config-file', textContent: `${c.file}: not stored with this run` })]);
     pre.replaceChildren();
     return;
   }
@@ -847,13 +851,10 @@ function renderConfig() {
     budget && ['Budget', budget, `${budget}: the latest run/resume's -n/--until and --cost as run totals, its --time as its own`],
   ].filter(Boolean);
   summary.title = `Show the full ${c.file}`;
-  const key = JSON.stringify(parts);
-  if (summary.dataset.key !== key) {
-    summary.dataset.key = key;
-    summary.replaceChildren(el('b', { textContent: 'Config' }), el('span', { className: 'config-file', textContent: c.file }),
-      // One line; long values are cut with "…" (hover, or open the config, for the full text).
-      ...parts.map(([k, v, full]) => el('span', { className: 'chip', title: full || v }, el('b', { textContent: k + ' ' }), v)));
-  }
+  rebuild(summary, JSON.stringify([c.file, parts]), () => [el('b', { textContent: 'Config' }),
+    el('span', { className: 'config-file', textContent: c.file }),
+    // One line; long values are cut with "…" (hover, or open the config, for the full text).
+    ...parts.map(([k, v, full]) => el('span', { className: 'chip', title: full || v }, el('b', { textContent: k + ' ' }), v))]);
   if (pre.dataset.text !== c.text) { pre.dataset.text = c.text; pre.replaceChildren(...highlightYaml(c.text)); }
 }
 

@@ -81,15 +81,14 @@ function fmtClock(epochSeconds) {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-// The running segment's --time against its clock: "12m5s of 1h (this segment)", short
-// "12m5s/1h"; past the cap "(time up)". '' when the run isn't running or the segment has
-// no --time (a stop reason says when time ended it).
-function timeCap(status, short = false, now = Date.now() / 1000) {
+// What is left of the running segment's --time, as the console says it (run_table.time_cap):
+// "47m 55s left (--time 1h)", past it "time up (--time 1h)". '' when the run isn't
+// running or the segment has no --time (a stop reason says when time ended it).
+function timeCap(status, now = Date.now() / 1000) {
   const s = status || {}, cap = s.max_time_seconds;
   if (s.state !== 'running' || !isNumber(cap) || cap <= 0 || !isNumber(s.segment_started_at)) return '';
-  const elapsed = Math.max(0, Math.floor(now - s.segment_started_at));
-  const text = short ? `${fmtLimit(elapsed)}/${fmtLimit(cap)}` : `${fmtLimit(elapsed)} of ${fmtLimit(cap)} (this segment)`;
-  return elapsed >= cap ? `${text} (time up)` : text;
+  const left = Math.floor(cap) - Math.max(0, Math.floor(now - s.segment_started_at));
+  return `${left > 0 ? `${fmtDuration(left)} left` : 'time up'} (--time ${fmtLimit(cap)})`;
 }
 
 // "20261114-2333-sorting-1q3w" -> name "sorting-1q3w", started "2026-11-14 23:33";
@@ -103,9 +102,10 @@ function splitRunId(id) {
 // The suffix every command accepts: "20261114-2333-sorting-1q3w" -> "1q3w".
 const shortId = (id) => (id || '').split('-').at(-1);
 
-// Where the run's accepted code is, as the console's dashboard says it: `landed`,
-// `3 to land`, `3 diverged` (`manual · ` first for a run that lands by hand), `—` when
-// nothing is to say; `hint` says where, or what to type. `run`: a run list row, or the
+// Where the run's accepted code is, in the console dashboard's words (run_table._landing):
+// `landed`, `3 to land`, `3 diverged`, `—` when nothing is to say; with `manual · ` first
+// for a run that lands by hand (the pages' one addition: no other column shows the mode).
+// `hint` says where, or what to type. `run`: a run list row, or the
 // run page's state.run (id, target_branch, landing, accepted, land).
 function landingWords(run, running = false) {
   const { id, target_branch: target, landing, accepted } = run;
