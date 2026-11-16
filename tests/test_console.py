@@ -44,7 +44,7 @@ def _header(config, budget, width=100):
 def test_header_lines():
     lines = _header(Config.from_dict(CONFIG), Budget(iterations=20, cost_usd=10, time_seconds=7200))
     assert lines[:-1] == [
-        "  autohelix  v0.3.0 · run 0mws · sorting · 12:00",
+        "  AutoHelix  v0.3.0 · run 0mws · sorting · 12:00",
         "  Goal     Make sort_list faster in sort.py.",
         "  Agent    claude (opus)",
         "  Gates    pytest -q · ask: keeps the public API? · speed regress 5%",
@@ -63,7 +63,7 @@ def test_header_omits_empty_lines():
 def test_the_mark_is_beside_the_header():
     title = terminal.title("run abcd", version="dev")
     lines = terminal.header(title, [("Goal", "g")], 80, show_mark=True)
-    assert len(lines) == 7 and lines[0].plain.endswith("autohelix  dev · run abcd")
+    assert len(lines) == 7 and lines[0].plain.endswith("AutoHelix  dev · run abcd")
     assert lines[1].plain[2:2 + terminal.MARK_WIDTH] == terminal.mark()[1].plain
 
 
@@ -306,7 +306,7 @@ def test_the_live_row_shows_the_phase_only_with_room_under_it(project):
     assert after and set(after) == {"\n"}, after
 
 
-@pytest.mark.parametrize("width, spacing", [(80, terminal.COMPACT), (120, terminal.SPACED)])
+@pytest.mark.parametrize("width, spacing", [(80, terminal.COMPACT), (120, terminal.SPACED), (130, terminal.WIDE)])
 def test_columns_are_spaced_when_the_width_allows(width, spacing):
     """Roomier columns where a reason still fits after the values; today's at 80 (with no
     metric too). The values stay right-aligned under their headings, the live row's phase

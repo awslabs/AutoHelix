@@ -22,7 +22,7 @@ from autohelix import run_table
 from autohelix.display import LiveDisplay
 from autohelix.formatting import clean, format_duration
 from autohelix.replay import LogTail
-from autohelix.terminal import earlier_line
+from autohelix.terminal import ROOM, earlier_line
 from autohelix.safe_open import open_run_log
 from autohelix.run_status import read_run_status, running_iteration
 from autohelix.runs import RunPaths
@@ -219,7 +219,7 @@ def _changes(project: Path, run_id: str | None) -> tuple:
 def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollower, status: dict | None, height: int,
                 width: int = 100) -> Group:
     """The run's screen on top, the log panel below it, the status line last, and while
-    the run is live a blank line under it (not on the terminal's last line). The live row
+    the run is live `ROOM` blank lines under it (not on the terminal's last lines). The live row
     is timed when drawn (`terminal.LiveRow`).
 
     On a short terminal the log panel shrinks first, then the oldest iteration rows go, then the panel.
@@ -232,14 +232,14 @@ def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollowe
         run, saved = data
         parts = run_table.view_parts(run, saved, width, live=True)
     running = bool(status) and status.get("state") == "running"
-    # The status line, a spare line so the terminal doesn't scroll, the blank line under a live run.
-    room = height - 2 - running
+    # The status line, a spare line so the terminal doesn't scroll, the blank lines under a live run.
+    room = height - 2 - ROOM * running
     lines = fit(parts, room - (MIN_LOG_LINES if log.display else 0)) if parts else []
     log_height = room - len(lines)
     if parts and (log_height < MIN_LOG_LINES or (parts[2] and lines[-1] is not parts[2][-1])):
         lines = fit(parts, room)  # no room for the log beside the whole end block: the table gets it all
         log_height = room - len(lines)
-    return Group(*lines, *log.render(status, height=log_height), *[Text()] * running)
+    return Group(*lines, *log.render(status, height=log_height), *[Text() for _ in range(ROOM * running)])
 
 
 def view(project: Path, backend: str | None = None, console: Console | None = None, *,

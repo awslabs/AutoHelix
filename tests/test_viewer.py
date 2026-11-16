@@ -445,7 +445,7 @@ def test_dashboard_json_and_once(measured_project):
     result = _cli("dashboard", "-p", project, "--once")
     assert result.exit_code == 0, result.output
     lines = [line.rstrip() for line in result.output.splitlines()]
-    assert lines[0].startswith("  autohelix  v") and lines[0].endswith(" · dashboard · test_project")
+    assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(" · dashboard · test_project")
     assert lines[1].startswith("  Project  ") and lines[1].endswith(" @ " + subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip())
     assert lines[2].startswith("  Runs     2 runs") and lines[2].endswith("1 archived (not listed; see --json)")
@@ -475,7 +475,7 @@ def test_view_json_and_once(measured_project):
 
     text = _cli("view", first, "-p", project, "--once").output
     lines = [line.rstrip() for line in text.splitlines()]
-    assert lines[0].startswith("  autohelix  v") and lines[0].endswith(f" · run {short_id(first)} · test_project · finished")
+    assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(f" · run {short_id(first)} · test_project · finished")
     assert "  Goal     Test the integration" in lines
     rows = lines[lines.index(next(line for line in lines if line.lstrip().startswith("time"))) + 1:]
     assert rows[0].split() == ["·", "base", "100"]

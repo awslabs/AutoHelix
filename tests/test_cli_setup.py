@@ -506,7 +506,7 @@ def test_one_agent_asks_once_and_the_default_starts_it(project, monkeypatch, exe
     agents(["codex"])(monkeypatch)
     result = setup(input="\n")
     assert result.exit_code == 0, result.output
-    assert "autohelix  v" in flat_lines(result) and " · setup" in flat_lines(result)
+    assert "AutoHelix  v" in flat_lines(result) and " · setup" in flat_lines(result)
     assert field(result, "Config") == "autohelix.yaml (new)"
     assert "  How do you want to write it?\n  1. With Codex          it asks what you want, then drafts the config" in flat_lines(result)
     assert "  2. From the template   the commented template, to edit by hand\n  Choose [1]:" in flat_lines(result)

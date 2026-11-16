@@ -72,7 +72,7 @@ whether it is clean (in yellow when a run would refuse the folder: no git checko
 no commit yet, or uncommitted changes to tracked files):
 
 ```
-  autohelix  v0.3.0 · setup
+  AutoHelix  v0.3.0 · setup
   Project  ~/code/sorting
   Config   autohelix.yaml (new)
   Agents   Claude Code · Codex (found on PATH)
@@ -185,7 +185,7 @@ commands use: iteration copies are made from the commit. Do it before the first
 ### What it prints
 
 ```text
-  autohelix  v0.3.0 · run krp3 · sorting · 14:02
+  AutoHelix  v0.3.0 · run krp3 · sorting · 14:02
   Goal     Make sort_list faster in sort.py.
   Agent    claude (sonnet)
   Gates    pytest -q test_sort.py · speed regress 5%
@@ -228,7 +228,7 @@ that failed (`pytest -q failed (exit 1)`, `ask: … answered no`), a metric gate
 comparison with the iteration it compares against, or the agent's failure. A reason that doesn't fit goes on the line under the row, with failed
 observe entries and discarded out-of-scope paths. While an iteration runs, a live row
 shows its time and phase (`agent`, `gates`, `observe · bench` with the entry
-running, `stop`), with a blank line under it. The end block says how the segment ended (`Done`, `Stopped`,
+running, `stop`), with two blank lines under it. The end block says how the segment ended (`Done`, `Stopped`,
 `Interrupted`, `Error`), each metric from the baseline to the run's tip, the totals,
 what landed with this segment's accepted summaries (`landing  failed: …` in yellow
 when auto landing couldn't, the commits then waiting for `autohelix land`), what to

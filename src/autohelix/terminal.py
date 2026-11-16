@@ -159,9 +159,9 @@ def print_lines(console, lines) -> None:
 
 
 def title(*parts: str, version: str) -> list[tuple[str, str | None]]:
-    """`autohelix  v0.3.0 · run krp3 · sorting · 14:02`: the name bold, the version dim."""
+    """`AutoHelix  v0.3.0 · run krp3 · sorting · 14:02`: the name bold, the version dim."""
     shown = version if version == "dev" else f"v{version}"
-    return [("autohelix", "bold"), (f"  {shown}", "dim"), *[(f" · {clean(part)}", None) for part in parts if part]]
+    return [("AutoHelix", "bold"), (f"  {shown}", "dim"), *[(f" · {clean(part)}", None) for part in parts if part]]
 
 
 def run_fields(config, budget: str) -> list[tuple[str, str]]:
@@ -243,10 +243,11 @@ COST = 6  # "$12.34"
 CHANGE = 6  # "0.083×"
 INDENT = 2 + LABEL + 2  # where the time column starts: notes and long reasons go under it
 # Space between the columns after the label (time, cost, each metric, the reason) and
-# between a value and its change: roomy when the width allows, else compact.
-SPACED, COMPACT = (4, 2), (2, 1)
-REASON_ROOM = 40  # spaced only if a typical reason still fits on the row after the values
+# between a value and its change: the widest that the width allows, else compact.
+WIDE, SPACED, COMPACT = (6, 2), (4, 2), (2, 1)
+REASON_ROOM = 45  # wider only if a typical reason (a metric gate's, ~43) still fits on the row after the values
 SPACED_FROM = 100  # and never narrower (80 columns: always compact)
+ROOM = 2  # blank lines under a live row
 
 
 class Table:
@@ -256,9 +257,9 @@ class Table:
     Stateful, as rows arrive: `add` returns a row's lines (the column header before the
     first), and keeps the baseline and each metric's tip value (the value a metric gate
     compares with) for later rows and the end block. Columns that don't fit the width
-    are dropped: cost first, then the changes. The columns are spaced (`SPACED`) when
-    that leaves `REASON_ROOM` after them on a terminal `SPACED_FROM` wide or more, else
-    compact (80 columns, many metrics)."""
+    are dropped: cost first, then the changes. The columns get the widest spacing
+    (`WIDE`, then `SPACED`) that leaves `REASON_ROOM` after them on a terminal
+    `SPACED_FROM` wide or more, else compact (80 columns, many metrics)."""
 
     def __init__(self, directions: dict[str, str], width: int, gates: list = (), timeout: float | None = None):
         """`directions`: metric -> "higher"/"lower", in column order; `gates`: the
@@ -271,9 +272,9 @@ class Table:
         self.heads = [f"{name} {'↓' if direction == 'lower' else '↑'}" for name, direction in self.directions.items()]
         self.value_width = {name: max(len(head), 8) for name, head in zip(self.directions, self.heads)}
         self.show_cost = self.show_change = True
-        self.gap, self.sep = SPACED
-        if self.width < SPACED_FROM or self._metrics_end() + REASON_ROOM > self.width:
-            self.gap, self.sep = COMPACT
+        for self.gap, self.sep in (WIDE, SPACED, COMPACT):
+            if self.width >= SPACED_FROM and self._metrics_end() + REASON_ROOM <= self.width:
+                break
         if self._metrics_end() > self.width:
             self.show_cost = False
         if self._metrics_end() > self.width:
@@ -492,9 +493,9 @@ def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int 
 
 
 def with_room(renderable) -> Group:
-    """`renderable` with a blank line under it: a live row shown at the bottom of the
-    terminal doesn't sit on its last line (gone with the live display)."""
-    return Group(renderable, Text())
+    """`renderable` with `ROOM` blank lines under it: a live row shown at the bottom of
+    the terminal doesn't sit on its last lines (gone with the live display)."""
+    return Group(renderable, *[Text() for _ in range(ROOM)])
 
 
 def outcome(stop: dict | None, error: BaseException | None, interrupted_at: int | None) -> tuple[str, str, str | None]:
