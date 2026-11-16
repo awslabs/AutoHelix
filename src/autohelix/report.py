@@ -98,8 +98,10 @@ Only read. Don't run tests, benchmarks or experiments, and don't edit any file o
 
 
 def write_report(config: Config, project: Path, console, *, run_id: str | None = None, _owned: bool = False,
-                 ) -> bool:
-    """Run the report agent; replace the saved report only if it wrote a new one."""
+                 phase_at: int | None = None) -> bool:
+    """Run the report agent; replace the saved report only if it wrote a new one.
+    `phase_at`: the run table's phase column, for the summary step's live row
+    (`terminal.Table.phase_at`)."""
     from rich.live import Live
 
     from autohelix.agents import AgentConfig, AgentEvent, create_agent
@@ -111,7 +113,7 @@ def write_report(config: Config, project: Path, console, *, run_id: str | None =
         raise RuntimeError("No current run; start a run first.")
     if not _owned:
         with RunLock(paths.lock):
-            return write_report(config, project, console, run_id=paths.run_id, _owned=True)
+            return write_report(config, project, console, run_id=paths.run_id, _owned=True, phase_at=phase_at)
     draft = paths.report_draft
     draft.parent.mkdir(parents=True, exist_ok=True)
     draft.unlink(missing_ok=True)
@@ -125,7 +127,7 @@ def write_report(config: Config, project: Path, console, *, run_id: str | None =
     ), heartbeat_seconds=30)
     log_path = paths.logs / "report.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    display = LiveDisplay(console=console, title="summary", verbose=False)
+    display = LiveDisplay(console=console, title="summary", verbose=False, phase_at=phase_at)
 
     def on_event(event: AgentEvent) -> None:
         display.handle_event(event)
