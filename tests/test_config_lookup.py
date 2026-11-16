@@ -15,17 +15,13 @@ from autohelix.harness import Harness
 from autohelix.history import History
 from autohelix.runs import NoRunToResume, RunPaths, git, short_id
 from autohelix.viewer import RunData
-from tests.helpers import latest_run
+from tests.helpers import cli, latest_run
 
 
 def write(path, text="goal: x\n"):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     return path
-
-
-def cli(project, *args):
-    return CliRunner().invoke(main, [*args, "-p", str(project)])
 
 
 def flat(text):

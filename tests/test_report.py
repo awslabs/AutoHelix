@@ -88,7 +88,7 @@ def test_a_summary_that_never_returned_is_an_unknown_cost(project, monkeypatch):
 
 
 def test_no_summary_after_the_agent_failed_three_times(project, monkeypatch):
-    from tests.test_runs import configure
+    from tests.helpers import configure
 
     configure(project, agent={"backend": "mock", "settings": {"should_fail": True}})
     calls = []
@@ -117,7 +117,7 @@ def test_a_failed_summary_says_why_and_names_its_log(project, monkeypatch):
 
 
 def test_the_summary_keeps_the_agent_settings(project, monkeypatch):
-    from tests.test_runs import configure
+    from tests.helpers import configure
 
     configure(project, agent={"backend": "mock", "reasoning_effort": "high", "extra_args": ["--x"],
                               "timeout": "2h", "settings": {"change_file": "code.py", "cost_usd": 0.1}})

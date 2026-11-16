@@ -16,11 +16,7 @@ from autohelix.cli import main
 from autohelix.judge import CONFIG_ENV
 from autohelix.runs import (SCHEMA, NoRun, RunLock, RunPaths, default_run, find_project, git, project_runs,
                             short_id, write_json)
-from tests.helpers import latest_run
-
-
-def cli(project, *args):
-    return CliRunner().invoke(main, [*args, "-p", str(project)])
+from tests.helpers import cli, latest_run
 
 
 def add_run(project, run_id, *, created_at, archived=False):

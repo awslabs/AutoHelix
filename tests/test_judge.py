@@ -164,6 +164,16 @@ def test_ask_answers_and_records_one_call(tmp_path, usage_file):
     assert call["source"] == "ask" and Path(call["log"]).exists()
 
 
+def test_ask_in_a_harness_call_records_its_transcript_by_destination(tmp_path, usage_file, monkeypatch):
+    """In a command the harness runs, the record names the call and the file name, which
+    stay right once the harness moves the transcript to the call's stored folder."""
+    monkeypatch.setenv("AUTOHELIX_CALL", "gates/2")
+    ask("Done?", tmp_path, mock_judge())
+    [call] = read_usage(usage_file)
+    assert (call["call"], call["log"]) == ("gates/2", "ask.log")
+    assert (tmp_path / "logs" / "ask.log").is_file()
+
+
 def test_invalid_answer_is_retried_once_then_fails(tmp_path, usage_file):
     with pytest.raises(JudgeError, match="no JSON object"):
         ask("Done?", tmp_path, mock_judge(judge_output="I think so", cost_usd=0.01))
@@ -361,7 +371,8 @@ def test_in_a_run_a_judge_writing_fails_and_its_copy_goes(candidate, monkeypatch
 
 
 def test_by_hand_ask_names_the_working_tree_change(tmp_path, usage_file):
-    from tests.test_review import git, make_repo
+    from tests.helpers import git
+    from tests.test_review import make_repo
 
     repo = make_repo(tmp_path / "repo")
     (repo / "a.py").write_text("one\n")

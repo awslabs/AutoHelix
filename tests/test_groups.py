@@ -7,18 +7,11 @@ import os
 import subprocess
 
 import pytest
-from click.testing import CliRunner
 
 from autohelix import workspace
-from autohelix.cli import main
 from autohelix.harness import Budget, Harness
 from autohelix.runs import RunLock, RunPaths, archive, git, short_id
-from tests.test_runs import configure
-from tests.helpers import latest_run
-
-
-def cli(project, *args):
-    return CliRunner().invoke(main, [*args, "-p", str(project)])
+from tests.helpers import cli, configure, latest_run
 
 
 def started(project, *args):

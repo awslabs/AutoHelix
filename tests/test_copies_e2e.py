@@ -8,7 +8,7 @@ import yaml
 
 from autohelix.harness import Budget, Harness
 from autohelix.runs import RunPaths, git, land
-from tests.test_runs import configure
+from tests.helpers import configure
 
 
 def _judge_config(project, **settings):

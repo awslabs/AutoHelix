@@ -7,8 +7,8 @@ import shutil
 
 from autohelix.harness import Budget, Harness
 from autohelix.runs import RunPaths, git, short_id
-from tests.test_groups import cli, identity, started, watch_agent
-from tests.test_runs import configure
+from tests.helpers import cli, configure
+from tests.test_groups import identity, started, watch_agent
 
 TRACKER = {"name": "tracker", "metrics": {"score": "higher"},
            "command": 'echo "run $AUTOHELIX_RUN_ID"; '

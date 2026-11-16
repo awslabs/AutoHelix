@@ -16,24 +16,20 @@ from autohelix.harness import Budget, Harness
 from autohelix.history import History
 from autohelix.iteration import IterationWorkspace
 from autohelix.runs import RunPaths
-from tests.helpers import latest_run
-
-
-def _git(project, *args) -> str:
-    return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True, check=True).stdout.strip()
+from tests.helpers import git, latest_run
 
 
 @pytest.fixture
 def project(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
-    _git(project, "init")
-    _git(project, "config", "user.email", "test@test.com")
-    _git(project, "config", "user.name", "Test")
+    git(project, "init")
+    git(project, "config", "user.email", "test@test.com")
+    git(project, "config", "user.name", "Test")
     (project / "hello.py").write_text('print("hello")\n')
     (project / ".gitignore").write_text(".autohelix/\n")
-    _git(project, "add", "-A")
-    _git(project, "commit", "-m", "init")
+    git(project, "add", "-A")
+    git(project, "commit", "-m", "init")
     return project
 
 
@@ -49,8 +45,8 @@ def _configure(project, **sections) -> None:
                                                         "change_content": "# iteration {iteration}"}},
               **sections}
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    _git(project, "add", "-A")
-    _git(project, "commit", "-m", "config")
+    git(project, "add", "-A")
+    git(project, "commit", "-m", "config")
 
 
 def _run(project, n: int) -> list:
@@ -354,11 +350,11 @@ def test_call_folder_is_removed_on_interrupt(project):
     try:
         workspace = IterationWorkspace(1, harness.run_state, harness.history, harness.repo)
         with pytest.raises(KeyboardInterrupt):
-            with workspace.call_folder() as folders:
+            with workspace.call_folder("gates/1") as folders:
                 (folders["scratch"] / "x").write_text("x")
                 folder = folders["scratch"].parent
                 raise KeyboardInterrupt
-        assert not folder.exists()
+        assert folder.name == "iter-1-gates-1" and not folder.exists()
         workspace.close()
     finally:
         harness.close()
@@ -367,13 +363,13 @@ def test_call_folder_is_removed_on_interrupt(project):
 def test_candidate_base_and_project(project, log):
     record = f'echo "$AUTOHELIX_ITERATION $AUTOHELIX_CANDIDATE $AUTOHELIX_BASE $AUTOHELIX_PROJECT" >> {log}'
     _configure(project, gates=[record], observe=[{"name": "bench", "command": record}])
-    base = _git(project, "rev-parse", "HEAD")
+    base = git(project, "rev-parse", "HEAD")
     harness = Harness(project, verbose=False)
     harness.run(Budget(until=1), report=False)
     commit = History(project, latest_run(project).run_id).load()[1].commit
     assert commit
-    a_tree, t_tree = _git(project, "rev-parse", f"{base}^{{tree}}"), _git(project, "rev-parse", f"{commit}^{{tree}}")
-    assert _git(project, "rev-parse", f"{commit}^") == base
+    a_tree, t_tree = git(project, "rev-parse", f"{base}^{{tree}}"), git(project, "rev-parse", f"{commit}^{{tree}}")
+    assert git(project, "rev-parse", f"{commit}^") == base
     expected = [f"0 {a_tree} {base} {project.resolve()}", f"1 {t_tree} {base} {project.resolve()}"]
     assert _lines(log) == [expected[0]] * 2 + [expected[1]] * 2
 
@@ -474,7 +470,7 @@ def test_an_accepted_no_op_counts_as_previous(project):
     config = yaml.safe_load((project / "autohelix.yaml").read_text())
     config["agent"]["settings"]["change_file"] = "elsewhere.txt"
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    _git(project, "commit", "-qam", "out-of-scope change")
+    git(project, "commit", "-qam", "out-of-scope change")
     records = _run(project, 3)
     assert [(r.accepted, r.commit) for r in records[1:]] == [(True, None)] * 3
     assert _first_lines(project, 3) == ["iter=3", "prev=iter=2"]
@@ -549,7 +545,7 @@ def test_a_judge_writes_in_its_own_copy_not_the_checks_copy(project, log):
     config = yaml.safe_load((project / "autohelix.yaml").read_text())
     config["agent"]["settings"]["judge_change_file"] = "planted.md"
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    _git(project, "commit", "-qam", "judge edits")
+    git(project, "commit", "-qam", "judge edits")
     _, record = _run(project, 1)
     assert record.accepted
     assert _lines(log) == ["0 later", "0 bench", "1 later", "1 bench"]

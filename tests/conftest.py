@@ -1,5 +1,5 @@
 """Shared fixtures: a run layout for file-only observer tests, and a committed
-project with a mock-agent config for run tests (`tests.test_runs.configure` edits it)."""
+project with a mock-agent config for run tests (`tests.helpers.configure` edits it)."""
 
 import pytest
 import yaml

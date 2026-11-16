@@ -9,17 +9,7 @@ from autohelix.cli import main
 from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.workspace import GitExcludeError, ensure_git_exclude_entry, ensure_runtime_ignored
-from tests.helpers import latest_run
-
-
-def git(project, *args):
-    return subprocess.run(
-        [
-            "git", "-c", "user.name=Test", "-c", "user.email=test@test.com",
-            *args,
-        ],
-        cwd=project, capture_output=True, text=True, check=True,
-    ).stdout
+from tests.helpers import git, latest_run
 
 
 @pytest.fixture(params=["fresh-clone", "existing-ignore", "subdirectory", "worker"])

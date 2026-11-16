@@ -93,6 +93,8 @@ def test_supersede_moves_earlier_attempts_aside(run_paths):
 
 
 def test_a_baseline_retry_points_kept_calls_at_the_moved_attempt(project):
+    from autohelix.usage_log import read_usage
+
     harness = Harness(project, land_mode="manual")
     try:
         paths = harness.paths
@@ -100,27 +102,82 @@ def test_a_baseline_retry_points_kept_calls_at_the_moved_attempt(project):
         log = paths.iteration_dir(0) / "gates" / "1" / "ask.log"  # a judge log inside the attempt's folder
         log.parent.mkdir(parents=True)
         log.write_text("transcript\n")
-        other = paths.logs / "elsewhere" / "ask.log"  # one outside it stays as it is
+        other = paths.logs / "elsewhere" / "ask.log"  # a path a custom tool recorded stays as it is
         usage = paths.usage(0)
         usage.parent.mkdir(parents=True, exist_ok=True)
-        usage.write_text(json.dumps({"id": "a", "cost_usd": 0.1, "log": str(log)}) + "\n"
-                         + json.dumps({"id": "b", "cost_usd": 0.2, "log": str(other)}) + "\n"
-                         + json.dumps({"id": "c", "log": "iterations/000/observe/review/review.log"}) + "\n")
+        lines = (json.dumps({"id": "a", "cost_usd": 0.1, "call": "gates/1", "log": "ask.log"}) + "\n"
+                 + json.dumps({"id": "b", "cost_usd": 0.2, "log": str(other)}) + "\n")
+        usage.write_text(lines)
         moved = harness.history.supersede(0)
         harness._start_command_usage(0, moved)
         assert moved == paths.attempt_dir(0, 1)
-        kept = [json.loads(line) for line in usage.read_text().splitlines()]
-        assert [k["id"] for k in kept] == ["a", "b", "c"]  # still counted toward the cost
-        assert kept[0]["log"] == str(moved / "gates" / "1" / "ask.log")
+        # Nothing rewritten: one marker appended, saying where the earlier attempt went.
+        assert usage.read_text() == lines + json.dumps({"superseded": "000-1"}) + "\n"
+        kept = read_usage(usage)
+        assert [k["id"] for k in kept] == ["a", "b"]  # still counted toward the cost
+        assert [k["attempt"] for k in kept] == ["000-1", "000-1"]
+        assert paths.usage_log(0, kept[0]) == ".internal/attempts/000-1/gates/1/ask.log"
         assert (moved / "gates" / "1" / "ask.log").read_text() == "transcript\n"
-        assert kept[1]["log"] == str(other)
-        assert kept[2]["log"] == ".internal/attempts/000-1/observe/review/review.log"  # relative stays relative
+        assert paths.usage_log(0, kept[1]) == str(other)
+        # This attempt's call of the same gate finds its own transcript, not the moved one.
+        (paths.gate_dir(0, 1)).mkdir(parents=True)
+        (paths.gate_dir(0, 1) / "ask.log").write_text("second\n")
+        with usage.open("a") as f:
+            f.write(json.dumps({"id": "c", "cost_usd": 0.3, "call": "gates/1", "log": "ask.log"}) + "\n")
+        assert [paths.usage_log(0, k) for k in read_usage(usage)] == [
+            ".internal/attempts/000-1/gates/1/ask.log", str(other), "iterations/000/gates/1/ask.log"]
+        # A second retry: the earlier records keep their attempt, the last one gets the new one.
+        harness._start_command_usage(0, harness.history.supersede(0))
+        assert [k.get("attempt") for k in read_usage(usage)] == ["000-1", "000-1", "000-2"]
+        # A retry whose earlier folder wasn't kept: its calls have no transcript.
+        with usage.open("a") as f:
+            f.write(json.dumps({"id": "d", "call": "gates/1", "log": "ask.log"}) + "\n")
+        harness._start_command_usage(0, None)
+        assert paths.usage_log(0, read_usage(usage)[-1]) is None
         # After an accepted baseline, the next attempt at a number starts from no calls.
         harness.history.update(IterationResult(iteration=0, accepted=True))
         harness._start_command_usage(0, harness.history.supersede(0))
         assert usage.read_text() == ""
     finally:
         harness.close()
+
+
+@pytest.mark.parametrize("usage", [
+    {"call": "gates/0", "log": "ask.log"}, {"call": "gates/01", "log": "ask.log"},
+    {"call": "../gates/1", "log": "ask.log"}, {"call": "gates/1/..", "log": "ask.log"},
+    {"call": "observe/.hidden", "log": "ask.log"}, {"call": "observe/a/b", "log": "ask.log"},
+    {"call": "notes/1", "log": "ask.log"}, {"call": "gates/1", "log": "stdout.txt"},
+    {"call": "gates/1", "log": "../1/ask.log"}, {"call": ["gates/1"], "log": "ask.log"},
+    {"call": "gates/1", "log": None}, {"call": "gates/1", "log": "ask.log", "attempt": "001-1"},
+    {"call": "gates/1", "log": "ask.log", "attempt": "../000-1"},
+])
+def test_a_usage_record_names_only_its_own_calls_transcript(run_paths, usage):
+    """`call` and `log` come from a file commands can write: only a transcript name in
+    a call folder of this iteration (or its own attempts) is followed."""
+    for folder in (run_paths.gate_dir(0, 1), run_paths.attempt_dir(1, 1) / "gates" / "1",
+                   run_paths.attempt_dir(0, 1) / "gates" / "1"):
+        folder.mkdir(parents=True)
+        (folder / "ask.log").write_text("x")
+        (folder / "stdout.txt").write_text("x")
+    assert run_paths.usage_log(0, usage) is None or run_paths.relative_log(run_paths.usage_log(0, usage)) is None
+
+
+def test_a_usage_record_finds_its_call_folder_while_the_command_runs(run_paths):
+    from autohelix.usage_log import append_usage, read_usage
+
+    run_paths.copies_record.parent.mkdir(parents=True, exist_ok=True)
+    usage = {"call": "observe/bench", "log": "review-2.log"}
+    live = run_paths.usage_log(4, usage)
+    assert live == str(run_paths.copies / "iter-4-observe-bench" / "logs" / "review-2.log")
+    assert run_paths.live_transcript(live, 4) == ["iter-4-observe-bench", "logs", "review-2.log"]
+    stored = run_paths.observe_entry(4, "bench") / "review-2.log"
+    stored.parent.mkdir(parents=True)
+    stored.write_text("x")
+    assert run_paths.usage_log(4, usage) == "iterations/004/observe/bench/review-2.log"
+    # A record can't claim an attempt itself: only a marker line gives one.
+    append_usage({"id": "a", **usage, "attempt": "004-1"}, run_paths.usage(4))
+    [record] = read_usage(run_paths.usage(4))
+    assert "attempt" not in record and run_paths.usage_log(4, record) == "iterations/004/observe/bench/review-2.log"
 
 
 def test_an_iteration_folder_holds_its_record_prompt_agent_log_and_notes(project):
@@ -199,7 +256,7 @@ ITERATION = '"$AUTOHELIX_RUN_DIR/iterations/$(printf %03d "$AUTOHELIX_ITERATION"
 
 
 def _configure(project, **values):
-    from tests.test_runs import configure
+    from tests.helpers import configure
 
     configure(project, **values)
 

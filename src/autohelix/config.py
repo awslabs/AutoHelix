@@ -96,7 +96,7 @@ ASK_TIMEOUT = 600
 # The least `timeout:` an `ask:` or `review:` entry may set: in a run the judge keeps
 # `judge.COPY_MARGIN` (30s) of it for its usage and its copy's removal, and needs time to answer.
 JUDGE_MIN_TIMEOUT = 60
-_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+ENTRY_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")  # an observe entry's `name:` (also its folder)
 _METRIC_NAME = re.compile(r"\w+")
 TITLE_LENGTH = 80
 
@@ -576,7 +576,7 @@ def _parse_observe(value: Any, backend: str, errors: list[str]) -> list[ObserveE
             errors.append(f"{where}: expected a mapping with `name:` and `command:` or `review:`, got {entry!r}")
             continue
         name = entry.get("name")
-        if isinstance(name, str) and _NAME.fullmatch(name):
+        if isinstance(name, str) and ENTRY_NAME.fullmatch(name):
             where = f"observe entry `{name}`"
             if name in names:
                 errors.append(f"observe: two entries are named `{name}`; names must be unique")

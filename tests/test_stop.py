@@ -12,11 +12,9 @@ import time
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
 
 import autohelix
 from autohelix import cli as cli_module
-from autohelix.cli import main
 from autohelix.harness import Budget, Harness
 from autohelix.history import History
 from autohelix.live import status_line
@@ -24,12 +22,7 @@ from autohelix.run_status import read_segments, write_stop_request
 from autohelix.runs import RunLock, RunPaths, critical_section, git, short_id, write_json
 from autohelix.viewer import ProjectRuns, RunData
 from autohelix import run_table
-from tests.test_runs import configure
-from tests.helpers import latest_run
-
-
-def cli(project, *args):
-    return CliRunner().invoke(main, [*args, "-p", str(project)])
+from tests.helpers import cli, configure, latest_run
 
 
 def iterations(paths):

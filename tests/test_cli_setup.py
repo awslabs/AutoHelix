@@ -3,7 +3,6 @@
 import os
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -16,11 +15,7 @@ from click.testing import CliRunner
 from autohelix import cli
 from autohelix.cli import CONFIG_TEMPLATE, main
 from autohelix.config import load_config
-
-
-def git(cwd, *args):
-    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@e", *args], cwd=cwd,
-                   capture_output=True, check=True)
+from tests.helpers import git
 
 
 @pytest.fixture

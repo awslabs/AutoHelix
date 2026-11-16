@@ -661,7 +661,7 @@ def test_a_real_run_reports_its_whole_sequence(project):
 
 
 def test_a_failed_baseline_is_an_iteration_event(project):
-    from tests.test_runs import configure
+    from tests.helpers import configure
 
     configure(project, gates=["echo formatted >> code.py"])  # a gate that edits files: the baseline fails
     cursor = Watcher(project).cursor
@@ -674,7 +674,7 @@ def test_a_failed_baseline_is_an_iteration_event(project):
 
 
 def test_wait_follows_a_live_run(project):
-    from tests.test_runs import configure
+    from tests.helpers import configure
 
     configure(project, stop=["exit 1"])  # stop commands: accepted records are rewritten
     watcher = Watcher(project, poll_seconds=0.01)
@@ -707,7 +707,7 @@ def test_wait_follows_a_live_run(project):
 def test_a_recovered_record_without_an_end_time_keeps_its_place(project):
     """A record `reconcile` recovers has no `ended_at`: its caught-up line gets the time
     it was logged, so neither it nor its open segment's crash reads as 1970."""
-    from tests.test_runs import configure
+    from tests.helpers import configure
 
     configure(project, stop=["exit 1"])
     assert CliRunner().invoke(main, ["run", "-n", "1", "--no-report", "--land", "manual",
@@ -731,7 +731,7 @@ def test_a_recovered_record_without_an_end_time_keeps_its_place(project):
 def test_an_iteration_killed_in_its_stop_commands_is_reported_at_the_resume(project):
     """Accepted and published, then the process died before its line (in the stop
     commands): the next segment logs it for the dead one, before its start."""
-    from tests.test_runs import configure
+    from tests.helpers import configure
 
     configure(project, stop=["exit 1"])
     assert CliRunner().invoke(main, ["run", "-n", "1", "--no-report", "--land", "manual",

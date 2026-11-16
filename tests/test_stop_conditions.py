@@ -1,7 +1,6 @@
 """Stop conditions: `stop:` commands that end a run early when one exits 0."""
 
 import json
-import subprocess
 
 import pytest
 
@@ -12,25 +11,21 @@ from autohelix.history import History
 from autohelix.prompt_template import build_prompt_variables
 from autohelix.run_status import read_run_status
 from autohelix.live import status_line
-from tests.helpers import latest_run
-
-
-def _git(project, *args):
-    subprocess.run(["git", *args], cwd=project, capture_output=True, check=True)
+from tests.helpers import git, latest_run
 
 
 @pytest.fixture
 def project(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
-    _git(project, "init")
-    _git(project, "config", "user.email", "test@test.com")
-    _git(project, "config", "user.name", "Test")
+    git(project, "init")
+    git(project, "config", "user.email", "test@test.com")
+    git(project, "config", "user.name", "Test")
     (project / "hello.py").write_text('print("hello")\n')
     (project / ".gitignore").write_text(".autohelix/\n")
     (project / ".autohelix").mkdir()
-    _git(project, "add", "-A")
-    _git(project, "commit", "-m", "init")
+    git(project, "add", "-A")
+    git(project, "commit", "-m", "init")
     return project
 
 
@@ -46,8 +41,8 @@ agent:
 
 {extra}
 """)
-    _git(project, "add", "autohelix.yaml")
-    _git(project, "commit", "-m", "config")
+    git(project, "add", "autohelix.yaml")
+    git(project, "commit", "-m", "config")
 
 
 def _run(project, n: int) -> list:

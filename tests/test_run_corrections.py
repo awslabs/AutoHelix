@@ -15,8 +15,7 @@ from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.runs import RunLock, RunPaths, delete, git, land, short_id
 from autohelix.usage_log import append_usage
 from autohelix.viewer import RunData
-from tests.test_runs import configure
-from tests.helpers import latest_run
+from tests.helpers import configure, latest_run
 
 
 @pytest.mark.parametrize("operation", ["delete-marker", "orphan"])

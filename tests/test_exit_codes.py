@@ -4,23 +4,16 @@ as soon as its command holds the run's lock: a start its checks refuse is a reco
 segment that failed."""
 
 import pytest
-from click.testing import CliRunner
 
-from autohelix.cli import main
 from autohelix.events import Watcher
 from autohelix.harness import Harness
 from autohelix.history import History
 from autohelix.run_status import read_run_status, read_segments
 from autohelix.runs import short_id
-from tests.helpers import latest_run
-from tests.test_runs import configure
+from tests.helpers import cli, configure, latest_run
 
 
 MUTATING = "echo formatted >> code.py"  # a gate that edits files: the baseline fails
-
-
-def cli(project, *args):
-    return CliRunner().invoke(main, [*args, "-p", str(project)])
 
 
 def test_polite_endings_exit_0(project):

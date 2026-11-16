@@ -19,15 +19,7 @@ from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.runs import RunLock, RunPaths, archive, delete, git, land, repair_history, short_id
 from click.testing import CliRunner
-
-
-def configure(project, **values):
-    path = project / "autohelix.yaml"
-    data = yaml.safe_load(path.read_text())
-    data.update(values)
-    path.write_text(yaml.safe_dump(data))
-    git(project, "add", "autohelix.yaml")
-    git(project, "commit", "-qm", "config")
+from tests.helpers import configure
 
 
 def test_identity_selection_new_and_explicit_config(project):
@@ -560,10 +552,13 @@ def test_a_failed_restart_does_not_land_old_tip(project):
     harness = Harness(project)
     harness.run(Budget(until=1), report=False)
     git(project, "reset", "--hard", harness.run_info["base_commit"])
-    (project / ".gitignore").write_text("!.*\n")
     before = git(project, "rev-parse", "HEAD").stdout.strip()
+    resumed = Harness(project)  # auto landing, as the first
+    assert git(project, "rev-parse", resumed.paths.ref).stdout.strip() != before  # a tip that could land
+    # Broken after the Harness was made: the segment's own start checks refuse it.
+    (project / ".gitignore").write_text("!.*\n")
     with pytest.raises(RuntimeError, match="gitignore"):
-        Harness(project).run(Budget(until=2), report=False)  # auto landing, as the first
+        resumed.run(Budget(until=2), report=False)
     assert git(project, "rev-parse", "HEAD").stdout.strip() == before
 
 
@@ -847,7 +842,6 @@ def test_ask_from_an_agent_without_log_dir_records_absolute_log(tmp_path, monkey
     assert answer.yes
     [call] = read_usage(usage)
     assert Path(call["log"]).is_absolute() and Path(call["log"]).exists()
-
 
 
 def test_old_reviewer_call_costs_count_in_the_run_total(project):

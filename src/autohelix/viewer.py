@@ -414,7 +414,7 @@ class RunData:
                 calls = list(status.get("calls", [])) if status.get("iteration") == n else []
             # The record's calls, then this iteration's command calls since (stop commands run after it).
             seen = {call["usage"].get("id") for call in calls if isinstance(call.get("usage"), dict)} - {None}
-            calls = calls + [{"role": "command", "log": usage.get("log"), "usage": usage}
+            calls = calls + [{"role": "command", "log": self.paths.usage_log(n, usage), "usage": usage}
                              for usage in read_usage(self.paths.usage(n)) if usage.get("id") not in seen]
         phases = []
         for call in calls:

@@ -103,14 +103,14 @@ def log_for(project: Path, status: dict | None, current: Path | None, run_id: st
 def transcript_for(paths: RunPaths, status: dict | None) -> tuple[str, str] | None:
     """The running iteration's latest `ask`/`review` call with a log that can be read
     (`RunPaths.readable_log`: its live transcript in the call folder while the command
-    runs, the stored one after): (the usage record's `log`, its source)."""
+    runs, the stored one after): (where it is, `RunPaths.usage_log`; its source)."""
     from autohelix.usage_log import read_usage
 
     n = running_iteration(status)
     if n is None:
         return None
     for usage in reversed(read_usage(paths.usage(n))):
-        value = usage.get("log")
+        value = paths.usage_log(n, usage)
         if paths.readable_log(value, n):
             source = usage.get("source")
             return value, clean(source) if isinstance(source, str) and source else "call"

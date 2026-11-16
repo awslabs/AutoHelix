@@ -6,19 +6,12 @@ import socket
 import time
 
 import pytest
-from click.testing import CliRunner
 
-from autohelix.cli import main
 from autohelix.harness import Budget, Harness
 from autohelix.history import History, record_seconds
 from autohelix.runs import (PROJECT_RECORD, RunLock, RunPaths, copies_base, git, project_key, project_runs, short_id,
                             sweep_copies)
-from tests.test_runs import configure
-from tests.helpers import latest_run
-
-
-def cli(project, *args):
-    return CliRunner().invoke(main, [*args, "-p", str(project)])
+from tests.helpers import cli, configure, latest_run
 
 
 def started(project, *args):

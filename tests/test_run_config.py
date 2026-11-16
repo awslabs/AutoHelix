@@ -5,16 +5,14 @@ import stat
 
 import pytest
 import yaml
-from click.testing import CliRunner
 
-from autohelix.cli import main
 from autohelix.config import config_changes, load_config
 from autohelix.harness import Budget, Harness
 from autohelix.history import History
 from autohelix.prompt_template import load_template
 from autohelix.runs import RunPaths, git, load_run_config, short_id
 from autohelix.workspace import Scope
-from tests.helpers import latest_run
+from tests.helpers import cli, latest_run
 
 CONFIG = """\
 # Why this goal: setup's reasoning, as comments.
@@ -31,10 +29,6 @@ agent:
 def commit(project, message="change"):
     git(project, "add", "-A")
     git(project, "commit", "-qm", message)
-
-
-def cli(project, *args):
-    return CliRunner().invoke(main, [*args, "-p", str(project)])
 
 
 @pytest.fixture

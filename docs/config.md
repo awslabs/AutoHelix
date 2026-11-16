@@ -381,6 +381,7 @@ started is killed. Each gets:
 | `AUTOHELIX_ITERATION` | The iteration number (0 for the baseline) |
 | `AUTOHELIX_RUN_ID`, `AUTOHELIX_RUN_DIR` | The run's id and its `.autohelix/runs/<id>/` folder |
 | `AUTOHELIX_LOG_DIR` | A private folder for this command where `autohelix ask` and `review` write their transcripts; after the command ended they are moved to its stored output (`ask*.log`, `review*.log` only) |
+| `AUTOHELIX_CALL` | Where this command's output is stored in the iteration's folder: `gates/<k>`, `observe/<name>` or `stop/<k>`; `ask`/`review` record it with their transcript's name |
 | `AUTOHELIX_USAGE_FILE` | Where model calls record their cost (see [Cost Tracking](#cost-tracking)) |
 | `AUTOHELIX_COMMAND_DEADLINE` | The command's deadline, in Unix seconds |
 | `AUTOHELIX_PREVIOUS` | Observe commands only: see [Previous output](#previous-output) |

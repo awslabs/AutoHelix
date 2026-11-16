@@ -16,11 +16,7 @@ from autohelix import run_table
 from autohelix.live import fit, status_line
 from autohelix.runs import RunPaths, write_json
 from autohelix.viewer import MAX_TEXT, ProjectRuns, RunData, make_server, review_markdown, write_static
-from tests.helpers import latest_run
-
-
-def git(project, *args):
-    return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True, check=True).stdout.strip()
+from tests.helpers import git, latest_run
 
 
 CONFIG = """\

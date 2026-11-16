@@ -47,6 +47,7 @@ from autohelix.usage_log import append_usage, new_call_id
 DEFAULT_TIMEOUT = ASK_TIMEOUT
 DEADLINE_ENV = "AUTOHELIX_COMMAND_DEADLINE"  # epoch seconds; set by the harness per command
 LOG_DIR_ENV = "AUTOHELIX_LOG_DIR"
+CALL_ENV = "AUTOHELIX_CALL"  # where the harness stores the command's output: `gates/2`, `observe/bench`, ...
 CONFIG_ENV = "AUTOHELIX_CONFIG"
 CANDIDATE_ENV = "AUTOHELIX_CANDIDATE"  # the candidate tree
 BASE_ENV = "AUTOHELIX_BASE"  # the commit the candidate is built on
@@ -231,6 +232,16 @@ def _log_path(name: str) -> Path:
             index += 1
 
 
+def _log_fields(log_path: Path) -> dict[str, str]:
+    """How a usage record names its transcript: in a command the harness runs, the
+    call (`$AUTOHELIX_CALL`) and the file name, which the harness moves to that call's
+    stored folder once the command ended (`RunPaths.usage_log`); else its path."""
+    call = os.environ.get(CALL_ENV)
+    if call and os.environ.get(LOG_DIR_ENV):
+        return {"call": call, "log": log_path.name}
+    return {"log": str(log_path.resolve())}
+
+
 def deadline_left(margin: int = 10) -> int | None:
     """Seconds left before the harness's deadline for this command, minus `margin`
     (time to record usage and clean up); None outside the harness (or with an
@@ -302,10 +313,8 @@ def call_judge(cwd: Path, config: AgentConfig, *, source: str, record: dict, pro
             "Reply with only the JSON object.")
         call_id = new_call_id()
         log_path = _log_path(source)
-        # The harness points it at the stored copy once the command ended; readers make
-        # it relative to the run (and drop it if it isn't a run log).
         entry = {"id": call_id, "source": source, **record, "agent": config.backend,
-                 "model": config.model, "log": str(log_path.resolve())}
+                 "model": config.model, **_log_fields(log_path)}
         append_usage({**entry, "status": "started", "cost_usd": None})
         started = time.monotonic()
         result = None

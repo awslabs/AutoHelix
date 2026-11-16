@@ -17,11 +17,7 @@ from autohelix.cli import main
 from autohelix.judge import JudgeError, Target, judge_config
 from autohelix.review import build_system_prompt, parse_review, review_budget, review_schema
 from autohelix.usage_log import read_usage
-from tests.helpers import latest_run
-
-def git(cwd, *args) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
-
+from tests.helpers import git, latest_run
 
 def make_repo(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)

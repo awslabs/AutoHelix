@@ -108,9 +108,10 @@ class CommandResult:
 # the agent runner's grace (3 s) plus 2 s to stop it on SIGTERM; wait longer.
 CHECK_KILL_GRACE = 8
 
-# Per-command variables: a context manager given the command, yielding the variables to
-# add for that one call (a value of None unsets the variable) and cleaning up after it.
-PerCommand = Callable[[str], AbstractContextManager]
+# Per-command variables: a context manager given the command's spec, yielding the
+# variables to add for that one call (a value of None unsets the variable) and cleaning
+# up after it.
+PerCommand = Callable[[CommandSpec], AbstractContextManager]
 
 
 def _command_env(project_path: Path | None, cwd: Path, timeout: int,
@@ -233,7 +234,7 @@ def run_command(
 
 
 @contextmanager
-def _no_extra(_command: str):
+def _no_extra(_spec: CommandSpec):
     yield {}
 
 
@@ -255,7 +256,7 @@ def run_gate_commands(
     while its `per_command` context is still open, and before `after_command`."""
     results = []
     for c in commands:
-        with (per_command or _no_extra)(c.command) as added:
+        with (per_command or _no_extra)(c) as added:
             result = run_command(
                 c.command, cwd, timeout=c.timeout, project_path=project_path,
                 extra_env={**(extra_env or {}), **added},
@@ -331,7 +332,7 @@ def run_stop_checks(
     each command's result as `run_gate_commands`' does (its context still open)."""
     results: list[StopCheckResult] = []
     for c in config.stop:
-        with (per_command or _no_extra)(c.command) as added:
+        with (per_command or _no_extra)(c) as added:
             r = run_command(
                 c.command, cwd, timeout=c.timeout, project_path=project_path,
                 extra_env={**(extra_env or {}), **added},

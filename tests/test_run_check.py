@@ -3,8 +3,7 @@ nothing (the setup skill's validation step)."""
 
 import pytest
 
-from tests.test_groups import cli
-from tests.test_runs import configure
+from tests.helpers import cli, configure
 
 
 def _snapshot(project):

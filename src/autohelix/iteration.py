@@ -204,7 +204,6 @@ class IterationWorkspace:
         self.members = [(paths, data) for paths, data in group_members(run.paths, run.data)
                         if not self.imported or paths.run_id != self.imported[0].run_id]
         self.refs = (run.paths.ref, *(paths.ref for paths, _ in self.others))
-        self._calls = 0  # per-command folders made so far (`call_folder`)
         self._call_folders: list[Path] = []
 
     @property
@@ -328,23 +327,24 @@ class IterationWorkspace:
         return self.tree
 
     @contextmanager
-    def call_folder(self, **sources: Path | None):
-        """A private folder for one command, `iter-N-call-K/` under the run's copies
-        folder, removed when the command ends (also on an error or interrupt): an empty
-        `scratch/`, `bin/` holding the `autohelix` launcher (`launcher.py`; put it first
-        on the command's PATH), plus for each named source a copy of that folder under
-        the same name (an empty folder if the source doesn't exist or is reached through a
-        symlink; no entry for None).
-        Yields {"scratch": path, "logs": path, "bin": path, <name>: path, ...}. A copy keeps what the command reads from
-        run state fixed, whatever the command or the agent writes meanwhile."""
-        self._calls += 1
-        folder = ensure_copies(self._run.copies_root) / RunPaths.call_folder_name(self.iteration, self._calls)
+    def call_folder(self, call: str, **sources: Path | None):
+        """A private folder for the command whose output goes to `call` (`gates/2`,
+        `observe/bench`, `stop/1`: its `$AUTOHELIX_CALL`), `iter-N-gates-2/` under the
+        run's copies folder, removed when the command ends (also on an error or
+        interrupt): an empty `scratch/` and `logs/` (`$AUTOHELIX_LOG_DIR`), `bin/` holding
+        the `autohelix` launcher (`launcher.py`; put it first on the command's PATH), plus
+        for each named source a copy of that folder under the same name (an empty folder
+        if the source doesn't exist or is reached through a symlink; no entry for None).
+        Yields {"call": call, "scratch": path, "logs": path, "bin": path, <name>: path, ...}.
+        A copy keeps what the command reads from run state fixed, whatever the command or
+        the agent writes meanwhile."""
+        folder = ensure_copies(self._run.copies_root) / RunPaths.call_folder_name(self.iteration, call)
         if os.path.lexists(folder):  # left by a crashed process
             remove_copy(folder)
         folder.mkdir(mode=0o700)
         self._call_folders.append(folder)
         try:
-            paths = {"scratch": folder / "scratch", "logs": folder / "logs"}
+            paths = {"call": call, "scratch": folder / "scratch", "logs": folder / "logs"}
             paths["scratch"].mkdir()
             paths["logs"].mkdir()
             paths["bin"] = write_launcher(folder / "bin")  # `autohelix`, immune to the command's env
@@ -373,18 +373,16 @@ class IterationWorkspace:
         return stage
 
     @staticmethod
-    def move_transcripts(folders: dict[str, Path], stage: Path) -> dict[str, str]:
+    def move_transcripts(folders: dict[str, Path], stage: Path) -> None:
         """Move the judge and review transcripts the command's `ask`/`review` calls wrote
-        to its `logs/` folder into `stage` (after the command ended): only regular,
-        single-link files named like one (`runs.is_transcript`) directly in that folder,
-        never symlinks or anything else the command left there. One already in `stage`
-        (a capture with that name) is replaced. Returns {the path a call recorded
-        (resolved): the name in `stage`}."""
+        to its `logs/` folder into `stage` (after the command ended), where their usage
+        records find them (`RunPaths.usage_log`): only regular, single-link files named
+        like one (`runs.is_transcript`) directly in that folder, never symlinks or
+        anything else the command left there. One already in `stage` (a capture with
+        that name) is replaced."""
         logs = folders["logs"]
-        moved = {}
         if logs.is_symlink() or not logs.is_dir():
-            return moved
-        recorded = os.path.realpath(logs)
+            return
         for entry in os.scandir(logs):
             try:
                 info = entry.stat(follow_symlinks=False)
@@ -396,8 +394,6 @@ class IterationWorkspace:
             if os.path.lexists(target):
                 remove_copy(target)
             os.rename(entry.path, target)
-            moved[os.path.join(recorded, entry.name)] = entry.name
-        return moved
 
     def _remove_call_folder(self, folder: Path) -> None:
         try:

@@ -2,7 +2,6 @@
 iteration, the end block (outcome, metrics, totals, what landed, next commands, files),
 and errors in the end block. Whole screens: test_snapshots.py."""
 
-import subprocess
 
 import pytest
 import yaml
@@ -15,11 +14,7 @@ from autohelix.display import clean
 from autohelix.harness import Budget
 from autohelix.terminal import Row, Table, budget_text
 from autohelix.runs import RunPaths, short_id
-from tests.helpers import latest_run
-
-
-def _git(cwd, *args) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+from tests.helpers import git, latest_run
 
 
 CONFIG = {
@@ -169,9 +164,9 @@ def test_clean_strips_control_characters():
 def project(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
-    _git(project, "init", "-q", "-b", "main")
-    _git(project, "config", "user.email", "t@t")
-    _git(project, "config", "user.name", "T")
+    git(project, "init", "-q", "-b", "main")
+    git(project, "config", "user.email", "t@t")
+    git(project, "config", "user.name", "T")
     (project / "hello.py").write_text('print("hello")\n')
     (project / ".gitignore").write_text(".autohelix/\n")
     (project / ".autohelix").mkdir()
@@ -182,8 +177,8 @@ def _configure(project, settings=None, **sections):
     config = {"goal": "Test the console", "agent": {"backend": "mock", "settings": {
         "change_file": "hello.py", "change_content": "# iteration {iteration}", **(settings or {})}}, **sections}
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    _git(project, "add", "-A")
-    _git(project, "commit", "-qm", "config")
+    git(project, "add", "-A")
+    git(project, "commit", "-qm", "config")
 
 
 def _run(project, *args):

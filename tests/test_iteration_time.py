@@ -256,7 +256,7 @@ def test_the_agent_gets_its_budget_formatted(project, monkeypatch):
     it; it was "1h 30m", a third duration format), not rounded."""
     from autohelix.agents.mock import MockAgent
     from autohelix.harness import Budget, Harness
-    from tests.test_runs import configure
+    from tests.helpers import configure
 
     seen = []
     real = MockAgent.run

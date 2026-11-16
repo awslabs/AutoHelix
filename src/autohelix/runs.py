@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from autohelix.config import load_config, project_configs, run_command, template_text
+from autohelix.config import ENTRY_NAME, load_config, project_configs, run_command, template_text
 
 SCHEMA = 2
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
@@ -62,7 +62,9 @@ _ITERATION = re.compile(r"[0-9]{3,}")
 _ATTEMPT = re.compile(r"[0-9]{3,}-[1-9][0-9]*")
 _POSITION = re.compile(r"[1-9][0-9]*")
 _TRANSCRIPT = re.compile(r"(ask|review)(-[0-9]+)?\.log")  # `judge._log_path`'s names
-_CALL_FOLDER = re.compile(r"iter-(0|[1-9][0-9]*)-call-[1-9][0-9]*")  # `RunPaths.call_folder_name`
+# A command call's place in its iteration folder (`$AUTOHELIX_CALL`): `gates/<k>`, `stop/<k>`, `observe/<name>`.
+_CALL = re.compile(rf"(?:gates|stop)/[1-9][0-9]*|observe/{ENTRY_NAME.pattern}")
+_CALL_FOLDER = re.compile(rf"iter-(0|[1-9][0-9]*)-((?:gates|stop)-[1-9][0-9]*|observe-{ENTRY_NAME.pattern})")
 
 
 def is_transcript(name: str) -> bool:
@@ -217,9 +219,41 @@ class RunPaths:
         return list(path.relative_to(self.run_dir).parts)
 
     @staticmethod
-    def call_folder_name(iteration: int, k: int) -> str:
-        """`iter-N-call-K`: the k-th command call folder of an iteration, in the copies folder."""
-        return f"iter-{iteration}-call-{k}"
+    def call_folder_name(iteration: int, call: str) -> str:
+        """`iter-N-gates-2`, `iter-N-observe-bench`, `iter-N-stop-1`: the folder, in the
+        copies folder, of the command whose output goes to `call` (`gates/2`, ...) of
+        iteration N."""
+        return f"iter-{iteration}-{call.replace('/', '-')}"
+
+    def usage_log(self, iteration: int, usage: dict):
+        """Where the transcript of a usage record of `iteration` is, as the `log` value
+        readers take (`relative_log`, `live_transcript`). A record with a `call` (an
+        `ask`/`review` in a command the harness ran) names its transcript by file name in
+        that call's folder: the stored one (`iterations/NNN/<call>/<log>`, or in the
+        earlier attempt `read_usage` puts it in, `.internal/attempts/NNN-k/...`) if it is
+        there, else the call folder's `logs/` it is being written to (`live_transcript`,
+        while the iteration runs). Any other record's `log` is passed on as it is."""
+        call, log = usage.get("call"), usage.get("log")
+        if call is None:
+            return log
+        if not (isinstance(call, str) and _CALL.fullmatch(call) and isinstance(log, str) and is_transcript(log)):
+            return None
+        attempt = usage.get("attempt")
+        if attempt is not None:  # an earlier attempt's call
+            folder = self.attempts / attempt if (isinstance(attempt, str) and _ATTEMPT.fullmatch(attempt)
+                                                 and attempt.rsplit("-", 1)[0] == self.iteration_name(iteration)
+                                                 ) else None
+        else:
+            folder = self.iteration_dir(iteration)
+        stored = folder / call / log if folder else None
+        if stored is not None and os.path.lexists(stored):
+            return str(stored.relative_to(self.run_dir))
+        if attempt is not None:
+            return None
+        try:
+            return str(self.copies / self.call_folder_name(iteration, call) / "logs" / log)
+        except RuntimeError:  # no copies folder recorded
+            return None
 
     def copies_under(self, base: Path) -> Path:
         return base / project_key(self.project) / self.run_id
@@ -295,8 +329,8 @@ class RunPaths:
 
     def live_transcript(self, value, running: int | None) -> list[str] | None:
         """A judge or review transcript a running call is writing, named by untrusted
-        metadata (a usage record's `log` before its command ended): an absolute path
-        `<copies>/iter-N-call-K/logs/<ask|review>(-n).log`, N being the `running`
+        metadata (`usage_log` before its command ended): an absolute path
+        `<copies>/iter-N-<call>/logs/<ask|review>(-n).log`, N being the `running`
         iteration (from the run status). Returns its parts below `copies`, else None;
         no other name, folder or iteration."""
         if not self.run_id or running is None or not isinstance(value, str) or not os.path.isabs(value):
