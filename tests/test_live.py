@@ -9,6 +9,7 @@ from rich.console import Console
 
 import autohelix.live as W
 from autohelix.run_status import RunStatus
+from tests.helpers import latest_run
 
 
 def _status(**info) -> dict:
@@ -31,19 +32,19 @@ def test_status_line():
 def test_log_for_follows_phases(tmp_path, run_paths):
     logs = run_paths.logs
     agent = run_paths.agent_log(2)
-    assert W.log_for(tmp_path, _status(), None)[:2] == (agent, "Iteration 2 · agent")
-    assert W.log_for(tmp_path, _status(phase="report"), agent)[:2] == (logs / "report.log", "Summary")
+    assert W.log_for(tmp_path, _status(), None, "test")[:2] == (agent, "Iteration 2 · agent")
+    assert W.log_for(tmp_path, _status(phase="report"), agent, "test")[:2] == (logs / "report.log", "Summary")
     # Between phases the panel stays put; a watcher started then shows the agent log.
     shown = run_paths.gate_dir(2, 1) / "ask.log"
-    assert W.log_for(tmp_path, _status(phase="accept"), shown) is None
-    assert W.log_for(tmp_path, _status(phase="checks"), None)[0] == agent
+    assert W.log_for(tmp_path, _status(phase="accept"), shown, "test") is None
+    assert W.log_for(tmp_path, _status(phase="checks"), None, "test")[0] == agent
     # Agent panel time counts from the iteration's start, not the phase's.
-    assert W.log_for(tmp_path, _status(phase="checks"), None)[2] == pytest.approx(time.time() - 65, abs=2)
-    assert W.log_for(tmp_path, _status(iteration=None, phase="starting"), None) is None
+    assert W.log_for(tmp_path, _status(phase="checks"), None, "test")[2] == pytest.approx(time.time() - 65, abs=2)
+    assert W.log_for(tmp_path, _status(iteration=None, phase="starting"), None, "test") is None
 
 
 def test_run_status_records_iteration_start(tmp_path, run_paths):
-    status = RunStatus(tmp_path)
+    status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
     status.start()
     status.phase("agent", 1)
     first = status.data["iteration_started_at"]
@@ -81,12 +82,12 @@ def _watch_once(tmp_path, monkeypatch, polls=1) -> str:
     _stop_after(monkeypatch, polls)
     out = io.StringIO()
     with pytest.raises(KeyboardInterrupt):
-        W.view(tmp_path, "claude", Console(file=out, width=100, force_terminal=False))
+        W.view(tmp_path, "claude", Console(file=out, width=100, force_terminal=False), run_id="test")
     return out.getvalue()
 
 
 def test_view_shows_the_running_agent_log(tmp_path, monkeypatch, run_paths):
-    status = RunStatus(tmp_path)
+    status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
     status.start()
     status.phase("agent", 1)
     log = run_paths.agent_log(1)
@@ -105,8 +106,8 @@ def test_view_without_a_run_waits(tmp_path, monkeypatch):
 
 
 def test_baseline_has_no_agent_panel(tmp_path):
-    assert W.log_for(tmp_path, _status(iteration=0, phase="baseline"), None) is None
-    assert W.log_for(tmp_path, {"state": "finished", "iteration": 0, "phase": None}, None) is None
+    assert W.log_for(tmp_path, _status(iteration=0, phase="baseline"), None, "test") is None
+    assert W.log_for(tmp_path, {"state": "finished", "iteration": 0, "phase": None}, None, "test") is None
 
 
 def _cli(*args):
@@ -123,12 +124,12 @@ def test_live_view_exits_with_hints_instead_of_waiting(tmp_path):
         assert result.exit_code == 1
         return " ".join(result.output.split())
 
-    assert "Write a config with `autohelix setup`, then `autohelix run`." in hint()
+    assert "No runs in" in hint() and "write a config with `autohelix setup`, then `autohelix run`." in hint()
     (tmp_path / "autohelix").mkdir()
     (tmp_path / "autohelix" / "perf.yaml").write_text("goal: x\n")
-    assert "Start one with `autohelix run perf`." in hint()
+    assert "start one with `autohelix run perf`." in hint()
     (tmp_path / "autohelix.yaml").write_text("goal: x\n")
-    assert ("Start one with `autohelix run [CONFIG]` (configs: autohelix.yaml, autohelix/perf.yaml)."
+    assert ("start one with `autohelix run [CONFIG]` (configs: autohelix.yaml, autohelix/perf.yaml)."
             in hint())
 
 
@@ -208,7 +209,7 @@ def _screen_lines(data, log, height) -> list[str]:
 
 
 def test_on_a_short_terminal_the_log_shrinks_first(tmp_path):
-    log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()))
+    log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()), "test")
     log.display = W.LiveDisplay(console=log.console, title="Iteration 3 · agent", verbose=True, max_entries=30)
     for i in range(30):
         log.display._append_entry("Agent", f"step {i}", "white")
@@ -241,7 +242,7 @@ def test_on_a_short_terminal_the_log_shrinks_first(tmp_path):
 
 def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, run_paths):
     """Resuming reruns an unfinished iteration: same log path, new start time."""
-    status = RunStatus(tmp_path)
+    status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
     status.start()
     status.phase("agent", 1)
     log = run_paths.agent_log(1)
@@ -262,7 +263,7 @@ def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, r
         status.note(log=str(log), calls=[{"role": "agent", "log": str(log.relative_to(run_paths.run_dir))}])  # rerun: new iteration_started_at
     monkeypatch.setattr(W, "time", _Clock(sleep))
     with pytest.raises(KeyboardInterrupt):
-        W.view(tmp_path, "claude", Console(file=io.StringIO()))
+        W.view(tmp_path, "claude", Console(file=io.StringIO()), run_id="test")
     assert len(created) >= 2 and set(created) == {"Iteration 1 · agent"}
 
 
@@ -279,7 +280,7 @@ def test_the_view_times_its_live_row_when_drawn(tmp_path):
     screen was built: the screen can stay up between rereads and still move."""
     from autohelix.terminal import LiveRow
 
-    log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()))
+    log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()), "test")
     started = time.time() - 72
     status = {"state": "running", "phase": "agent", "iteration": 3}
     screen = W.view_screen((_running(_run_data(3), started), W.run_table.Saved()), log, status, 40)
@@ -303,7 +304,7 @@ def test_the_view_times_its_live_row_when_drawn(tmp_path):
 
 
 def test_a_live_view_keeps_a_blank_line_at_the_bottom(tmp_path):
-    log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()))
+    log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()), "test")
     data = (_running(_run_data(3), time.time()), W.run_table.Saved())
     running = W.view_screen(data, log, {"state": "running", "phase": "agent", "iteration": 3}, 40).renderables
     assert [line.plain for line in running[-2:]] == ["", ""] and running[-3].plain.startswith("Running")
@@ -314,7 +315,7 @@ def test_a_live_view_keeps_a_blank_line_at_the_bottom(tmp_path):
 def test_the_view_rereads_the_run_only_when_it_changed(tmp_path, monkeypatch, run_paths):
     """Rereading the run (history, config, git) is slow: the view does it when the status
     or the run's files change, or after REREAD_SECONDS, not on every poll."""
-    status = RunStatus(tmp_path)
+    status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
     status.start()
     status.phase("agent", 1)
     reads = []
@@ -337,7 +338,7 @@ def test_the_view_rereads_the_run_only_when_it_changed(tmp_path, monkeypatch, ru
     fake.monotonic = lambda: clock[0]
     monkeypatch.setattr(W, "time", fake)
     with pytest.raises(KeyboardInterrupt):
-        W.view(tmp_path, None, Console(file=io.StringIO()))
+        W.view(tmp_path, None, Console(file=io.StringIO()), run_id="test")
     assert len(reads) == 3  # the first poll, the history, the status
 
 
@@ -345,7 +346,7 @@ def test_the_views_live_row_names_the_observe_entry(tmp_path, run_paths):
     """From the status the harness writes, through the `view --json` payload."""
     from autohelix.viewer import ProjectRuns
 
-    status = RunStatus(tmp_path)
+    status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
     status.start()
     status.phase("benchmark", 1)
     status.note(entry="bench")

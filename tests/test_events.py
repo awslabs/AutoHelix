@@ -17,6 +17,7 @@ from click.testing import CliRunner
 from autohelix.cli import main
 from autohelix.events import EVENT_SCHEMA, STARTING_SECONDS, Marks, Watcher, decode_cursor, encode_cursor
 from autohelix.runs import SCHEMA, RunPaths, short_id, write_json
+from tests.helpers import latest_run
 
 HOST = socket.gethostname()
 T0 = 1_700_000_000.0
@@ -599,7 +600,7 @@ def test_a_real_run_reports_its_whole_sequence(project):
     cursor = Watcher(project).cursor  # before the run
     result = CliRunner().invoke(main, ["run", "-n", "2", "--no-report", "-p", str(project)])
     assert result.exit_code == 0, result.output
-    run_id = RunPaths(project).run_id
+    run_id = latest_run(project).run_id
     events = []
     while not events or events[-1]["event"] != "ended":
         result = cli(project, "--after", cursor, "--timeout", "1s")
@@ -644,7 +645,7 @@ def test_wait_follows_a_live_run(project):
     assert not failures and not thread.is_alive()
     assert [(e["event"], e.get("iteration")) for e in events] == [
         ("started", None), ("iteration", 0), ("iteration", 1), ("iteration", 2), ("ended", None)]
-    paths = RunPaths(project)
+    paths = latest_run(project)
     for event in events:
         if event["event"] == "iteration":  # reported in final form: after the stop commands
             final = json.loads(paths.record(event["iteration"]).read_text())

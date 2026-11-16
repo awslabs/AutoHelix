@@ -15,6 +15,7 @@ from autohelix.display import clean
 from autohelix.harness import Budget
 from autohelix.terminal import Row, Table, budget_text
 from autohelix.runs import RunPaths, short_id
+from tests.helpers import latest_run
 
 
 def _git(cwd, *args) -> str:
@@ -188,7 +189,7 @@ def _configure(project, settings=None, **sections):
 def _run(project, *args):
     # The width is fixed: the ending's `next` line wraps by it (one command per line under 80+).
     result = CliRunner(env={"COLUMNS": "80"}).invoke(main, ["run", "--path", str(project), "--no-report", "-n", "1", *args])
-    run_id = RunPaths(project).run_id
+    run_id = latest_run(project).run_id
     return result, short_id(run_id), run_id
 
 

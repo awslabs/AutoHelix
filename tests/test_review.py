@@ -17,6 +17,7 @@ from autohelix.cli import main
 from autohelix.judge import JudgeError, judge_config
 from autohelix.review import build_system_prompt, parse_review, review_budget, review_schema
 from autohelix.usage_log import read_usage
+from tests.helpers import latest_run
 
 def git(cwd, *args) -> str:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
@@ -127,7 +128,7 @@ def test_prints_prose_then_metric_lines(tmp_path, monkeypatch):
     result = invoke(["--metric", "missing:lower", "--metric", "score:higher", "--", "Check it."], tmp_path, monkeypatch)
     assert result.exit_code == 0, result.stderr
     assert result.stdout == "Item 2 is missing.\nFix the parser.\n##autohelix[missing=1]\n##autohelix[score=0.5]\n"
-    assert "autohelix review: ok · $0.03" in result.stderr
+    assert "autohelix review: ok · mock (autohelix.yaml) · $0.0300" in result.stderr  # names its agent
     assert parse_structured_metrics(result.stdout) == {"missing": 1, "score": 0.5}
 
 
@@ -639,7 +640,7 @@ observe:
     # As an editable install would: the project's src/ on sys.path, remapped onto the copy.
     monkeypatch.syspath_prepend(str(project / "src"))
     Harness(project, verbose=False).run(Budget(until=1), report=False)
-    baseline, first = History(project).load()
+    baseline, first = History(project, latest_run(project).run_id).load()
     assert baseline.gates[0]["passed"] is False  # the judge's "no", not the planted exit 0
     assert baseline.observe[0]["ok"] is True and baseline.observe[0]["metrics"] == {"missing": 7}
     assert not first.accepted and first.gates[0]["passed"] is False

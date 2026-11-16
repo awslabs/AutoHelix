@@ -42,10 +42,8 @@ def read_report_info(project: Path, run_id: str | None = None) -> dict | None:
         return None
 
 
-def build_report_prompt(config: Config, project: Path, draft: Path, run_id: str | None = None) -> str:
+def build_report_prompt(config: Config, project: Path, draft: Path, run_id: str) -> str:
     paths = RunPaths(project, run_id)
-    if not paths.run_id:
-        raise RuntimeError("No current run; start a run first.")
     records = History(project, paths.run_id).load()
     last = max((r.iteration for r in records), default=0)
     identity = paths.read_identity()
@@ -97,8 +95,7 @@ Only read. Don't run tests, benchmarks or experiments, and don't edit any file o
 """
 
 
-def write_report(config: Config, project: Path, console, *, run_id: str | None = None, _owned: bool = False,
-                 ) -> bool:
+def write_report(config: Config, project: Path, console, *, run_id: str, _owned: bool = False) -> bool:
     """Run the report agent; replace the saved report only if it wrote a new one."""
     from rich.live import Live
 
@@ -107,8 +104,6 @@ def write_report(config: Config, project: Path, console, *, run_id: str | None =
     from autohelix.terminal import with_room
 
     paths = RunPaths(project, run_id)
-    if not paths.run_id:
-        raise RuntimeError("No current run; start a run first.")
     if not _owned:
         with RunLock(paths.lock):
             return write_report(config, project, console, run_id=paths.run_id, _owned=True)

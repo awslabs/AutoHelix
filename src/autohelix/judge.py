@@ -104,21 +104,29 @@ def judge_config(base: AgentConfig, *, agent: str | None = None, model: str | No
 
 def load_base_config(cwd: Path) -> AgentConfig:
     """`agent:` from $AUTOHELIX_CONFIG, else the config a bare `run` here would use
-    (`find_config`), else defaults.
+    (`find_config`), else defaults (`base_config`)."""
+    return base_config(cwd)[0]
+
+
+def base_config(cwd: Path) -> tuple[AgentConfig, str]:
+    """`load_base_config`'s settings, with where they came from, for a by-hand `ask` or
+    `review` to say ("autohelix/a.yaml", "defaults: several configs", ...).
 
     A set but unreadable $AUTOHELIX_CONFIG, or a malformed `agent:`, is an error
     rather than a silent fallback to other settings. No config, or several, is
-    not: by hand, the defaults serve."""
+    not: by hand, the defaults serve, and the source says so."""
     import yaml
 
     explicit = os.environ.get(CONFIG_ENV)
     if explicit:
         path = Path(explicit)
+        source = f"${CONFIG_ENV}"
     else:
         try:
             path = find_config(cwd)
-        except ConfigNotFound:
-            return AgentConfig()
+        except ConfigNotFound as e:
+            return AgentConfig(), "defaults: " + ("several configs here" if e.configs else "no config here")
+        source = os.path.relpath(path, cwd)
     try:
         data = yaml.safe_load(path.read_text()) or {}
     except (OSError, yaml.YAMLError) as e:
@@ -127,9 +135,14 @@ def load_base_config(cwd: Path) -> AgentConfig:
     if agent is not None and not isinstance(agent, dict):
         raise JudgeError(f"`agent:` in {path} must be a mapping")
     try:
-        return AgentConfig.from_dict(agent)
+        return AgentConfig.from_dict(agent), source
     except ValueError as e:
         raise JudgeError(f"`agent:` in {path}: {e}") from e
+
+
+def describe_agent(config: AgentConfig, source: str) -> str:
+    """The agent a by-hand `ask`/`review` used, for its stderr line: `codex gpt-5 (autohelix/a.yaml)`."""
+    return " ".join(part for part in (config.backend, config.model) if part) + f" ({source})"
 
 
 def build_system_prompt(question: str, yes: str | None = None, no: str | None = None,

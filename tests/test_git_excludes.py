@@ -8,6 +8,7 @@ from click.testing import CliRunner
 from autohelix.cli import main
 from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
+from tests.helpers import latest_run
 
 
 def git(project, *args):
@@ -72,7 +73,7 @@ def test_exclusions_keep_runtime_local_in_each_layout(project_layout):
     result = CliRunner().invoke(
         main, ["run", "-p", str(project), "-n", "1", "--no-report"],
     )
-    assert History(project).load()[-1].accepted
+    assert History(project, latest_run(project).run_id).load()[-1].accepted
     # Only the accepted iteration adds a commit, never ignore setup.
     assert git(project, "rev-list", "--count", f"{head_before}..HEAD").strip() == "1"
     repo_prefix = git(project, "rev-parse", "--show-prefix").strip()
@@ -113,7 +114,7 @@ def test_staged_user_changes_are_preserved(project_layout):
         main, ["run", "-p", str(project), "-n", "1", "--no-report"],
     )
     assert "Uncommitted changes in tracked files" in result.output
-    assert History(project).load() == []
+    assert History(project, latest_run(project).run_id).load() == []
 
     # Refusing a dirty first baseline is a command error.
     assert result.exit_code == 1, result.output
@@ -195,7 +196,7 @@ def test_later_runtime_ignore_overrides_negation(project_layout, negation):
     result = CliRunner().invoke(
         main, ["run", "-p", str(project), "-n", "1", "--no-report"],
     )
-    assert History(project).load()[-1].accepted
+    assert History(project, latest_run(project).run_id).load()[-1].accepted
 
     assert result.exit_code == 0, result.output
     assert ignore.read_text() == rules

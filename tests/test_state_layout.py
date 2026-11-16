@@ -16,7 +16,7 @@ def test_paths(tmp_path):
     paths = RunPaths(tmp_path, "20261112-0900-k3f9")
     run = paths.run_dir
     assert run == tmp_path.resolve() / ".autohelix" / "runs" / "20261112-0900-k3f9"
-    assert paths.current == tmp_path.resolve() / ".autohelix" / ".internal" / "current"
+    assert not hasattr(paths, "current")  # no current-run pointer: commands choose with `default_run`
     assert paths.lock == paths.project_internal / "locks" / "20261112-0900-k3f9.lock"
     assert paths.bin == paths.project_internal / "bin"
     assert (paths.report, paths.report_html, paths.notes) == (run / "report.md", run / "report.html", run / "notes")

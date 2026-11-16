@@ -10,6 +10,7 @@ from autohelix import runs
 from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.workspace import ITERATION_DIR
+from tests.helpers import latest_run
 
 
 def _git(cwd, *args, check=True) -> str:
@@ -78,7 +79,7 @@ def test_rejected_trees_are_kept_and_shown_to_the_next_agent(project):
     harness = Harness(project, verbose=False, land_mode="manual")
     spy = Spy(harness)
     harness.run(Budget(until=3), report=False)
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, False), (2, True), (3, True)]
     rejected, accepted = records[1], records[2]
 
@@ -114,7 +115,7 @@ def test_failed_agent_attempt_keeps_its_tree_and_stays_rejected(project):
     harness = Harness(project, verbose=False, land_mode="manual")
     Spy(harness, edit=lambda worktree: (worktree / "hello.py").write_text("half done\n"))
     harness.run(Budget(until=1), report=False)  # the loop goes on; the budget ends it here
-    record = History(project).load()[-1]
+    record = History(project, latest_run(project).run_id).load()[-1]
     assert record.iteration == 1 and not record.accepted
     assert record.reason == "Iteration 1 agent failed: Mock failure"
     assert record.gates == [] and record.observe == []  # never checked
@@ -130,7 +131,7 @@ def test_discarded_paths_are_recorded(project):
     _configure(project, settings={"change_file": "tests/test_x.py"}, scope={"editable": ["hello.py"]})
     harness = Harness(project, verbose=False, land_mode="manual")
     harness.run(Budget(until=1), report=False)
-    record = History(project).load()[-1]
+    record = History(project, latest_run(project).run_id).load()[-1]
     assert record.accepted and record.commit is None  # its only change was out of scope
     assert record.discarded == ["tests/test_x.py"]
     assert _refs(project, harness) == []

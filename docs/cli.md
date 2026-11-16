@@ -1,6 +1,24 @@
 # CLI Reference
 
 Project commands default to the current directory if `--path` is omitted.
+Commands that read runs (`resume`, `stop`, `land`, `archive`, `delete`, `hint`,
+`view`, `dashboard`, `report`, `wait`) also work from a subfolder: when the
+folder has no runs (`.autohelix/runs/`), they use the nearest folder above it,
+up to the top of its git checkout, that has, and say so ("Using project
+../.."). `setup` and `run` take the folder as given.
+
+### Which run a command acts on
+
+`land`, `hint`, `view` and `report` take a run id (or its last part); without
+one they act on the **running run**, else the **most recently active run that
+isn't [archived](#autohelix-archive)**, and say which on stderr ("Run k3f9 (the
+running run; name one to choose another)"). With several runs running they
+refuse: "Several runs are running: k3f9, m2x7; name one." With no run to act
+on, they say so and how to start one ("No runs in /path/to/project; start one
+with `autohelix run`."). `resume` has its own rule (a config's latest run,
+below). Commands that take several ids (`archive`, `delete`, `stop`, `wait`)
+check every id first: an unknown one refuses the whole command, nothing done;
+then they act on each, report each, and exit 1 if any failed.
 
 ## `autohelix skill`
 
@@ -419,7 +437,7 @@ repository; git commands need the full id (`git merge autohelix/20261111-1432-k3
 Continue a run.
 
 ```bash
-autohelix resume [RUN_ID] [-n MORE | --until N] [--cost USD] [--time DURATION] [-p PATH] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
+autohelix resume [RUN_ID | CONFIG] [-n MORE | --until N] [--cost USD] [--time DURATION] [-p PATH] [--group NAME] [--land auto|manual] [--verbose] [--no-report]
 ```
 
 `resume` only continues the same run: its stored config, its own tip, more
@@ -449,10 +467,12 @@ pytest`) are not changes. A deleted file, or a deleted prompt template, isn't a
 change: the run continues with its copy (other keys are still compared). The
 stored copy is read-only. A
 run started before runs stored their config can't be resumed: continue it
-with `run --import <id>`. Without `RUN_ID`, the config is the one a bare
-`autohelix run` would use (with several configs and no `autohelix.yaml`,
-`resume` stops: name a run), and `resume` continues that config's most
-recently active run that isn't [archived](#autohelix-archive), preferring runs
+with `run --import <id>`. `resume perf` (a config name, as `run perf`
+takes) continues the latest run of `autohelix/perf.yaml`; a run id takes
+precedence over a config of the same name. Without either, the config is the
+one a bare `autohelix run` would use (with several configs and no
+`autohelix.yaml`, `resume` stops: name a run or a config), and `resume`
+continues that config's most recently active run that isn't [archived](#autohelix-archive), preferring runs
 that captured their baseline; it says which ("Resuming k3f9: 12 iterations,
 last active 2h ago"). If that run is running in another terminal, `resume`
 says so rather than picking an older one. With no run to resume it exits
@@ -465,7 +485,9 @@ After an interrupted segment (Ctrl-C, a killed process, a reboot), a
 the interrupted segment had 8 left: -n 8" (not when that segment had already stopped for a
 reason of its own). `--until` with a number already reached says so ("Already at iteration 5;
 --until 3 runs nothing.") and exits 0 without starting a segment: nothing is written, landed or
-reported. A run stopped by a
+reported, except a `--land` or `--group` given with it, which is stored at once ("Run k3f9: landing
+set to auto; already at iteration 5, --until 5 runs nothing."), so `resume ID --until <its last
+iteration> --land auto` changes a run's landing mode without running anything. A run stopped by a
 [stop condition](config.md#stop) is paused, not ended: `resume` continues it
 and says so ("Run k3f9 stopped because score reached 0.9; it stops again after
 the next accepted iteration if that still holds"): the condition is checked
@@ -541,7 +563,7 @@ autohelix land [RUN_ID] [-p PATH] [--into BRANCH]
 ```
 
 Fast-forward the run's starting branch to its accepted tip, preserving unrelated
-checkout edits. Defaults to the current run. For a divergent target, use the
+checkout edits. Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on). For a divergent target, use the
 printed git merge command after reviewing the changes. A run created from a
 detached checkout requires `--into BRANCH`. Landing also refuses branches that
 are being rebased. If the target moved during a segment, review it and land
@@ -586,7 +608,7 @@ autohelix view [RUN_ID] [-p PATH] --once | --json
 autohelix view [RUN_ID] [-p PATH] --web [--port 8765] [--open]
 ```
 
-`RUN_ID` (or its last part) picks the run; the default is the current run. By default the terminal shows, on top, the run's own screen as `autohelix run` prints it: the header (goal, agent, gates, observe entries, scope, budget, and the run's state in the title line), one row per iteration under the column header (outcome, time, cost, each metric with its change from the baseline, why a rejection was rejected), then the live row of the iteration under way (its time so far, ticking and with a spinner, and phase: agent, gates, `observe · <entry>`, stop) or, once the run stopped, its end block (how it ended, each metric's baseline → latest accepted value, totals, what landed with the accepted summaries, what to type next, and the run's report.html and report.md once written), refreshed as the run goes (the run is reread when its files change). The rows come from the run's history, so they read as `run` printed them; if the history can't be read, a yellow `!` line says so and the end block has only how the run ended. Commits waiting on the run's branch read `unlanded  3 commits on autohelix/<id> (manual landing)` (or `(main has moved on)`) with `autohelix land` among the next commands, as in `run`'s end block. Below that is the live output of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (in the live row's words: agent, gates, observe, stop) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out (the baseline stays). When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/` (and, for a judge or review call still running, its transcript in the run's copies folder).
+`RUN_ID` (or its last part) picks the run; without it, the [running or latest run](#which-run-a-command-acts-on), chosen when the view starts. By default the terminal shows, on top, the run's own screen as `autohelix run` prints it: the header (goal, agent, gates, observe entries, scope, budget, and the run's state in the title line), one row per iteration under the column header (outcome, time, cost, each metric with its change from the baseline, why a rejection was rejected), then the live row of the iteration under way (its time so far, ticking and with a spinner, and phase: agent, gates, `observe · <entry>`, stop) or, once the run stopped, its end block (how it ended, each metric's baseline → latest accepted value, totals, what landed with the accepted summaries, what to type next, and the run's report.html and report.md once written), refreshed as the run goes (the run is reread when its files change). The rows come from the run's history, so they read as `run` printed them; if the history can't be read, a yellow `!` line says so and the end block has only how the run ended. Commits waiting on the run's branch read `unlanded  3 commits on autohelix/<id> (manual landing)` (or `(main has moved on)`) with `autohelix land` among the next commands, as in `run`'s end block. Below that is the live output of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (in the live row's words: agent, gates, observe, stop) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out (the baseline stays). When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/` (and, for a judge or review call still running, its transcript in the run's copies folder).
 
 `--once` prints the top part once and exits (`tests/snapshots/view-*.txt` shows it). `--json` prints the run once and exits, for scripts and agents managing runs: the run's row from [`dashboard --json`](#json-output) under `run`, plus `iterations`, one entry per iteration with `iteration`, `accepted`, `metrics`, `summary` (the agent's one-line summary; for records without one, the commit subject, or why it was rejected), `reason` (why it was rejected, `null` otherwise), `cost`, `cost_incomplete`, `seconds`, `gates` (in config order: `text`, `kind` (`command` or `metric`), `passed` (`true`, `false`, or `null` when not reached), and for commands that ran `return_code`, `duration_s` (`timed_out` when one did) and, failed, the `output` tail; for checked metric gates `value`, `reference` and, failed, `reason`), `observe` (the entries that ran, in order: `name`, `ok`, `return_code`, `error`, `metrics`, `duration_s`), `stops` (the stop commands that ran, in order: `text`, `outcome` (`stop`, `continue` or `error`), `return_code`, `duration_s`, and `timed_out` when one did) and `discarded` (paths outside the editable scope whose changes were dropped). In the text table a rejected iteration shows the gate that failed (a metric gate as `speed 6.5% worse than iter 3 (5% allowed)`), with failed observe entries, failed stop commands and discarded paths on the lines under it. Use one of `--once`, `--json` and `--web` at a time.
 
@@ -750,13 +772,13 @@ until it is resumed: only `--timeout` ends a wait on it.
 
 ## `autohelix hint`
 
-Send a hint to a running agent, picked up at the start of its next iteration.
+Send a hint to a run's agent, picked up at the start of its next iteration.
 
 ```bash
 autohelix hint "MESSAGE" [-p PATH] [--run RUN_ID]
 ```
 
-Requires a selected run (start one first). Appends a timestamped line to `.autohelix/runs/<id>/hints.md`. The agent reads that file (its prompt lists it among what to read before starting) each iteration, so a hint lets you steer a run without stopping it. Run it from a second terminal while `autohelix run` is going. Hints accumulate — the file holds the full history for the run.
+The run is `--run RUN_ID`, else the [running or latest run](#which-run-a-command-acts-on); `hint` names it ("Hint added to run k3f9."), adding "(not running; read by its next `autohelix resume k3f9`)" when it isn't running. Appends a timestamped line to `.autohelix/runs/<id>/hints.md`. The agent reads that file (its prompt lists it among what to read before starting) each iteration, so a hint lets you steer a run without stopping it. Run it from a second terminal while `autohelix run` is going. Hints accumulate — the file holds the full history for the run.
 
 ## `autohelix ask`
 
@@ -788,7 +810,7 @@ stop:
 - **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run: the run's stored config), else the config a bare `autohelix run` in the current directory would use (none, or several: the defaults): backend, command, model and effort only, never `agent.settings` or `extra_args`.
 - **Candidate contents are checked before and after every judge call.** Tracked and nonignored files, modes, symlinks and submodule contents must remain unchanged; runtime feedback/log outputs are allowed. A stop judge after acceptance cannot change accepted code: its edits are discarded and its verdict ignored, with error and usage recorded. Backend restrictions remain best effort.
 - **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox; it still reads an `AGENTS.md` in the directory. OpenCode can't be used as a judge yet: it has no read-only mode.
-- **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `--cost`, and its transcript is saved with the output of the command that ran it: `.autohelix/runs/<id>/iterations/NNN/gates/<k>/ask.log` for an `ask:` gate (`stop/<k>/` for a stop command, `observe/<name>/` for an observe entry; `ask-2.log`, … for further calls). While the command runs it is written to the command's private `$AUTOHELIX_LOG_DIR`. Outside a run, the cost is printed to stderr.
+- **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `--cost`, and its transcript is saved with the output of the command that ran it: `.autohelix/runs/<id>/iterations/NNN/gates/<k>/ask.log` for an `ask:` gate (`stop/<k>/` for a stop command, `observe/<name>/` for an observe entry; `ask-2.log`, … for further calls). While the command runs it is written to the command's private `$AUTOHELIX_LOG_DIR`. Outside a run, a line on stderr gives the answer, the agent and where its settings came from, and the cost: `autohelix ask: yes · codex gpt-5 (autohelix/a.yaml) · $0.0120`, or `· claude (defaults: several configs here) · …`, so a by-hand answer from other settings than a run's is visible.
 - An invalid answer or failed call is retried once. The command stays inside the timeout of the command that runs it.
 - **Scripts own the exit code.** `ask` exits non-zero when it can't answer; a script that swallows that (`autohelix ask ... || true`) and exits 0 passes.
 - **Judges can't change what they judge.** Each call fingerprints the files in its directory first. If the call changes one or adds a non-ignored file, it ends without retry: standalone ask exits 2, and in a run the call's usage record keeps an `integrity_violation` flag that rejects the iteration even if a wrapper script restores the files and exits 0.
@@ -842,7 +864,7 @@ call it directly, as they call `autohelix ask`.
 line, then one `##autohelix[NAME=value]` line per `--metric`, written by the
 command itself. The numbers come from the reviewer's structured answer (its
 JSON output schema requires them); a missing or non-finite one is an error.
-Outside a run, the cost is printed to stderr.
+Outside a run, a line on stderr names the agent, where its settings came from and the cost, as `ask`'s does.
 
 **Exit codes:** 0 when a review was produced; 2 when no valid review was
 produced (after one retry), a requested number is missing, or the reviewer
@@ -871,4 +893,4 @@ Write (or rewrite) the run summary.
 autohelix report [RUN_ID] [-p PATH]
 ```
 
-`autohelix run` and `resume` write the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. It uses the config the run stored when it started. One agent call reads the run's history, notes, logs and commits and writes `.autohelix/runs/<id>/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
+Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on). `autohelix run` and `resume` write the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. It uses the config the run stored when it started. One agent call reads the run's history, notes, logs and commits and writes `.autohelix/runs/<id>/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).

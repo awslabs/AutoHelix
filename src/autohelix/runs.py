@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from autohelix.config import load_config, run_command, template_text
+from autohelix.config import load_config, project_configs, run_command, template_text
 
 SCHEMA = 2
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
@@ -78,13 +78,13 @@ def _at(parts: list, index: int) -> str:
 class RunPaths:
     """The sole definition of project and per-run state paths.
 
-    Without an explicit id, observers follow current. The root remains useful
-    for project setup, but observers must not treat it as a run without an id.
+    Without an id, only the project's paths (`root`, `runs`, `locks`, ...) mean
+    anything; which run a command acts on is `default_run`'s choice, never a pointer.
 
     A run's folder holds what people read (run.json, config.yaml, history.jsonl, hints.md,
     report.md/.html, the `notes` link, `iterations/NNN/`, `logs/`); everything the
     harness keeps for itself is in its `.internal/`, and the project's own
-    (the current-run pointer, locks, helper scripts) in `.autohelix/.internal/`.
+    (locks, helper scripts) in `.autohelix/.internal/`.
     """
 
     project: Path
@@ -92,23 +92,14 @@ class RunPaths:
 
     def __post_init__(self):
         object.__setattr__(self, "project", Path(self.project).resolve())
-        run_id = self.run_id
-        if run_id in (None, "current"):
-            try:
-                run_id = self.current.read_text().strip()
-            except FileNotFoundError:
-                run_id = None
-        if run_id is not None and not _ID.fullmatch(run_id):
-            raise RuntimeError(f"Invalid run id: {run_id!r}")
-        object.__setattr__(self, "run_id", run_id)
+        if self.run_id is not None and not _ID.fullmatch(self.run_id):
+            raise RuntimeError(f"Invalid run id: {self.run_id!r}")
 
     # The project's state.
     @property
     def root(self): return self.project / ".autohelix"
     @property
     def project_internal(self): return self.root / ".internal"
-    @property
-    def current(self): return self.project_internal / "current"  # the current run's id
     @property
     def locks(self): return self.project_internal / "locks"
     @property
@@ -590,7 +581,10 @@ def is_archived(data: dict) -> bool:
 
 
 def is_live(paths: RunPaths) -> bool:
-    """Whether a process holds the run's lock (a brief probe: advisory)."""
+    """Whether a process holds the run's lock (a brief probe: advisory). A run that never
+    ran has no lock file, and the probe doesn't create one."""
+    if not paths.lock.exists():
+        return False
     try:
         RunLock(paths.lock).close()
     except RuntimeError:
@@ -640,7 +634,7 @@ def imported_run(paths: RunPaths, data: dict) -> tuple[RunPaths, dict] | None:
     stop this run."""
     source = data.get("import")
     source = source.get("run") if isinstance(source, dict) else None
-    if not isinstance(source, str) or not _ID.fullmatch(source):  # a real id, never the `current` alias
+    if not isinstance(source, str) or not _ID.fullmatch(source):  # a real id
         return None
     try:
         other = RunPaths(paths.project, source)
@@ -715,6 +709,72 @@ def resolve_run(project: Path, value: str) -> str:
     folder = f" ({value} is a folder: use -p {value})" if Path(value).is_dir() else ""
     raise RuntimeError(f"No run {value!r} in {Path(project).resolve()}{folder}. Use a run id or its last "
                        "part, e.g. k3f9 (names aren't ids); `autohelix dashboard` lists runs.")
+
+
+def resolve_runs(project: Path, values) -> list[str]:
+    """Several run ids as typed, all resolved before anything acts on them: an unknown
+    one refuses the whole command (RuntimeError). A run named twice counts once."""
+    return list(dict.fromkeys(resolve_run(project, value) for value in values))
+
+
+def how_to_start(project: Path) -> str:
+    """How to start a first run here, by the configs there are (lowercase, a sentence end)."""
+    configs = project_configs(project)
+    if not configs:
+        return "write a config with `autohelix setup`, then `autohelix run`."
+    if len(configs) == 1:
+        return f"start one with `{run_command(configs[0])}`."
+    return f"start one with `autohelix run [CONFIG]` (configs: {', '.join(configs)})."
+
+
+class NoRun(RuntimeError):
+    """No run for a command without a run id to act on (`default_run`)."""
+
+
+def no_run(project: Path) -> str:
+    """The one message for "no run to act on": none at all, or every one archived."""
+    project = Path(project).resolve()
+    if project_runs(project):
+        return (f"No run to act on in {project}: every run is archived. Name one (`autohelix dashboard --json` "
+                f"lists them), or {how_to_start(project)}")
+    return f"No runs in {project}; {how_to_start(project)}"
+
+
+def default_run(project: Path) -> tuple[RunPaths, dict, str]:
+    """The run a command given no run id acts on (`land`, `hint`, `view`, `report`): the
+    one running run, else the most recently active run that isn't archived. Returns it
+    with why it was chosen ("running", "most recently active") for the caller to say.
+    RuntimeError when several runs are running (name one), NoRun when there is none."""
+    runs = project_runs(project)
+    live = [(p, d) for p, d in runs if is_live(p)]
+    if len(live) > 1:
+        raise RuntimeError(f"Several runs are running: {', '.join(short_id(p.run_id) for p, _ in live)}; "
+                           "name one.")
+    if live:
+        return (*live[0], "running")
+    for paths, data in runs:
+        if not is_archived(data):
+            return paths, data, "most recently active"
+    raise NoRun(no_run(project))
+
+
+def find_project(path) -> Path:
+    """The project a command that reads runs acts on, from `path` (`--path`, default the
+    current folder): that folder when it has runs (`.autohelix/runs/`), else the nearest
+    folder above it, up to the top of its git checkout, that has; else `path` itself."""
+    start = Path(path).resolve()
+    if RunPaths(start).runs.is_dir():
+        return start
+    top = git(start, "rev-parse", "--show-toplevel", check=False)
+    if top.returncode:
+        return start
+    top_path = Path(top.stdout.strip()).resolve()
+    for folder in start.parents:
+        if not folder.is_relative_to(top_path):
+            break
+        if RunPaths(folder).runs.is_dir():
+            return folder
+    return start
 
 
 def _ago(seconds: float) -> str:
@@ -1118,6 +1178,26 @@ def archive(paths: RunPaths, *, undo: bool = False, why: str | None = None) -> N
         write_json(paths.identity, data)
 
 
+def set_options(paths: RunPaths, *, land_mode: str | None = None, group: str | None = None) -> list[str]:
+    """`resume --land` / `--group` with nothing to run: store them now, under the run's
+    lock (a run that is running refuses), and say what changed (nothing: [])."""
+    with RunLock(paths.lock):
+        data = paths.read_identity()
+        changed = []
+        if land_mode and (data.get("land") or "auto") != land_mode:
+            data["land"] = land_mode
+            changed.append(f"landing set to {land_mode}")
+        if group is not None and (data.get("group") or "") != group:
+            changed.append(f"joins group {group}" if group else f"leaves group {data['group']}")
+            if group:
+                data["group"] = group
+            else:
+                data.pop("group", None)
+        if changed:
+            write_json(paths.identity, data)
+        return changed
+
+
 def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
     """Remove a run's state, ref, pin, rejected trees and copies. Refuses while it runs, and, unless
     forced, while it has unlanded commits (they'd become unreachable)."""
@@ -1147,18 +1227,6 @@ def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
         if tip.returncode == 0:
             git(paths.project, "update-ref", "--no-deref", "-d", paths.ref, tip.stdout.strip())
         shutil.rmtree(paths.run_dir)
-    current = paths.current
-    try:
-        pointed = current.read_text().strip()
-    except OSError:
-        return
-    if pointed == paths.run_id:  # follow the most recently active remaining run
-        remaining = project_runs(paths.project)
-        remaining.sort(key=lambda item: is_archived(item[1]))  # stable: activity order within each
-        if remaining:
-            write_text(current, remaining[0][0].run_id + "\n")
-        else:
-            current.unlink(missing_ok=True)
 
 
 def run_tip(paths: RunPaths, data: dict | None = None) -> str:

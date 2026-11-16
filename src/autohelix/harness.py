@@ -309,7 +309,6 @@ class Harness:
             self.history = History(self.project_path, self.paths.run_id)
             tip, warning = reconcile(self.paths, self.run_info, self.history, self.land_mode)
             self.run_state = RunState(self.paths, self.run_info, tip)
-            write_text(self.paths.current, self.paths.run_id + "\n")
             self.repo = Repo(self.project_path)
             self.run_status = RunStatus(self.project_path, self.paths.run_id)
             self.segment_log = SegmentLog(self.paths.segments)

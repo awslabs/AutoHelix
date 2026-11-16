@@ -566,12 +566,14 @@ def test_archived_noop_retains_its_own_tip(project, monkeypatch):
     assert run_tip(resumed.paths) == run_tip_before
 
 
-def test_viewer_calls_containment_and_current_alias(project):
+def test_viewer_calls_containment_and_one_run_per_reader(project):
     from autohelix.viewer import RunData
 
-    data = RunData(project, run_id="current")
+    with pytest.raises(ValueError):
+        RunData(project, None)  # no "current run" mode: a reader reads one named run
     harness = Harness(project)
     harness.run(Budget(until=1), report=False)
+    data = RunData(project, harness.paths.run_id)
     assert data.state()["run_id"] == harness.paths.run_id
     outside = project / "private.log"
     outside.write_text(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "private"}]}}) + "\n")
@@ -581,8 +583,8 @@ def test_viewer_calls_containment_and_current_alias(project):
     assert data._events(linked) == []
     second = Harness(project, new=True)
     second.run(Budget(until=1), report=False)
-    assert data.state()["run_id"] == second.paths.run_id
-    assert [call["role"] for call in data.iteration(1)["calls"]] == ["agent"]
+    assert data.state()["run_id"] == harness.paths.run_id  # a reader stays on its run
+    assert [call["role"] for call in RunData(project, second.paths.run_id).iteration(1)["calls"]] == ["agent"]
     row = json.loads(second.paths.history.read_text().splitlines()[-1])
     assert row["metrics"] == {} and row["cost"]["cost_usd"] == 0.1
 
@@ -747,7 +749,7 @@ def test_refused_first_start_creates_no_identity(project, problem, capsys):
     else:
         assert "has a `..` component" in " ".join(capsys.readouterr().out.split())
     root = RunPaths(project).root
-    assert not RunPaths(project).current.exists()
+    assert not (RunPaths(project).project_internal / "current").exists()  # no pointer is ever written
     assert not list((root / "runs").glob("*/run.json"))
     assert not git(project, "for-each-ref", "--format=%(refname)", "refs/autohelix/").stdout.strip()
 

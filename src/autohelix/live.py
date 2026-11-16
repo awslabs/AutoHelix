@@ -65,7 +65,7 @@ def _status_line(status: dict | None, now: float | None = None) -> str:
     return f"Running{where} · {run_table.PHASES.get(phase, phase)} · {since}"  # the live row's words
 
 
-def log_for(project: Path, status: dict | None, current: Path | None, run_id: str | None = None) -> tuple[Path, str, float] | None:
+def log_for(project: Path, status: dict | None, current: Path | None, run_id: str) -> tuple[Path, str, float] | None:
     """The log to show for this status: (path, panel title, when it started).
 
     Between the agent and summary phases (checks, merge, …) the panel follows
@@ -75,8 +75,6 @@ def log_for(project: Path, status: dict | None, current: Path | None, run_id: st
     if not status:
         return None
     paths = RunPaths(project, run_id)
-    if not paths.run_id:
-        return None
     logs = paths.logs
     phase, n = status.get("phase"), status.get("iteration")
     phase_start = status.get("phase_started_at", time.time())
@@ -122,7 +120,7 @@ def transcript_for(paths: RunPaths, status: dict | None) -> tuple[str, str] | No
 class LogFollower:
     """The log panel: follows the log the run's status points at, replaying what is already there."""
 
-    def __init__(self, project: Path, backend: str | None, console: Console, run_id: str | None = None):
+    def __init__(self, project: Path, backend: str | None, console: Console, run_id: str):
         self.project, self.backend, self.console, self.run_id = project, backend, console, run_id
         self.current: Path | None = None
         self.tail: LogTail | None = None
@@ -243,8 +241,8 @@ def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollowe
 
 
 def view(project: Path, backend: str | None = None, console: Console | None = None, *,
-         run_id: str | None = None) -> None:
-    """Follow a run (the current one unless `run_id`) until interrupted, across its segments.
+         run_id: str) -> None:
+    """Follow the run `run_id` until interrupted, across its segments.
     The run is reread when its status or files change (`_changes`), else every
     REREAD_SECONDS; the screen is redrawn REFRESH_PER_SECOND times a second meanwhile."""
     console = console or Console()

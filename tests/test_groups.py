@@ -14,6 +14,7 @@ from autohelix.cli import main
 from autohelix.harness import Budget, Harness
 from autohelix.runs import RunLock, RunPaths, archive, git, short_id
 from tests.test_runs import configure
+from tests.helpers import latest_run
 
 
 def cli(project, *args):
@@ -23,7 +24,7 @@ def cli(project, *args):
 def started(project, *args):
     result = cli(project, "run", "-n", "1", "--no-report", *args)
     assert result.exit_code == 0, result.output
-    return RunPaths(project), result
+    return latest_run(project), result
 
 
 def identity(paths):

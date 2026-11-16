@@ -12,6 +12,7 @@ from autohelix import live as W
 from autohelix.replay import LogTail
 from autohelix.run_status import RunStatus
 from autohelix.safe_open import open_run_log
+from tests.helpers import latest_run
 
 LINE = json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "SECRET-TEXT"}]}}) + "\n"
 
@@ -127,12 +128,12 @@ def test_a_planted_link_on_the_way_to_a_transcript_is_refused(run_paths, tmp_pat
 
 
 def _follow(tmp_path, log):
-    status = RunStatus(tmp_path)
+    status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
     status.start()
     status.phase("agent", 1)
     status.note(log=str(log))
     out = io.StringIO()
-    follower = W.LogFollower(tmp_path, "claude", Console(file=out, width=120))
+    follower = W.LogFollower(tmp_path, "claude", Console(file=out, width=120), "test")
     follower.poll(status.data)
     with Console(file=out, width=120) as console:
         if follower.display is not None:
@@ -237,7 +238,7 @@ def test_planted_live_transcripts_are_refused(run_paths, tmp_path, kind):
 
 
 def _running(tmp_path, iteration=3, phase="checks"):
-    status = RunStatus(tmp_path)
+    status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
     status.start()
     status.phase(phase, iteration)
     return status
@@ -286,7 +287,7 @@ def test_terminal_view_follows_a_live_transcript_then_the_stored_one(tmp_path, r
     append_usage({"id": "a", "source": "ask", "status": "started", "log": str(log)}, run_paths.usage(3))
     status = _running(tmp_path)
     out = io.StringIO()
-    follower = W.LogFollower(tmp_path, "claude", Console(file=out, width=120))
+    follower = W.LogFollower(tmp_path, "claude", Console(file=out, width=120), "test")
     follower.poll(status.data)
     assert follower.current == log and follower.display.title == "Iteration 3 · ask"
     with Console(file=out, width=120) as console:

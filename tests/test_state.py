@@ -8,8 +8,8 @@ from autohelix.state import (
     GitExcludeError,
     ensure_git_exclude_entry,
     ensure_runtime_ignored,
-    read_stored_config_path,
 )
+from autohelix.runs import RunPaths
 
 
 @pytest.fixture
@@ -65,5 +65,12 @@ class TestEnsureGitExcludeEntry:
         assert exclude.read_bytes() == before
 
 
-def test_no_selected_run_has_no_stored_config(tmp_path):
-    assert read_stored_config_path(tmp_path) is None
+def test_paths_without_an_id_name_no_run_even_beside_an_old_pointer(tmp_path):
+    """There is no current-run pointer: an old `.internal/current` file is never followed
+    (it used to be, and a hand-edited one broke every command)."""
+    pointer = tmp_path / ".autohelix" / ".internal" / "current"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text("My Run\n")
+    paths = RunPaths(tmp_path)
+    assert paths.run_id is None
+    assert paths.config == tmp_path / ".autohelix" / "config.yaml"  # no run's stored config

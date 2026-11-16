@@ -16,6 +16,7 @@ from autohelix.harness import Budget, Harness
 from autohelix.history import History
 from autohelix.iteration import IterationWorkspace
 from autohelix.runs import RunPaths
+from tests.helpers import latest_run
 
 
 def _git(project, *args) -> str:
@@ -54,7 +55,7 @@ def _configure(project, **sections) -> None:
 
 def _run(project, n: int) -> list:
     Harness(project, verbose=False).run(Budget(until=n), report=False)
-    return History(project).load()
+    return History(project, latest_run(project).run_id).load()
 
 
 def _lines(path) -> list[str]:
@@ -146,7 +147,7 @@ def test_failed_entry_contributes_no_metrics_and_the_run_continues(project, log)
     assert (flaky_dir / "stdout.txt").read_text() == "##autohelix[score=7]\n"
     assert (flaky_dir / "stderr.txt").read_text() == "oops\n"
     assert not (_observe(project, 1) / "other" / "stderr.txt").exists()
-    persisted = json.loads(History(project).history_path.read_text().splitlines()[-1])
+    persisted = json.loads(History(project, latest_run(project).run_id).history_path.read_text().splitlines()[-1])
     assert persisted["observe"][0]["error"] == "exited 2"
 
 
@@ -230,7 +231,7 @@ def test_refused_captures_are_skipped_at_capture_time(tmp_path):
     (root / ".git" / "config").write_text("secret")
     (root / "STDOUT.TXT").write_text("planted")
     stage.mkdir()
-    history = History(tmp_path)
+    history = History(tmp_path, latest_run(tmp_path).run_id)
     problems = history.stage_output(stage, "out\n", "", root, ["../x", ".git/config", "STDOUT.TXT", ".git"])
     assert len(problems) == 4 and all("skipped" in p for p in problems)
     assert sorted(p.name for p in stage.iterdir()) == ["stdout.txt"]
@@ -338,7 +339,7 @@ def test_scratch_is_fresh_private_and_removed_after_each_command(project, log):
     harness = Harness(project, verbose=False)
     copies = harness.run_state.copies_root
     harness.run(Budget(until=1), report=False)
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [r.accepted for r in records] == [True, True]
     assert all(g["passed"] for r in records for g in r.gates)
     assert [o["ok"] for r in records for o in r.observe] == [True, True]
@@ -369,7 +370,7 @@ def test_candidate_base_and_project(project, log):
     base = _git(project, "rev-parse", "HEAD")
     harness = Harness(project, verbose=False)
     harness.run(Budget(until=1), report=False)
-    commit = History(project).load()[1].commit
+    commit = History(project, latest_run(project).run_id).load()[1].commit
     assert commit
     a_tree, t_tree = _git(project, "rev-parse", f"{base}^{{tree}}"), _git(project, "rev-parse", f"{commit}^{{tree}}")
     assert _git(project, "rev-parse", f"{commit}^") == base
@@ -410,7 +411,7 @@ def test_failed_command_entry_at_the_baseline_is_a_setup_error(project):
                                   "metrics": {"speed": "higher"}}])
     with pytest.raises(RuntimeError, match=r"observe entry `bench` failed \(exited 1\) and reported no `speed`"):
         Harness(project, verbose=False).run(Budget(until=1), report=False)
-    [record] = History(project).load()
+    [record] = History(project, latest_run(project).run_id).load()
     assert not record.accepted and record.observe[0]["error"] == "exited 1"
 
 
@@ -421,7 +422,7 @@ def test_failed_entry_without_metrics_at_the_baseline_continues(project):
     ])
     harness = Harness(project, verbose=False)
     harness._capture_baseline()
-    [baseline] = History(project).load()
+    [baseline] = History(project, latest_run(project).run_id).load()
     harness.close()
     assert baseline.accepted and baseline.metrics == {"speed": 3}
     assert [(o["name"], o["ok"]) for o in baseline.observe] == [("notes", False), ("bench", True)]
@@ -441,7 +442,7 @@ def test_failed_review_entry_at_the_baseline(project, gated):
                 harness._capture_baseline()
         else:
             harness._capture_baseline()
-            [baseline] = History(project).load()
+            [baseline] = History(project, latest_run(project).run_id).load()
             assert baseline.accepted and baseline.metrics == {}
     finally:
         harness.close()
@@ -483,7 +484,7 @@ def test_previous_after_resume(project):
     _configure(project, observe=[{"name": "tracker", "command": TRACKER}])
     Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
     Harness(project, verbose=False).run(Budget(until=2), report=False)  # resume: iteration 2
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True), (2, True)]
     assert _first_lines(project, 2) == ["iter=2", "prev=iter=1"]
 
@@ -503,10 +504,10 @@ def test_baseline_retry_clears_observations_and_has_no_previous(project, tmp_pat
     harness = Harness(project, verbose=False)  # resumes the run: a baseline retry
     harness.config.gates = []  # this attempt plants nothing: what's left is the first attempt's
     harness.run(Budget(until=1), report=False)
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [(r.iteration, r.accepted) for r in records][:2] == [(0, True), (1, True)]
     assert sorted(p.name for p in observations.iterdir()) == ["bench"]
-    kept = History(project).paths.attempt_dir(0, 1)
+    kept = History(project, latest_run(project).run_id).paths.attempt_dir(0, 1)
     assert sorted(p.name for p in (kept / "observe").iterdir()) == ["bench", "ghost"]
     assert json.loads((kept / "record.json").read_text())["accepted"] is False  # the failed attempt's record
     first, retry, iteration_1 = _lines(log)
@@ -609,5 +610,5 @@ def test_interrupt_during_a_real_command_removes_its_call_folder(project, log):
         harness.close()
     [scratch] = _lines(log)
     assert not os.path.exists(scratch) and not os.path.exists(os.path.dirname(scratch))
-    record = History(project).load()[-1]
+    record = History(project, latest_run(project).run_id).load()[-1]
     assert record.iteration == 1 and record.reason == "interrupted"

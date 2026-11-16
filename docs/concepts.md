@@ -417,7 +417,7 @@ harness keeps for itself is in `.internal/` folders:
 │   └── .internal/              # status.json, segments.jsonl, stop.json (autohelix stop), usage/,
 │                               # notes versions notes/<n>/, superseded attempts attempts/,
 │                               # report.json, the copies path
-└── .internal/                  # the current run's id, lock files, helper scripts (bin/)
+└── .internal/                  # lock files, helper scripts (bin/)
 ```
 
 Every iteration's folder has the same parts; those that don't apply are absent:

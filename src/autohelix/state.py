@@ -103,13 +103,3 @@ def _require_runtime_ignored(project_path: Path) -> None:
         "negation rules in your .gitignore, then retry. "
         "AutoHelix has not modified your .gitignore."
     )
-
-
-def read_stored_config_path(project_path: Path, run_id: str | None = None) -> Path | None:
-    """The selected run's stored config (`runs/<id>/config.yaml`), None without a run.
-    A run started by an older AutoHelix has none; callers must not put another config
-    (its source file's current text) in its place."""
-    from autohelix.runs import RunPaths
-
-    paths = RunPaths(project_path, run_id)
-    return paths.config if paths.run_id else None

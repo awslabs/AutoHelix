@@ -2,6 +2,7 @@
 --now, which also interrupts it (SIGINT, as Ctrl-C would)."""
 
 import json
+import re
 import os
 import signal
 import socket
@@ -20,10 +21,11 @@ from autohelix.harness import Budget, Harness
 from autohelix.history import History
 from autohelix.live import status_line
 from autohelix.run_status import read_segments, write_stop_request
-from autohelix.runs import RunLock, RunPaths, critical_section, git, short_id
+from autohelix.runs import RunLock, RunPaths, critical_section, git, short_id, write_json
 from autohelix.viewer import ProjectRuns, RunData
 from autohelix import run_table
 from tests.test_runs import configure
+from tests.helpers import latest_run
 
 
 def cli(project, *args):
@@ -40,7 +42,7 @@ def status(paths):
 
 def stop_gate(at: int, *flags: str) -> str:
     """A gate that runs `autohelix stop` on its own run at iteration `at`, then passes."""
-    run = '"$(cat "$AUTOHELIX_PROJECT/.autohelix/.internal/current")"'
+    run = '"$AUTOHELIX_RUN_ID"'
     return (f'if [ "$AUTOHELIX_ITERATION" = {at} ]; then '
             f'autohelix stop {run} -p "$AUTOHELIX_PROJECT" {" ".join(flags)}; fi; true')
 
@@ -75,7 +77,7 @@ def test_a_request_during_the_baseline_stops_after_the_baseline(project):
     configure(project, gates=[stop_gate(0)])
     result = cli(project, "run", "-n", "3", "--no-report")
     assert result.exit_code == 0, result.output
-    paths = RunPaths(project)
+    paths = latest_run(project)
     assert iterations(paths) == [0]
     assert "  Stopped    requested by autohelix stop" in result.output
     reason = status(paths)["stop_reason"]
@@ -84,7 +86,10 @@ def test_a_request_during_the_baseline_stops_after_the_baseline(project):
     # The gate's own output: what the request said to its caller.
     gate_out = (paths.iteration_dir(0) / "gates" / "1" / "stdout.txt").read_text()
     assert f"Run {short_id(paths.run_id)} stops after the baseline." in gate_out
-    assert f"See when it has ended: autohelix wait {short_id(paths.run_id)} (repeat until it prints ended or idle)" in gate_out
+    # From the gate's folder the advice names the project (relative or absolute, whichever is shorter).
+    advice = re.search(rf"See when it has ended: autohelix wait -p (\S+) {short_id(paths.run_id)} "
+                       r"\(repeat until it prints ended or idle\)", gate_out)
+    assert advice and Path(advice[1]).name == "project"
     # A resume continues as usual: nothing is left of the request (the gate asks only at 0).
     result = cli(project, "resume", "-n", "2", "--no-report")
     assert result.exit_code == 0, result.output
@@ -142,7 +147,7 @@ def test_an_unreadable_request_is_no_request(project, monkeypatch):
 def test_the_status_carries_the_segment_number(project):
     result = cli(project, "run", "--no-report")
     assert result.exit_code == 0, result.output
-    paths = RunPaths(project)
+    paths = latest_run(project)
     assert status(paths)["segment"] == 1
     assert cli(project, "resume", "--no-report").exit_code == 0
     assert status(paths)["segment"] == 2 == read_segments(paths.segments)[-1]["segment"]
@@ -209,7 +214,7 @@ def running(project):
     in segment 2."""
     result = cli(project, "run", "--no-report")
     assert result.exit_code == 0, result.output
-    paths = RunPaths(project)
+    paths = latest_run(project)
     data = status(paths)
     data.update(state="running", pid=os.getpid(), host=socket.gethostname(), segment=2, iteration=3,
                 phase="agent")
@@ -229,7 +234,8 @@ def test_stop_writes_a_request_for_the_running_segment(project, running):
     result = cli(project, "stop", short, "--why", "done for today")
     assert result.exit_code == 0, result.output
     assert result.output.splitlines() == [f"Run {short} stops after its current iteration (3).",
-                                          f"See when it has ended: autohelix wait {short} (repeat until it prints ended or idle)"]
+                                          f"See when it has ended: autohelix wait -p {project} {short} "
+                                          "(repeat until it prints ended or idle)"]
     request = json.loads(running.stop_request.read_text())
     assert {k: request[k] for k in ("why", "now", "segment", "host", "pid")} == {
         "why": "done for today", "now": False, "segment": 2, "host": socket.gethostname(), "pid": os.getpid()}
@@ -253,7 +259,7 @@ def test_stop_says_what_happens_next(project, running, fields, message):
 
 def test_stop_refuses_runs_that_are_not_running(project):
     result = cli(project, "run", "--no-report")
-    paths = RunPaths(project)
+    paths = latest_run(project)
     short = short_id(paths.run_id)
     result = cli(project, "stop", short)
     assert result.exit_code == 1 and f"Run {short} is not running (finished)." in result.output
@@ -268,7 +274,7 @@ def test_stop_refuses_a_running_status_whose_lock_is_free(project, monkeypatch):
     """A process killed before it could update its status (SIGKILL), its pid taken by
     another autohelix process: the status says running, but nobody holds the run's lock."""
     result = cli(project, "run", "--no-report")
-    paths = RunPaths(project)
+    paths = latest_run(project)
     set_status(paths, state="running", pid=os.getpid(), host=socket.gethostname(), segment=1, iteration=1)
     monkeypatch.setattr(cli_module, "_process_command", lambda pid: "python -m autohelix run")
     kills = []
@@ -290,13 +296,24 @@ def test_stop_refuses_a_status_without_a_segment(project, running):
     assert not running.stop_request.exists()
 
 
-def test_stop_handles_every_id_and_fails_if_any_failed(project, running):
+def test_stop_with_an_unknown_id_stops_nothing(project, running):
     short = short_id(running.run_id)
     result = cli(project, "stop", "zzzz", short)
     assert result.exit_code == 1
-    assert "No run 'zzzz'" in result.output
+    assert "No run 'zzzz'" in result.output and "Nothing was done." in result.output
+    assert not running.stop_request.exists()  # ids are resolved before anything is asked
+
+
+def test_stop_handles_every_known_id_and_fails_if_any_failed(project, running):
+    short = short_id(running.run_id)
+    other = RunPaths(project, "20260101-0000-idle-zzzz")
+    write_json(other.identity, {"schema": 2, "id": other.run_id, "created_at": 1.0})
+    result = cli(project, "stop", "zzzz", short)
+    assert result.exit_code == 1
+    assert "Run zzzz is not running." in result.output
     assert f"Run {short} stops after its current iteration (3)." in result.output
-    assert f"See when it has ended: autohelix wait {short} (repeat until it prints ended or idle)" in result.output
+    assert (f"See when it has ended: autohelix wait -p {project} {short} (repeat until it prints ended or idle)"
+            in result.output)
     assert running.stop_request.exists()
 
 
@@ -402,7 +419,7 @@ def test_stop_now_ends_a_background_run_that_ignores_sigint(project, tmp_path):
             assert time.monotonic() < deadline, (tmp_path / "run.log").read_text()
             time.sleep(0.1)
         group = int((marks / "gate.pid").read_text())
-        paths = RunPaths(project)
+        paths = latest_run(project)
         result = cli(project, "stop", short_id(paths.run_id), "--now", "--why", "enough")
         assert result.exit_code == 0, result.output
         assert process.wait(timeout=60) is not None

@@ -14,6 +14,7 @@ from autohelix.history import History
 from autohelix.prompt_template import load_template
 from autohelix.runs import RunPaths, git, load_run_config, short_id
 from autohelix.workspace import Scope
+from tests.helpers import latest_run
 
 CONFIG = """\
 # Why this goal: setup's reasoning, as comments.
@@ -45,7 +46,7 @@ def started(project):
     commit(project, "config")
     result = cli(project, "run", "-n", "1", "--no-report", "--land", "manual")
     assert result.exit_code == 0, result.output
-    return RunPaths(project)
+    return latest_run(project)
 
 
 # --- the stored copy ---
@@ -106,7 +107,7 @@ def test_a_run_whose_template_was_not_stored_refuses(project):
     (project / "autohelix.yaml").write_text(CONFIG + "prompt_template: prompt.md\n")
     commit(project, "template")
     assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
-    paths = RunPaths(project)
+    paths = latest_run(project)
     paths.template.unlink()
     with pytest.raises(RuntimeError, match=rf"stored no copy of its prompt_template .* `autohelix run --import "
                                            rf"{short_id(paths.run_id)}`"):
@@ -179,7 +180,7 @@ def test_a_template_edit_refuses(project):
     (project / "autohelix.yaml").write_text(CONFIG + "prompt_template: prompt.md\n")
     commit(project, "template")
     assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
-    paths = RunPaths(project)
+    paths = latest_run(project)
     assert paths.template.read_text() == "Do it: {{ goal }}\n"
     assert "Do it: Make a checked change" in paths.prompt(1).read_text()
     (project / "prompt.md").write_text("Do it differently: {{ goal }}\n")
@@ -198,7 +199,7 @@ def test_a_deleted_template_continues_but_other_keys_are_compared(project):
     (project / "autohelix.yaml").write_text(CONFIG + "prompt_template: prompt.md\n")
     commit(project, "template")
     assert cli(project, "run", "-n", "1", "--no-report", "--land", "manual").exit_code == 0
-    paths = RunPaths(project)
+    paths = latest_run(project)
     git(project, "rm", "-q", "prompt.md")
     commit(project, "drop template")
     (project / "autohelix.yaml").write_text(CONFIG.replace("Make a checked change", "Other") + "prompt_template: prompt.md\n")

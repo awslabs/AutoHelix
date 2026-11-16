@@ -14,7 +14,6 @@ def run_paths(tmp_path):
         "schema": SCHEMA, "id": "test", "config_path": "autohelix.yaml",
         "base_commit": "0" * 40, "target_branch": None,
     })
-    write_text(paths.current, "test\n")
     return paths
 
 

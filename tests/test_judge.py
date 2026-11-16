@@ -21,6 +21,7 @@ from autohelix.judge import (
 from autohelix.run_status import read_run_status
 from autohelix.runs import RunPaths
 from autohelix.usage_log import append_usage, read_usage
+from tests.helpers import latest_run
 
 
 def mock_judge(**settings) -> AgentConfig:
@@ -256,15 +257,15 @@ stop:
 
     Harness(project, verbose=False).run(Budget(until=3), report=False)
 
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [r.iteration for r in records] == [0, 1]
     assert records[1].stop["reason"] == "all items done"
     [call] = records[1].command_usage
     assert call["source"] == "ask" and call["cost_usd"] == 0.10
     assert records[1].cost.cost_usd == pytest.approx(0.20)  # agent + judge
     [command_call] = [call for call in records[1].calls if call["role"] == "command"]
-    assert (RunPaths(project).run_dir / command_call["log"]).exists()
-    assert read_run_status(project)["stop_reason"]["kind"] == "condition"
+    assert (latest_run(project).run_dir / command_call["log"]).exists()
+    assert read_run_status(project, latest_run(project).run_id)["stop_reason"]["kind"] == "condition"
 
 
 def test_reason_cannot_carry_a_metric():
