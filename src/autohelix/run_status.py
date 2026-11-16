@@ -10,7 +10,7 @@ import os
 import socket
 import time
 from pathlib import Path
-from autohelix.runs import RunPaths, SCHEMA, write_json
+from autohelix.runs import RunPaths, SCHEMA, held_here, is_live, write_json
 
 
 def _path(project: Path, run_id: str | None = None) -> Path:
@@ -150,8 +150,22 @@ def read_segments(path: Path | None, *, data: bytes | None = None, terminated: b
     return [segments[n] for n in sorted(segments)]
 
 
+def holder_gone(paths: RunPaths, host, pid) -> bool:
+    """Whether the process (`pid` on `host`) that wrote a running status or an open
+    segment is certainly gone: on this host, when nothing holds the run's lock
+    (`is_live`; `run`/`resume` hold it from start to end, and a pid could be reused),
+    or when this process holds it and isn't `pid` (a resume reading the segment it
+    continues). Another host's can't be checked (False)."""
+    if host != socket.gethostname():
+        return False
+    if held_here(paths.lock):
+        return pid != os.getpid()
+    return not is_live(paths)
+
+
 def read_run_status(project: Path, run_id: str | None = None) -> dict | None:
-    """Return the last recorded status, with state corrected if the process died."""
+    """Return the last recorded status; a running one whose process is gone
+    (`holder_gone`) reads as crashed."""
     paths = RunPaths(project, run_id)
     if paths.run_id is None:
         return None
@@ -159,13 +173,10 @@ def read_run_status(project: Path, run_id: str | None = None) -> dict | None:
         data = json.loads(paths.status.read_text())
     except (OSError, ValueError):
         return None
-    if data.get("state") == "running" and data.get("host") == socket.gethostname():
-        try:
-            os.kill(int(data["pid"]), 0)
-        except ProcessLookupError:
-            data["state"] = "crashed"
-        except (PermissionError, KeyError, TypeError, ValueError):
-            pass
+    if not isinstance(data, dict):
+        return None
+    if data.get("state") == "running" and holder_gone(paths, data.get("host"), data.get("pid")):
+        data["state"] = "crashed"
     return data
 
 

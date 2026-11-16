@@ -512,7 +512,9 @@ def test_three_agent_failures_in_a_row_stop_the_run_and_land_accepted_work(repo)
     _configure(project, repo, scope={"editable": ["hello.py"]})
     harness = Harness(project, verbose=False)  # auto landing
     Agent(harness, _failing({2, 3, 4}))
-    harness.run(Budget(until=10), report=False)
+    with pytest.raises(AutoHelixRunError, match="the agent failed 3 times in a row: crashed") as raised:
+        harness.run(Budget(until=10), report=False)  # an error (the CLI exits 1), shown in the ending
+    assert raised.value.autohelix_reported
     records = History(project, latest_run(project).run_id).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True), (2, False), (3, False), (4, False)]
     reason = read_run_status(project, latest_run(project).run_id)["stop_reason"]

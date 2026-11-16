@@ -247,8 +247,7 @@ class RunData:
 
     def _config(self):
         """The run's stored config (`runs/<id>/config.yaml`), parsed again only when it
-        changes. A run without one (started by an older AutoHelix) shows it missing, never
-        its source file."""
+        changes (never its source file)."""
         path = self.paths.config
         try:
             info = path.stat()
@@ -281,8 +280,6 @@ class RunData:
             except ConfigError:
                 text = None
             summary["template"] = {"file": config_relative(self.project, config.prompt_template), "text": text}
-        if not path.exists():
-            summary["missing"] = True
         if config:
             summary.update(
                 agent=" · ".join(filter(None, [config.agent.backend, config.agent.model])),
@@ -910,7 +907,7 @@ class ProjectRuns:
         try:
             mtime = path.stat().st_mtime
         except OSError:
-            return {"file": relative, "missing": True}
+            return {"file": relative, "invalid": True}
         cached = self._configs.get(path)
         if cached and cached[0] == mtime:
             return cached[1]
@@ -962,7 +959,7 @@ class ProjectRuns:
         attempts = [r for r in records if r.iteration > 0]
         cost = summarize_costs([usage for r in records for usage in r.cost_usages])
         budget = status or {}
-        tip = refs.get(paths.ref) or data.get("abandoned_tip")
+        tip = refs.get(paths.ref)
         target = data.get("target_branch")
         target_tip = refs.get(f"refs/heads/{target}") if target else None
         return {
@@ -972,8 +969,7 @@ class ProjectRuns:
             "created_at": data.get("created_at"),
             "last_activity": last_activity(paths, data, status or {}),
             "config_file": config.get("file"),
-            # The run's stored config, missing (an old run's: never its source file instead) or invalid.
-            "config_missing": bool(config.get("missing")),
+            # The run's stored config can't be read (never its source file instead).
             "config_invalid": bool(config.get("invalid")),
             "goal": config.get("goal"),
             "title": config.get("title"),  # the goal's first line, cut (Config.title)

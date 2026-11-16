@@ -108,10 +108,10 @@ def _iterations(run: dict) -> str:
 
 
 def _config_file(run: dict, unless_named: bool = False) -> str:
-    """The run's config file, marked when the run has no stored copy (an old run) or it
-    is invalid; with `unless_named`, "" when the run is named after it (the dashboard)."""
+    """The run's config file, marked when its stored copy can't be read; with
+    `unless_named`, "" when the run is named after it (the dashboard)."""
     file = run["config_file"] or ""
-    flag = " (not stored)" if run.get("config_missing") else " (invalid)" if run.get("config_invalid") else ""
+    flag = " (invalid)" if run.get("config_invalid") else ""
     named = unless_named and not flag and file.rsplit("/", 1)[-1] in (f"{run.get('name')}.yaml", "autohelix.yaml")
     return file + flag if file and not named else ""
 

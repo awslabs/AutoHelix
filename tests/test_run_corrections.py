@@ -191,7 +191,8 @@ def test_auto_landing_never_rewinds_target_changed_during_segment(project, monke
         return run_agent(*args)
 
     monkeypatch.setattr(harness, "run_agent", agent)
-    harness.run(Budget(until=1), report=False)
+    with pytest.raises(AutoHelixRunError, match="auto landing failed: Target main changed during this segment"):
+        harness.run(Budget(until=1), report=False)  # a refused landing is an error (exit 1)
     assert harness.history.load()[-1].accepted
     assert git(project, "rev-parse", "HEAD").stdout.strip() == observed[0]
     assert (project / "user.txt").read_text() == "legitimate concurrent user commit"

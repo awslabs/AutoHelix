@@ -165,7 +165,7 @@ def test_an_interrupt_with_a_now_request_notes_it_as_the_stop_reason(project, mo
         raise KeyboardInterrupt  # what the SIGINT `stop --now` sends raises
 
     monkeypatch.setattr(harness, "run_iteration", interrupted)
-    harness.run(Budget(iterations=5), report=False)
+    assert harness.run(Budget(iterations=5), report=False) == "interrupted"  # the CLI exits 130
     reason = status(paths)["stop_reason"]
     assert reason["kind"] == "request" and reason["now"] is True and reason["why"] == "wrong direction"
     assert reason["detail"] == "requested by autohelix stop --now: wrong direction"
@@ -266,7 +266,7 @@ def test_stop_refuses_runs_that_are_not_running(project):
     assert not paths.stop_request.exists()
     set_status(paths, state="running", pid=2 ** 22 + 12345, host=socket.gethostname())  # a dead process
     result = cli(project, "stop", short)
-    assert result.exit_code == 1 and "is not running (it stopped unexpectedly)." in result.output
+    assert result.exit_code == 1 and "is not running (its process is gone; it stopped unexpectedly)." in result.output
     assert not paths.stop_request.exists()
 
 
@@ -287,12 +287,12 @@ def test_stop_refuses_a_running_status_whose_lock_is_free(project, monkeypatch):
     RunLock(paths.lock).close()  # the probe let it go
 
 
-def test_stop_refuses_a_status_without_a_segment(project, running):
+def test_a_status_without_a_segment_is_not_running(project, running):
     data = status(running)
-    del data["segment"]
+    del data["segment"]  # no released version writes one: no special message for it
     running.status.write_text(json.dumps(data))
     result = cli(project, "stop", short_id(running.run_id))
-    assert result.exit_code == 1 and "older AutoHelix" in result.output and "Ctrl-C" in result.output
+    assert result.exit_code == 1 and f"Run {short_id(running.run_id)} is not running." in result.output
     assert not running.stop_request.exists()
 
 
@@ -422,7 +422,7 @@ def test_stop_now_ends_a_background_run_that_ignores_sigint(project, tmp_path):
         paths = latest_run(project)
         result = cli(project, "stop", short_id(paths.run_id), "--now", "--why", "enough")
         assert result.exit_code == 0, result.output
-        assert process.wait(timeout=60) is not None
+        assert process.wait(timeout=60) == 130  # interrupted
     finally:
         if process.poll() is None:
             process.kill()

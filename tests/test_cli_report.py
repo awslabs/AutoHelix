@@ -124,7 +124,7 @@ class TestReportCommand:
         latest_run(project).config.unlink()
         result = runner.invoke(main, ["report", "-p", str(project)])
         assert result.exit_code == 1
-        assert "Run test has no stored config (started by an older AutoHelix); its report can't be written." in (
+        assert "Run test has no stored config: it was made by a development version of AutoHelix." in (
             " ".join(result.output.split()))
 
     @staticmethod

@@ -11,6 +11,7 @@ from rich.console import Console
 from autohelix import live as W
 from autohelix.replay import LogTail
 from autohelix.run_status import RunStatus
+from autohelix.runs import RunLock
 from autohelix.safe_open import open_run_log
 from tests.helpers import latest_run
 
@@ -239,6 +240,7 @@ def test_planted_live_transcripts_are_refused(run_paths, tmp_path, kind):
 
 def _running(tmp_path, iteration=3, phase="checks"):
     status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
+    status.lock = RunLock(latest_run(tmp_path).lock)  # a running segment holds the run's lock
     status.start()
     status.phase(phase, iteration)
     return status
@@ -273,7 +275,7 @@ def test_web_viewer_shows_a_live_stop_transcript_after_the_record(tmp_path, run_
     log.write_text(LINE)
     append_usage({"id": "gate", "source": "ask", "status": "ok", "log": None}, run_paths.usage(3))
     append_usage({"id": "stop", "source": "ask", "status": "started", "log": str(log)}, run_paths.usage(3))
-    _running(tmp_path, phase="stop check")
+    status = _running(tmp_path, phase="stop check")  # kept: its lock is the run's liveness
     calls = RunData(tmp_path, run_id="test").iteration(3)["calls"]
     assert [c["usage"].get("id") for c in calls] == ["gate", "stop"]
     assert any("SECRET-TEXT" in event["text"] for event in calls[1]["events"])

@@ -15,8 +15,8 @@ import pytest
 from click.testing import CliRunner
 
 from autohelix.cli import main
-from autohelix.events import EVENT_SCHEMA, STARTING_SECONDS, Marks, Watcher, decode_cursor, encode_cursor
-from autohelix.runs import SCHEMA, RunPaths, short_id, write_json
+from autohelix.events import EVENT_SCHEMA, Marks, Watcher, decode_cursor, encode_cursor
+from autohelix.runs import SCHEMA, RunLock, RunPaths, held_here, short_id, write_json
 from tests.helpers import latest_run
 
 HOST = socket.gethostname()
@@ -45,7 +45,19 @@ def record(paths, iteration, at, accepted=True, started=None, **fields):
     return data
 
 
+_HELD: list[RunLock] = []  # the locks of runs this process "runs" (alive while held)
+
+
+def hold(paths) -> None:
+    """Hold the run's lock, as the process running it does: a segment or status with this
+    process's pid is alive."""
+    if not held_here(paths.lock):
+        _HELD.append(RunLock(paths.lock))
+
+
 def start(paths, segment, at, pid=None, host=HOST, start_iteration=0):
+    if pid is None:
+        hold(paths)
     append(paths.segments, {"segment": segment, "event": "start", "started_at": at, "pid": pid or os.getpid(),
                             "host": host, "budget": {}, "start_iteration": start_iteration})
 
@@ -57,6 +69,8 @@ def end(paths, segment, at, state="finished", stop_reason=None, last_iteration=1
 
 
 def status(paths, **data):
+    if "pid" not in data:
+        hold(paths)
     paths.status.parent.mkdir(parents=True, exist_ok=True)
     paths.status.write_text(json.dumps({"state": "running", "pid": os.getpid(), "host": HOST, **data}))
 
@@ -402,7 +416,7 @@ def test_a_live_segment_is_no_crash_and_an_ending_one_is_no_crash(tmp_path, monk
     # The process writes its end record, then exits: seen dead before the record is read.
     from autohelix import events
 
-    monkeypatch.setattr(events, "process_gone", lambda pid, host: True)
+    monkeypatch.setattr(events, "holder_gone", lambda paths, host, pid: True)
     original = events.RunSource._read_segments
 
     def read_segments(self, force=False):
@@ -423,7 +437,7 @@ def test_idle_never_takes_a_run_that_just_ended_for_a_crash(tmp_path, monkeypatc
     watcher = Watcher(tmp_path, run_ids=[paths.run_id])
     assert watcher.poll() is None
     end(paths, 1, T0 + 5)
-    monkeypatch.setattr(events, "process_gone", lambda pid, host: True)
+    monkeypatch.setattr(events, "holder_gone", lambda paths, host, pid: True)
     assert watcher.idle()["event"] == "ended"
     assert watcher.idle()["runs"][0]["state"] == "finished"
 
@@ -496,7 +510,8 @@ def test_idle_with_ids_when_none_is_running(tmp_path):
 def test_a_running_or_starting_run_is_not_idle(tmp_path):
     running = make_run(tmp_path, "20261114-1000-a-aaaa")
     start(running, 1, T0)
-    starting = make_run(tmp_path, "20261114-1000-b-bbbb", created_at=time.time() - STARTING_SECONDS / 2)
+    starting = make_run(tmp_path, "20261114-1000-b-bbbb")
+    status(starting, phase="starting")  # between the status's start and the segment log's
     clock = [0.0]
 
     def sleep(seconds):
@@ -508,8 +523,28 @@ def test_a_running_or_starting_run_is_not_idle(tmp_path):
         assert (event["event"], event["timeout_seconds"], event["run"]) == ("timeout", 3, None)
         assert clock[0] >= 3
         assert event["cursor"] == watcher.cursor
-    later = Watcher(tmp_path, run_ids=[starting.run_id], now=lambda: time.time() + STARTING_SECONDS)
-    assert later.next(idle=True)["runs"][0]["state"] == "new"
+
+
+
+def test_a_run_not_started_yet_is_new_however_recent(tmp_path):
+    """No clock heuristic: a segment starts as soon as its command holds the run's lock,
+    so until then a run (just created, or being resumed) is idle."""
+    fresh = make_run(tmp_path, "20261114-1000-b-bbbb", created_at=time.time())
+    assert Watcher(tmp_path, run_ids=[fresh.run_id]).next(idle=True)["runs"][0]["state"] == "new"
+    # A status that says running whose process is gone: crashed, not starting.
+    status(fresh, pid=dead_pid(), phase="starting")
+    assert Watcher(tmp_path, run_ids=[fresh.run_id]).next(idle=True)["runs"][0]["state"] == "crashed"
+
+
+def test_a_run_without_segments_is_new(tmp_path):
+    """Every segment writes its start record beside its status: a run with history or a
+    stopped status but no segments is a development build's, and reads as `new` (no
+    `ended` state for it)."""
+    paths = make_run(tmp_path, "20261114-1000-a-aaaa")
+    record(paths, 0, T0)
+    assert Watcher(tmp_path, run_ids=[paths.run_id]).idle()["runs"][0]["state"] == "new"
+    status(paths, state="finished", pid=1)
+    assert Watcher(tmp_path, run_ids=[paths.run_id]).idle()["runs"][0]["state"] == "new"
 
 
 def test_next_blocks_until_an_event(tmp_path):

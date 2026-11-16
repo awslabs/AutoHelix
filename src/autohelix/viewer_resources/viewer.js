@@ -883,18 +883,6 @@ function observeLabel(o) {
 
 function renderConfig() {
   const c = state.config;
-  if (c?.missing) { // a run started by an older AutoHelix: never its source file instead
-    $('config').hidden = false;
-    const summary = $('config-summary');
-    summary.title = '';
-    summary.dataset.key = 'missing';
-    summary.replaceChildren(el('b', { textContent: 'Config' }),
-      el('span', { className: 'config-file', textContent: `${c.file}: not stored with this run` }));
-    const pre = $('config-text');
-    pre.dataset.text = '';
-    pre.replaceChildren();
-    return;
-  }
   $('config').hidden = !c?.text;
   if (!c?.text) return;
   // Budgets are not config: the latest segment's flags, as its status records them.

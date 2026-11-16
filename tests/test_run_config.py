@@ -109,7 +109,8 @@ def test_a_run_whose_template_was_not_stored_refuses(project):
     assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
     paths = latest_run(project)
     paths.template.unlink()
-    with pytest.raises(RuntimeError, match=rf"stored no copy of its prompt_template .* `autohelix run --import "
+    with pytest.raises(RuntimeError, match=rf"has no stored copy of its prompt_template: it was made by a "
+                                           rf"development version .*\(`autohelix delete --force "
                                            rf"{short_id(paths.run_id)}`"):
         load_run_config(paths)
 
@@ -300,8 +301,8 @@ def test_a_new_run_is_not_compared_with_a_file_edited_while_it_started(project, 
 
 def test_a_run_without_a_stored_config_refuses(started):
     started.config.unlink()
-    with pytest.raises(RuntimeError, match=r"has no stored config .* `autohelix run --import "
-                                           rf"{short_id(started.run_id)}`"):
+    with pytest.raises(RuntimeError, match=r"has no stored config: it was made by a development version .*\("
+                                           rf"`autohelix delete --force {short_id(started.run_id)}`"):
         Harness(started.project, run_id=started.run_id)
 
 

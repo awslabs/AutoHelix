@@ -499,6 +499,14 @@ def claim_copies(paths: "RunPaths", warn=None) -> Path:
     return root
 
 
+_HELD: set[str] = set()  # the run locks this process holds (`held_here`)
+
+
+def held_here(path: Path) -> bool:
+    """Whether this process holds the run lock at `path` (a `RunLock`)."""
+    return os.path.realpath(path) in _HELD
+
+
 class RunLock:
     """Nonblocking, process-held ownership; the persistent inode is never removed."""
 
@@ -510,9 +518,12 @@ class RunLock:
         except BlockingIOError:
             self._file.close()
             raise RuntimeError(f"Run {short_id(path.stem)} is running.") from None
+        self._key = os.path.realpath(path)
+        _HELD.add(self._key)
 
     def close(self):
         if not self._file.closed:
+            _HELD.discard(self._key)
             fcntl.flock(self._file, fcntl.LOCK_UN)
             self._file.close()
 
@@ -577,18 +588,26 @@ class NoRunToResume(RuntimeError):
 
 
 def is_archived(data: dict) -> bool:
-    return bool(data.get("archived")) or data.get("lifecycle") == "abandoned"  # pre-archive runs
+    return bool(data.get("archived"))
 
 
 def is_live(paths: RunPaths) -> bool:
     """Whether a process holds the run's lock (a brief probe: advisory). A run that never
-    ran has no lock file, and the probe doesn't create one."""
-    if not paths.lock.exists():
-        return False
+    ran has no lock file, and the probe doesn't create one; it opens the file read-only
+    (observers need no write access) and takes the lock only when nobody holds it. A
+    lock that can't be opened counts as held."""
     try:
-        RunLock(paths.lock).close()
-    except RuntimeError:
+        fd = os.open(paths.lock, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return False
+    except OSError:
         return True
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:  # BlockingIOError: held
+        return True
+    finally:
+        os.close(fd)  # releases the probe's lock
     return False
 
 
@@ -855,29 +874,27 @@ def no_run_to_resume(config_path: str) -> str:
     return f"No run to resume for {config_path}; start one with `{run_command(config_path)}`."
 
 
-def not_stored(paths: RunPaths, data: dict) -> str:
-    """For a run started before runs stored their config: it can only be continued by a new run."""
-    short = short_id(paths.run_id)
-    return (f"Run {short} has no stored config (it was started by an older AutoHelix); continue it in a new "
-            f"run: `{run_command(data['config_path'])} --import {short}`.")
+def development_run(paths: RunPaths, missing: str) -> str:
+    """For a run folder without a file every released version writes (`missing`): it
+    was made by a development build, and is not read."""
+    return (f"Run {short_id(paths.run_id)} has no {missing}: it was made by a development version of AutoHelix. "
+            f"Delete it (`autohelix delete --force {short_id(paths.run_id)}`).")
 
 
 def load_run_config(paths: RunPaths, data: dict | None = None):
     """The run's own config (`load_config` of its stored copy, with its stored template
     text, `RunPaths.template`; the file it came from, as run.json names it, is the
-    `source`). RuntimeError (`not_stored`) without one."""
+    `source`). RuntimeError (`development_run`) without one."""
     data = data if data is not None else paths.read_identity()
     if not paths.config.is_file():
-        raise RuntimeError(not_stored(paths, data))
+        raise RuntimeError(development_run(paths, "stored config"))
     try:
         text = paths.template.read_text()
     except FileNotFoundError:
         text = None
     config = load_config(paths.project, paths.config, source=paths.project / data["config_path"], template_text=text)
     if config.prompt_template is not None and text is None:
-        raise RuntimeError(f"Run {short_id(paths.run_id)} stored no copy of its prompt_template (started by an "
-                           f"older AutoHelix); continue it in a new run: "
-                           f"`{run_command(data['config_path'])} --import {short_id(paths.run_id)}`.")
+        raise RuntimeError(development_run(paths, "stored copy of its prompt_template"))
     return config
 
 
@@ -1168,7 +1185,6 @@ def archive(paths: RunPaths, *, undo: bool = False, why: str | None = None) -> N
     back. `why` (archive only) replaces the archive note, `archive_why`; undo keeps it."""
     with RunLock(paths.lock):
         data = paths.read_identity()
-        data.pop("lifecycle", None)
         if undo:
             data.pop("archived", None)
         else:
@@ -1230,14 +1246,9 @@ def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
 
 
 def run_tip(paths: RunPaths, data: dict | None = None) -> str:
-    """Read accepted code even after an earlier `abandon` removed a fully landed ref."""
+    """The run's accepted code: its ref, else (no ref yet) its base commit."""
     result = git(paths.project, "rev-parse", "--verify",
                  paths.ref if paths.run_id else "HEAD", check=False)
     if result.returncode == 0:
         return result.stdout.strip()
-    from autohelix.history import History
-
-    records = History(paths.project, paths.run_id).load()
-    commit = next((r.commit for r in reversed(records) if r.accepted and r.commit), None)
-    identity = data or paths.read_identity()
-    return identity.get("abandoned_tip") or commit or identity["base_commit"]
+    return (data or paths.read_identity())["base_commit"]

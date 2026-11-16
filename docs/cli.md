@@ -301,16 +301,40 @@ starting branch before report generation. If dirty files would be overwritten,
 the target diverged, or the target is checked out elsewhere, landing is refused
 and the run ref retains the accepted code. Resolve that condition and land later.
 One `run` or `resume` command is a **segment**, with its own
-[budget](#budgets). Only one process can own a run at a time; a PID in
-the viewer is advisory, while a process-held file lock enforces ownership.
+[budget](#budgets). Only one process can own a run at a time: a process-held
+file lock enforces it, and whether a run is running comes from that lock (a
+status that says running whose lock is free reads as crashed). The segment
+starts as soon as the command holds the lock, before its checks (a clean
+checkout, preflight): `autohelix stop` and `autohelix wait` see it from there, and
+a start its checks refuse is a recorded segment that failed.
 
 A failed or timed-out main-agent call records a rejected attempt (unchecked,
 `agent failed: …` in red in the console row, `agent timed out (30m)` for a timeout),
 consumes its number, and the loop goes on to the next iteration; budgets apply
 as for any rejection. Three failed calls in a row stop the run ("the agent failed
-3 times in a row: …"), with landing and the report as at any segment end.
+3 times in a row: …"), with landing and the report as at any segment end, and
+the command exits 1.
 Setup failures before a call (copy creation, the prompt) do not consume an
 iteration and stop the run with an error. Failed baseline attempts remain iteration 0 and retain their costs.
+
+### Exit codes
+
+`run` and `resume` exit:
+
+- **0** when the segment did what was asked or was stopped politely: a budget
+  ran out, a [stop condition](config.md#stop) held, or `autohelix stop` asked
+  (also `resume --until N` with nothing left to run, and `run --check` when the
+  run would start);
+- **1** on an error: the config or a check refused the start (no run to
+  resume, a dirty checkout, failed preflight checks, also on `resume`), the
+  baseline or an iteration failed with an error, the agent failed three times in
+  a row, or auto landing failed (the iterations stay accepted on the run's ref;
+  `autohelix land` once the cause is fixed);
+- **130** when interrupted: Ctrl-C, SIGTERM, or `autohelix stop --now`
+  (the iteration is recorded and the run lands as usual).
+
+Other commands exit 0 on success and 1 on an error; usage errors (a bad flag)
+exit 2. `ask`, `review` and `wait` have their own codes (below).
 
 Legacy `.autohelix/history.jsonl` state is not migrated: move or delete the old
 `.autohelix/` directory and run `git worktree prune` before starting a new run.
@@ -475,8 +499,8 @@ one a bare `autohelix run` would use (with several configs and no
 continues that config's most recently active run that isn't [archived](#autohelix-archive), preferring runs
 that captured their baseline; it says which ("Resuming k3f9: 12 iterations,
 last active 2h ago"). If that run is running in another terminal, `resume`
-says so rather than picking an older one. With no run to resume it exits
-with status 3.
+says so rather than picking an older one. With no run to resume it exits 1
+(see [Exit codes](#exit-codes)).
 
 Budgets are this segment's ([Budgets](#budgets)): `resume -n 10 --cost 5`
 runs 10 more iterations, up to $5 more, however much the run spent before.
@@ -536,8 +560,10 @@ reaches a run a script started in the background, which ignores SIGINT. Ctrl-C
 and SIGTERM wait for an accept that is being recorded to finish.
 
 `stop` refuses runs that aren't running (also one whose process is gone while
-its status still says running) and runs started by an AutoHelix too old to
-support it. It takes several ids and exits 1 if any of them was refused or, with
+its status still says running: its lock is free). A segment counts as running
+from the moment its command holds the run's lock, so a run just launched can be
+stopped during its checks; it then stops right after them (after the baseline,
+for a new run). It takes several ids and exits 1 if any of them was refused or, with
 `--now`, could not be signalled (its request stands: it still stops after its
 iteration). It prints what happens next ("Run k3f9 stops after its current
 iteration (4).") and the `autohelix wait` command that says when it has ended
@@ -674,9 +700,10 @@ autohelix wait [RUN_ID...] [-p PATH] [--after CURSOR] --follow
 | `--follow` | Never exit: print one line per event, in order (not with `--timeout`; no `idle` events) |
 | `--path`, `-p` | Project directory (default: current dir) |
 
-It only reads `.autohelix/` (`history.jsonl`, `segments.jsonl`, `status.json`,
-`run.json`): no lock, nothing written or repaired, so it is safe beside running
-runs, and any number can wait at once.
+It only reads `.autohelix/` (`history.jsonl`, `segments.jsonl`, `status.json`):
+nothing written or repaired, so it is safe beside running runs, and any number
+can wait at once. Whether an open segment's process is gone comes from the run's
+lock, probed (never held) only for a segment open on this host.
 
 ### The cursor
 
@@ -736,18 +763,17 @@ Per event:
   `status.json`, or `null`), `error` (a failed segment's error, else `null`),
   `last_iteration` (the run's last iteration), `iterations` (the records this
   segment added). `time` is when it ended.
-- **`crashed`**: a segment never ended and its process is gone. `segment`,
+- **`crashed`**: a segment never ended and its process is gone (nothing holds the run's lock). `segment`,
   `last_iteration` (the run's last iteration when it crashed; `null` if it had
   none, e.g. during its first baseline). Reported once per segment. `time` is its last sign of life.
 - **`idle`**: only with run ids, without `--follow`: none of them is running
   and nothing is pending. `runs`: one `{run, short, state}` per run named,
   `state` being how its last segment ended (`finished`, `interrupted`,
-  `failed`), `crashed`, `ended` (a run from before segments were recorded),
-  `new` (nothing started yet) or `gone` (deleted while waiting). A run created
-  in the last minute that hasn't started its first segment yet counts as
-  starting, not idle; a run being resumed is idle until its new segment starts,
-  so to watch a `resume` you launch, wait without ids, from a cursor taken
-  before.
+  `failed`), `crashed`, `new` (nothing started yet) or `gone` (deleted while
+  waiting). A segment starts as soon as its `run` or `resume` holds the run's
+  lock; until then (the command's first second or so) the run is idle. So to
+  watch a run you launch, `run` or `resume` alike, wait for its `started` event:
+  without ids, from a cursor taken before.
 - **`timeout`**: `--timeout` passed without an event. `timeout_seconds`. Its
   cursor continues where this wait started (the one given, or now): a timeout
   is a heartbeat, not a gap.
@@ -766,9 +792,9 @@ Errors (an unknown run id) exit **1**; usage errors (a bad option, a cursor
 `wait` didn't print) exit 2, as for every command, but print nothing on stdout,
 while a timeout prints its JSON line there. Ctrl-C exits 130.
 
-A crash is detected only for a process on this host. A run that crashed on
-another host, or whose process id was reused by another process, looks running
-until it is resumed: only `--timeout` ends a wait on it.
+A crash is detected only for a process on this host (from the run's lock). A
+run that crashed on another host looks running until it is resumed: only
+`--timeout` ends a wait on it.
 
 ## `autohelix hint`
 

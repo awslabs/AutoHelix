@@ -67,8 +67,7 @@ def describe_member(paths, data: dict) -> str:
             parts.append("latest accepted " + ", ".join(
                 f"{name} {value:g}" if isinstance(value, (int, float)) else f"{name} {value}"
                 for name, value in latest.metrics.items()))
-        # From its status file, not a lock probe: probing would briefly block the user's
-        # own commands on that run, and this runs every iteration.
+        # Its status, checked against its lock only when it says running (`holder_gone`).
         running = (read_run_status(paths.project, paths.run_id) or {}).get("state") == "running"
         parts.append("running" if running else "finished")
     except Exception as e:  # noqa: BLE001

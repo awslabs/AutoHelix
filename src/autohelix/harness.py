@@ -1487,7 +1487,7 @@ class Harness:
         finally:
             workspace.close()
 
-    def run(self, budget: Budget | None = None, report: bool = True) -> None:
+    def run(self, budget: Budget | None = None, report: bool = True) -> str:
         """Run the optimization loop for `budget` (default: `DEFAULT_ITERATIONS` more),
         recording live status in .internal/status.json.
 
@@ -1495,9 +1495,24 @@ class Harness:
         iteration, writes the run summary unless `report=False` (`--no-report`).
         However a started run stops, it then saves report.html. SIGTERM ends it as
         Ctrl-C does (`_terminate_interrupts`).
+
+        Returns "finished" when the segment ended politely (a budget, a stop
+        condition, `autohelix stop`), "interrupted" when an interrupt in the loop
+        ended it (recorded and landed; one in the baseline or the summary
+        propagates). Raises `AutoHelixRunError`, already shown in the ending
+        (`autohelix_reported`), when the agent kept failing or auto landing failed.
         """
         with _terminate_interrupts():
             self._run_segment(budget, report)
+        if self._interrupted_at is not None:
+            return "interrupted"
+        stop = self.run_status.data.get("stop_reason") or {}
+        failure = self._land_error or (stop.get("kind") == "agent" and stop.get("detail"))
+        if failure:
+            error = AutoHelixRunError(f"auto landing failed: {failure}" if failure is self._land_error else failure)
+            error.autohelix_reported = True
+            raise error
+        return "finished"
 
     def _run_segment(self, budget: Budget | None, report: bool) -> None:
         outcome = "finished"
@@ -1508,6 +1523,8 @@ class Harness:
         self._landed_count: int | None = None  # commits auto landing put on the target (None: none landed)
         self._files: list[tuple[str, str]] = []
         self._interrupted_at: int | None = None
+        self._land_error: Exception | None = None  # why auto landing failed (`run` then raises)
+        self._segment_checked = False  # past the start's checks: from there the segment lands
         self._segment_first = 1
         try:
             if self._ownership._file.closed:
@@ -1588,17 +1605,14 @@ class Harness:
         self._preflight_done = True
 
     def _preflight(self) -> bool:
-        """Print preflight warnings and errors; False if there are errors."""
+        """Print preflight warnings and errors; False if there are errors (the caller
+        then raises, saying the checks failed)."""
         issues = preflight_check(self.config, self.project_path)
         for w in (i for i in issues if i.level == "warning"):
             self._warn(w.message)
         errors = [i for i in issues if i.level == "error"]
         for e in errors:
             self.console.print(f"  [red]FAIL[/red] {e.message}")
-        if errors:
-            self.console.print(
-                "\n[red]Preflight checks failed.[/red] Fix the issues above before running."
-            )
         return not errors
 
     def _target_tip(self) -> str | None:
@@ -1610,8 +1624,8 @@ class Harness:
         """Auto-land at segment end; in every mode, refuse/warn if the target moved.
         Keeps what landed for the ending (`_landing`: `N commits on <branch>`, `N
         commits on autohelix/<id> (manual landing)`, `failed: …`; `_landed_count`)."""
-        if not self._segment_started or self._land_attempted:
-            return
+        if not self._segment_checked or self._land_attempted:
+            return  # a start that was refused (its checks failed) lands nothing
         self._land_attempted = True
         target = self.run_info.get("target_branch")
         # An interrupt (Ctrl-C, `stop --now`, a second one) waits for the landing: once
@@ -1637,6 +1651,7 @@ class Harness:
                                                       "manual landing")
             except Exception as e:
                 self._landing = terminal.not_landed(e)
+                self._land_error = e
                 self.log.warn(f"auto-land: {e}")
 
     def _commits_between(self, old: str | None, new: str) -> int:
@@ -1661,6 +1676,29 @@ class Harness:
         start_iter = self.history.get_last_iteration() + 1
         self._segment_first = start_iter  # the ending lists what this segment landed
         max_iter = budget.last_iteration(start_iter - 1)
+        needs_baseline = not any(r.iteration == 0 and r.accepted for r in self.history.load())
+
+        # The segment starts as soon as the run lock is held (before anything can refuse):
+        # `autohelix stop` and `wait` then see it, and a start that fails is a recorded
+        # segment that failed. Status records the iteration and cost caps as run totals
+        # (spent before this segment plus its own), the time cap as this segment's.
+        cost_before = summarize_costs(self.history.cost_usages).cost_usd or 0
+        self._segment_records = len(self.history.load())  # the end record counts what it adds
+        # A stop request no segment answered (its own ended first): gone before the status
+        # says running, the only time `autohelix stop` writes one.
+        clear_stop_request(self.paths)
+        # The number its start record gets: in the status, so a stop request names this segment.
+        self._segment = self.segment_log.next_number()
+        # Set before the first write: from here the segment's ending writes its end record.
+        self._segment_started = True
+        self.run_status.start(
+            max_iterations=max_iter, run_id=self.paths.run_id, segment=self._segment,
+            max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
+            max_time_seconds=budget.time_seconds, segment_started_at=segment_started_at)
+        self.segment_log.start(segment=self._segment, started_at=segment_started_at,
+                               start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
+                               budget={**asdict(budget), "default": budget.default})
+        self._segment_target_tip = self._target_tip()
 
         # Again at each segment: the ignore rules may have changed since this Harness was
         # created (a long-lived programmatic one).
@@ -1669,7 +1707,6 @@ class Harness:
         except GitExcludeError as e:
             raise AutoHelixRunError(str(e)) from e
 
-        needs_baseline = not any(r.iteration == 0 and r.accepted for r in self.history.load())
         if needs_baseline:
             require_clean(self.project_path)  # also a resumed run whose baseline was never accepted
             if git(self.project_path, "rev-parse", "HEAD").stdout.strip() != self.run_state.expected_tip:
@@ -1701,34 +1738,16 @@ class Harness:
         # Run preflight checks before the baseline (silent on success); a first
         # start already ran them before allocating the run.
         if needs_baseline and not self._preflight_done and not self._preflight():
-            return False
+            raise AutoHelixRunError("Preflight checks failed. Fix the issues above before running.")
+        self._segment_checked = True
 
-        # Status records the iteration and cost caps as run totals (spent before this
-        # segment plus its own), the time cap as this segment's, counted from its start.
-        cost_before = summarize_costs(self.history.cost_usages).cost_usd or 0
-        self._segment_records = len(self.history.load())  # the end record counts what it adds
-        # A stop request no segment answered (its own ended first): gone before the status
-        # says running, the only time `autohelix stop` writes one.
-        clear_stop_request(self.paths)
-        # The number its start record gets: in the status, so a stop request names this segment.
-        self._segment = self.segment_log.next_number()
-        # Set before the first write: from here the segment's ending writes its end record.
-        self._segment_started = True
-        self.run_status.start(
-            max_iterations=max_iter, run_id=self.paths.run_id, segment=self._segment,
-            max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
-            max_time_seconds=budget.time_seconds, segment_started_at=segment_started_at)
-        self.segment_log.start(segment=self._segment, started_at=segment_started_at,
-                               start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
-                               budget={**asdict(budget), "default": budget.default})
-        self._segment_target_tip = self._target_tip()
-        flags = [self.run_info.pop("archived", None), self.run_info.pop("lifecycle", None)]
+        archived = self.run_info.pop("archived", None)
         for key, value in self._identity_changes.items():  # `resume --land` / `--group`
             if value is None:
                 self.run_info.pop(key, None)
             else:
                 self.run_info[key] = value
-        if any(flags) or self._identity_changes:
+        if archived or self._identity_changes:
             write_json(self.paths.identity, self.run_info)  # resuming brings an archived run back
 
         # Capture baseline on first run

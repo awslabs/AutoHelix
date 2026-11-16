@@ -3,7 +3,8 @@
 
 """Run events for `autohelix wait`: what happened in a project's runs, one JSON object
 per event, read from the files the harness writes (a pure reader: nothing is written,
-no run lock is taken, nothing is repaired).
+nothing is repaired; the run lock is only probed, for a segment open on this host,
+to tell whether its process is gone).
 
 Events
 ------
@@ -34,20 +35,19 @@ Per event:
   `detail`, or null), `error` (a failed segment's error, else null),
   `last_iteration` (the run's last iteration), `iterations` (records this segment
   added). `time`: when it ended.
-- `crashed`: a segment never ended and its process is gone. `segment`,
-  `last_iteration` (the run's last iteration when it crashed; null if
+- `crashed`: a segment never ended and its process is gone (nothing holds the run's
+  lock). `segment`, `last_iteration` (the run's last iteration when it crashed; null if
   it had none). Reported once per segment. `time`: the last sign of life (its status's last update, or the run's
-  last event before it). Only a process on this host can be checked: a run that
-  crashed on another host, or whose process id was reused, looks running until it
-  is resumed; only `--timeout` ends a wait on it.
+  last event before it). Only a run on this host can be checked: one that
+  crashed on another host looks running until it is resumed; only `--timeout` ends
+  a wait on it.
 - `idle`: only for `wait` with run ids, without `--follow`: none of them is running
   and nothing is pending. `runs`: `[{run, short, state}]`, state `finished`,
-  `interrupted`, `failed` (how its last segment ended), `crashed`, `ended` (a run
-  from before the segment log, with history but no segments), `new` (nothing
-  started yet) or `gone` (its folder was deleted while waiting). A run created in
-  the last minute that has not started its first segment yet (preflight checks)
-  counts as starting, not idle; so does nothing else: a run being resumed is idle
-  until its new segment starts.
+  `interrupted`, `failed` (how its last segment ended), `crashed`, `new` (nothing
+  started yet) or `gone` (its folder was deleted while waiting). A segment starts
+  as soon as its `run` or `resume` holds the run's lock, before its checks; until
+  then (the command's first second or so) the run is idle: wait for the `started`
+  event of a run you launch (`wait` without ids, or `--after` a cursor taken before).
 - `timeout`: `--timeout` passed without an event. `timeout_seconds`.
 
 Order and the cursor
@@ -82,7 +82,6 @@ opened without following symlinks, only as regular files, and up to a size cap
 import base64
 import json
 import os
-import socket
 import stat
 import time
 import zlib
@@ -91,7 +90,7 @@ from pathlib import Path
 from typing import Callable
 
 from autohelix.costs import summarize_costs
-from autohelix.run_status import read_segments
+from autohelix.run_status import holder_gone, read_segments
 from autohelix.runs import _ID, RunPaths, short_id
 from autohelix.safe_open import open_file
 
@@ -99,20 +98,17 @@ EVENT_SCHEMA = 1
 CURSOR_VERSION = "1"
 CURSOR_CAP = 64 << 20  # bytes of cursor JSON, both ways: never print one `--after` refuses
 POLL_SECONDS = 0.5
-# A run without a segment yet, created this recently, is starting (preflight), not idle.
-STARTING_SECONDS = 60.0
 # Phases after which an accepted iteration's record is final (with the same iteration
 # number in the status). Before them (accept, stop check, or one read before those),
 # the harness may still rewrite it.
 FINAL_PHASES = ("between iterations", "report")
 # Each file's place in the run folder and the most `wait` reads of it.
 FILES = {"history": ("history.jsonl",), "segments": (".internal", "segments.jsonl"),
-         "status": (".internal", "status.json"), "identity": ("run.json",)}
-CAPS = {"history": 1 << 30, "segments": 16 << 20, "status": 1 << 20, "identity": 1 << 20}
+         "status": (".internal", "status.json")}
+CAPS = {"history": 1 << 30, "segments": 16 << 20, "status": 1 << 20}
 LINE_CAP = 64 << 20  # one history record
 _RANK = {"started": 0, "iteration": 1, "ended": 2, "crashed": 3}
 _DEFAULTS = (-1, -1, 0, 0, 0)
-_HOST = socket.gethostname()
 _NOT_A_CURSOR = "not a cursor printed by `autohelix wait`"
 
 
@@ -181,20 +177,6 @@ def _fingerprint(started_at) -> int:
     return int(round(started_at * 1000)) % 10**6 if _number(started_at) else -1
 
 
-def process_gone(pid, host) -> bool:
-    """Whether `pid` on `host` has certainly exited (only this host's can be checked;
-    a reused pid looks alive)."""
-    if host != _HOST or type(pid) is not int or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except OSError:  # PermissionError: someone else's live process
-        return False
-    return False
-
-
 @dataclass
 class _Event:
     time: float
@@ -253,8 +235,6 @@ class RunSource:
         self._sorted: list[_Record] | None = None
         self.segments: list[dict] = []
         self.status: dict = {}
-        self.created_at: float | None = None
-        self._identity_read = False
         self.dead: set[int] = set()  # open segments whose process is gone
         self.version = 0  # bumped whenever anything read changed
 
@@ -368,18 +348,9 @@ class RunSource:
         self._read_status()
         self._read_segments()
         self._read_history()
-        if not self._identity_read:  # until run.json is there (a run being created)
-            data = self._read("identity")
-            if data is not None:
-                self._identity_read = True
-                try:
-                    created = json.loads(data).get("created_at")
-                except (ValueError, AttributeError):
-                    created = None
-                self.created_at = created if _number(created) else None
         dead = {s["segment"] for s in self.segments[:-1] if s["open"]}
         last = self.segments[-1] if self.segments else None
-        if last is not None and last["open"] and process_gone(last.get("pid"), last.get("host")):
+        if last is not None and last["open"] and holder_gone(self.paths, last.get("host"), last.get("pid")):
             self._read_segments(force=True)
             self._read_history()
             dead = {s["segment"] for s in self.segments[:-1] if s["open"]}
@@ -409,7 +380,7 @@ class RunSource:
         if records and records[-1].accepted and records[-1].n > 0 and self.live:
             s = self.status
             if (s.get("state") == "running" and s.get("iteration") == records[-1].n
-                    and s.get("phase") not in FINAL_PHASES and not process_gone(s.get("pid"), s.get("host"))):
+                    and s.get("phase") not in FINAL_PHASES and not holder_gone(self.paths, s.get("host"), s.get("pid"))):
                 return records[:-1]
         return records
 
@@ -436,32 +407,16 @@ class RunSource:
             times += [self.status[k] for k in ("updated_at", "stopped_at") if _number(self.status.get(k))]
         return max(times), max((n for _, n in before), default=None)
 
-    def state(self, now: float) -> str:
+    def state(self) -> str:
         """`running`, `starting`, or how it stands idle (see the module docstring)."""
         if self.segments:
             last = self.segments[-1]
             if last["open"]:
                 return "crashed" if last["segment"] in self.dead else "running"
-            return last.get("state") if isinstance(last.get("state"), str) else "ended"
-        status = self.status
-        if status.get("state") == "running":  # between the status's start and the log's
-            return "crashed" if process_gone(status.get("pid"), status.get("host")) else "starting"
-        if status.get("state") in ("finished", "interrupted", "failed"):
-            return status["state"]
-        if self.records:
-            return "ended"
-        created = self.created_at
-        if created is None:
-            signature = self._signature("identity") or self._dir_signature()
-            created = signature[2] / 1e9 if signature else None
-        return "starting" if created is not None and now - created < STARTING_SECONDS else "new"
-
-    def _dir_signature(self):
-        try:
-            st = os.lstat(self.runs / self.run)
-        except OSError:
-            return None
-        return st.st_ino, st.st_size, st.st_mtime_ns
+            return last.get("state") if isinstance(last.get("state"), str) else "failed"
+        if self.status.get("state") == "running":  # between the status's start and the log's
+            return "crashed" if holder_gone(self.paths, self.status.get("host"), self.status.get("pid")) else "starting"
+        return "new"
 
     # --- events -------------------------------------------------------------------
 
@@ -608,7 +563,7 @@ class Watcher:
         runs = []
         for run in self.run_ids:
             source = self._sources.get(run)
-            state = source.state(now) if source is not None else "gone"
+            state = source.state() if source is not None else "gone"
             if state in ("running", "starting"):
                 return None
             runs.append({"run": run, "short": short_id(run), "state": state})

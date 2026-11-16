@@ -9,6 +9,7 @@ from rich.console import Console
 
 import autohelix.live as W
 from autohelix.run_status import RunStatus
+from autohelix.runs import RunLock
 from tests.helpers import latest_run
 
 
@@ -88,6 +89,7 @@ def _watch_once(tmp_path, monkeypatch, polls=1) -> str:
 
 def test_view_shows_the_running_agent_log(tmp_path, monkeypatch, run_paths):
     status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
+    status.lock = RunLock(latest_run(tmp_path).lock)  # a running segment holds the run's lock
     status.start()
     status.phase("agent", 1)
     log = run_paths.agent_log(1)
@@ -243,6 +245,7 @@ def test_on_a_short_terminal_the_log_shrinks_first(tmp_path):
 def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, run_paths):
     """Resuming reruns an unfinished iteration: same log path, new start time."""
     status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
+    status.lock = RunLock(latest_run(tmp_path).lock)  # a running segment holds the run's lock
     status.start()
     status.phase("agent", 1)
     log = run_paths.agent_log(1)
@@ -347,6 +350,7 @@ def test_the_views_live_row_names_the_observe_entry(tmp_path, run_paths):
     from autohelix.viewer import ProjectRuns
 
     status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
+    status.lock = RunLock(latest_run(tmp_path).lock)  # a running segment holds the run's lock
     status.start()
     status.phase("benchmark", 1)
     status.note(entry="bench")

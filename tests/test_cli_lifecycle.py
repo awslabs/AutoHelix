@@ -85,9 +85,9 @@ def test_resume_until_is_a_total_and_n_with_until_is_refused(project):
     assert result.exit_code == 2 and "not both" in result.output
 
 
-def test_resume_with_nothing_to_resume_exits_3(project):
+def test_resume_with_nothing_to_resume_exits_1(project):
     result = cli(project, "resume")
-    assert result.exit_code == 3
+    assert result.exit_code == 1
     assert "No run to resume for autohelix.yaml; start one with `autohelix run`." in result.output
 
 
@@ -123,12 +123,14 @@ def test_archive_undo_and_archive_refuses_a_live_run(project):
     assert "archived" not in paths.read_identity()
 
 
-def test_an_abandoned_run_reads_as_archived(project):
+def test_only_the_archived_flag_archives_a_run(project):
     paths = started(project)
     data = paths.read_identity()
-    data["lifecycle"] = "abandoned"  # written before archive existed
+    data["lifecycle"] = "abandoned"  # a development build's key: no meaning
     paths.identity.write_text(json.dumps(data))
-    assert cli(project, "resume").exit_code == 3
+    assert json.loads(cli(project, "dashboard", "--json").output)["runs"][0]["archived"] is False
+    assert cli(project, "archive", short_id(paths.run_id)).exit_code == 0
+    assert paths.read_identity()["lifecycle"] == "abandoned"  # left alone
     assert json.loads(cli(project, "dashboard", "--json").output)["runs"][0]["archived"] is True
 
 

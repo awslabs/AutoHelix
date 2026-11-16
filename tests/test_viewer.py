@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -13,6 +14,7 @@ import pytest
 from autohelix.agents import AgentRunResult
 from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.run_status import RunStatus, read_run_status
+from autohelix.runs import RunLock
 from autohelix.viewer import make_server
 from autohelix.runs import RunPaths, short_id
 from tests.test_integration import integration_project  # noqa: F401  (fixture)
@@ -23,6 +25,7 @@ from tests.helpers import latest_run
 
 def test_run_status_lifecycle(tmp_path, run_paths):
     status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
+    status.lock = RunLock(latest_run(tmp_path).lock)  # a running segment holds the run's lock
     status.phase("agent", 1)  # Before start: ignored, writes nothing.
     assert read_run_status(tmp_path, latest_run(tmp_path).run_id) is None
 
@@ -45,6 +48,51 @@ def test_dead_process_reads_as_crashed(tmp_path, run_paths):
     data["pid"] = proc.pid  # A pid that has exited.
     status.path.write_text(json.dumps(data))
     assert read_run_status(tmp_path, latest_run(tmp_path).run_id)["state"] == "crashed"
+
+
+def test_a_running_status_is_running_only_while_its_lock_is_held(tmp_path, run_paths):
+    """Liveness comes from the run lock, not the pid: a reused pid (any live process,
+    another user's too) used to keep a dead run "running" forever."""
+    status = RunStatus(tmp_path, run_paths.run_id)
+    status.start()
+    sleeper = subprocess.Popen(["sleep", "30"])
+    try:
+        data = json.loads(status.path.read_text())
+        data["pid"] = sleeper.pid  # alive, but not the run's process
+        status.path.write_text(json.dumps(data))
+        assert read_run_status(tmp_path, run_paths.run_id)["state"] == "crashed"  # nobody holds the lock
+        data["pid"] = 1  # a root process: the pid probe's PermissionError counted it alive
+        status.path.write_text(json.dumps(data))
+        assert read_run_status(tmp_path, run_paths.run_id)["state"] == "crashed"
+        # Another process holding the lock: running, whatever the pid.
+        run_paths.lock.parent.mkdir(parents=True, exist_ok=True)
+        holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time; f = open(sys.argv[1], 'a+'); "
+                                   "fcntl.flock(f, fcntl.LOCK_EX); print('held', flush=True); time.sleep(30)",
+                                   str(run_paths.lock)], stdout=subprocess.PIPE, text=True)
+        try:
+            assert holder.stdout.readline() == "held\n"
+            assert read_run_status(tmp_path, run_paths.run_id)["state"] == "running"
+        finally:
+            holder.kill()
+            holder.wait()
+        assert read_run_status(tmp_path, run_paths.run_id)["state"] == "crashed"
+        # This process holding the lock (a resume reading the segment it continues): only
+        # its own pid is running.
+        with RunLock(run_paths.lock):
+            assert read_run_status(tmp_path, run_paths.run_id)["state"] == "crashed"
+            data["pid"] = os.getpid()
+            status.path.write_text(json.dumps(data))
+            assert read_run_status(tmp_path, run_paths.run_id)["state"] == "running"
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+def test_the_liveness_probe_creates_no_lock_file(tmp_path, run_paths):
+    status = RunStatus(tmp_path, run_paths.run_id)
+    status.start()
+    assert read_run_status(tmp_path, run_paths.run_id)["state"] == "crashed"
+    assert not run_paths.lock.exists()
 
 
 def test_harness_records_finished_run(integration_project):  # noqa: F811

@@ -21,7 +21,7 @@ from autohelix.agents import JUDGE_BACKENDS
 from autohelix.harness import DEFAULT_ITERATIONS, Budget, Harness
 from autohelix.history import History
 from autohelix.run_status import read_run_status
-from autohelix.runs import (NoRunToResume, RunPaths, planned_run, RunLock, archive as archive_run, check_group, check_why,
+from autohelix.runs import (RunPaths, planned_run, RunLock, archive as archive_run, check_group, check_why,
                             default_run, delete as delete_run, find_project, is_live,
                             load_run_config, land as land_run, project_runs, resolve_run, resolve_runs,
                             config_relative, run_tip, set_options, short_id, valid_name)
@@ -409,9 +409,6 @@ def _start(project: Path, config: Path | None, **selection) -> Harness:
     the local git excludes and .autohelix/, once nothing is left to refuse."""
     try:
         return Harness(project, config_file=config, **selection)
-    except NoRunToResume as e:
-        click.echo(f"Error: {e}", err=True)
-        raise SystemExit(3)
     except (RuntimeError, FileNotFoundError, ConfigError) as e:
         raise click.ClickException(str(e)) from e
 
@@ -500,12 +497,19 @@ def _last_iteration(project: Path, config: Path | None, run_id: str | None) -> i
 
 
 def _segment(harness: Harness, budget: Budget, report: bool) -> None:
+    """Run a segment; exit 0 when it ended politely (a budget, a stop condition,
+    `autohelix stop`), 1 on an error (the agent kept failing, landing failed),
+    130 when interrupted (Ctrl-C, SIGTERM, `autohelix stop --now`)."""
     try:
-        harness.run(budget, report=report)
+        ended = harness.run(budget, report=report)
+    except KeyboardInterrupt:
+        raise SystemExit(130) from None
     except RuntimeError as e:
         if getattr(e, "autohelix_reported", False):  # printed first, above landing and the run page
             raise SystemExit(1) from e
         raise click.ClickException(str(e)) from e
+    if ended == "interrupted":
+        raise SystemExit(130)
 
 
 @main.command()
@@ -616,7 +620,7 @@ def resume(target: str | None, path: Path, verbose: bool, no_report: bool, land_
     runs up to iteration N in total. Without a budget flag, 1 more. The run
     keeps its landing mode and group unless --land or --group changes them;
     with nothing to run (--until already reached) they are stored at once.
-    Exits 3 when there is no run to resume.
+    Exits as `run` does: 0, 1 (also when there is no run to resume), 130.
     """
     budget = _budget(iterations, until, cost_usd, time_seconds)
     group = _group(group)
@@ -919,17 +923,13 @@ def _stop_run(paths: RunPaths, why: str | None, now: bool) -> str:
     from autohelix.run_status import read_stop_request, write_stop_request
 
     short = short_id(paths.run_id)
+    # A running status whose process is gone (SIGKILL, out of memory: its lock is free)
+    # reads as crashed (`read_run_status`).
     status = read_run_status(paths.project, paths.run_id) or {}
     state = status.get("state")
-    if state != "running":
-        last = {"crashed": "it stopped unexpectedly"}.get(state, state)
+    if state != "running" or type(status.get("segment")) is not int:
+        last = {"crashed": "its process is gone; it stopped unexpectedly", "running": None}.get(state, state)
         raise RuntimeError(f"Run {short} is not running" + (f" ({last})." if last else "."))
-    # A status the process had no chance to update (SIGKILL, out of memory): its lock is free.
-    if not is_live(paths):
-        raise RuntimeError(f"Run {short} is not running (its process is gone; it stopped unexpectedly).")
-    if type(status.get("segment")) is not int:
-        raise RuntimeError(f"Run {short} was started by an older AutoHelix and can't be stopped this way; "
-                           "press Ctrl-C in its terminal.")
     pid, host = status.get("pid"), status.get("host")
     if now:
         if host != socket.gethostname():
@@ -1186,10 +1186,6 @@ def report(run_id: str | None, path: Path):
     if History(project_path, run_id).get_last_iteration() == 0:
         console.print(f"[yellow]Run {short_id(run_id)} has no iterations yet. Nothing to report.[/yellow]",
                       highlight=False)
-        raise SystemExit(1)
-    if not paths.config.is_file():
-        console.print(f"[red]Error:[/red] Run {short_id(paths.run_id)} has no stored config (started by an older "
-                      "AutoHelix); its report can't be written.", highlight=False)
         raise SystemExit(1)
     try:
         config = load_run_config(paths)

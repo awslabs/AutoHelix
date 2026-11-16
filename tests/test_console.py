@@ -240,7 +240,8 @@ def test_ending_when_landing_fails(project, monkeypatch):
     monkeypatch.setattr(autohelix.harness, "land", refuse)
     _configure(project, scope={"editable": ["hello.py"]})
     result, short, _ = _run(project)
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output  # a landing that failed is an error
+    assert "Error" not in result.output  # said once, on the landing line
     ending = _ending(result.output)
     start = next(i for i, line in enumerate(ending) if line.startswith("  landing "))
     end = next(i for i, line in enumerate(ending) if line.startswith("  next "))
@@ -267,7 +268,7 @@ def test_agent_failures_show_in_the_row_and_three_in_a_row_stop_the_run(project)
     _configure(project, settings={"should_fail": True}, scope={"editable": ["hello.py"]})
     # The width is fixed: the ending's `next` line wraps by it (one command per line under 80+).
     result = CliRunner(env={"COLUMNS": "80"}).invoke(main, ["run", "--path", str(project), "--no-report", "-n", "5"])
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output  # an error, said on the ending's first line
     rows = [line.rstrip() for line in result.output.splitlines() if line.startswith("  ✗ ")]
     assert len(rows) == 3 and all(row.endswith("agent failed: Mock failure") for row in rows)
     assert "  Stopped    the agent failed 3 times in a row: Mock failure" in result.output.splitlines()

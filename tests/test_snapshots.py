@@ -160,7 +160,7 @@ def _run_payload(running: bool) -> dict:
               {"state": "finished", "phase": None, "iteration": 7, "stopped_at": T,
                "stop_reason": {"kind": "budget", "detail": "iteration budget reached (7)"}})
     return {"id": "20261115-1402-sorting-krp3", "name": "sorting", "archived": False, "last_activity": T - 30,
-            "config_file": "autohelix/sorting.yaml", "config_missing": False, "config_invalid": False,
+            "config_file": "autohelix/sorting.yaml", "config_invalid": False,
             "goal": CONFIG.goal, "title": CONFIG.title, "status": status, "stop_requested": None,
             "accepted": 3, "group": None, "why": None, "archive_why": None, "import": None,
             "metrics": {"iteration": 6 if not running else 3, "values": [

@@ -45,9 +45,9 @@ PROJECT --after CURSOR --timeout 10m`, each time with the latest event's
 is gone); a `timeout` event (exit 2) is a heartbeat, so check the launched
 process then. The cursor makes the loop miss and repeat nothing however long you
 inspect between calls. With run ids, an `idle` event says none of them is
-running; a run being resumed is idle until its segment starts, so wait for a
-resume you launch without ids. A crashed run whose process id was reused (or on
-another host) looks running: only the timeout ends that wait. Exit 1 (nothing on stdout) is an error.
+running; any run you launch (`run` or `resume`) is idle until its segment starts
+(its first second or so), so wait for its `started` event without ids. A crashed
+run on another host looks running: only the timeout ends that wait. Exit 1 (nothing on stdout) is an error.
 
 To end a run early, when the user asks or evidence shows further iterations
 would be wasted (a broken evaluator or environment; say why), use `autohelix
@@ -116,8 +116,10 @@ iteration N in total, safe to repeat) over `-n` (N more iterations) in scripts
 and retries: a retried `-n` would run N again. `--until` makes retries safe for
 iterations only: `--cost` and `--time` start fresh on each segment, so track
 the total yourself (`progress.cost_usd` in `autohelix dashboard --json`) and
-pass only the remainder. `resume` exits 3 when there is no run to
-resume. A failed actual main-agent call consumes its number; resume at the next
+pass only the remainder. `run` and `resume` exit 0 when the segment ended
+by a budget, a `stop:` condition or `autohelix stop`; 1 on an error (no run to
+resume, failed preflight checks, the agent failing three times in a row, a
+landing that failed); 130 when interrupted (Ctrl-C, `autohelix stop --now`). A failed actual main-agent call consumes its number; resume at the next
 iteration. Do not archive or delete runs, reset accepted code, or extend the
 agreed effort without authorization. Record why you start or archive a run, one
 line each, so the dashboard explains it: `autohelix run a --why "baseline for the

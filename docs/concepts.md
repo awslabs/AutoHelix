@@ -442,7 +442,8 @@ retried baseline, reuses its number: the earlier attempt's folder is moved to
 `.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
 
 `.internal/segments.jsonl` records every segment (one `run` or `resume`
-command) that started, append-only, two JSON lines each, linked by `segment`
+command) that started (as soon as the command held the run's lock, before its
+checks: a start they refuse is a segment that failed), append-only, two JSON lines each, linked by `segment`
 (1, 2, … in the run) and told apart by `event`:
 
 - `"event": "start"`: `started_at` (epoch seconds), `budget` as given
@@ -562,7 +563,9 @@ for cooperative agents, not a filesystem security boundary.
 Archive retains evidence, unlanded commits and rejected trees, and leaves code
 intact. Delete removes the run directory, its ref and its
 `refs/autohelix-rejected/<id>/` refs, while lock files remain outside that
-directory. Runs abandoned by earlier versions read as archived. Legacy top-level
+directory. A run folder missing a file every release writes (its stored
+`config.yaml`) was made by a development build: it is refused, with the advice
+to delete it. Legacy top-level
 history must be moved or deleted before run; there is no automatic migration.
 
 ## Cost Tracking
