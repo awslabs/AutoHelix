@@ -222,6 +222,7 @@ class Row:
     summary: str | None = None
     gates: list = field(default_factory=list)
     observe: list = field(default_factory=list)
+    stops: list = field(default_factory=list)
     discarded: list = field(default_factory=list)
     discarded_frozen: list = field(default_factory=list)
 
@@ -233,8 +234,8 @@ class Row:
         return cls(iteration=record.iteration, accepted=record.accepted, metrics=record.metrics,
                    seconds=wall_ms / 1000 if wall_ms else None, cost=cost.cost_usd, cost_incomplete=cost.incomplete,
                    commit=record.commit, reason=record.reason, agent_error=record.agent_error,
-                   summary=record.summary, gates=record.gates, observe=record.observe, discarded=record.discarded,
-                   discarded_frozen=record.discarded_frozen)
+                   summary=record.summary, gates=record.gates, observe=record.observe, stops=record.stops,
+                   discarded=record.discarded, discarded_frozen=record.discarded_frozen)
 
 
 LABEL = 6  # "✓ 12  "
@@ -386,7 +387,8 @@ class Table:
 
     def _notes(self, row: Row) -> list[tuple[str, str | None]]:
         """Under a row: gates failing at the baseline (red: every iteration will fail
-        them), failed observe entries and metrics an entry didn't report, discarded paths."""
+        them), failed observe entries and metrics an entry didn't report, stop commands
+        that failed (neither 0 nor 1: the condition wasn't checked), discarded paths."""
         notes = []
         if row.iteration == 0:
             notes += [(f"gate fails at the baseline: {clean(gate.get('text'))}", RED) for gate in row.gates
@@ -400,6 +402,12 @@ class Table:
             elif item.get("metric_errors"):
                 missing = ", ".join(clean(name) for name in item["metric_errors"])
                 notes.append((f"observe {clean(item.get('name'))} reported no {missing}", "dim"))
+        for k, item in enumerate(row.stops, start=1):
+            if isinstance(item, dict) and item.get("outcome") == "error":
+                code = item.get("return_code")
+                problem = ("timed out" if item.get("timed_out") is True else "could not run" if code == -1
+                           else f"exited {clean(code)}")
+                notes.append((f"stop command {problem}, not checked: {clean(item.get('text'))} (stop/{k}/)", "yellow"))
         if row.discarded:
             frozen = set(row.discarded_frozen)
             shown = ", ".join(clean(p) + " (frozen)" * (p in frozen) for p in row.discarded[:3])
@@ -527,16 +535,18 @@ def rejection(row: Row, gates: list, directions: dict, tip: dict[str, tuple[floa
             if hasattr(gate, "metric") and (text := _metric_rejection(gate, item, tip, directions.get(gate.metric))):
                 return text
         elif item.get("kind") == "command" and not item.get("reason"):
-            return failed_gate(clean(item.get("text")), item.get("return_code"))
+            return failed_gate(clean(item.get("text")), item.get("return_code"), item.get("timed_out") is True)
     reason = clean(row.reason or "rejected")
     for prefix in ("gate failed: ", "metric gate: "):
         reason = reason.removeprefix(prefix)
     return reason
 
 
-def failed_gate(text: str, code) -> str:
-    """A failed command gate: `pytest -q failed (exit 1)`; an `ask:` gate answering
-    no (exit 1) `ask: keeps the API? answered no`."""
+def failed_gate(text: str, code, timed_out: bool = False) -> str:
+    """A failed command gate: `pytest -q failed (exit 1)`, `pytest -q timed out`; an
+    `ask:` gate answering no (exit 1) `ask: keeps the API? answered no`."""
+    if timed_out:
+        return f"{text} timed out"
     if text.startswith("ask:") and code == 1:
         return f"{text} answered no"
     exit_code = isinstance(code, int) and not isinstance(code, bool) and code > 0

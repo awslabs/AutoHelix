@@ -41,10 +41,10 @@ from markdown_it import MarkdownIt
 
 from autohelix.agents import AgentEventKind
 from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained, open_dir as _open_dir, open_file as _open_file, open_run_log
-from autohelix.config import ConfigNotFound, MetricGate, find_config, load_config
+from autohelix.config import ConfigError, ConfigNotFound, MetricGate, find_config, load_config, template_text
 from autohelix.costs import summarize_costs
 from autohelix.history import History, record_seconds
-from autohelix.runs import RunPaths, config_relative, git, is_archived, is_transcript, last_activity
+from autohelix.runs import RunPaths, config_relative, git, is_archived, is_transcript, last_activity, load_run_config
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
 from autohelix.run_status import pending_stop, read_run_status, running_iteration
@@ -275,7 +275,8 @@ class RunData:
         cached = self._configs.get(path)
         if cached is None or cached[0] != key or key is None:
             try:
-                config = load_config(self.project, config_file=path)[0]
+                config = (load_run_config(self.paths) if self.paths.run_id and path == self.paths.config
+                          else load_config(self.project, config_file=path))
             except Exception:
                 config = None
             cached = self._configs[path] = (key, config, _read_user_file(path))
@@ -292,6 +293,12 @@ class RunData:
             except (RuntimeError, KeyError):
                 pass
         summary = {"file": file, "text": cached[2] if cached else _read_user_file(path)}
+        if config is not None and config.prompt_template is not None:  # stored beside a run's config
+            try:
+                text = template_text(config)
+            except ConfigError:
+                text = None
+            summary["template"] = {"file": config_relative(self.project, config.prompt_template), "text": text}
         if not path.exists():
             summary["missing"] = True
         if config:
@@ -322,6 +329,7 @@ class RunData:
                 "cost": r.cost.cost_usd, "cost_incomplete": r.cost.incomplete,
                 "seconds": (r.usage.get("wall_clock_ms") or 0) / 1000 or None,
                 "gates": r.gates, "observe": r.observe,
+                "stops": [item for item in _field(r, "stops") or [] if isinstance(item, dict)],
                 "discarded": [p for p in _field(r, "discarded") or [] if isinstance(p, str)],
                 "discarded_frozen": [p for p in _field(r, "discarded_frozen") or [] if isinstance(p, str)],
             })
@@ -511,21 +519,27 @@ class RunData:
         `iterations/NNN/stop/<k>/` folder), in order: `position` (k), `command` (what ran,
         its command.txt; the config's entry at k only if that can't be read: `stop:` may
         have changed since), `stopped` (the first whose command is the one the record says
-        stopped the run: stop commands end at the first that exits 0) and `stored`
-        (`_command_output`)."""
+        stopped the run: stop commands end at the first that exits 0), `stored`
+        (`_command_output`) and, from the record's `stops` item at k, `outcome` (stop,
+        continue, error), `return_code` and `timed_out`."""
         listing = _listing(self.root, self.paths.parts(self.paths.stop_dir(n, 1).parent))
         positions = sorted(int(name) for name, info in listing
                            if stat.S_ISDIR(info.st_mode) and re.fullmatch(r"[1-9][0-9]{0,8}", name))
         specs = config.stop if config else []
         fired = _field(record, "stop")
         fired = fired.get("command") if isinstance(fired, dict) else None
+        items = _field(record, "stops")
+        items = items if isinstance(items, list) else []
         out = []
         for k in positions:
             command = _command_text(self.root, self.paths.stop_dir(n, k), self.paths)
             if command is None and k <= len(specs):
                 command = specs[k - 1].command
             stopped = fired is not None and command == fired and not any(item["stopped"] for item in out)
+            item = items[k - 1] if k <= len(items) and isinstance(items[k - 1], dict) else {}
             out.append({"position": k, "command": command, "stopped": stopped,
+                        "outcome": item.get("outcome"), "return_code": item.get("return_code"),
+                        "timed_out": item.get("timed_out") is True,
                         "stored": self._command_output(self.paths.stop_dir(n, k), logs, outputs)})
         return out
 
@@ -931,7 +945,7 @@ class ProjectRuns:
         if cached and cached[0] == mtime:
             return cached[1]
         try:
-            config = load_config(self.project, config_file=path)[0]
+            config = load_config(self.project, config_file=path)
             summary = {"file": relative, "goal": (config.goal.strip() or None) if isinstance(config.goal, str) else None,
                        "title": (config.title or None) if isinstance(config.goal, str) else None,
                        "directions": config.metric_directions()}

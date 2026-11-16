@@ -141,7 +141,8 @@ observe:
   only by the prompt. Review numbers are noisy and gameable: suitable for
   display and `stop`, not recommended for gates.
 - `agent` on a review or `ask` entry takes only `backend` (`claude` or
-  `codex`), `model`, `reasoning_effort`, `timeout`, `command`.
+  `codex`), `model`, `reasoning_effort`, `command`; the entry's `timeout:`
+  bounds its judge (an `ask` entry's defaults to 10 minutes).
 
 An observe entry that fails (non-zero exit, timeout, a review without a valid
 answer) does not reject the iteration: the failure is recorded and shown, and
@@ -192,15 +193,17 @@ read-only mode, so with an OpenCode main agent each `ask`/`review` entry needs
 its own `agent.backend`.
 
 `agent.timeout` is a per-iteration hard kill (default: none); where the backend
-supports it the agent also sees the remaining time. `ask` defaults to 600
-seconds and a review to its entry's timeout, independently of `agent.timeout`.
+supports it the agent also sees the remaining time. `ask` and `review` entries
+don't use it: their own `timeout:` bounds them.
 
 ## Stop conditions
 
 `stop` lists commands, in the same forms as gate commands, that end the run
 early. They run after the baseline and after each accepted iteration: exit 0
 stops (the last stdout line is the recorded reason), 1 continues, anything else
-is an error (fatal on the baseline, a warning later). `$AUTOHELIX_METRICS` is a
+is an error (fatal on the baseline, marked on the iteration's row later). A
+Python script exits 1 on an uncaught exception, which would read as "continue":
+have it catch its errors and exit 2, or use `jq -e`. `$AUTOHELIX_METRICS` is a
 JSON file of the metrics just measured, so a target is
 `jq -e '.speedup >= 10' "$AUTOHELIX_METRICS"`; `$AUTOHELIX_OBSERVATIONS` is a
 copy of the accepted iteration's observations (one folder per entry name);
@@ -247,8 +250,9 @@ threshold, not an absolute all-inclusive financial cap.
 Commit the config and any scripts it uses, then start with `autohelix run
 [NAME] --path PROJECT -n 3` (`NAME` for `autohelix/NAME.yaml`, none for
 `autohelix.yaml`): always a new run, here of three iterations (an open-ended goal; `-n 1` for a single task its gates can check). A run keeps the config it started with
-(stored in `.autohelix/runs/<id>/config.yaml`, the prompt template inlined). `resume` refuses when
-the file's parsed config has changed since (comment edits don't count): apply an edited config with a
+(stored in `.autohelix/runs/<id>/config.yaml`, the prompt template beside it as
+`prompt_template.md`). `resume` refuses when the file's parsed config has changed since (comment
+edits and other spellings of the same value don't count): apply an edited config with a
 new run, `autohelix run [NAME] --import <id>`, or restore the file. The config and template files are
 always frozen; freeze scripts the config calls under `scope.frozen` if they must not change. Continue one with `autohelix resume [RUN_ID]
 --path PROJECT` and its own budget flags. A bare `resume` continues the latest run of the config a

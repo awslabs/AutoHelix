@@ -155,7 +155,7 @@ stop:
 
 def test_broken_command_fails_on_the_baseline_before_recording(project):
     _configure(project, "stop:\n  - exit 3\n")
-    with pytest.raises(AutoHelixRunError, match="Stop command failed on the baseline"):
+    with pytest.raises(AutoHelixRunError, match="Stop command exited 3 on the baseline"):
         Harness(project, verbose=False).run(Budget(until=2), report=False)
     records = History(project).load()
     assert len(records) == 1 and records[0].iteration == 0 and not records[0].accepted
@@ -170,6 +170,24 @@ stop:
     assert [r.iteration for r in records] == [0, 1, 2]
     assert all(r.stop is None for r in records)
     assert read_run_status(project)["stop_reason"]["budget"] == "iterations"
+    # Recorded like a gate, so `view` and the viewer can show it (it was a terminal line only).
+    assert records[0].stops == [{"text": records[0].stops[0]["text"], "outcome": "continue", "return_code": 1,
+                                 "duration_s": records[0].stops[0]["duration_s"]}]
+    assert [(item["outcome"], item["return_code"]) for r in records[1:] for item in r.stops] == [
+        ("error", 3), ("error", 3)]
+
+
+def test_a_timeout_is_recorded_as_a_flag_not_read_from_the_output(project):
+    """A command printing "Timeout after…" and exiting 1 used to be reported as timed out."""
+    _configure(project, """
+stop:
+  - command: '[ "$AUTOHELIX_ITERATION" = 0 ] && echo "Timeout after 5s" && exit 1; sleep 30'
+    timeout: 1
+""")
+    records = _run(project, 1)
+    assert [(i["outcome"], i.get("timed_out", False)) for i in records[0].stops] == [("continue", False)]
+    assert [(i["outcome"], i.get("timed_out", False), i["return_code"]) for i in records[1].stops] == [
+        ("error", True, -1)]
 
 
 def test_rejected_iterations_are_not_checked(project):
@@ -201,9 +219,9 @@ def test_interrupt_during_stop_check_still_records_the_merge(project, monkeypatc
     harness = Harness(project, verbose=False)
     original = harness._check_stop
 
-    def interrupt_after_baseline(workspace, iteration, metrics):
+    def interrupt_after_baseline(workspace, iteration, metrics, record):
         if iteration == 0:
-            return original(workspace, iteration, metrics)
+            return original(workspace, iteration, metrics, record)
         raise KeyboardInterrupt
 
     monkeypatch.setattr(harness, "_check_stop", interrupt_after_baseline)
@@ -263,9 +281,9 @@ def test_stop_check_failure_after_merge_keeps_the_iteration(project, monkeypatch
     harness = Harness(project, verbose=False)
     original = harness._check_stop
 
-    def fail_after_baseline(workspace, iteration, metrics):
+    def fail_after_baseline(workspace, iteration, metrics, record):
         if iteration == 0:
-            return original(workspace, iteration, metrics)
+            return original(workspace, iteration, metrics, record)
         raise OSError("disk full")
 
     monkeypatch.setattr(harness, "_check_stop", fail_after_baseline)
@@ -298,3 +316,36 @@ def test_report_prompt_says_why_the_run_ended(project):
     config = Config.from_dict({"goal": "g"})
     prompt = build_report_prompt(config, project, project / "draft.md")
     assert "The run ended because: stop condition met at iteration 1: done enough." in prompt
+
+
+def test_a_failed_stop_command_is_a_note_under_its_row():
+    """In `run` and `view` alike, from the record (`run` used to print a yellow line apart,
+    `view` showed nothing)."""
+    from autohelix.terminal import Row, Table
+
+    table = Table.of(Config.from_dict({"goal": "g", "stop": ["a", "b"]}), 100)
+    table.add(Row(0, True))
+    row = Row(1, True, stops=[{"text": "python done.py", "outcome": "continue", "return_code": 1},
+                              {"text": "check.sh", "outcome": "error", "return_code": 2}])
+    lines = [line.plain.strip() for line in table.add(row)]
+    assert "stop command exited 2, not checked: check.sh (stop/2/)" in lines
+    assert not any("python done.py" in line for line in lines)
+    timed = Row(2, True, stops=[{"text": "slow", "outcome": "error", "return_code": -1, "timed_out": True}])
+    assert "stop command timed out, not checked: slow (stop/1/)" in [line.plain.strip() for line in table.add(timed)]
+
+
+def test_a_gate_timeout_is_recorded_as_a_flag(project):
+    """Recorded like a stop command's; the row says "timed out" (it said "failed")."""
+    from autohelix.terminal import Row, rejection
+
+    _configure(project, """
+gates:
+  - command: '[ "$AUTOHELIX_ITERATION" = 0 ] || sleep 30'
+    timeout: 1
+""")
+    records = _run(project, 1)
+    [gate] = records[1].gates
+    assert gate["passed"] is False and gate["timed_out"] is True and gate["return_code"] == -1
+    assert "timed_out" not in records[0].gates[0]
+    config = Config.from_dict({"goal": "g", "gates": ['[ "$AUTOHELIX_ITERATION" = 0 ] || sleep 30']})
+    assert rejection(Row.of(records[1]), config.gates, {}, {}) == "[ \"$AUTOHELIX_ITERATION\" = 0 ] || sleep 30 timed out"

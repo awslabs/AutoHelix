@@ -134,15 +134,14 @@ gates:
   then `--`, so a question starting with `-` stays a question.
 - `yes:` and `no:` say what each answer means (`--yes`, `--no`).
 - `agent:` takes only `backend` (`claude` or `codex`), `model`,
-  `reasoning_effort`, `timeout` and `command`; they become flags. Unset ones come
+  `reasoning_effort` and `command`; they become flags. Unset ones come
   from the top-level `agent:`, except that naming another backend drops the
   top-level `model`, `reasoning_effort` and `command` (they belong to the other
   backend). OpenCode has no read-only mode: with `agent.backend: opencode` at the
-  top level, every `ask:` entry needs its own `agent.backend`.
-- The judge's own time limit is 600 seconds unless set. `timeout:` is the whole
-  command's deadline and also bounds the judge; `agent.timeout` alone sets the
-  judge's limit and makes the command's deadline a minute longer. `agent.timeout`
-  must be shorter than `timeout:`.
+  top level, every `ask:` entry needs its own `agent.backend`, and an `autohelix
+  ask` a script runs needs `--agent claude` or `--agent codex`.
+- `timeout:` is the command's deadline (default 10m), which also bounds the
+  judge. An entry's `agent.timeout` is an error naming `timeout:`.
 
 **`metric:` entries** run nothing. They compare a number from an `observe:`
 entry with the **last accepted iteration**, the code being built on:
@@ -290,9 +289,8 @@ observe:
   number). A review that leaves a declared number out fails. What a number means
   is up to the prompt.
 - `agent:` as for [`ask:` entries](#gates): `backend`, `model`,
-  `reasoning_effort`, `timeout`, `command`.
-- `timeout:` the command's deadline (default 30m), which also bounds the review;
-  `agent.timeout` alone makes it a minute longer.
+  `reasoning_effort`, `command`.
+- `timeout:` the command's deadline (default 30m), which also bounds the review.
 
 Review numbers are noisy and gameable: fine for display and `stop:`, not
 recommended for gates.
@@ -399,8 +397,15 @@ in order until one exits:
   printed to stdout is recorded as the reason (`speedup 10.3 ≥ 10`), so print one.
 - **1**: keep going.
 - **anything else, or a timeout**: an error. On the baseline it stops the run
-  before the first iteration (fix the command and run again); later it prints a
-  warning and the run continues.
+  before the first iteration (fix the command and run again); later the run
+  continues, and the iteration's row (in `run` and `view`) and the web view mark
+  the failed command.
+
+Each command's outcome (`stop`, `continue` or `error`), exit code and whether it
+timed out are recorded in the iteration's `stops` (as gates are in `gates`).
+Python exits 1 on an uncaught exception, which reads as "keep going": a script
+should catch its own errors and exit 2 (`sys.exit(0 if done else 1)` inside a
+`try`), or use `jq -e`.
 
 On top of the [command environment](#command-environment), stop commands get:
 
@@ -491,7 +496,7 @@ another repository clones it outside its copy (under `/tmp`, say).
 | `model` | The model (default: the backend's) |
 | `reasoning_effort` | e.g. `low`, `medium`, `high`, `xhigh` |
 | `timeout` | A duration per iteration; unset means no limit (see below) |
-| `command` | The backend's executable (default `claude`, `codex`, `opencode` on `PATH`) |
+| `command` | The backend's executable (default: `$AUTOHELIX_CLAUDE_CMD`, `$AUTOHELIX_CODEX_CMD` or `$AUTOHELIX_OPENCODE_CMD`, else `claude`, `codex`, `opencode` on `PATH`); `run` checks before starting that every agent the config runs (the main agent, each `ask:` and `review:` entry's judge) can be found |
 | `settings` | Codex only: `-c key=value` pass-through |
 | `extra_args` | Extra CLI arguments for the main agent |
 | `auto_memory` | Claude Code's built-in memory; off by default for self-contained iterations |
@@ -500,7 +505,8 @@ another repository clones it outside its copy (under `/tmp`, say).
 `ask:` and `review:` calls keep their own independent, read-only defaults and
 use only `backend`, `model`, `reasoning_effort` and `command` from here, never
 `settings`, `extra_args` or `auto_memory`. They don't use `agent.timeout` either:
-`ask` defaults to 600 seconds, a review to its command's deadline.
+an entry's `timeout:` bounds its judge (`ask` defaults to 10 minutes, a review to
+30).
 
 **`agent.timeout`** is a hard kill: at the deadline the agent is stopped, even
 mid-step, and the iteration is rejected unchecked (its tree is still kept, see

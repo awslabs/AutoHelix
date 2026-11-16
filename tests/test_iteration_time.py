@@ -8,19 +8,23 @@ from pathlib import Path
 
 import pytest
 
-from autohelix.iteration_time import format_limit, parse_duration
+import autohelix.iteration_time
+from autohelix.config import parse_duration
+from autohelix.iteration_time import format_limit
 
 
-def test_parse_duration_none_or_empty():
-    assert parse_duration(None) is None
-    assert parse_duration("") is None
+def test_one_duration_parser():
+    """iteration_time's optional variant (None, empty and zero meaning unset) is gone:
+    every duration goes through config.parse_duration, where those are errors."""
+    assert not hasattr(autohelix.iteration_time, "parse_duration")
+    for unset in (None, "", 0, -5, "0m"):
+        with pytest.raises(ValueError):
+            parse_duration(unset)
 
 
 def test_parse_duration_numbers():
     assert parse_duration(30) == 30
     assert parse_duration(3600) == 3600
-    assert parse_duration(0) is None
-    assert parse_duration(-5) is None
     assert parse_duration("120") == 120
 
 

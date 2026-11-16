@@ -29,7 +29,7 @@ def project(tmp_path):
 
 class TestPreflightCheck:
     def test_all_passing(self, project):
-        config, raw = load_config(project)
+        config = load_config(project)
         with patch("autohelix.checks.run_command") as mock_c, \
              patch("autohelix.checks.run_observe_entry") as mock_m, \
              patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
@@ -44,7 +44,7 @@ class TestPreflightCheck:
 
     def test_empty_goal_is_error(self, tmp_path):
         (tmp_path / "autohelix.yaml").write_text("goal: ''\n")
-        config, raw = load_config(tmp_path)
+        config = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, tmp_path)
         errors = [i for i in issues if i.level == "error"]
@@ -54,7 +54,7 @@ class TestPreflightCheck:
         (tmp_path / "autohelix.yaml").write_text(
             "goal: Describe what you want the agent to achieve.\n"
         )
-        config, raw = load_config(tmp_path)
+        config = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, tmp_path)
         errors = [i for i in issues if i.level == "error"]
@@ -62,14 +62,14 @@ class TestPreflightCheck:
 
     def test_no_constraints_or_metrics_is_warning(self, tmp_path):
         (tmp_path / "autohelix.yaml").write_text("goal: Make it faster\n")
-        config, raw = load_config(tmp_path)
+        config = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, tmp_path)
         warnings = [i for i in issues if i.level == "warning"]
         assert any("No gates or observe entries" in i.message for i in warnings)
 
     def test_agent_not_found_is_error(self, project):
-        config, raw = load_config(project)
+        config = load_config(project)
         with patch("autohelix.checks.run_command") as mock_c, \
              patch("autohelix.checks.run_observe_entry") as mock_m, \
              patch("autohelix.checks.shutil.which", return_value=None):
@@ -90,7 +90,7 @@ class TestPreflightCheck:
               editable: [nonexistent/]
         """)
         (tmp_path / "autohelix.yaml").write_text(config_text)
-        config, raw = load_config(tmp_path)
+        config = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, tmp_path)
         warnings = [i for i in issues if i.level == "warning"]
@@ -118,7 +118,7 @@ class TestPreflightCheck:
     def test_preflight_no_longer_guesses_gate_targets(self, tmp_path):
         (tmp_path / "tests").mkdir()
         (tmp_path / "autohelix.yaml").write_text("goal: Make it faster\ngates:\n  - pytest tests/\n")
-        config, raw = load_config(tmp_path)
+        config = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, tmp_path)
         assert not any("scope" in i.message.lower() for i in issues)
@@ -134,7 +134,7 @@ class TestPreflightCheck:
                   latency: lower
         """)
         (tmp_path / "autohelix.yaml").write_text(config_text)
-        config, raw = load_config(tmp_path)
+        config = load_config(tmp_path)
         with patch("autohelix.checks.run_observe_entry") as mock_m, \
              patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             mock_m.return_value = ObserveResult(
@@ -151,11 +151,11 @@ class TestPreflightCheck:
 # ── Scope patterns counted over `git ls-files` with the harness's matcher [01-1, 03-5] ──
 
 
-def _committed(folder: Path, files: dict[str, str], untracked: dict[str, str] = {}) -> Path:
+def _committed(folder: Path, files: dict[str, str], untracked: dict[str, str] | None = None) -> Path:
     import subprocess
     folder.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q"], cwd=folder, check=True)
-    for name, text in {**files, **untracked}.items():
+    for name, text in {**files, **(untracked or {})}.items():
         (folder / name).parent.mkdir(parents=True, exist_ok=True)
         (folder / name).write_text(text)
     subprocess.run(["git", "add", "--", *files], cwd=folder, check=True)
@@ -166,7 +166,7 @@ def _committed(folder: Path, files: dict[str, str], untracked: dict[str, str] = 
 
 def _scope_warnings(folder: Path, scope: str) -> list[str]:
     (folder / "autohelix.yaml").write_text(f"goal: g\nagent: {{backend: mock}}\nscope:\n{scope}")
-    config, raw = load_config(folder)
+    config = load_config(folder)
     return [i.message for i in preflight_check(config, folder) if "scope." in i.message]
 
 
@@ -192,3 +192,91 @@ def test_preflight_in_a_subdirectory_counts_its_own_files(tmp_path):
     assert _scope_warnings(repo / "sub", "  editable: [src/a.py]\n") == []
     assert _scope_warnings(repo / "sub", "  editable: [src/other.py]\n") == [
         "scope.editable 'src/other.py' matches no committed file"]
+
+
+# ── Every agent's real command, as its backend resolves it [03-3] ──
+
+
+def _agent_errors(folder: Path, monkeypatch, config: str, **env: str) -> list[str]:
+    """Preflight's agent errors with nothing on PATH but `bin/` (empty unless a test adds to it)."""
+    (folder / "bin").mkdir(exist_ok=True)
+    monkeypatch.setenv("PATH", str(folder / "bin"))
+    for backend in ("CLAUDE", "CODEX", "OPENCODE"):
+        monkeypatch.delenv(f"AUTOHELIX_{backend}_CMD", raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    (folder / "autohelix.yaml").write_text(config)
+    return [i.message for i in preflight_check(load_config(folder), folder)
+            if i.level == "error" and "Agent command" in i.message]
+
+
+def _executable(path: Path) -> str:
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_the_documented_command_override_is_honoured(tmp_path, monkeypatch):
+    """`AUTOHELIX_CLAUDE_CMD`, which the backend runs, used to fail preflight: it read
+    only `agent.command`, else `claude` on PATH."""
+    wrapper = _executable(tmp_path / "my-claude")
+    assert _agent_errors(tmp_path, monkeypatch, "goal: g\n", AUTOHELIX_CLAUDE_CMD=wrapper) == []
+    assert _agent_errors(tmp_path, monkeypatch, "goal: g\n") == [
+        "Agent command 'claude' not found in PATH; install claude, or set agent.command or AUTOHELIX_CLAUDE_CMD"]
+    _executable(tmp_path / "bin" / "claude")
+    assert _agent_errors(tmp_path, monkeypatch, "goal: g\n") == []
+
+
+def test_judge_backends_are_checked(tmp_path, monkeypatch):
+    """An `ask:` or `review:` judge whose backend isn't installed used to pass preflight
+    and then fail every iteration's check."""
+    config = textwrap.dedent("""\
+        goal: g
+        agent: {backend: mock}
+        gates:
+          - ask: Keeps the API?
+            agent: {backend: codex}
+        observe:
+          - name: notes
+            review: Review it
+            agent: {backend: claude, command: /nowhere/claude}
+          - name: inherits
+            review: Review it too
+    """)
+    assert _agent_errors(tmp_path, monkeypatch, config) == [
+        "Agent command 'codex' not found in PATH (used by `ask: Keeps the API?`); install codex, or set "
+        "agent.command or AUTOHELIX_CODEX_CMD",
+        "Agent command '/nowhere/claude' not found in PATH (used by `observe notes`); install claude, or set "
+        "agent.command or AUTOHELIX_CLAUDE_CMD",
+    ]
+    assert _agent_errors(tmp_path, monkeypatch, config, AUTOHELIX_CODEX_CMD=_executable(tmp_path / "cx")) == [
+        "Agent command '/nowhere/claude' not found in PATH (used by `observe notes`); install claude, or set "
+        "agent.command or AUTOHELIX_CLAUDE_CMD"]
+
+
+def test_a_judge_on_the_main_backend_shares_its_command(tmp_path, monkeypatch):
+    main = _executable(tmp_path / "claude-main")
+    config = f"goal: g\nagent: {{command: {main}}}\ngates: [{{ask: 'Done?'}}]\n"
+    assert _agent_errors(tmp_path, monkeypatch, config) == []
+    # Another backend drops the top-level command (as `judge.judge_config` does).
+    config = f"goal: g\nagent: {{command: {main}}}\ngates: [{{ask: 'Done?', agent: {{backend: codex}}}}]\n"
+    assert _agent_errors(tmp_path, monkeypatch, config) == [
+        "Agent command 'codex' not found in PATH (used by `ask: Done?`); install codex, or set agent.command "
+        "or AUTOHELIX_CODEX_CMD"]
+
+
+@pytest.mark.parametrize("backend, module, cls", [
+    ("claude", "claudecode", "ClaudeCodeAgent"), ("codex", "codex", "CodexAgent"),
+    ("opencode", "opencode", "OpenCodeAgent")])
+def test_backends_resolve_their_command_as_preflight_does(tmp_path, monkeypatch, backend, module, cls):
+    import importlib
+
+    from autohelix.agents import AgentConfig, command_path
+
+    agent_class = getattr(importlib.import_module(f"autohelix.agents.{module}"), cls)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv(f"AUTOHELIX_{backend.upper()}_CMD", "/opt/wrapper")
+    assert agent_class(AgentConfig(backend=backend))._command_path() == command_path(backend) == "/opt/wrapper"
+    assert agent_class(AgentConfig(backend=backend, command="/x"))._command_path() == "/x"
+    monkeypatch.delenv(f"AUTOHELIX_{backend.upper()}_CMD")
+    assert agent_class(AgentConfig(backend=backend))._command_path() == backend

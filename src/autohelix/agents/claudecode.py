@@ -5,10 +5,9 @@
 
 import json
 import os
-import shutil
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback
+from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, command_path
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_worktree_env
 
@@ -34,18 +33,7 @@ class ClaudeCodeAgent:
         self._structured_output = None
 
     def _command_path(self) -> str:
-        if self.config.command:
-            return self.config.command
-
-        env_command = os.environ.get("AUTOHELIX_CLAUDE_CMD")
-        if env_command:
-            return env_command
-
-        resolved_claude = shutil.which("claude")
-        if resolved_claude:
-            return resolved_claude
-
-        return "claude"
+        return command_path("claude", self.config.command)
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [

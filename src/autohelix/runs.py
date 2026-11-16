@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from autohelix.config import load_config, run_command, stored_config_text
+from autohelix.config import load_config, run_command, template_text
 
 SCHEMA = 2
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
@@ -125,6 +125,8 @@ class RunPaths:
     def identity(self): return self.run_dir / "run.json"
     @property
     def config(self): return self.run_dir / "config.yaml"  # the run's config, stored when it started
+    @property
+    def template(self): return self.run_dir / "prompt_template.md"  # its prompt_template's text, if it has one
     @property
     def history(self): return self.run_dir / "history.jsonl"
     @property
@@ -783,7 +785,8 @@ def _owned(paths: RunPaths) -> tuple[dict, RunLock, list[tuple[str, str]]]:
 
 def require_clean(project: Path) -> None:
     """A run starts from a commit: refuse uncommitted changes in tracked files."""
-    dirty = git(project, "status", "--porcelain", "--untracked-files=no").stdout
+    # Read-only: no opportunistic index refresh (a check like `run --check` writes nothing).
+    dirty = git(project, "--no-optional-locks", "status", "--porcelain", "--untracked-files=no").stdout
     if dirty:
         raise RuntimeError("Uncommitted changes in tracked files. Commit them before starting a run:\n" + dirty)
 
@@ -800,12 +803,22 @@ def not_stored(paths: RunPaths, data: dict) -> str:
 
 
 def load_run_config(paths: RunPaths, data: dict | None = None):
-    """The run's own config (`load_config` of its stored copy; the file it came from,
-    as run.json names it, is the `source`). RuntimeError (`not_stored`) without one."""
+    """The run's own config (`load_config` of its stored copy, with its stored template
+    text, `RunPaths.template`; the file it came from, as run.json names it, is the
+    `source`). RuntimeError (`not_stored`) without one."""
     data = data if data is not None else paths.read_identity()
     if not paths.config.is_file():
         raise RuntimeError(not_stored(paths, data))
-    return load_config(paths.project, paths.config, source=paths.project / data["config_path"])
+    try:
+        text = paths.template.read_text()
+    except FileNotFoundError:
+        text = None
+    config = load_config(paths.project, paths.config, source=paths.project / data["config_path"], template_text=text)
+    if config.prompt_template is not None and text is None:
+        raise RuntimeError(f"Run {short_id(paths.run_id)} stored no copy of its prompt_template (started by an "
+                           f"older AutoHelix); continue it in a new run: "
+                           f"`{run_command(data['config_path'])} --import {short_id(paths.run_id)}`.")
+    return config
 
 
 def new_run_name(config: Path, name: str | None) -> str | None:
@@ -897,7 +910,8 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
         # Refused first starts must not leave an identity, owned ref or pointer.
         if ready is not None:
             ready()
-        stored = stored_config_text(config)
+        stored = config.read_text()  # verbatim; its template's text beside it (`RunPaths.template`)
+        template = template_text(load_config(project, config))
         base = git(project, "rev-parse", "HEAD").stdout.strip()
         target = git(project, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip().removeprefix("refs/heads/") or None
         notices = _new_run_notices(project, config_path, target, group, imported, base, land_mode)
@@ -932,8 +946,12 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
                     **({"import": {"run": imported}} if imported else {}),
                     **({"why": why} if why else {})}
             try:
-                write_text(paths.config, stored)  # first: a readable run (run.json) has its config
-                os.chmod(paths.config, 0o444)  # never edited: a run keeps the config it started with
+                # First: a readable run (run.json) has its config. Never edited: a run keeps
+                # the config it started with.
+                for path, text in ((paths.config, stored), (paths.template, template)):
+                    if text is not None:
+                        write_text(path, text)
+                        os.chmod(path, 0o444)
                 write_json(paths.identity, data)
             except BaseException:
                 lock.close()

@@ -4,11 +4,9 @@
 """OpenCode CLI backend."""
 
 import json
-import os
-import shutil
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback
+from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, command_path
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_worktree_env
 
@@ -25,18 +23,7 @@ class OpenCodeAgent:
         self._final_text: str | None = None
 
     def _command_path(self) -> str:
-        if self.config.command:
-            return self.config.command
-
-        env_command = os.environ.get("AUTOHELIX_OPENCODE_CMD")
-        if env_command:
-            return env_command
-
-        resolved = shutil.which("opencode")
-        if resolved:
-            return resolved
-
-        return "opencode"
+        return command_path("opencode", self.config.command)
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [

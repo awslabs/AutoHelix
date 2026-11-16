@@ -17,6 +17,7 @@ from click.core import ParameterSource
 
 from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFound, find_config, load_config,
                               project_configs, run_command)
+from autohelix.agents import JUDGE_BACKENDS
 from autohelix.harness import DEFAULT_ITERATIONS, Budget, Harness
 from autohelix.history import History
 from autohelix.run_status import read_run_status
@@ -642,7 +643,7 @@ def delete(run_ids: tuple[str, ...], path: str, force: bool):
 @click.option("--yes", "yes_means", help='What a "yes" answer means.')
 @click.option("--no", "no_means", help='What a "no" answer means.')
 @click.option("--rubric", type=click.Path(exists=True, dir_okay=False), help="File with criteria for the answer.")
-@click.option("--agent", "agent_type", type=click.Choice(["claude", "codex", "mock"]),
+@click.option("--agent", "agent_type", type=click.Choice(JUDGE_BACKENDS),
               help="Agent backend (default: agent.backend from the config, else claude).")
 @click.option("--model", help="Model (default: agent.model from the config).")
 @click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
@@ -711,7 +712,7 @@ def _review_metrics(ctx, param, values: tuple[str, ...]) -> list[str]:
               help="Include this entry's review from the last accepted iteration (in a run).")
 @click.option("--metric", "metrics", multiple=True, metavar="NAME:higher|lower", callback=_review_metrics,
               help="A number the review must report, printed as ##autohelix[NAME=value]. Repeatable.")
-@click.option("--agent", "agent_type", type=click.Choice(["claude", "codex", "mock"]),
+@click.option("--agent", "agent_type", type=click.Choice(JUDGE_BACKENDS),
               help="Agent backend (default: agent.backend from the config, else claude).")
 @click.option("--model", help="Model (default: agent.model from the config).")
 @click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
@@ -1021,7 +1022,7 @@ def _view_live(project_path: Path, run_id: str | None) -> None:
         raise SystemExit(1)
     try:
         # The run's stored config (an old run has none); the lookup only without a run.
-        config, _ = load_config(project_path, config_file=read_stored_config_path(project_path, run_id))
+        config = load_config(project_path, config_file=read_stored_config_path(project_path, run_id))
         backend = config.agent.backend
     except Exception:  # noqa: BLE001 - the log parser can tell backends apart on its own
         backend = None
@@ -1126,7 +1127,7 @@ def report(run_id: str | None, path: str):
                       "AutoHelix); its report can't be written.", highlight=False)
         raise SystemExit(1)
     try:
-        config, _ = load_run_config(paths)
+        config = load_run_config(paths)
     except (RuntimeError, ConfigError) as e:
         console.print(f"[red]Error:[/red] {e}", highlight=False)
         raise SystemExit(1)

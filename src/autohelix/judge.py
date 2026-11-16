@@ -29,11 +29,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from autohelix.agents import AgentConfig, AgentEvent, create_agent
-from autohelix.config import ConfigNotFound, find_config
+from autohelix.config import ASK_TIMEOUT, ConfigNotFound, find_config
 from autohelix.workspace import Fingerprint, git_env
 from autohelix.usage_log import append_usage, new_call_id
 
-DEFAULT_TIMEOUT = 600
+DEFAULT_TIMEOUT = ASK_TIMEOUT
 DEADLINE_ENV = "AUTOHELIX_COMMAND_DEADLINE"  # epoch seconds; set by the harness per command
 LOG_DIR_ENV = "AUTOHELIX_LOG_DIR"
 CONFIG_ENV = "AUTOHELIX_CONFIG"

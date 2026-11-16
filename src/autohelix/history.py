@@ -38,12 +38,16 @@ class IterationResult:
     calls: list[dict[str, Any]] = field(default_factory=list)
     # One item per gate, in list order: {"text", "kind": "command"|"metric", "passed":
     # true|false|null (not reached)}; commands that ran add "return_code" and
-    # "duration_s", a failed one its "output" tail; checked metric gates add "value",
+    # "duration_s" ("timed_out": true when they did), a failed one its "output" tail; checked metric gates add "value",
     # "reference" and, failed, "reason". Empty if evaluation never started.
     gates: list[dict[str, Any]] = field(default_factory=list)
     # One item per observe entry that ran, in order: {"name", "ok", "return_code",
     # "error", "metrics", "duration_s"}.
     observe: list[dict[str, Any]] = field(default_factory=list)
+    # One item per stop command that ran (accepted iterations and the baseline), in
+    # order: {"text", "outcome": "stop"|"continue"|"error", "return_code",
+    # "duration_s"}, and "timed_out": true when it did.
+    stops: list[dict[str, Any]] = field(default_factory=list)
     # The attempt itself: the agent's one-line summary (commit_summary.txt, whenever its
     # copy was frozen, accepted or not), the commit it was built on (A), the frozen tree
     # (T), the out-of-scope paths dropped at freeze (project-relative), and for a

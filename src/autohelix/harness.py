@@ -25,8 +25,7 @@ from rich.table import Table
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import (ConfigError, MetricGate, config_changes, find_config, inlined, load_config,
-                              parse_config, run_command, template_path)
+from autohelix.config import ConfigError, MetricGate, config_changes, find_config, load_config, run_command
 from autohelix.costs import summarize_costs
 from autohelix import terminal
 from autohelix.display import LiveDisplay, clean
@@ -41,7 +40,7 @@ from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, 
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
-                              run_observe_entry, run_stop_checks, scope_warning)
+                              run_observe_entry, run_stop_checks, scope_warning, StopCheckResult)
 from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
 from autohelix.formatting import format_cap, format_cost, format_total_cost
@@ -243,9 +242,9 @@ class Harness:
                 self.console.print(f"[yellow]Run {short_id(import_run)} used {source}; this run uses {used}.[/yellow]",
                                    highlight=False)
         if creating:
-            self.config, _ = load_config(self.project_path, config_file=config_file)
+            self.config = load_config(self.project_path, config_file=config_file)
         else:
-            self.config, _ = self._run_config(planned)
+            self.config = self._run_config(planned)
         errors = [issue for issue in self.config.validate() if issue.level == "error"]
         if errors:
             for error in errors:
@@ -289,7 +288,7 @@ class Harness:
         )
         if self.paths.run_id != (planned and planned.run_id):
             try:  # a new run (or, raced, another than planned): from now on, its stored copy
-                self.config, _ = self._run_config(
+                self.config = self._run_config(
                     self.paths, check=self.paths.run_id in existing)  # one just created matches its file
             except BaseException:
                 self._ownership.close()
@@ -347,30 +346,32 @@ class Harness:
 
     def _run_config(self, paths: RunPaths, check: bool = True):
         """A run's stored config (`load_run_config`). With `check`, refuses, before
-        anything is spent, when the file it came from parses differently now
-        (`config_changes`); a deleted file, or a deleted prompt template (the other
-        keys still compared), continues from the stored copy."""
+        anything is spent, when the file it came from parses differently now, or its
+        template's text differs (`config_changes`); a deleted file, or a deleted prompt
+        template (the other settings still compared), continues from the stored copy."""
         data = paths.read_identity()
-        config, raw = load_run_config(paths, data)
+        config = load_run_config(paths, data)
         source = self.project_path / data["config_path"]
         short = short_id(paths.run_id)
         if not check:
-            return config, raw
+            return config
         if not source.is_file():
             self.console.print(f"[dim]{data['config_path']} is gone; run {short} continues "
                                "with the config it stored when it started.[/dim]", highlight=False)
-            return config, raw
+            return config
         try:
-            current = parse_config(source, self.project_path)
-            template = current.get("prompt_template")
-            if isinstance(template, str) and template.strip() and not template_path(source, template).exists():
-                self.console.print(f"[dim]{template} is gone; run {short} continues with the prompt template "
-                                   "it stored when it started.[/dim]", highlight=False)
-                current = {**current, "prompt_template": raw.get("prompt_template")}
+            current = load_config(self.project_path, source)
+            if (current.prompt_template is not None and current.prompt_template == config.prompt_template
+                    and not current.prompt_template.exists()):
+                self.console.print(f"[dim]{config_relative(self.project_path, current.prompt_template)} is gone; "
+                                   f"run {short} continues with the prompt template it stored when it started."
+                                   "[/dim]", highlight=False)
+                current.prompt_template_text = config.prompt_template_text
+            if current._parse_errors and current._parse_errors != config._parse_errors:
+                changed = f"it no longer reads: {current._parse_errors[0]}"
             else:
-                current = inlined(source, current)
-            keys = config_changes(raw, current)
-            changed = f"changed: {', '.join(keys)}" if keys else None
+                keys = config_changes(config, current)
+                changed = f"changed: {', '.join(keys)}" if keys else None
         except ConfigError as e:
             changed = f"it no longer reads: {e}"
         if changed:
@@ -379,7 +380,7 @@ class Harness:
                 f"config it started with. To apply the new config, start a new run that continues from "
                 f"this one: `{run_command(data['config_path'])} --import {short}`. To continue this run, "
                 "restore the file.")
-        return config, raw
+        return config
 
     def _metric_label(self, name: str) -> str:
         """Format metric name with direction arrow."""
@@ -431,7 +432,7 @@ class Harness:
     def _check_metric_gate(self, gate: MetricGate, item: dict, metrics: dict[str, float], records) -> str | None:
         """Compare one metric gate with the last accepted iteration and record it in
         `item`. Returns the rejection reason, or None if it passes."""
-        direction = self.config.metric_directions().get(gate.metric, "higher")
+        direction = self.config.metric_directions()[gate.metric]
         value, reference = metrics.get(gate.metric), metric_reference(records, gate.metric)
         failure = metric_gate_failure(gate, direction, value, reference)
         item.update(passed=failure is None, value=value, reference=reference)
@@ -919,7 +920,7 @@ class Harness:
         # handled by the caller) keep the recorded acceptance.
         if self.config.stop:
             try:
-                result.stop, _ = self._check_stop(workspace, iteration, metrics)
+                result.stop, _ = self._check_stop(workspace, iteration, metrics, result)
             except Exception as e:  # noqa: BLE001 - acceptance already happened
                 self._warn(f"Stop check failed: {e}")
                 self.log.info(f"iter {iteration} stop check failed — {e}")
@@ -1013,6 +1014,8 @@ class Harness:
             item = current["item"] = evaluation.gates[index]
             item.update(passed=result.passed, return_code=result.return_code,
                         duration_s=None if result.duration_s is None else round(result.duration_s, 3))
+            if result.timed_out:
+                item["timed_out"] = True
             if not result.passed:
                 item["output"] = _tail(result.output)
             self.log.info(f"{where} gate: {spec.text} — {'passed' if result.passed else 'FAILED'}")
@@ -1091,7 +1094,6 @@ class Harness:
         baseline = iteration == 0
         where = "baseline" if baseline else f"iter {iteration}"
         gates = [(index, gate) for index, gate in enumerate(self.config.gates) if isinstance(gate, MetricGate)]
-        declared = self.config.metric_names()
         imported = imported_run(self.paths, self.run_info)
         imported_history = History(self.project_path, imported[0].run_id) if imported else None
         for entry in self.config.observe:
@@ -1143,11 +1145,10 @@ class Harness:
                 raise
             if baseline:
                 continue
-            # Metric gates waiting for this entry, in gates list order; a gate on a
-            # metric nobody declares (not a valid config) is checked after the last entry.
-            last = entry is self.config.observe[-1]
+            # Metric gates waiting for this entry, in gates list order (a gate's metric is
+            # always declared: `config._parse_gates`).
             for index, gate in gates:
-                if not (gate.metric in entry.metrics or last and gate.metric not in declared):
+                if gate.metric not in entry.metrics:
                     continue
                 if failure := self._check_metric_gate(gate, evaluation.gates[index], evaluation.metrics, records):
                     notes.append(f"  [red]✗[/red] {failure}")
@@ -1329,11 +1330,12 @@ class Harness:
         }
 
     def _check_stop(self, workspace: IterationWorkspace, iteration: int,
-                    metrics: dict[str, float]) -> tuple[dict[str, str] | None, list]:
-        """Run the stop commands in a fresh copy of the accepted tip. Returns (stop,
-        errors): stop is {"command", "reason"} if one exited 0; errors are the results
-        that exited with anything other than 0 or 1 (or timed out). Changing the
-        files or a judge violation is an error.
+                    metrics: dict[str, float], record: IterationResult) -> tuple[dict[str, str] | None, list]:
+        """Run the stop commands in a fresh copy of the accepted tip, each recorded in
+        `record.stops` as it ends (like a gate: outcome, return code, timed out). Returns
+        (stop, errors): stop is {"command", "reason"} if one exited 0; errors are the
+        results that exited with anything other than 0 or 1 (or timed out). Changing
+        the files or a judge violation is an error.
 
         Each command also gets `$AUTOHELIX_OBSERVATIONS`, a copy (made for that call)
         of the accepted iteration's `iterations/NNN/observe/` (empty if it observed
@@ -1357,8 +1359,11 @@ class Harness:
                        "AUTOHELIX_OBSERVATIONS": str(folders["observations"]),
                        "AUTOHELIX_LOG_DIR": str(folders["logs"]), "PATH": command_path(folders["bin"])}
 
+        record.stops = []
+
         def stop_result(spec, result) -> None:  # stored while its call folder still exists
             position = positions[id(spec)]
+            record.stops.append(StopCheckResult.of(spec, result).record(spec.text))
             self._store_command_output(iteration, current["folders"], spec.command, result,
                                        lambda: self.history.stop_dir(iteration, position))
 
@@ -1374,14 +1379,8 @@ class Harness:
         finally:
             workspace.remove(stop)
         errors = [r for r in results if r.error]
-        for r in errors:
-            code = ("timed out" if r.output.startswith("Timeout after")
-                    else "could not run" if r.return_code == -1 else f"exited {r.return_code}")
-            self._warn(f"Stop command {code}: {r.command}")
-            tail = "\n".join(r.output.strip().splitlines()[-5:])
-            if tail:
-                self.console.print(f"[dim]{tail}[/dim]", highlight=False)
-            self.log.info(f"iter {iteration} stop command error ({code}): {r.command}")
+        for r in errors:  # shown under the iteration's row (`terminal.Table._notes`, from `record.stops`)
+            self.log.info(f"iter {iteration} stop command error ({r.problem()}): {r.command}")
         if violation := self._integrity_violation(iteration):
             raise AutoHelixRunError(violation)
         fired = next((r for r in results if r.stop), None)
@@ -1467,12 +1466,13 @@ class Harness:
             if self.config.stop:
                 # A broken stop command fails here, before anything is recorded, so a
                 # typo surfaces before the first iteration is paid for.
-                baseline.stop, errors = self._check_stop(workspace, 0, metrics)
+                baseline.stop, errors = self._check_stop(workspace, 0, metrics, baseline)
                 if errors:
                     self.log.info("baseline FAILED — stop command error")
+                    tail = "\n".join(errors[0].output.strip().splitlines()[-5:])
                     raise AutoHelixRunError(
-                        f"Stop command failed on the baseline: {errors[0].command} "
-                        "(expected exit 0 to stop or 1 to continue)"
+                        f"Stop command {errors[0].problem()} on the baseline: {errors[0].command} "
+                        "(expected exit 0 to stop or 1 to continue)" + (f"\n{tail}" if tail else "")
                     )
             self._complete_record(baseline, started_at, time.monotonic(), evaluation)
             self._write_baseline(baseline)

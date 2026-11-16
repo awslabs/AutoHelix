@@ -3,6 +3,8 @@
 
 """Agent backends for AutoHelix."""
 
+import os
+import shutil
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -190,6 +192,23 @@ class AgentBackend(Protocol):
         project_path: Path | None = None,
     ) -> AgentRunResult:
         """Execute the agent inside the given worktree."""
+
+
+# Every `agent.backend` (`create_agent`), and those an `ask:`/`review:` judge can use
+# (a read-only mode; mock for tests).
+BACKENDS = ("claude", "codex", "opencode", "mock")
+JUDGE_BACKENDS = ("claude", "codex", "mock")
+
+
+def command_path(backend: str, command: str | None = None) -> str:
+    """The executable a backend runs: `agent.command`, else `$AUTOHELIX_<BACKEND>_CMD`,
+    else the backend's name found on PATH, else the bare name (which then fails to start).
+    The backends and preflight both resolve it here."""
+    if command:
+        return command
+    if env_command := os.environ.get(f"AUTOHELIX_{backend.upper()}_CMD"):
+        return env_command
+    return shutil.which(backend) or backend
 
 
 def agent_string(data: dict, key: str, where: str, errors: list[str]) -> str | None:

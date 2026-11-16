@@ -404,7 +404,8 @@ harness keeps for itself is in `.internal/` folders:
 .autohelix/
 ├── runs/<id>/
 │   ├── run.json                # identity (base commit, target branch, config file), archived flag
-│   ├── config.yaml             # the run's config, stored when it started (the stored copy inlines the template)
+│   ├── config.yaml             # the run's config, stored verbatim when it started
+│   ├── prompt_template.md      # its prompt_template's text, stored with it (only with one)
 │   ├── history.jsonl           # one record per iteration: the index and the source of truth
 │   ├── hints.md
 │   ├── report.md  report.html  # the run summary; the one-file run page
@@ -513,10 +514,10 @@ A run is a line of work: `autohelix run` starts one, `autohelix resume` continue
 one (by default the config's most recently active), `autohelix stop` ends a
 running one after its current iteration, `archive` sets one aside and `delete`
 removes it. **A run keeps its config**: it stores it as `config.yaml`
-when it starts, and every segment, `view`, `dashboard`, `report` and the judges
+(and its prompt template as `prompt_template.md`) when it starts, and every segment, `view`, `dashboard`, `report` and the judges
 (`$AUTOHELIX_CONFIG`) use that copy. `resume` refuses before spending anything
-when the config file's parsed config differs from it (comments and formatting
-don't count; the prompt template's text does): `autohelix run <config> --import
+when the config file's parsed config differs from it (comments, formatting and
+other spellings of the same value don't count; the prompt template's text does): `autohelix run <config> --import
 <id>` applies the new config in a new run, or restore the file to continue. A
 deleted config file isn't a change. `run --import <id>` starts a new run (code
 from your checkout, its own config, budgets, baseline and notes) whose agents

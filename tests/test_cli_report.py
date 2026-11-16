@@ -133,7 +133,7 @@ class TestReportCommand:
 
 class TestBuildReportPrompt:
     def _prompt(self, project):
-        config, _ = load_config(project)
+        config = load_config(project)
         return build_report_prompt(config, project, Path("/tmp/draft.md"))
 
     def test_goal_coverage_and_output(self, project):

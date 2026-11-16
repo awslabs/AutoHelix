@@ -337,17 +337,19 @@ def _describe_gate(gate) -> str:
     return f"{gate.metric}: {bound} than the last accepted iteration"
 
 
-def render_template(template: str, variables: dict[str, Any], name: str = "the built-in prompt") -> str:
+def render_template(template: str, variables: dict[str, Any], name: str | None = None) -> str:
     """Render a Jinja2 template with the given variables. A template that doesn't parse
-    or render raises RuntimeError naming it (`name`: the config's template file)."""
+    or render raises RuntimeError naming it (`name`: the config's template file; None:
+    the built-in prompt)."""
     from jinja2 import TemplateError
 
+    name = f"prompt_template {name}" if name else "The built-in prompt"
     try:
         rendered = _create_env().from_string(template).render(**variables)
     except TemplateSyntaxError as e:
-        raise RuntimeError(f"prompt_template {name}, line {e.lineno}: {e.message}") from e
+        raise RuntimeError(f"{name}, line {e.lineno}: {e.message}") from e
     except TemplateError as e:
-        raise RuntimeError(f"prompt_template {name} could not be rendered: {e}") from e
+        raise RuntimeError(f"{name} could not be rendered: {e}") from e
 
     # Collapse 3+ consecutive newlines into 2
     import re

@@ -57,6 +57,11 @@ class TestRenderTemplate:
         with pytest.raises(RuntimeError, match="prompt_template p.md could not be rendered: .*has no attribute 'x'"):
             render_template("{{ last.gates.x.y }}", {"last": {"gates": []}}, "p.md")
 
+    def test_the_built_in_prompt_is_named_as_such(self):
+        """Not "prompt_template the built-in prompt": no file is involved."""
+        with pytest.raises(RuntimeError, match=r"^The built-in prompt, line 1: "):
+            render_template("{% if unclosed %}", {})
+
     def test_trim_blocks(self):
         template = "before\n{% if x %}\nyes\n{% endif %}\nafter"
         result = render_template(template, {"x": True})
@@ -81,7 +86,7 @@ class TestLoadTemplate:
         (tmp_path / "configs" / "prompts").mkdir(parents=True)
         (tmp_path / "configs" / "prompts" / "agent.md").write_text("Custom: {{ goal }}")
         (tmp_path / "configs" / "a.yaml").write_text("goal: g\nprompt_template: prompts/agent.md\n")
-        config, raw = load_config(tmp_path, tmp_path / "configs" / "a.yaml")
+        config = load_config(tmp_path, tmp_path / "configs" / "a.yaml")
         assert load_template(config) == "Custom: {{ goal }}"
         assert not [i for i in config.validate() if i.level == "error"]
 
@@ -89,25 +94,24 @@ class TestLoadTemplate:
         from autohelix.config import load_config
 
         (tmp_path / "autohelix.yaml").write_text("goal: g\nprompt_template: nope.md\n")
-        config, raw = load_config(tmp_path)
+        config = load_config(tmp_path)
         assert any("prompt_template not found" in i.message for i in config.validate())
 
     @pytest.mark.parametrize("stored", [False, True])
     def test_a_template_that_does_not_parse_is_a_config_error(self, tmp_path, stored):
         """An unclosed `{% if %}` used to reach the agent as its prompt; now config
         validation names the file and line (also a run's stored copy)."""
-        from autohelix.config import inlined, load_config
+        from autohelix.config import load_config
 
-        (tmp_path / "p.md").write_text("ok\n{% if hints %}x\n")
+        text = "ok\n{% if hints %}x\n"
+        (tmp_path / "p.md").write_text("fine" if stored else text)
         (tmp_path / "autohelix.yaml").write_text("goal: g\nprompt_template: p.md\n")
-        if stored:
-            import yaml
-
-            data = inlined(tmp_path / "autohelix.yaml")
-            (tmp_path / "stored.yaml").write_text(yaml.safe_dump(data))
-            config, _ = load_config(tmp_path, tmp_path / "stored.yaml", source=tmp_path / "autohelix.yaml")
+        if stored:  # its stored text, whatever the file says now
+            (tmp_path / "stored.yaml").write_text("goal: g\nprompt_template: p.md\n")
+            config = load_config(tmp_path, tmp_path / "stored.yaml", source=tmp_path / "autohelix.yaml",
+                                 template_text=text)
         else:
-            config, _ = load_config(tmp_path)
+            config = load_config(tmp_path)
         found = [i.message for i in config.validate() if i.level == "error"]
         assert any(m.startswith("prompt_template p.md, line 2: Unexpected end of template") for m in found), found
 

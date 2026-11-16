@@ -87,7 +87,7 @@ keeps the tree).
 iteration, a baseline retry), laid out like iterations/NNN/.
 - logs/: the harness's own logs: run-<time>.log per run or resume, hook_audit.log, report.log.
 {git}
-- config.yaml: the run's config, as stored when it started (a prompt_template's text inlined).
+- config.yaml: the run's config, as stored when it started (verbatim); prompt_template.md: its prompt template's text, if it has one.
 
 ## Instructions
 {INSTRUCTIONS}

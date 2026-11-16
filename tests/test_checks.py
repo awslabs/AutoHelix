@@ -6,11 +6,14 @@ import pytest
 
 from autohelix.checks import (
     CHECK_KILL_GRACE,
+    metric_gate_failure,
+    metric_reference,
     parse_structured_metrics,
     run_command,
     run_observe_entry,
 )
-from autohelix.config import ObserveEntry
+from autohelix.config import MetricGate, ObserveEntry
+from autohelix.history import IterationResult
 
 
 def _observe(tmp_path, script, metrics):
@@ -244,3 +247,81 @@ def test_every_example_prints_its_metrics_as_structured_lines(example, metric):
                       if p.is_file() and p.suffix in {".py", ".sh", ".tmpl"})
     assert f"##autohelix[{metric}=" in sources or (
         example == "workflow-optimization" and "##autohelix[{name}=" in sources)
+
+
+# --- metric gates (moved from test_config.py, beside the code they test) ---
+
+def _record(iteration, metrics, accepted=True, commit="c"):
+    return IterationResult(iteration=iteration, accepted=accepted, metrics=metrics,
+                           commit=None if iteration == 0 else commit)
+
+
+class TestMetricGateReference:
+    def test_reference_is_the_tip_commit_record(self):
+        records = [_record(0, {"s": 10}), _record(1, {"s": 12}), _record(2, {"s": 30}, accepted=False),
+                   _record(3, {"s": 11})]
+        assert metric_reference(records, "s") == 11
+
+    def test_baseline_until_a_commit(self):
+        assert metric_reference([_record(0, {"s": 10}), _record(1, {"s": 9}, accepted=False)], "s") == 10
+
+    def test_accepted_no_op_does_not_re_measure(self):
+        records = [_record(0, {"s": 10}), _record(1, {"s": 12}), _record(2, {"s": 15}, commit=None)]
+        assert metric_reference(records, "s") == 12
+
+    def test_no_fallback_when_the_tip_record_lacks_the_metric(self):
+        records = [_record(0, {"s": 10, "t": 1}), _record(1, {"s": 12, "t": 2}), _record(2, {"s": 13})]
+        assert metric_reference(records, "t") is None
+        assert metric_reference(records, "u") is None
+
+
+class TestMetricGateFailure:
+    def regress(self, pct):
+        return MetricGate("s", "regress", pct)
+
+    def improve(self, pct):
+        return MetricGate("s", "improve", pct)
+
+    def test_regress(self):
+        assert metric_gate_failure(self.regress(5), "higher", 96, 100) is None
+        assert metric_gate_failure(self.regress(5), "higher", 95, 100) is None  # exactly at the bound
+        assert "5.1% worse than 100" in metric_gate_failure(self.regress(5), "higher", 94.9, 100)
+        assert metric_gate_failure(self.regress(5), "lower", 105, 100) is None
+        assert metric_gate_failure(self.regress(5), "lower", 106, 100)
+        assert metric_gate_failure(self.regress(0), "higher", 99.99, 100)
+        assert metric_gate_failure(self.regress(0), "higher", 100, 100) is None
+
+    def test_improve(self):
+        assert metric_gate_failure(self.improve(0), "higher", 100.01, 100) is None
+        assert "does not improve" in metric_gate_failure(self.improve(0), "higher", 100, 100)
+        assert metric_gate_failure(self.improve(5), "higher", 105, 100) is None
+        assert metric_gate_failure(self.improve(5), "higher", 1.05, 1.0) is None  # float noise at the bound
+        assert "by only 4.0%" in metric_gate_failure(self.improve(5), "higher", 104, 100)
+        assert metric_gate_failure(self.improve(10), "lower", 0.9, 1.0) is None
+        assert metric_gate_failure(self.improve(10), "lower", 0.95, 1.0)
+
+    def test_negative_reference_uses_its_absolute_value(self):
+        assert metric_gate_failure(self.regress(10), "higher", -1.05, -1.0) is None
+        assert metric_gate_failure(self.regress(10), "higher", -1.2, -1.0)
+        assert metric_gate_failure(self.improve(10), "higher", -0.9, -1.0) is None
+
+    def test_near_zero(self):
+        assert metric_gate_failure(self.regress(50), "lower", 0, 0) is None
+        assert metric_gate_failure(self.regress(50), "lower", 0.001, 0)  # no worse than 0
+        assert metric_gate_failure(self.improve(50), "lower", -0.001, 0) is None  # any strict improvement
+        assert metric_gate_failure(self.improve(50), "lower", 0, 0)
+        assert metric_gate_failure(self.improve(0), "lower", 0, 1) is None  # count 1 -> 0
+
+    def test_non_finite_values_fail(self):
+        for value in (float("inf"), float("-inf"), float("nan")):
+            assert "not a finite number" in metric_gate_failure(self.regress(5), "higher", value, 100)
+            assert "not a finite number" in metric_gate_failure(self.improve(0), "lower", value, 100)
+
+    def test_non_finite_references_are_none(self):
+        assert metric_reference([_record(0, {"s": float("inf")})], "s") is None
+        records = [_record(0, {"s": 10}), _record(1, {"s": float("nan")})]
+        assert metric_reference(records, "s") is None
+
+    def test_missing_value_fails_and_missing_reference_passes(self):
+        assert "was not measured" in metric_gate_failure(self.regress(5), "higher", None, 100)
+        assert metric_gate_failure(self.improve(5), "higher", 1, None) is None

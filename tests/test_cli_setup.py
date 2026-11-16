@@ -10,6 +10,7 @@ from pathlib import Path
 import click
 import click.testing
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from autohelix import cli
@@ -318,16 +319,16 @@ def test_the_template_is_a_valid_v2_config_once_it_has_a_goal(project):
     path = project / "autohelix" / "perf.yaml"
     for text in ("autohelix init", "prompt.md", "-c "):
         assert text not in CONFIG_TEMPLATE
-    config, raw = load_config(project, config_file=path)
+    config = load_config(project, config_file=path)
     errors = [i.message for i in config.validate() if i.level == "error"]
     assert len(errors) == 1 and "default placeholder" in errors[0]
     path.write_text(CONFIG_TEMPLATE.replace("Describe what you want the agent to optimize.", "Make main.py faster."))
-    config, raw = load_config(project, config_file=path)
+    config = load_config(project, config_file=path)
     assert [i for i in config.validate() if i.level == "error"] == []
     assert not [i for i in config.validate() if "Unknown config key" in i.message]
     assert config.title == "Make main.py faster."
     assert config.editable == ["src/"]
-    assert "budget" not in raw
+    assert "budget" not in yaml.safe_load(path.read_text())
 
 
 def test_run_finds_the_named_config(project, monkeypatch):

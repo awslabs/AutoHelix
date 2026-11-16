@@ -252,8 +252,10 @@ def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):
     result, _, _ = _run(project)
     assert result.exit_code == 1
     ending = _ending(result.output)
-    message = "Stop command failed on the baseline: echo broken; exit 3 (expected exit 0 to stop or 1 to continue)"
-    assert ending[0].startswith("  Error      Stop command failed on the baseline: echo broken;")
+    # The exit code and the command's last output lines, which used to be printed apart.
+    message = ("Stop command exited 3 on the baseline: echo broken; exit 3 (expected exit 0 to stop or 1 to "
+               "continue) broken")
+    assert ending[0].startswith("  Error      Stop command exited 3 on the baseline: echo broken;")
     totals = next(i for i, line in enumerate(ending) if line.startswith("  run "))
     assert " ".join(" ".join(ending[:totals]).split()) == f"Error {message}"  # wrapped, not cut
     assert [line.split()[0] for line in ending[totals:]] == ["run", "landed", "next", "page"]

@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback
+from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, command_path
 from autohelix.agents.codex_cost import TOKEN_FIELDS, estimate_cost, session_metadata
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_worktree_env
@@ -34,7 +34,7 @@ class CodexAgent:
         self._schema_path: Path | None = None
 
     def _command_path(self) -> str:
-        return self.config.command or os.environ.get("AUTOHELIX_CODEX_CMD") or "codex"
+        return command_path("codex", self.config.command)
 
     @staticmethod
     def _parse_version(text: str) -> tuple[int, int, int] | None:

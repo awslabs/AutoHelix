@@ -19,6 +19,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 from autohelix.agents.runner import _kill_process_group, end_group
+from autohelix.agents import command_path
 from autohelix.config import DEFAULT_CHECK_TIMEOUT, CommandSpec, Config, MetricGate, ObserveEntry
 from autohelix.sandbox import build_worktree_env
 from autohelix.workspace import git_env, path_in_scope, run_git
@@ -56,16 +57,21 @@ def preflight_check(config: Config, project_path: Path) -> list[PreflightIssue]:
     for ci in config_issues:
         issues.append(PreflightIssue(level=ci.level, message=ci.message))
 
-    # 2. Check agent command exists (skip for mock agent which is built-in)
-    agent_type = config.agent.backend.lower()
-    if agent_type != "mock":
-        default_cmds = {"claude": "claude", "codex": "codex", "opencode": "opencode"}
-        agent_cmd = config.agent.command or default_cmds.get(agent_type, agent_type)
-        if not shutil.which(agent_cmd):
-            issues.append(PreflightIssue(
-                level="error",
-                message=f"Agent command '{agent_cmd}' not found in PATH",
-            ))
+    # 2. Every agent the config runs (main agent, `ask:` and `review:` judges) can start:
+    # its command resolved as the backend resolves it (mock is built in).
+    missing: dict[str, list[str]] = {}
+    for who, backend, command in config.agent_commands():
+        if backend != "mock" and not shutil.which(path := command_path(backend, command)):
+            missing.setdefault(f"{backend}\0{path}", []).append(who)
+    for key, whos in missing.items():
+        backend, path = key.split("\0")
+        users = "" if whos == ["agent"] else " (used by " + ", ".join(
+            "the agent" if who == "agent" else f"`{who}`" for who in whos) + ")"
+        issues.append(PreflightIssue(
+            level="error",
+            message=(f"Agent command '{path}' not found in PATH{users}; install {backend}, or set "
+                     f"agent.command or AUTOHELIX_{backend.upper()}_CMD"),
+        ))
 
     # 3. Scope patterns that match no committed file, with the matcher the harness uses
     # (no scope at all: `scope_warning`, at run start). Editable ones may name files the
@@ -273,14 +279,43 @@ class StopCheckResult:
     return_code: int
     output: str
     reason: str  # the last non-empty stdout line (unless just true/false/null), or the command itself
+    timed_out: bool = False
+    duration_s: float | None = None
+
+    @classmethod
+    def of(cls, spec: CommandSpec, r: "CommandResult") -> "StopCheckResult":
+        lines = [line.strip() for line in r.stdout.splitlines() if line.strip()]
+        # `jq -e` prints the value it tested: true/false/null says nothing, the command does.
+        last = lines[-1] if lines else None
+        return cls(command=spec.command, return_code=r.return_code, output=r.output,
+                   reason=last if last and last not in ("true", "false", "null") else spec.command,
+                   timed_out=r.timed_out, duration_s=r.duration_s)
 
     @property
     def stop(self) -> bool:
-        return self.return_code == 0
+        return self.return_code == 0 and not self.timed_out
 
     @property
     def error(self) -> bool:
-        return self.return_code not in (0, 1)
+        return self.timed_out or self.return_code not in (0, 1)
+
+    @property
+    def outcome(self) -> str:
+        """"stop", "continue" or "error", as the iteration record has it."""
+        return "stop" if self.stop else "error" if self.error else "continue"
+
+    def problem(self) -> str:
+        """An error's kind, for messages: `timed out`, `could not run`, `exited 2`."""
+        return ("timed out" if self.timed_out else "could not run" if self.return_code == -1
+                else f"exited {self.return_code}")
+
+    def record(self, text: str) -> dict:
+        """The record's item for this command (`IterationResult.stops`), like a gate's."""
+        item = {"text": text, "outcome": self.outcome, "return_code": self.return_code,
+                "duration_s": None if self.duration_s is None else round(self.duration_s, 3)}
+        if self.timed_out:
+            item["timed_out"] = True
+        return item
 
 
 def run_stop_checks(
@@ -303,14 +338,8 @@ def run_stop_checks(
             )
             if on_result:
                 on_result(c, r)
-        lines = [line.strip() for line in r.stdout.splitlines() if line.strip()]
-        # `jq -e` prints the value it tested: true/false/null says nothing, the command does.
-        last = lines[-1] if lines else None
-        results.append(StopCheckResult(
-            command=c.command, return_code=r.return_code, output=r.output,
-            reason=last if last and last not in ("true", "false", "null") else c.command,
-        ))
-        if r.return_code == 0:
+        results.append(StopCheckResult.of(c, r))
+        if results[-1].stop:
             break
     return results
 

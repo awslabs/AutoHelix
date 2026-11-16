@@ -177,7 +177,7 @@ class Saved:
         from autohelix.runs import load_run_config
 
         try:
-            config = load_run_config(paths)[0]
+            config = load_run_config(paths)
         except Exception:  # noqa: BLE001 - `view` shows what the payload has
             config = None
         try:

@@ -432,12 +432,24 @@ def test_running_iteration_marks_only_the_entry_running(project, server):
         ("bench", False, "done\n"), ("review", True, None)]
 
 
+def test_the_stored_template_is_shown_with_the_config(project):
+    """The run's prompt template, stored beside its config.yaml, not the file's current text."""
+    paths = RunPaths(project, "test")
+    assert "template" not in RunData(project, run_id="test").state()["config"]
+    paths.config.write_text(CONFIG + "prompt_template: prompt.md\n")
+    paths.template.write_text("Stored: {{ goal }}\n")
+    (project / "prompt.md").write_text("Edited since\n")
+    config = RunData(project, run_id="test").state()["config"]
+    assert config["text"].endswith("prompt_template: prompt.md\n")
+    assert config["template"] == {"file": "prompt.md", "text": "Stored: {{ goal }}\n"}
+
+
 def test_config_is_parsed_again_only_when_its_file_changes(project, monkeypatch):
     import autohelix.viewer as viewer_module
 
     calls = []
-    real = viewer_module.load_config
-    monkeypatch.setattr(viewer_module, "load_config", lambda *a, **k: calls.append(1) or real(*a, **k))
+    real = viewer_module.load_run_config  # a run's stored copy, with its stored template
+    monkeypatch.setattr(viewer_module, "load_run_config", lambda *a, **k: calls.append(1) or real(*a, **k))
     data = RunData(project, run_id="test")
     data.state()
     data.state()
@@ -468,7 +480,9 @@ def test_gate_and_stop_output_per_item(project, server):
     _stored(paths.stop_dir(1, 2), "autohelix ask -- 'Done?'", "yes\n", transcripts=["ask.log"])
     paths.history.write_text(paths.history.read_text().replace(
         '"iteration": 1, "accepted": true,',
-        '"iteration": 1, "accepted": true, "stop": {"command": "autohelix ask -- \'Done?\'", "reason": "yes"},'))
+        '"iteration": 1, "accepted": true, "stop": {"command": "autohelix ask -- \'Done?\'", "reason": "yes"}, '
+        '"stops": [{"text": "jq", "outcome": "error", "return_code": -1, "timed_out": true}, '
+        '{"text": "ask", "outcome": "stop", "return_code": 0}],'))
     gates = get_json(server + "/api/iteration/2")["gates"]
     stored = gates[0]["stored"]
     assert stored["folder"] == "gates/1" and stored["command"] == "pytest -q"
@@ -480,6 +494,10 @@ def test_gate_and_stop_output_per_item(project, server):
     stops = get_json(server + "/api/iteration/1")["stop"]
     assert [(s["position"], s["command"], s["stopped"]) for s in stops] == [
         (1, "jq -e '.speed > 20' $AUTOHELIX_METRICS", False), (2, "autohelix ask -- 'Done?'", True)]
+    # each with its recorded outcome, as gates have theirs
+    assert [(s["outcome"], s["return_code"], s["timed_out"]) for s in stops] == [("error", -1, True), ("stop", 0, False)]
+    row = next(r for r in get_json(server + "/api/state")["iterations"] if r["iteration"] == 1)
+    assert [item["outcome"] for item in row["stops"]] == ["error", "stop"]  # `view --json` too
     assert [t["name"] for t in stops[1]["stored"]["transcripts"]] == ["ask.log"]
     assert get_json(server + "/api/iteration/2")["stop"] == []
     status, body, mime = get(server + "/api/output/2/gates/1/stdout.txt")
@@ -528,7 +546,9 @@ def test_snapshot_has_no_gate_or_stop_output(project):
     _stored(paths.stop_dir(1, 1), "true", "")
     routes = RunData(project).snapshot()
     assert routes["/api/iteration/2"]["gates"][0]["stored"] is None
-    assert routes["/api/iteration/1"]["stop"] == [{"position": 1, "command": "true", "stopped": False, "stored": None}]
+    assert routes["/api/iteration/1"]["stop"] == [{"position": 1, "command": "true", "stopped": False,
+                                                    "outcome": None, "return_code": None, "timed_out": False,
+                                                    "stored": None}]  # no `stops` in this record
 
 
 def test_stop_checks_name_what_ran_and_flag_one(project, server):

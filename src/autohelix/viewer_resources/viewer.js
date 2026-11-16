@@ -680,18 +680,27 @@ function fillGates(card, iteration, gates, failureOutput) {
   }));
 }
 
-// The stop commands that ran after this iteration (accepted ones only): ■ the one that stopped the run.
+// The stop commands that ran after this iteration (accepted ones only): ■ the one that stopped the run,
+// ✗ one that failed (neither 0 nor 1, or timed out: its condition was never checked).
+function stopProblem(x) {
+  if (x.outcome !== 'error') return null;
+  return x.timed_out ? 'timed out' : x.return_code === -1 ? 'could not run' : `exited ${x.return_code}`;
+}
+
 function fillStop(card, iteration, stops) {
   show(card.stop.node, stops.length > 0);
-  setText(card.stop.count, stops.length ? `· ${stops.length} ran${stops.some((x) => x.stopped) ? ' · stopped the run' : ''}` : '');
+  const failed = stops.filter(stopProblem).length;
+  setText(card.stop.count, stops.length ? `· ${stops.length} ran${failed ? ` · ${failed} failed` : ''}`
+    + `${stops.some((x) => x.stopped) ? ' · stopped the run' : ''}` : '');
   const key = JSON.stringify(stops);
   if (card.stopKey === key) return;
   card.stopKey = key;
-  card.stop.body.replaceChildren(...stops.map((x) => el('div', { className: `gate ${x.stopped ? 'stopped' : 'ran'}` },
+  card.stop.body.replaceChildren(...stops.map((x) => el('div', { className: `gate ${x.stopped ? 'stopped' : stopProblem(x) ? 'failed' : 'ran'}` },
     el('div', {},
-      el('span', { className: 'mark', textContent: x.stopped ? '■' : '·' }),
+      el('span', { className: 'mark', textContent: x.stopped ? '■' : stopProblem(x) ? '✗' : '·' }),
       el('code', { textContent: x.command || `stop/${x.position}` }),
-      x.stopped ? el('span', { className: 'muted', textContent: '  stopped the run' }) : null),
+      x.stopped ? el('span', { className: 'muted', textContent: '  stopped the run' })
+        : stopProblem(x) ? el('span', { className: 'muted', textContent: `  ${stopProblem(x)}: an error, not a condition` }) : null),
     storedEl(card, iteration, 'stop', x.position, x.stored))));
 }
 
@@ -918,7 +927,16 @@ function renderConfig() {
       ...parts.map(([k, v, full]) => el('span', { className: 'chip', title: full || v }, el('b', { textContent: k + ' ' }), v)));
   }
   const pre = $('config-text');
-  if (pre.dataset.text !== c.text) { pre.dataset.text = c.text; pre.replaceChildren(...highlightYaml(c.text)); }
+  // The prompt template, stored with the run beside its config, after it.
+  const t = c.template;
+  const textKey = JSON.stringify([c.text, t || null]);
+  if (pre.dataset.text !== textKey) {
+    pre.dataset.text = textKey;
+    pre.replaceChildren(...highlightYaml(c.text), ...(t ? [
+      el('span', { className: 'yaml-comment', textContent: `\n# prompt_template ${t.file}${t.text === null ? ': unreadable' : ''}\n` }),
+      t.text || '',
+    ] : []));
+  }
 }
 
 function renderDiff(box, stat, text, live) {
