@@ -24,7 +24,6 @@ from autohelix.config import DEFAULT_CHECK_TIMEOUT, CommandSpec, Config, MetricG
 from autohelix.sandbox import build_worktree_env
 
 # Progress callback type: (phase, command, elapsed_seconds | None)
-ProgressCallback = Callable[[str, str, float | None], None]
 
 
 @dataclass
@@ -171,21 +170,19 @@ def _drain(proc) -> tuple[str, str]:
     return _text(stdout), _text(stderr)
 
 
-def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str], phase: str,
-             on_progress: ProgressCallback | None) -> _Execution:
-    """Run a shell command in its own process group. The whole group is killed when the
+def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str]) -> _Execution:
+    """Run a shell command in its own process group, with no input (stdin is /dev/null,
+    also when the harness runs in a terminal). The whole group is killed when the
     command ends (whatever its background children were doing, and however it ends), at
     the timeout, and on an interrupt. A timed-out command keeps the output it wrote."""
     start = time.monotonic()
-    if on_progress:
-        on_progress(phase, command, 0.0)
-
     proc: subprocess.Popen | None = None
     try:
         proc = subprocess.Popen(
             command,
             shell=True,
             cwd=cwd,
+            stdin=subprocess.DEVNULL,  # never the user's terminal: no prompts, no TTY size
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -197,8 +194,6 @@ def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str], phase: 
                 break
             except subprocess.TimeoutExpired:
                 elapsed = time.monotonic() - start
-                if on_progress:
-                    on_progress(phase, command, elapsed)
                 if elapsed > timeout:
                     # Kill the whole process group, not just the /bin/sh wrapper,
                     # so a timed-out pytest/benchmark doesn't keep running detached.
@@ -223,12 +218,11 @@ def run_command(
     cwd: Path,
     timeout: int = DEFAULT_CHECK_TIMEOUT,
     project_path: Path | None = None,
-    on_progress: ProgressCallback | None = None,
     extra_env: dict[str, str | None] | None = None,
 ) -> CommandResult:
     """Run a single command."""
     env = _command_env(project_path, cwd, timeout, extra_env)
-    run = _execute(command, cwd, timeout, env, "gate", on_progress)
+    run = _execute(command, cwd, timeout, env)
     if run.timed_out:
         output = f"Timeout after {timeout}s"
         if run.stdout or run.stderr:
@@ -258,7 +252,6 @@ def run_gate_commands(
     commands: list[CommandSpec],
     cwd: Path,
     project_path: Path | None = None,
-    on_progress: ProgressCallback | None = None,
     extra_env: dict[str, str | None] | None = None,
     after_command: Callable[[str], None] | None = None,
     stop_on_failure: bool = False,
@@ -275,7 +268,7 @@ def run_gate_commands(
     for c in commands:
         with (per_command or _no_extra)(c.command) as added:
             result = run_command(
-                c.command, cwd, timeout=c.timeout, project_path=project_path, on_progress=on_progress,
+                c.command, cwd, timeout=c.timeout, project_path=project_path,
                 extra_env={**(extra_env or {}), **added},
             )
             results.append(result)
@@ -312,7 +305,6 @@ def run_stop_checks(
     cwd: Path,
     project_path: Path | None = None,
     extra_env: dict[str, str | None] | None = None,
-    on_progress: ProgressCallback | None = None,
     per_command: PerCommand | None = None,
     on_result: Callable[[CommandSpec, CommandResult], None] | None = None,
 ) -> list[StopCheckResult]:
@@ -324,7 +316,7 @@ def run_stop_checks(
         with (per_command or _no_extra)(c.command) as added:
             r = run_command(
                 c.command, cwd, timeout=c.timeout, project_path=project_path,
-                on_progress=on_progress, extra_env={**(extra_env or {}), **added},
+                extra_env={**(extra_env or {}), **added},
             )
             if on_result:
                 on_result(c, r)
@@ -439,16 +431,15 @@ def run_observe_entry(
     cwd: Path,
     timeout: int | None = None,
     project_path: Path | None = None,
-    on_progress: ProgressCallback | None = None,
     extra_env: dict[str, str | None] | None = None,
 ) -> ObserveResult:
     """Run an observe entry and extract its declared metric values from the output.
     A review entry's numbers count only from `##autohelix[name=value]` lines."""
-    from autohelix.iteration_time import format_duration
+    from autohelix.iteration_time import format_limit
 
     timeout = timeout if timeout is not None else mc.timeout
     env = _command_env(project_path, cwd, timeout, extra_env)
-    run = _execute(mc.command, cwd, timeout, env, "observe", on_progress)
+    run = _execute(mc.command, cwd, timeout, env)
     output = run.stdout + run.stderr
 
     def failed(error: str, return_code: int) -> ObserveResult:
@@ -460,7 +451,7 @@ def run_observe_entry(
         )
 
     if run.timed_out:
-        return failed(f"timed out after {format_duration(int(timeout))}", -1)
+        return failed(f"timed out after {format_limit(int(timeout))}", -1)
     if run.error is not None:
         return failed(f"could not run: {run.error}", -1)
     if run.return_code != 0:

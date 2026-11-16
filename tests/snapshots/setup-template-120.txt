@@ -1,0 +1,15 @@
+    ⢠⠞⠛⣢⢖⠛⠳⡄     AutoHelix  v0.3.0 · setup
+  ⣠⠖⢸⠐⠚⠁⠈⠓⠒⡒⠲⣄   Project    ~/code/sorting
+  ⢻⡠⠞      ⠳⣄⠟   Config     autohelix.yaml (new)
+  ⣴⠙⢦      ⡴⠊⣧   Agents     Claude Code · Codex (found on PATH)
+  ⠙⠦⠬⠤⢤⡀⢀⡤⠄⡇⠴⠋   Git        main · clean
+    ⠘⢦⣤⠵⠫⣤⡴⠃
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  How do you want to write it? From the template
+
+  Wrote      autohelix.yaml  the commented template
+  next       edit it: the goal, scope, gates and observe entries
+             commit it, with any scripts its commands use
+             autohelix run
+  or         autohelix setup --agent claude  an agent drafts it with you
+             autohelix skill install --agent claude  for your own agent sessions

@@ -21,7 +21,7 @@ def _status(**info) -> dict:
 def test_status_line():
     now = time.time()
     assert W.status_line(None).startswith("No run recorded yet")
-    assert W.status_line(_status(phase="checks", phase_started_at=now - 20), now) == "Running · iteration 2 · checks · 20s"
+    assert W.status_line(_status(phase="checks", phase_started_at=now - 20), now) == "Running · iteration 2 · gates · 20s"
     assert W.status_line(_status(iteration=0, phase="baseline", phase_started_at=now), now) == "Running · measuring the baseline · 0s"
     assert W.status_line(_status(phase="report", phase_started_at=now - 75), now) == "Running · writing the summary · 1m 15s"
     finished = W.status_line({"state": "finished", "stopped_at": now})
@@ -150,17 +150,17 @@ def test_dashboard_metric_goes_with_the_table(tmp_path, flags):
 def test_live_dashboard_draws_the_table_until_ctrl_c(tmp_path, monkeypatch, run_paths):
     _stop_after(monkeypatch, polls=2)
     reads = []
-    real = W.run_table.format_runs
-    monkeypatch.setattr(W.run_table, "format_runs", lambda data, **k: reads.append(k) or real(data, **k))
+    real = W.run_table.dashboard_lines
+    monkeypatch.setattr(W.run_table, "dashboard_lines", lambda data, *a, **k: reads.append(k) or real(data, *a, **k))
     out = io.StringIO()
     with pytest.raises(KeyboardInterrupt):
         W.dashboard(tmp_path, Console(file=out, width=100, force_terminal=False))
     assert len(reads) == 2  # redrawn after the first sleep
-    assert "1 run" in out.getvalue() and "Ctrl-C to stop" in out.getvalue()
+    assert "Runs       1 run" in out.getvalue() and "Ctrl-C to stop" in out.getvalue()
     # Through the CLI, Ctrl-C ends it quietly.
     _stop_after(monkeypatch)
     result = _cli("dashboard", "-p", tmp_path)
-    assert result.exit_code == 0 and "RUN" in result.output, result.output
+    assert result.exit_code == 0 and "dashboard" in result.output, result.output
 
 
 def _run_data(iterations: int) -> dict:
@@ -176,34 +176,34 @@ def _run_data(iterations: int) -> dict:
 
 
 def test_the_time_cap_is_the_running_segments_own():
-    """--time is shown against the segment's clock while it runs (short in the
-    dashboard's row), "(time up)" past it, nothing once the run stopped; the run's
-    total time has no cap."""
-    from autohelix import run_table
-
+    """What is left of --time is shown against the segment's clock while it runs,
+    "time up" past it, nothing once the run stopped; the run's total time has no cap."""
     data = _run_data(3)
     run = data["run"]
-    assert run_table.time_cap(run, 1000) == ""  # not running
+    assert W.run_table.time_cap(run, 1000) == ""  # not running
     run["status"] = {"state": "running", "iteration": 2, "segment_started_at": 1000 - 725,
                      "max_time_seconds": 3600, "phase": "agent", "phase_started_at": 990}
-    assert run_table.time_cap(run, 1000) == "12m5s of 1h (this segment)"
-    assert run_table.time_cap(run, 1000, short=True) == "12m5s/1h"
-    assert "1m 00s · $1.50 · 12m5s of 1h (this segment)" in run_table.format_run(data, now=1000)
+    assert W.run_table.time_cap(run, 1000) == "47m 55s left (--time 1h)"  # the cap as --time spells it
+    assert "left" not in W.run_table.format_run(data, W.run_table.Saved(), now=1000)  # the view's live row has the iteration's time
     run["status"].update(segment_started_at=1000 - 6000, max_time_seconds=5400)
-    assert run_table.time_cap(run, 1000, short=True) == "1h40m/1h30m (time up)"
-    listing = run_table.format_runs({**data, "runs": [run]}, now=1000)
-    assert "1m 00s · $1.50 · 1h40m/1h30m (time up)" in listing
+    assert W.run_table.time_cap(run, 1000) == "time up (--time 1h30m)"
+    listing = W.run_table.format_runs({**data, "runs": [run]}, now=1000)
+    assert "spent 1m 00s · $1.50 · time up (--time 1h30m)" in listing
     run["status"]["segment_started_at"] = 1000 + 5  # clock skew
-    assert run_table.time_cap(run, 1000, short=True) == "0s/1h30m"
+    assert W.run_table.time_cap(run, 1000) == "1h 30m left (--time 1h30m)"
     run["status"].update(state="finished")
-    assert run_table.time_cap(run, 1000) == ""
-    assert "1h30m" not in run_table.format_runs({**data, "runs": [run]}, now=1000)
+    assert W.run_table.time_cap(run, 1000) == ""
+    assert "1h30m" not in W.run_table.format_runs({**data, "runs": [run]}, now=1000)
 
 
 def _screen_lines(data, log, height) -> list[str]:
     out = io.StringIO()
     console = Console(file=out, width=100, height=height, force_terminal=False)
-    console.print(W.view_screen(data, log, {"state": "finished"}, height))
+    from autohelix.terminal import Row
+
+    rows = [Row(r["iteration"], r["accepted"], r["metrics"], r["seconds"], r["cost"], commit=f"c{r['iteration']}",
+                summary=r["summary"]) for r in data["run"]["iterations"]]
+    console.print(W.view_screen((data, W.run_table.Saved(rows=rows)), log, {"state": "finished"}, height))
     return out.getvalue().splitlines()
 
 
@@ -214,26 +214,29 @@ def test_on_a_short_terminal_the_log_shrinks_first(tmp_path):
         log.display._append_entry("Agent", f"step {i}", "white")
     data = _run_data(5)
 
+    def row(n):  # an iteration's row: `✓ 4   30s   $0.10   104 +4%`
+        return lambda line: line.split()[:2] == ["✓", str(n)]
+
     tall = _screen_lines(data, log, 60)
-    assert tall[0].startswith("r1 · finished") and any("change 4" in line for line in tall)
+    assert tall[0].endswith(" · run r1 · p · finished") and any(map(row(4), tall))
     assert any("step 29" in line for line in tall) and any("step 5" in line for line in tall)
     assert tall[-1].startswith("Finished")
 
-    short = _screen_lines(data, log, 20)
-    assert len(short) <= 19
-    assert short[0].startswith("r1 · finished") and sum("change" in line for line in short) == 5  # the table stays
+    short = _screen_lines(data, log, 30)
+    assert len(short) <= 29
+    assert short[0].endswith("finished") and all(any(map(row(n), short)) for n in range(1, 5))  # the table stays
     assert any("step 29" in line for line in short) and not any("step 5" in line for line in short)  # newest output
 
-    tiny = _screen_lines(_run_data(40), log, 20)
-    assert len(tiny) <= 19
-    assert tiny[0].startswith("r1 · finished") and any("ITER" in line for line in tiny)
-    assert any("earlier" in line for line in tiny) and any("change 39" in line for line in tiny)
-    assert not any(line.endswith("change 1") for line in tiny)  # the oldest rows went
+    tiny = _screen_lines(_run_data(40), log, 30)
+    assert len(tiny) <= 29
+    assert tiny[0].endswith("finished") and any(line.lstrip().startswith("time") for line in tiny)
+    assert any("earlier" in line for line in tiny) and any(map(row(39), tiny))
+    assert not any(map(row(1), tiny))  # the oldest rows went
     assert any("step 29" in line for line in tiny) and tiny[-1].startswith("Finished")
 
-    cramped = _screen_lines(_run_data(40), log, 12)  # no room for the log: the table keeps the screen
-    assert len(cramped) <= 11 and cramped[0].startswith("r1 · finished") and cramped[-1].startswith("Finished")
-    assert not any("step" in line for line in cramped) and any("change 39" in line for line in cramped)
+    cramped = _screen_lines(_run_data(40), log, 21)  # no room for the log: the table keeps the screen
+    assert len(cramped) <= 20 and cramped[0].endswith("finished") and cramped[-1].startswith("Finished")
+    assert not any("step" in line for line in cramped) and any(map(row(39), cramped))
 
 
 def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, run_paths):
@@ -261,3 +264,92 @@ def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, r
     with pytest.raises(KeyboardInterrupt):
         W.view(tmp_path, "claude", Console(file=io.StringIO()))
     assert len(created) >= 2 and set(created) == {"Iteration 1 · agent"}
+
+
+def _running(data: dict, started: float) -> dict:
+    """`data` while iteration 3 runs (its agent phase started at `started`)."""
+    data["run"]["status"] = {"state": "running", "phase": "agent", "iteration": 3,
+                             "iteration_started_at": started, "phase_started_at": started}
+    data["run"]["progress"]["iterations"] = 2
+    return data
+
+
+def test_the_view_times_its_live_row_when_drawn(tmp_path):
+    """The live row's clock and spinner come from the time it is drawn, not when the
+    screen was built: the screen can stay up between rereads and still move."""
+    from autohelix.terminal import LiveRow
+
+    log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()))
+    started = time.time() - 72
+    status = {"state": "running", "phase": "agent", "iteration": 3}
+    screen = W.view_screen((_running(_run_data(3), started), W.run_table.Saved()), log, status, 40)
+    row = next(part for part in screen.renderables if isinstance(part, LiveRow))
+    now = [started + 72]
+    row.clock = lambda: now[0]
+
+    def drawn() -> str:
+        out = io.StringIO()
+        Console(file=out, width=100, force_terminal=False).print(row)
+        return out.getvalue().rstrip()
+
+    first = drawn()
+    now[0] += 61.25
+    second = drawn()
+    assert first.split()[1:] == ["3", "1m", "12s", "agent"]
+    assert second.split()[1:] == ["3", "2m", "13s", "agent"] and second[2] != first[2]  # a new spinner frame
+    # `--once` is a fixed line at the time given.
+    once = W.run_table.format_run(_running(_run_data(3), started), W.run_table.Saved(), now=started + 72)
+    assert once.splitlines()[-1].split()[1:] == ["3", "1m", "12s", "agent"]
+
+
+def test_a_live_view_keeps_a_blank_line_at_the_bottom(tmp_path):
+    log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()))
+    data = (_running(_run_data(3), time.time()), W.run_table.Saved())
+    running = W.view_screen(data, log, {"state": "running", "phase": "agent", "iteration": 3}, 40).renderables
+    assert [line.plain for line in running[-2:]] == ["", ""] and running[-3].plain.startswith("Running")
+    stopped = W.view_screen((_run_data(3), W.run_table.Saved()), log, {"state": "finished"}, 40).renderables
+    assert stopped[-1].plain.startswith("Finished")
+
+
+def test_the_view_rereads_the_run_only_when_it_changed(tmp_path, monkeypatch, run_paths):
+    """Rereading the run (history, config, git) is slow: the view does it when the status
+    or the run's files change, or after REREAD_SECONDS, not on every poll."""
+    status = RunStatus(tmp_path)
+    status.start()
+    status.phase("agent", 1)
+    reads = []
+    monkeypatch.setattr(W, "_read_run", lambda *a: reads.append(1))
+    polls = iter(range(8))
+    clock = [time.monotonic()]
+
+    def sleep(_):
+        clock[0] += 0.5  # 4.5 s in all: under REREAD_SECONDS
+        n = next(polls, None)
+        if n is None:
+            raise KeyboardInterrupt
+        if n == 3:
+            with open(run_paths.history, "a") as f:  # an iteration ended
+                f.write("{}\n")
+        if n == 5:
+            status.phase("checks", 1)
+
+    fake = _Clock(sleep)
+    fake.monotonic = lambda: clock[0]
+    monkeypatch.setattr(W, "time", fake)
+    with pytest.raises(KeyboardInterrupt):
+        W.view(tmp_path, None, Console(file=io.StringIO()))
+    assert len(reads) == 3  # the first poll, the history, the status
+
+
+def test_the_views_live_row_names_the_observe_entry(tmp_path, run_paths):
+    """From the status the harness writes, through the `view --json` payload."""
+    from autohelix.viewer import ProjectRuns
+
+    status = RunStatus(tmp_path)
+    status.start()
+    status.phase("benchmark", 1)
+    status.note(entry="bench")
+    data = ProjectRuns(tmp_path).run("test")
+    assert data["run"]["status"]["entry"] == "bench"
+    row = W.run_table.format_run(data, W.run_table.Saved()).splitlines()[-1]
+    assert row.split()[1] == "1" and row.split()[-3:] == ["observe", "·", "bench"]

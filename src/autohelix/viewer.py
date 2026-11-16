@@ -996,7 +996,7 @@ class ProjectRuns:
             "status": status and {k: status.get(k) for k in (
                 "state", "phase", "iteration", "iteration_started_at", "phase_started_at", "stopped_at",
                 "stop_reason", "max_iterations", "max_cost_usd", "max_time_seconds", "segment_started_at",
-                "segment")},
+                "segment", "entry")},
             # `autohelix stop` asked the running segment to end ({requested_at, why, now}), else None.
             "stop_requested": pending_stop(paths, status),
             "accepted": sum(1 for r in attempts if r.accepted),

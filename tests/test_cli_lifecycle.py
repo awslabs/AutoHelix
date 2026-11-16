@@ -273,10 +273,10 @@ def test_without_a_budget_flag_one_iteration(project):
     result = cli(project, "run", "--no-report")
     assert result.exit_code == 0, result.output
     paths = RunPaths(project)
-    assert "Budget   1 iteration (default)" in result.output
+    assert "Budget     1 iteration (default)" in result.output
     assert iterations(paths) == [0, 1] and status(paths)["max_iterations"] == 1
     result = cli(project, "resume", "--no-report")
-    assert "Budget   1 more iteration (default, to 2)" in result.output
+    assert "Budget     1 more iteration (default, to 2)" in result.output
     assert iterations(paths) == [0, 1, 2]
     assert "iteration budget reached (2)" in result.output
 
@@ -300,7 +300,7 @@ def test_cost_alone_has_no_iteration_cap_and_counts_this_segment(project):
     assert status(paths)["stop_reason"]["detail"] == "cost budget reached ($0.35 this segment)"
     result = cli(project, "resume", "--cost", "0.15", "--no-report")
     assert result.exit_code == 0, result.output
-    assert "Budget   no iteration cap · $0.15 more" in result.output
+    assert "Budget     no iteration cap · $0.15 more" in result.output
     assert iterations(paths) == [0, 1, 2, 3, 4, 5, 6]  # $0.40 before doesn't count
     assert status(paths)["max_cost_usd"] == pytest.approx(0.55)  # spent before + --cost
 
@@ -316,7 +316,7 @@ def test_time_counts_this_segment_only(project):
     clock = time.time()
     result = cli(project, "resume", "-n", "1", "--time", "1h", "--no-report")
     assert result.exit_code == 0, result.output
-    assert "Budget   1 more iteration (to 2) · 1h" in result.output
+    assert "Budget     1 more iteration (to 2) · 1h" in result.output
     assert iterations(paths) == [0, 1, 2]
     assert status(paths)["max_time_seconds"] == 3600 and before > 7200
     assert clock <= status(paths)["segment_started_at"] <= status(paths)["started_at"]

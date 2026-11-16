@@ -413,31 +413,17 @@ def test_a_rejection_that_changed_nothing_keeps_no_tree(repo):
 
 
 def test_console_notes_for_baseline_gates_unreported_metrics_and_discards():
-    from autohelix.display import Transcript
+    from autohelix.terminal import Row, Table
 
-    transcript = Transcript(Config.from_dict({"goal": "g", "gates": ["pytest -q"]}), 100)
-    baseline = IterationResult(iteration=0, accepted=True, gates=[{"text": "pytest -q", "kind": "command",
-                                                                    "passed": False}])
-    [_, note] = transcript.baseline(baseline)
-    assert note.plain.strip() == "gate failed at the baseline: pytest -q"
-    record = IterationResult(iteration=1, accepted=True, discarded=[f"f{i}.py" for i in range(5)],
-                             discarded_frozen=["f0.py"],
-                             observe=[{"name": "bench", "ok": True, "metric_errors": {"speed": "hint"}}])
-    lines = [line.plain.strip() for line in transcript.row(record, {}, {})]
+    table = Table.of(Config.from_dict({"goal": "g", "gates": ["pytest -q"]}), 100)
+    baseline = Row(0, True, gates=[{"text": "pytest -q", "kind": "command", "passed": False}])
+    [_, _, note] = table.add(baseline)
+    assert note.plain.strip() == "gate fails at the baseline: pytest -q"
+    row = Row(1, True, discarded=[f"f{i}.py" for i in range(5)], discarded_frozen=["f0.py"],
+              observe=[{"name": "bench", "ok": True, "metric_errors": {"speed": "hint"}}])
+    lines = [line.plain.strip() for line in table.add(row)]
     assert "observe bench reported no speed" in lines
-    assert "discarded 5 out-of-scope changes: f0.py (frozen), f1.py, f2.py, … (5 paths)" in lines
-
-
-def test_view_notes_for_baseline_gates_unreported_metrics_and_discards():
-    from autohelix.run_table import _summary
-
-    _, more = _summary({"iteration": 0, "accepted": True, "gates": [
-        {"text": "pytest -q", "kind": "command", "passed": False}]})
-    assert more == ["! gate failed at the baseline: pytest -q"]
-    _, more = _summary({"iteration": 2, "accepted": True, "summary": "s", "discarded": ["a", "b"],
-                        "discarded_frozen": ["b"], "observe": [{"name": "bench", "ok": True,
-                                                                "metric_errors": {"speed": "hint"}}]})
-    assert more == ["! observe bench reported no speed", "! discarded, outside the scope: a, b (frozen)"]
+    assert "discarded, outside the scope: f0.py (frozen), f1.py, f2.py, … 2 more" in lines
 
 
 def test_an_unreported_metric_keeps_its_hint_and_reaches_the_prompt(tmp_path):
@@ -461,10 +447,11 @@ def test_a_jq_style_last_line_is_not_the_stop_reason(tmp_path):
 
 
 def test_header_lines_are_cut_to_the_width():
-    from autohelix.display import header_lines
+    from autohelix import terminal
 
     config = Config.from_dict({"goal": "g", "gates": [f"pytest tests/test_{i}.py" for i in range(10)]})
-    lines = header_lines(config, "20261112-1200-abcd", "proj", Budget(until=3), width=60)
+    fields = terminal.run_fields(config, terminal.budget_text(Budget(until=3), 0))
+    lines = terminal.header(terminal.title("run abcd", "proj", version="dev"), fields, 60, show_mark=False)
     assert all(len(line.plain) <= 60 for line in lines) and lines[3].plain.endswith("…")
 
 

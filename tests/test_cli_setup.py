@@ -1,6 +1,7 @@
 """`autohelix setup [NAME]`: the template, or an agent session with the bundled skill."""
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -54,12 +55,38 @@ def execs(monkeypatch):
 
 
 def setup(*args, input=None):
-    return CliRunner().invoke(main, ["setup", *args], input=input)
+    """`autohelix setup`, 200 columns wide (long temporary paths fit on a line)."""
+    return CliRunner(env={"COLUMNS": "200"}).invoke(main, ["setup", *args], input=input)
 
 
 def flat(text):
-    """Output without the line wraps of a narrow terminal."""
-    return " ".join(text.split())
+    """Output without the line wraps of a narrow terminal (nor colours)."""
+    return " ".join(click.unstyle(text).split())
+
+
+def lines(result):
+    """The output's lines, without colours and trailing spaces."""
+    return [line.rstrip() for line in click.unstyle(result.output).splitlines()]
+
+
+def field(result, label):
+    """A header or end-block field's value (`  Label    value`, also beside the mark),
+    its wrapped lines joined."""
+    found, values = False, []
+    for line in lines(result):
+        line = re.sub(r"^  [\u2800-\u28ff ]{12}   (?=\S)", "  ", line)  # the mark, on a colour terminal
+        if line.startswith(f"  {label} "):
+            found, values = True, [line[2 + len(label):].strip()]
+        elif found and line.startswith("  " + " " * 9) and line.strip():
+            values.append(line.strip())
+        elif found:
+            break
+    return " ".join(values) if found else None
+
+
+def flat_lines(result):
+    """The output's lines joined with newlines (no colours, no trailing spaces)."""
+    return "\n".join(lines(result))
 
 
 def files(project):
@@ -76,11 +103,14 @@ def test_bare_setup_writes_the_template_and_nothing_else(project):
     assert files(project) == ["autohelix.yaml", "main.py"]  # no .autohelix/, no excludes
     exclude = project / ".git" / "info" / "exclude"
     assert ".autohelix/" not in (exclude.read_text() if exclude.exists() else "")
-    assert "Wrote autohelix.yaml." in result.output
-    assert "  2. Commit it, and any scripts its commands use (runs start from a commit).\n" in result.output
-    assert "  3. autohelix run\n" in result.output
+    assert "  Wrote      autohelix.yaml  the commented template" in lines(result)
+    assert field(result, "next") == ("edit it: the goal, scope, gates and observe entries "
+                                     "commit it, with any scripts its commands use autohelix run")
     assert "initialized" not in result.output.lower()
-    assert "No coding agent found" in result.output
+    assert field(result, "Agents") == "none found (claude, codex or opencode on PATH)"
+    assert field(result, "Config") == "autohelix.yaml (new)"
+    assert field(result, "Git").endswith(" · clean")
+    assert field(result, "or") is None
 
 
 def test_named_setup_writes_into_the_folder(project):
@@ -88,7 +118,8 @@ def test_named_setup_writes_into_the_folder(project):
     assert result.exit_code == 0, result.output
     assert (project / "autohelix" / "perf.yaml").read_text() == CONFIG_TEMPLATE
     assert files(project) == ["autohelix", "autohelix/perf.yaml", "main.py"]
-    assert "  3. autohelix run perf\n" in result.output
+    assert field(result, "next").endswith("autohelix run perf")
+    assert field(result, "Config") == "autohelix/perf.yaml (new)"
 
 
 def test_path_option_names_the_project(project, tmp_path):
@@ -97,21 +128,22 @@ def test_path_option_names_the_project(project, tmp_path):
     result = setup("-p", str(other))
     assert result.exit_code == 0, result.output
     assert (other / "autohelix.yaml").is_file() and not (project / "autohelix.yaml").exists()
-    assert f"Wrote {other.resolve() / 'autohelix.yaml'}." in result.output  # openable from the cwd
-    assert f"autohelix run -p {other}" in result.output
+    assert f"Wrote {other.resolve() / 'autohelix.yaml'}" in flat(result.output)  # openable from the cwd
+    assert lines(result)[-1].strip() == f"autohelix run -p {other}"  # never cut
+    assert field(result, "Project") == str(other.resolve())
 
 
 def test_relative_and_quoted_paths(project):
     (project / "sub").mkdir()
     result = setup("perf", "-p", "sub")
     assert result.exit_code == 0, result.output
-    assert "Wrote sub/autohelix/perf.yaml." in result.output
-    assert "autohelix run perf -p sub\n" in result.output
+    assert "Wrote sub/autohelix/perf.yaml" in flat(result.output)
+    assert lines(result)[-1].strip() == "autohelix run perf -p sub"
     (project / "my dir").mkdir()
     result = setup("-p", "my dir")
     assert result.exit_code == 0, result.output
-    assert "Wrote my dir/autohelix.yaml." in result.output
-    assert "autohelix run -p 'my dir'\n" in result.output
+    assert "Wrote my dir/autohelix.yaml" in flat(result.output)
+    assert lines(result)[-1].strip() == "autohelix run -p 'my dir'"
 
 
 @pytest.mark.parametrize("name", ["Perf", "perf_fast", "a" * 33, "", "perf.yaml", "x/y"])
@@ -221,8 +253,8 @@ def test_outside_git_writes_and_warns(tmp_path, monkeypatch):
     result = setup()
     assert result.exit_code == 0, result.output
     assert (tmp_path / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
-    assert ("Warning: Not a git repository. AutoHelix requires git.\n"
-            "Run: git init && git add -A && git commit -m 'init'") in result.output
+    assert field(result, "Git") == "Not a git repository. AutoHelix requires git."
+    assert "  next       git init && git add -A && git commit -m 'init'" in lines(result)  # the first step
 
 
 def test_a_repository_without_commits_warns(tmp_path, monkeypatch):
@@ -232,8 +264,8 @@ def test_a_repository_without_commits_warns(tmp_path, monkeypatch):
     result = setup()
     assert result.exit_code == 0, result.output
     assert (tmp_path / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
-    assert ("Warning: No commits yet; a run starts from a commit.\n"
-            "Run: git add -A && git commit -m 'init'") in result.output
+    assert field(result, "Git") == "No commits yet; a run starts from a commit."
+    assert "  next       git add -A && git commit -m 'init'" in lines(result)
 
 
 @pytest.mark.parametrize("where", ["bare", "git-dir"])
@@ -245,13 +277,20 @@ def test_a_folder_run_refuses_is_named_as_run_names_it(tmp_path, monkeypatch, wh
     folder = repo if where == "bare" else repo / ".git"
     result = setup("-p", str(folder))
     assert result.exit_code == 0, result.output
-    assert f"Warning: {folder.resolve()} is not in a git working tree" in flat(result.output)
+    assert field(result, "Git").startswith(f"{folder.resolve()} is not in a git working tree")
     result = CliRunner().invoke(main, ["run", "-p", str(folder)])
     assert result.exit_code == 1 and f"{folder.resolve()} is not in a git working tree" in flat(result.output)
 
 
 def test_a_repository_with_a_commit_has_no_warning(project):
-    assert "Warning" not in setup().output
+    result = setup()
+    assert field(result, "Git") in ("main · clean", "master · clean")
+    assert "Warning" not in result.output
+
+
+def test_uncommitted_changes_show_in_the_git_field(project):
+    (project / "main.py").write_text("x = 2\n")
+    assert field(setup(), "Git").endswith(" · 1 uncommitted change (a run needs them committed)")
 
 
 def test_init_is_a_hidden_alias(project):
@@ -269,8 +308,9 @@ def test_without_a_tty_writes_the_template_even_with_agents(project, monkeypatch
     assert result.exit_code == 0, result.output
     assert (project / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
     assert not execs
-    assert "`autohelix setup --agent claude`" in result.output
-    assert "`autohelix skill install --agent claude`" in result.output
+    assert field(result, "Agents") == "Claude Code · Codex (found on PATH)"
+    assert field(result, "or") == ("autohelix setup --agent claude  an agent drafts it with you "
+                                   "autohelix skill install --agent claude  for your own agent sessions")
 
 
 def test_the_template_is_a_valid_v2_config_once_it_has_a_goal(project):
@@ -466,9 +506,11 @@ def test_one_agent_asks_once_and_the_default_starts_it(project, monkeypatch, exe
     agents(["codex"])(monkeypatch)
     result = setup(input="\n")
     assert result.exit_code == 0, result.output
-    assert " · setup · autohelix.yaml\n  Project  " in result.output
-    assert "How do you want to write it?\n  1. With Codex  it proposes the config" in result.output
-    assert "  2. Empty config  the commented template, to edit by hand\nChoose [1]:" in result.output
+    assert "AutoHelix  v" in flat_lines(result) and " · setup" in flat_lines(result)
+    assert field(result, "Config") == "autohelix.yaml (new)"
+    assert "  How do you want to write it?\n  1. With Codex          it asks what you want, then drafts the config" in flat_lines(result)
+    assert "  2. From the template   the commented template, to edit by hand\n  Choose [1]:" in flat_lines(result)
+    assert "  Starting Codex with the AutoHelix setup skill…" in lines(result)
     assert "Which agent?" not in result.output
     assert [argv[0] for _, argv, _ in execs] == ["codex"]
     assert files(project) == ["main.py"]
@@ -479,7 +521,7 @@ def test_several_agents_ask_which_defaulting_to_the_first_found(project, monkeyp
     result = setup(input="1\n\n")
     assert result.exit_code == 0, result.output
     assert "  1. With an agent" in result.output
-    assert "Which agent?\n  1. Codex\n  2. OpenCode\nChoose [1]:" in result.output
+    assert "  Which agent?\n  1. Codex\n  2. OpenCode\n  Choose [1]:" in flat_lines(result)
     assert execs[0][1][0] == "codex"
     result = setup(input="\n2\n")
     assert result.exit_code == 0, result.output
@@ -493,7 +535,7 @@ def test_choosing_empty_writes_the_template(project, monkeypatch, execs, tty):
     assert "Which agent?" not in result.output
     assert not execs
     assert (project / "autohelix" / "perf.yaml").read_text() == CONFIG_TEMPLATE
-    assert "`autohelix setup perf --agent claude`" in result.output
+    assert field(result, "or").startswith("autohelix setup perf --agent claude  an agent drafts it with you")
 
 
 def test_no_agent_writes_the_template_without_asking(project, execs, tty):
@@ -501,7 +543,7 @@ def test_no_agent_writes_the_template_without_asking(project, execs, tty):
     assert result.exit_code == 0, result.output
     assert "How do you want" not in result.output
     assert (project / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
-    assert "No coding agent found" in result.output
+    assert field(result, "Agents") == "none found (claude, codex or opencode on PATH)"
     assert not execs
 
 

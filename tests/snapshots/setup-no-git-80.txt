@@ -1,0 +1,12 @@
+  AutoHelix  v0.3.0 · setup
+  Project    ~/code/sorting
+  Config     autohelix/perf.yaml (new)
+  Agents     none found (claude, codex or opencode on PATH)
+  Git        Not a git repository. AutoHelix requires git.
+  ────────────────────────────────────────────────────────────────────────────
+
+  Wrote      autohelix/perf.yaml  the commented template
+  next       git init && git add -A && git commit -m 'init'
+             edit it: the goal, scope, gates and observe entries
+             commit it, with any scripts its commands use
+             autohelix run perf

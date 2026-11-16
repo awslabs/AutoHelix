@@ -97,12 +97,14 @@ Only read. Don't run tests, benchmarks or experiments, and don't edit any file o
 """
 
 
-def write_report(config: Config, project: Path, console, *, run_id: str | None = None, _owned: bool = False) -> bool:
+def write_report(config: Config, project: Path, console, *, run_id: str | None = None, _owned: bool = False,
+                 ) -> bool:
     """Run the report agent; replace the saved report only if it wrote a new one."""
     from rich.live import Live
 
     from autohelix.agents import AgentConfig, AgentEvent, create_agent
     from autohelix.display import LiveDisplay
+    from autohelix.terminal import with_room
 
     paths = RunPaths(project, run_id)
     if not paths.run_id:
@@ -123,7 +125,7 @@ def write_report(config: Config, project: Path, console, *, run_id: str | None =
     ), heartbeat_seconds=30)
     log_path = paths.logs / "report.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    display = LiveDisplay(console=console, title="writing summary", verbose=False)
+    display = LiveDisplay(console=console, title="summary", verbose=False)
 
     def on_event(event: AgentEvent) -> None:
         display.handle_event(event)
@@ -138,7 +140,7 @@ def write_report(config: Config, project: Path, console, *, run_id: str | None =
                        refs=(paths.ref,))  # the prompt names `autohelix/<id>`
     started = time.monotonic()
     try:
-        with Live(display, console=console, refresh_per_second=10, transient=True):
+        with Live(with_room(display), console=console, refresh_per_second=10, transient=True):
             result = agent.run(
                 worktree_path=copy.working_dir,
                 prompt=build_report_prompt(config, project, draft, paths.run_id),
@@ -170,11 +172,5 @@ def write_report(config: Config, project: Path, console, *, run_id: str | None =
     info = {"last_iteration": last, "written_at": time.time(), "seconds": seconds,
             "cost_usd": (result.usage or {}).get("cost_usd")}
     paths.report_info.write_text(json.dumps(info))
-    report = paths.report
-    try:
-        report = report.relative_to(Path.cwd())
-    except ValueError:
-        pass
-    console.print(f"  [dim]Summary: {report}[/dim]", highlight=False, soft_wrap=True)
     return True
 

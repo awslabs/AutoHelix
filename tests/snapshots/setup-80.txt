@@ -1,0 +1,10 @@
+    ⢠⠞⠛⣢⢖⠛⠳⡄     AutoHelix  v0.3.0 · setup
+  ⣠⠖⢸⠐⠚⠁⠈⠓⠒⡒⠲⣄   Project    ~/code/sorting
+  ⢻⡠⠞      ⠳⣄⠟   Config     autohelix.yaml (new)
+  ⣴⠙⢦      ⡴⠊⣧   Agents     Claude Code · Codex (found on PATH)
+  ⠙⠦⠬⠤⢤⡀⢀⡤⠄⡇⠴⠋   Git        main · clean
+    ⠘⢦⣤⠵⠫⣤⡴⠃
+  ────────────────────────────────────────────────────────────────────────────
+  How do you want to write it?
+  ❯ With an agent       it asks what you want, then drafts the config
+    From the template   the commented template, to edit by hand

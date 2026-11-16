@@ -144,7 +144,7 @@ def build_prompt_variables(
       Members whose state isn't in the copy (it failed to copy) are left out of `group_runs`.
     """
     from autohelix.config import MetricGate
-    from autohelix.iteration_time import format_duration
+    from autohelix.iteration_time import format_limit
     from autohelix.iteration import SEEDED_ITERATIONS
     from autohelix.workspace import ITERATION_DIR
 
@@ -174,7 +174,7 @@ def build_prompt_variables(
         "last": _describe_last(latest, state) if latest else None,
         "last_accepted": _describe_accepted(history, iteration, state),
         "recent_iterations": SEEDED_ITERATIONS,
-        "time_limit": format_duration(config.agent.timeout) if config.agent.timeout is not None else "",
+        "time_limit": format_limit(config.agent.timeout) if config.agent.timeout is not None else "",
         "group": group or "",
         "group_runs": [describe_member(paths, data) for paths, data in members
                        if _in_copy(state, "runs", paths.run_id)],

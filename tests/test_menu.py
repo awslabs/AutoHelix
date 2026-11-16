@@ -31,7 +31,8 @@ def test_without_a_terminal_a_numbered_prompt_asks(monkeypatch):
         click.echo(f"picked {menu.choose('How?', OPTIONS, default=1)}")
 
     result = CliRunner().invoke(command, input="\n")
-    assert "How?\n  1. With Claude Code  it asks\n  2. Empty config  the template\n  3. Third\nChoose [2]:" in result.output
+    shown = "\n".join(line.rstrip() for line in result.output.splitlines())
+    assert "  How?\n  1. With Claude Code   it asks\n  2. Empty config       the template\n  3. Third\n  Choose [2]:" in shown
     assert "picked 1" in result.output
     assert "picked 2" in CliRunner().invoke(command, input="3\n").output
 

@@ -78,7 +78,9 @@ autohelix setup          # prepare autohelix.yaml
 autohelix setup perf     # or autohelix/perf.yaml, one of several loops
 ```
 
-and answer `agent`. `setup` starts your coding agent (Claude Code, Codex or
+`setup` first shows what it found (the project, the config it writes, the coding
+agents on `PATH`, the git branch and whether it is clean), then asks how to write
+the config. Choose "With an agent": `setup` starts your coding agent (Claude Code, Codex or
 OpenCode, whichever is installed; it asks which when there are several) with
 the setup skill bundled with AutoHelix, and the agent starts by asking what you
 want to achieve. The skill helps design the experiment from your existing code,
@@ -211,10 +213,23 @@ the intended environment. Then launch:
 autohelix run -n 5       # autohelix run perf -n 5 for autohelix/perf.yaml
 ```
 
-You'll see a live display of agent activity, followed by gate and observe results for each iteration.
+It prints a header (goal, agent, gates, observe, scope, budget), then one row per
+iteration as it ends, with a live row for the one under way:
 
-Use `autohelix view` in a second terminal to follow the run: its iterations so far, and the
-agent's live output below them (`autohelix view --web` for the same in a browser).
+```text
+             time    cost   speed ↑
+  · base                       46.9
+  ✓ 1         31s   $0.15  17,481.5 373×
+  ✗ 2      2m 23s   $0.48  pytest -q test_sort.py failed (exit 1)
+  ⠹ 3      1m 12s  agent
+```
+
+✓ is accepted, with each metric's change from the baseline; ✗ is rejected, with the reason. When
+the segment ends, the end block says why, how each metric moved, what landed on your
+branch and what to type next (see [CLI → What it prints](cli.md#what-it-prints)).
+
+Use `autohelix view` in a second terminal to follow the run: the same screen `run` prints
+(header, iterations so far, the live row), and the agent's live output below it (`autohelix view --web` for the same in a browser).
 `autohelix stop <id>` ends it after the current iteration (`--now`, or Ctrl-C in its
 terminal, at once); scripts can block on `autohelix wait`, which prints each iteration
 and the run's end as JSON.

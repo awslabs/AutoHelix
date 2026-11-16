@@ -1,0 +1,30 @@
+    ⢠⠞⠛⣢⢖⠛⠳⡄     AutoHelix  v0.3.0 · run krp3 · sorting · 14:02
+  ⣠⠖⢸⠐⠚⠁⠈⠓⠒⡒⠲⣄   Goal       Make sort_list faster in sort.py.
+  ⢻⡠⠞      ⠳⣄⠟   Agent      claude (sonnet)
+  ⣴⠙⢦      ⡴⠊⣧   Gates      pytest -q test_sort.py · speed regress 5%
+  ⠙⠦⠬⠤⢤⡀⢀⡤⠄⡇⠴⠋   Observe    bench (speed ↑, mem_mb ↓)
+    ⠘⢦⣤⠵⠫⣤⡴⠃     Scope      editable: sort.py
+                 Budget     2 more iterations (to 9) · 30m each
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+             time      cost     speed ↑            mem_mb ↓
+  · base                           46.9                 120
+  … 2 earlier iterations · autohelix view krp3
+  ✓ 3      2m 06s     $0.32    35,310.7  753×            96  -20%
+  ✗ 4     30m 00s     $1.10    agent timed out (30m)
+  ✗ 5      1m 48s     $0.29      33,002                 140            speed 6.5% worse than iter 3 (5% allowed)
+          discarded, outside the scope: autohelix.yaml (frozen), notes.txt
+  ✓ 6      1m 51s     $0.31    57,520.8  1226×           95  -21%
+  ✗ 7          4s              agent failed: claude exited 1: rate limited
+  resumed 15:40
+  ✓ 8      1m 38s     $0.27    61,004.2  1301×           94  -22%
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Done       stop condition met at iteration 8: speed above 60,000
+  speed      46.9 → 61,004.2  1301×  iter 8
+  mem_mb     120 → 94  -22%  iter 8
+  run        8 iterations · 4 accepted · 40m 21s · $2.92
+  landed     1 commit on main
+             8  Use a radix sort for small integer keys
+  next       autohelix view krp3 · autohelix resume krp3
+  page       .autohelix/runs/20261115-1402-sorting-krp3/report.html
+  summary    .autohelix/runs/20261115-1402-sorting-krp3/report.md

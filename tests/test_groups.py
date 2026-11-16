@@ -1,6 +1,7 @@
 """Groups (runs that see each other's notes and code), per-run landing modes, the
 copy layout (`.autohelix-iteration/`), and git lock retries."""
 
+import re
 import json
 import os
 import subprocess
@@ -101,7 +102,7 @@ def test_group_and_landing_mode_are_stored_kept_and_changed(project):
     assert identity(grouped)["group"] == "other" and identity(grouped)["land"] == "manual"
     result = cli(project, "resume", short_id(run_id), "-n", "1", "--no-report", "--group", "", "--land", "auto")
     assert result.exit_code == 0, result.output
-    assert "leaves group other" in result.output and "  Landed " in result.output
+    assert "leaves group other" in result.output and re.search(r"^  landed     \d+ commits? on main$", result.output, re.M)
     data = identity(grouped)
     assert "group" not in data and data["land"] == "auto"
 
@@ -156,13 +157,16 @@ def test_dashboard_shows_the_group_after_the_id(project):
     plain, _ = started(project, "--land", "manual")
     result = cli(project, "dashboard", "--once")
     assert result.exit_code == 0, result.output
-    assert f"{grouped.run_id} (perf)" in result.output
-    assert f"{plain.run_id} (" not in result.output
+    lines = result.output.splitlines()
+    under = {line.split()[0]: lines[i + 1] for i, line in enumerate(lines[:-1])
+             if line.split()[:1] in ([short_id(grouped.run_id)], [short_id(plain.run_id)])}
+    assert "group perf" in under[short_id(grouped.run_id)]  # on the dim line under the run's row
+    assert "group" not in under[short_id(plain.run_id)]
     rows = {row["id"]: row for row in json.loads(cli(project, "dashboard", "--json").output)["runs"]}
     assert rows[grouped.run_id]["group"] == "perf" and rows[grouped.run_id]["land"] == "manual"
     assert rows[plain.run_id]["group"] is None and rows[plain.run_id]["land"] == "manual"
     view = cli(project, "view", short_id(grouped.run_id), "--once")
-    assert view.output.startswith(f"{grouped.run_id} (perf)")
+    assert "\n  Group      perf\n" in view.output
 
 
 def test_notes_are_saved_as_versions_and_delete_removes_them(project):
