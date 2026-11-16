@@ -107,3 +107,34 @@ def test_exited_child_with_a_writing_grandchild_is_killed_at_the_timeout(tmp_pat
         time.sleep(0.1)
     else:
         raise AssertionError("background loop survived the timeout")
+
+
+def _assert_gone(pid: int, what: str) -> None:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    raise AssertionError(f"{what} survived")
+
+
+def test_silent_background_child_is_killed_after_a_normal_exit(tmp_path):
+    """The shell exits 0 leaving a silent `sleep` that holds the pipe open: the call
+    returns the shell's code and the sleep doesn't outlive it."""
+    marker = tmp_path / "pid"
+    result, _, elapsed = _run(
+        tmp_path, f"sleep 30 & echo $! > {marker}; exit 0", timeout_seconds=20)
+    assert (result.exit_code, result.timed_out) == (0, False)
+    assert elapsed < 10
+    _assert_gone(int(marker.read_text()), "background sleep holding the pipe")
+
+
+def test_detached_background_child_is_killed_after_a_normal_exit(tmp_path):
+    """Same with the child's output redirected away (the pipe closes at once)."""
+    marker = tmp_path / "pid"
+    result, _, _ = _run(
+        tmp_path, f"sleep 30 >/dev/null 2>&1 & echo $! > {marker}; exit 4")
+    assert (result.exit_code, result.timed_out) == (4, False)
+    _assert_gone(int(marker.read_text()), "background sleep with its output redirected")

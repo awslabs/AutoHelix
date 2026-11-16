@@ -128,6 +128,8 @@ def test_eval_template_matches_official_metric_and_protects_harness():
     assert "integrity_checker = check_harness_integrity" in source
     assert source.count("integrity_checker(_harness_snapshot)") >= 4
     assert source.count('print("mean_speedup: 0.0")') == 0
+    # Only a structured line is a metric, printed once, on success.
+    assert source.count('print(f"##autohelix[mean_speedup={speedup:.4f}]")') == 1
     assert "WARMUP_RUNS = 3" in source
     assert "TIMING_RUNS = 100" in source
     assert "DISCARD_FIRST = 1" in source
@@ -193,7 +195,7 @@ def test_autohelix_template_splits_correctness_from_timing():
     raw = yaml.safe_load(rendered)
     config = Config.from_dict(raw)
 
-    assert config.validate(raw) == []
+    assert config.validate() == []
     assert [gate.command for gate in config.gate_commands()] == [
         "python check_solution.py",
         "python eval_solution.py --check-only",

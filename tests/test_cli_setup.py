@@ -319,12 +319,12 @@ def test_the_template_is_a_valid_v2_config_once_it_has_a_goal(project):
     for text in ("autohelix init", "prompt.md", "-c "):
         assert text not in CONFIG_TEMPLATE
     config, raw = load_config(project, config_file=path)
-    errors = [i.message for i in config.validate(raw) if i.level == "error"]
+    errors = [i.message for i in config.validate() if i.level == "error"]
     assert len(errors) == 1 and "default placeholder" in errors[0]
     path.write_text(CONFIG_TEMPLATE.replace("Describe what you want the agent to optimize.", "Make main.py faster."))
     config, raw = load_config(project, config_file=path)
-    assert [i for i in config.validate(raw) if i.level == "error"] == []
-    assert not [i for i in config.validate(raw) if "Unknown config key" in i.message]
+    assert [i for i in config.validate() if i.level == "error"] == []
+    assert not [i for i in config.validate() if "Unknown config key" in i.message]
     assert config.title == "Make main.py faster."
     assert config.editable == ["src/"]
     assert "budget" not in raw
@@ -379,7 +379,8 @@ def test_agent_claude_execs_with_the_skill_and_writes_nothing(project, monkeypat
     assert "Propose the config for `autohelix/perf.yaml`" in prompt
     assert "`agent.backend: claude`" in prompt
     assert "Write the agreed file directly (don't run `autohelix setup`)." in prompt
-    assert f"To check it, use AutoHelix's own Python, `{sys.executable}`" in prompt
+    launcher = cli._launcher()
+    assert f"To check it, run `{launcher or 'autohelix'} run perf --check` from the project root." in prompt
     assert "Start by asking" not in prompt  # the skill's first question is in SKILL.md
 
 
@@ -390,7 +391,7 @@ def test_the_prompt_names_the_launcher_it_was_started_as(project, monkeypatch, e
     launcher.write_text("#!/usr/bin/env python\n")
     monkeypatch.setattr(sys, "argv", [str(launcher), "setup"])
     assert setup("--agent", "claude").exit_code == 0
-    assert f"`{sys.executable}` (its CLI is `{launcher.resolve()}`)." in execs[0][1][4]
+    assert f"run `{launcher.resolve()} run --check` from the project root." in execs[0][1][4]
 
 
 @pytest.mark.parametrize("agent", ["codex", "opencode"])

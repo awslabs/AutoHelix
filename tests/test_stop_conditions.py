@@ -68,7 +68,7 @@ def test_parses_strings_mappings_and_single_entries():
 
 def test_stop_is_a_known_key_and_empty_commands_are_errors():
     raw = {"goal": "real goal", "gates": ["true"], "stop": [{"command": " "}]}
-    issues = Config.from_dict(raw).validate(raw)
+    issues = Config.from_dict(raw).validate()
     messages = [i.message for i in issues]
     assert "stop entry 1: `command:` must be a non-empty string" in messages
     assert not any("Unknown config key" in m for m in messages)

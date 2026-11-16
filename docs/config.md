@@ -73,10 +73,14 @@ How a launch goes is not in the config either: how long (`autohelix run -n 10
 summary (`--no-report`, see [Report](#report)).
 
 Top-level keys: `goal`, `prompt_template`, `agent`,
-`scope`, `gates`, `observe` and `stop`. An unknown key is a warning
-(a possible typo); a key of the old format is an error that names its
-replacement (see [Old → new](#old--new)). `autohelix run` lists every error and
-starts nothing until they are fixed.
+`scope`, `gates`, `observe` and `stop`. An unknown key is an error (a
+misspelt `stop:` or `gates:` would otherwise do nothing); a key of the old
+format is an error that names its replacement (see [Old → new](#old--new)).
+`goal:` must be a string (`|` for several lines), `agent.command`, `model`,
+`reasoning_effort` and `backend` strings (arguments go in `extra_args`), and
+`auto_memory` `true` or `false`. `autohelix run` lists every error and starts
+nothing until they are fixed; `autohelix run --check` makes the same checks
+without starting (see [`run --check`](cli.md#autohelix-run)).
 
 `gates:`, `observe:` and `stop:` are lists; a single string or mapping counts
 as a list of one.
@@ -240,18 +244,19 @@ viewer's sections, so renaming an entry starts its history afresh. Metric names
   the copy, and a top-level `stdout.txt` or `stderr.txt` are config errors.
 - `timeout:` default 30m.
 
-**Metric extraction.** The recommended form is a structured line on stdout, one
-per metric:
+**Metric extraction.** A metric is read only from a structured line on stdout,
+one per metric, matched by name (the last one wins):
 
 ```
 ##autohelix[throughput=1234.5]
 ##autohelix[latency=0.003]
 ```
 
-Command entries also accept `name: value` or `name=value` lines matching a
-declared name, and, when only one metric is declared, a lone structured line
-with another name. A command without `metrics:` still runs and its output is
-kept for the agent.
+Nothing else counts: a `speed: 5` line, anything on stderr, or a structured
+line under another name (`##autohelix[sped=5]` for `speed`) leaves the metric
+unreported, and the entry's record says how to print it. A non-finite value
+(`inf`, `nan`) reports nothing. A command without `metrics:` still runs and its
+output is kept for the agent.
 
 ### Review entries
 
@@ -539,9 +544,12 @@ name or landing mode.
 
 `prompt_template:` is optional: a [Jinja2](https://jinja.palletsprojects.com/)
 file that replaces the built-in agent prompt, as a path relative to the config
-file (so it is versioned with it). A run stores the template's text with its
-config when it starts, so editing the template changes later runs, not this
-one. Most configs need only `goal:`. The
+file (so it is versioned with it). A template that doesn't parse is a config
+error naming the file and line, and one that fails to render (say `{{
+last.gates.x.y }}`) stops the run with an error naming the file, before its
+agent call. A run stores the template's text with its config when it starts, so
+editing the template changes later runs, not this one. Most configs need only
+`goal:`. The
 variables a template gets are a documented contract; see
 [Concepts → Prompt](concepts.md#prompt). `.autohelix/prompt.md` is no longer
 read; a run warns while it exists.

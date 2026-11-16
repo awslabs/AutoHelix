@@ -22,7 +22,7 @@ from autohelix.history import History
 from autohelix.run_status import read_run_status
 from autohelix.runs import (NoRunToResume, RunPaths, planned_run, RunLock, archive as archive_run, check_group, check_why,
                             delete as delete_run, load_run_config, land as land_run, project_runs, resolve_run,
-                            run_tip, short_id, valid_name)
+                            config_relative, run_tip, short_id, valid_name)
 from autohelix import run_table
 from autohelix.skill import SKILL_NAME, skill
 from autohelix.state import read_stored_config_path
@@ -96,15 +96,16 @@ def _launcher() -> Path | None:
 def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[str]:
     """The interactive session `setup` starts: the agent's own CLI with a first prompt
     that points at the bundled skill (nothing is installed or written). The prompt names
-    AutoHelix's own Python and launcher, which the agent's shell may not find (pipx,
-    `uv tool`, a venv that isn't activated); its PATH is left alone for the project's
-    own commands."""
+    AutoHelix's own launcher for `run --check`, which the agent's shell may not find
+    (pipx, `uv tool`, a venv that isn't activated); its PATH is left alone for the
+    project's own commands."""
     skill_dir = _skill_dir()
     where = (f"The config is `{target}`, already there (perhaps still the commented template): "
              "propose completing it there"
              if exists else f"Propose the config for `{target}`")
     launcher = _launcher()
-    tools = f"use AutoHelix's own Python, `{sys.executable}`" + (f" (its CLI is `{launcher}`)" if launcher else "")
+    check = run_command(target).replace("autohelix", shlex.quote(str(launcher)) if launcher else "autohelix", 1)
+    tools = f"run `{check} --check` from the project root"
     prompt = (f"Read `{skill_dir / 'SKILL.md'}` and follow it to help me set up AutoHelix for this "
               f"project. {where}, with `agent.backend: {agent}` unless we decide otherwise. Show the complete "
               f"proposal and explain its sections, choices, and effective defaults before changing project "
@@ -479,9 +480,12 @@ def _segment(harness: Harness, budget: Budget, report: bool) -> None:
               help="Continue from another run: its notes and history (read-only) in every iteration, its last "
                    "observe outputs at the baseline. Code still comes from your checkout.")
 @click.option("--why", help="Why this run is started (one line, shown on the dashboard).")
+@click.option("--check", is_flag=True,
+              help="Only make the checks a run makes before it writes anything (config, prompt template, "
+                   "clean checkout, agent command, scope); exit 0 if it would start, else 1.")
 def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land_mode: str | None,
         iterations: int | None, until: int | None, cost_usd: float | None, time_seconds: int | None,
-        group: str | None, import_run: str | None, why: str | None):
+        group: str | None, import_run: str | None, why: str | None, check: bool):
     """Start a new run of the optimization loop.
 
     Always a new run, with its own notes and history; to continue one, use
@@ -509,6 +513,10 @@ def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land
     observe entries get its last outputs as $AUTOHELIX_PREVIOUS. Your notes,
     budgets, metric reference and group are this run's own. To fork from the
     run's code, `git checkout autohelix/<id>` first.
+
+    With --check, nothing is started or written: the command makes every check
+    the run would make before writing anything, prints what it finds, and exits
+    0 when the run would start (for setup and CI).
     """
     budget = _budget(iterations, until, cost_usd, time_seconds)
     group = _group(group)
@@ -517,7 +525,11 @@ def run(config_name: str | None, path: str, verbose: bool, no_report: bool, land
     imported = _run_id(project, import_run)
     config = _segment_config(project, config_name, "run")
     harness = _start(project, config, verbose=verbose, new=True, land_mode=land_mode,
-                     group=group or None, import_run=imported, why=why)
+                     group=group or None, import_run=imported, why=why, check_only=check)
+    if check:
+        shown = config_relative(project, config)
+        click.echo(f"OK: {shown} is ready; `{run_command(shown)}` would start a new run.")
+        return
     _segment(harness, budget, not no_report)
 
 

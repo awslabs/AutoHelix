@@ -186,7 +186,7 @@ class Harness:
                  config_file: Path | None = None, *, new: bool = False,
                  run_id: str | None = None, name: str | None = None,
                  land_mode: str | None = None, create: bool = True, group: str | None = None,
-                 import_run: str | None = None, why: str | None = None):
+                 import_run: str | None = None, why: str | None = None, check_only: bool = False):
         """Own one run: `run_id`, a new one (`new`, as `autohelix run`), or the config's
         most recently active run (as `autohelix resume`; created if there is none,
         unless `create` is false).
@@ -201,7 +201,11 @@ class Harness:
         agent copy shows that run's state read-only, and the baseline's observe entries
         get its last outputs as `$AUTOHELIX_PREVIOUS`. `why` is the new run's note
         (`run --why`). A resume refuses, before writing anything, when its target branch
-        moved past its tip and it lands automatically (`runs.target_ahead`)."""
+        moved past its tip and it lands automatically (`runs.target_ahead`).
+
+        `check_only` (`run --check`): make every check up to the first write (config,
+        template, clean checkout, preflight) and stop there; the object is good for
+        nothing else."""
         # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send
         # every git call (ours, and the agent's, checks' and judges') to another repository.
         # The CLI does the same in `cli.main`; this covers the Harness as a library.
@@ -239,10 +243,10 @@ class Harness:
                 self.console.print(f"[yellow]Run {short_id(import_run)} used {source}; this run uses {used}.[/yellow]",
                                    highlight=False)
         if creating:
-            self.config, self._raw_config = load_config(self.project_path, config_file=config_file)
+            self.config, _ = load_config(self.project_path, config_file=config_file)
         else:
-            self.config, self._raw_config = self._run_config(planned)
-        errors = [issue for issue in self.config.validate(self._raw_config) if issue.level == "error"]
+            self.config, _ = self._run_config(planned)
+        errors = [issue for issue in self.config.validate() if issue.level == "error"]
         if errors:
             for error in errors:
                 self.console.print(f"[red]Error:[/red] {error.message}")
@@ -263,6 +267,10 @@ class Harness:
                 if is_live(planned):  # said first: the advice (`--land manual`) would lead straight to it
                     raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
                 raise RuntimeError(target_ahead_refusal(planned, data, count))
+        if check_only:  # nothing written; the scope advice a run prints at its start too
+            if warning := scope_warning(self.config):
+                self._warn(warning)
+            return
         # The first writes: the local excludes, before .autohelix/ exists.
         ensure_runtime_ignored(self.project_path)
         try:  # best effort: only runtime state must be ignored
@@ -281,7 +289,7 @@ class Harness:
         )
         if self.paths.run_id != (planned and planned.run_id):
             try:  # a new run (or, raced, another than planned): from now on, its stored copy
-                self.config, self._raw_config = self._run_config(
+                self.config, _ = self._run_config(
                     self.paths, check=self.paths.run_id in existing)  # one just created matches its file
             except BaseException:
                 self._ownership.close()
@@ -626,7 +634,8 @@ class Harness:
             group=self.run_info.get("group"), members=members, rejected_diff=rejected_diff, imported=imported,
             head=head,
         )
-        return render_template(template, variables)
+        template_file = self.config.prompt_template
+        return render_template(template, variables, *([template_file.name] if template_file else []))
 
     def run_agent(self, worktree_path: Path, prompt: str, iteration: int) -> AgentRunResult:
         """Run the configured agent in the worktree."""
@@ -1581,7 +1590,7 @@ class Harness:
 
     def _preflight(self) -> bool:
         """Print preflight warnings and errors; False if there are errors."""
-        issues = preflight_check(self.config, self._raw_config, self.project_path)
+        issues = preflight_check(self.config, self.project_path)
         for w in (i for i in issues if i.level == "warning"):
             self._warn(w.message)
         errors = [i for i in issues if i.level == "error"]

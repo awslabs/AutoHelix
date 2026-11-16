@@ -45,7 +45,7 @@ class LiveDisplay:
             "tools": 0,
             "input_tokens": 0,
             "output_tokens": 0,
-            "last_update": f"Waiting for {title.lower()} output",
+            "last_update": f"Waiting for {self.title.lower()} output",
         }
         self._elapsed = 0
         self._start_time = _time.monotonic()

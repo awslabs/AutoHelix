@@ -171,6 +171,7 @@ Start a new run of the optimization loop.
 
 ```bash
 autohelix run [CONFIG] [-n N | --until N] [--cost USD] [--time DURATION] [-p PATH] [--group NAME] [--import RUN_ID] [--why TEXT] [--land auto|manual] [--verbose] [--no-report]
+autohelix run [CONFIG] --check
 ```
 
 `CONFIG` names a config in `autohelix/` (`perf` for `autohelix/perf.yaml`);
@@ -254,6 +255,7 @@ pipe, a log file) or colours there is no mark and no live row. The renders at 80
 | `--why TEXT` | Why this run is started: one line (at most 300 characters), stored in `run.json` and shown on the dashboard |
 | `--verbose` | Show agent command details, file paths, heartbeats |
 | `--no-report` | Don't write the run summary when this segment finishes (not stored: pass it to each `resume` too) |
+| `--check` | Start nothing: make every check the run makes before writing anything (the config and its prompt template, a clean checkout, the agent command, scope patterns, `--import`'s run), print what it finds, exit 0 when the run would start, else 1. For setup and CI |
 
 `run` always starts a **new** run, with its own notes and history; to
 continue one, use [`autohelix resume`](#autohelix-resume). It never refuses

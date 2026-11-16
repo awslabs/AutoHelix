@@ -287,7 +287,7 @@ def test_checks_cannot_modify_candidate_but_capture_new_files(project, preexisti
         git(project, "add", "metric.txt")
         git(project, "commit", "-qm", "protected capture")
     configure(project, scope={"editable": ["code.py"]}, observe=[{
-        "name": "bench", "command": "echo 'new metric output' > metric.txt; echo 'score: 1'",
+        "name": "bench", "command": "echo 'new metric output' > metric.txt; echo '##autohelix[score=1]'",
         "metrics": {"score": "higher"}, "capture": ["metric.txt"],
     }])
     harness = Harness(project, land_mode="manual")

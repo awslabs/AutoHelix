@@ -520,6 +520,8 @@ def main():
     print(f"mean_speedup: {{speedup:.4f}}")
     print(f"ref_time_ms: {{ref_time:.4f}}")
     print(f"sol_time_ms: {{sol_time:.4f}}")
+    # The metric AutoHelix records: only ##autohelix lines count.
+    print(f"##autohelix[mean_speedup={{speedup:.4f}}]")
     sys.exit(0)
 
 

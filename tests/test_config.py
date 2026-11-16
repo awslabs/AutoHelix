@@ -12,11 +12,11 @@ from autohelix.history import IterationResult
 
 
 def errors(data):
-    return [i.message for i in Config.from_dict(data).validate(data) if i.level == "error"]
+    return [i.message for i in Config.from_dict(data).validate() if i.level == "error"]
 
 
 def warnings(data):
-    return [i.message for i in Config.from_dict(data).validate(data) if i.level == "warning"]
+    return [i.message for i in Config.from_dict(data).validate() if i.level == "warning"]
 
 
 BENCH = {"name": "bench", "command": "python bench.py", "metrics": {"speed": "higher"}}
@@ -466,7 +466,7 @@ class TestConfigValidate:
     def test_valid_config_no_issues(self):
         data = {"goal": "optimize sorting", "gates": ["pytest", {"metric": "speed", "regress": "5%"}],
                 "observe": [BENCH], "stop": ["true"]}
-        assert Config.from_dict(data).validate(data) == []
+        assert Config.from_dict(data).validate() == []
 
     def test_known_top_level_keys(self):
         assert KNOWN_TOP_LEVEL_KEYS == {"goal", "agent", "prompt_template", "scope", "gates", "observe", "stop"}
@@ -487,9 +487,44 @@ class TestConfigValidate:
         assert not any("No gates" in w for w in warnings({"goal": "x", "gates": ["pytest"]}))
         assert not any("No gates" in w for w in warnings({"goal": "x", "observe": [BENCH]}))
 
-    def test_unknown_top_level_keys_are_warnings(self):
-        assert any("Unknown config key 'gaol'" in w for w in warnings({"goal": "x", "gaol": "typo", "gates": ["p"]}))
-        assert not any("Unknown config key" in w for w in warnings({"goal": "x", "gates": ["p"], "observe": [BENCH]}))
+    @pytest.mark.parametrize("key", ["gaol", "stops", "gatse", "scopes"])
+    def test_unknown_top_level_keys_are_errors(self, key):
+        """A misspelt `stop:` used to be a warning: the run went to its budget."""
+        found = errors({"goal": "x", "gates": ["p"], key: ["true"]})
+        assert any(f"Unknown config key '{key}' - possible typo?" in e for e in found)
+        assert not any("Unknown config key" in m for m in errors({"goal": "x", "gates": ["p"], "observe": [BENCH]}))
+        assert not any("Unknown config key" in m for m in warnings({"goal": "x", key: 1}))
+
+    @pytest.mark.parametrize("goal", [["make it fast", "keep tests"], {"speed": "up"}, 3])
+    def test_a_goal_that_is_not_a_string_is_an_error(self, goal):
+        """It used to reach the prompt as its Python repr."""
+        config = Config.from_dict({"goal": goal, "gates": ["p"]})
+        assert config.goal == ""
+        assert "goal must be a string (use `|` for several lines)" in errors({"goal": goal, "gates": ["p"]})
+
+    @pytest.mark.parametrize(("agent", "message"), [
+        ({"command": ["claude", "--verbose"]},
+         "agent.command must be a non-empty string, got ['claude', '--verbose'] (put arguments in agent.extra_args)"),
+        ({"model": 4}, "agent.model must be a non-empty string, got 4"),
+        ({"reasoning_effort": ["high"]}, "agent.reasoning_effort must be a non-empty string"),
+        ({"backend": 1}, "agent.backend must be a non-empty string, got 1"),
+        ({"auto_memory": "false"}, "agent.auto_memory must be true or false, got 'false'"),
+        ({"auto_memory": 1}, "agent.auto_memory must be true or false, got 1"),
+    ])
+    def test_agent_values_are_type_checked(self, agent, message):
+        """A list as `command` crashed preflight with a TypeError; a quoted "false" turned
+        auto memory on."""
+        assert any(message in e for e in errors({"goal": "x", "gates": ["p"], "agent": agent}))
+        assert Config.from_dict({"goal": "x", "agent": agent}).agent.auto_memory is False
+
+    @pytest.mark.parametrize(("agent", "message"), [
+        ({"command": ["x", "y"]}, "gates entry 1 agent.command must be a non-empty string"),
+        ({"model": 4}, "gates entry 1 agent.model must be a non-empty string"),
+        ({"backend": ["codex"]}, "gates entry 1 agent.backend must be a non-empty string"),
+    ])
+    def test_ask_entry_agent_values_are_type_checked(self, agent, message):
+        found = errors({"goal": "x", "gates": [{"ask": "Is it good?", "agent": agent}]})
+        assert any(message in e for e in found), found
 
     def test_unknown_agent_backend_is_error(self):
         assert any("Unknown agent backend" in e for e in errors({"goal": "x", "agent": {"backend": "gpt4"}}))

@@ -1,5 +1,7 @@
 """Tests for autohelix.prompt_template module."""
 
+import pytest
+
 from autohelix.config import Config
 from autohelix.history import History
 from autohelix.prompt_template import build_prompt_variables, render_template, load_template
@@ -46,10 +48,14 @@ class TestRenderTemplate:
         result = render_template("\n\nhello\n\n", {})
         assert result == "hello\n"
 
-    def test_syntax_error_falls_back(self):
-        template = "{% if unclosed %}"
-        result = render_template(template, {})
-        assert "[Template error:" in result
+    def test_syntax_error_raises_naming_the_template(self):
+        """It used to become the agent's prompt, an error banner then the raw template."""
+        with pytest.raises(RuntimeError, match=r"prompt_template p\.md, line 1: Unexpected end of template"):
+            render_template("{% if unclosed %}", {}, "p.md")
+
+    def test_render_error_raises_naming_the_template(self):
+        with pytest.raises(RuntimeError, match="prompt_template p.md could not be rendered: .*has no attribute 'x'"):
+            render_template("{{ last.gates.x.y }}", {"last": {"gates": []}}, "p.md")
 
     def test_trim_blocks(self):
         template = "before\n{% if x %}\nyes\n{% endif %}\nafter"
@@ -77,14 +83,33 @@ class TestLoadTemplate:
         (tmp_path / "configs" / "a.yaml").write_text("goal: g\nprompt_template: prompts/agent.md\n")
         config, raw = load_config(tmp_path, tmp_path / "configs" / "a.yaml")
         assert load_template(config) == "Custom: {{ goal }}"
-        assert not [i for i in config.validate(raw) if i.level == "error"]
+        assert not [i for i in config.validate() if i.level == "error"]
 
     def test_a_missing_prompt_template_is_a_config_error(self, tmp_path):
         from autohelix.config import load_config
 
         (tmp_path / "autohelix.yaml").write_text("goal: g\nprompt_template: nope.md\n")
         config, raw = load_config(tmp_path)
-        assert any("prompt_template not found" in i.message for i in config.validate(raw))
+        assert any("prompt_template not found" in i.message for i in config.validate())
+
+    @pytest.mark.parametrize("stored", [False, True])
+    def test_a_template_that_does_not_parse_is_a_config_error(self, tmp_path, stored):
+        """An unclosed `{% if %}` used to reach the agent as its prompt; now config
+        validation names the file and line (also a run's stored copy)."""
+        from autohelix.config import inlined, load_config
+
+        (tmp_path / "p.md").write_text("ok\n{% if hints %}x\n")
+        (tmp_path / "autohelix.yaml").write_text("goal: g\nprompt_template: p.md\n")
+        if stored:
+            import yaml
+
+            data = inlined(tmp_path / "autohelix.yaml")
+            (tmp_path / "stored.yaml").write_text(yaml.safe_dump(data))
+            config, _ = load_config(tmp_path, tmp_path / "stored.yaml", source=tmp_path / "autohelix.yaml")
+        else:
+            config, _ = load_config(tmp_path)
+        found = [i.message for i in config.validate() if i.level == "error"]
+        assert any(m.startswith("prompt_template p.md, line 2: Unexpected end of template") for m in found), found
 
 
 class TestBuildPromptVariables:

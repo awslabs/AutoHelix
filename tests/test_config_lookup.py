@@ -321,7 +321,7 @@ def test_a_dirty_tree_is_refused_before_anything_is_written(folder_project):
     assert_untouched(folder_project)
 
 
-def test_readiness_is_checked_before_anything_is_written(folder_project):
+def test_a_scope_config_error_is_reported_before_anything_is_written(folder_project):
     config = folder_project / "autohelix" / "perf.yaml"
     data = yaml.safe_load(config.read_text())
     data["scope"] = {"editable": ["../elsewhere/"]}

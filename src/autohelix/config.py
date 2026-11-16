@@ -208,13 +208,8 @@ class Config:
                 return entry
         raise KeyError(name)
 
-    def validate(self, raw_data: dict[str, Any] | None = None) -> list[ConfigIssue]:
-        """Return a list of structured validation issues.
-
-        Args:
-            raw_data: If provided, also checks for unknown top-level keys
-                      (catches typos like 'gaol' instead of 'goal').
-        """
+    def validate(self) -> list[ConfigIssue]:
+        """Return a list of structured validation issues (parse errors included)."""
         issues: list[ConfigIssue] = []
 
         def error(msg: str) -> None:
@@ -225,12 +220,6 @@ class Config:
 
         for message in self._parse_errors:
             error(message)
-
-        # Check for unknown keys (typo detection)
-        if raw_data is not None:
-            unknown = set(raw_data.keys()) - KNOWN_TOP_LEVEL_KEYS - set(RENAMED_TOP_LEVEL_KEYS)
-            for key in sorted(unknown):
-                warning(f"Unknown config key '{key}' - possible typo?")
 
         # Goal must be non-empty and not the default placeholder
         if not isinstance(self.goal, str) or not self.goal.strip():
@@ -281,6 +270,11 @@ class Config:
         if (self.prompt_template is not None and self.prompt_template_text is None
                 and not self.prompt_template.is_file()):
             error(f"prompt_template not found: {self.prompt_template}")
+        elif self.prompt_template is not None:
+            from autohelix.prompt_template import template_problem
+
+            if problem := template_problem(self):
+                error(problem)
         return issues
 
     @classmethod
@@ -290,6 +284,9 @@ class Config:
         for key in data:
             if key in RENAMED_TOP_LEVEL_KEYS:
                 errors.append(RENAMED_TOP_LEVEL_KEYS[key])
+            elif key not in KNOWN_TOP_LEVEL_KEYS:  # a misspelt `stop:` or `gates:` would do nothing
+                errors.append(f"Unknown config key '{key}' - possible typo? "
+                              f"(known: {', '.join(sorted(KNOWN_TOP_LEVEL_KEYS))})")
 
         agent, agent_errors = AgentConfig.parse(data.get("agent"))
         errors.extend(agent_errors)
@@ -311,8 +308,10 @@ class Config:
                 errors.append(f"Unknown key scope.{key} (known: editable, frozen)")
 
         goal = data.get("goal", "")
+        if goal is not None and not isinstance(goal, str):  # a list or mapping isn't one text
+            errors.append("goal must be a string (use `|` for several lines)")
         return cls(
-            goal=goal if isinstance(goal, str) else "" if goal is None else str(goal),
+            goal=goal if isinstance(goal, str) else "",
             gates=gates,
             observe=observe,
             stop=stop,
@@ -435,9 +434,11 @@ def _entry_agent(entry: dict, timeout: int | None, backend: str, where: str,
         agent = {}
     _check_keys(agent, ENTRY_AGENT_KEYS, f"{where} agent", errors)
     flags: list[str] = []
-    own = agent.get("backend")
+    from autohelix.agents import agent_string
+
+    own = agent_string(agent, "backend", f"{where} agent", errors)
     if own is not None:
-        own = str(own).lower()
+        own = own.lower()
         if own not in ("claude", "codex", "mock"):
             errors.append(f"{where}: agent.backend {own!r} can't be used here"
                           + (" (OpenCode has no read-only mode)" if own == "opencode" else
@@ -446,8 +447,8 @@ def _entry_agent(entry: dict, timeout: int | None, backend: str, where: str,
     elif backend == "opencode":
         errors.append(f"{where}: opencode has no read-only mode; set agent.backend on this entry")
     for key, flag in (("model", "--model"), ("reasoning_effort", "--effort")):
-        if agent.get(key) is not None:
-            flags += [flag, str(agent[key])]
+        if (value := agent_string(agent, key, f"{where} agent", errors)) is not None:
+            flags += [flag, value]
     agent_timeout = None
     if agent.get("timeout") is not None:
         agent_timeout = _duration(agent["timeout"], f"{where} agent.timeout", errors)
@@ -456,8 +457,8 @@ def _entry_agent(entry: dict, timeout: int | None, backend: str, where: str,
                       f"timeout ({timeout}s), which stops the whole command")
     if agent_timeout is not None or timeout is not None:
         flags += ["--timeout", str(agent_timeout or timeout)]
-    if agent.get("command") is not None:
-        flags += ["--command", str(agent["command"])]
+    if (command := agent_string(agent, "command", f"{where} agent", errors)) is not None:
+        flags += ["--command", command]
     command_timeout = timeout or (agent_timeout + 60 if agent_timeout else DEFAULT_CHECK_TIMEOUT)
     return flags, command_timeout
 

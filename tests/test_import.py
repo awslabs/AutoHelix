@@ -13,7 +13,7 @@ from tests.test_runs import configure
 TRACKER = {"name": "tracker", "metrics": {"score": "higher"},
            "command": 'echo "run $AUTOHELIX_RUN_ID"; '
                       'if [ -n "$AUTOHELIX_PREVIOUS" ]; then echo "previous $(head -1 "$AUTOHELIX_PREVIOUS/stdout.txt")"; '
-                      'else echo "previous none"; fi; echo "score: 1"'}
+                      'else echo "previous none"; fi; echo "##autohelix[score=1]"'}
 OTHER = {"name": "other", "command": 'echo "previous ${AUTOHELIX_PREVIOUS:-none}"'}
 MOCK = {"backend": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
                                         "notes_content": "tried {iteration}"}}

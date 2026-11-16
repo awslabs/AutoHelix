@@ -171,7 +171,11 @@ def run_process(
             if line_buffer.strip():
                 line_callback(line_buffer)
 
-            return ProcessRunResult(exit_code=process.wait())
+            exit_code = process.wait()
+            # A background child (silent, or holding the pipe open) must not
+            # outlive a normal exit either.
+            end_group(process)
+            return ProcessRunResult(exit_code=exit_code)
     except KeyboardInterrupt:
         if process is not None:
             _kill_process_group(process)

@@ -299,17 +299,28 @@ VARIABLES = frozenset({
 })
 
 
+def template_problem(config) -> str | None:
+    """Why the config's `prompt_template:` can't be used (a config error naming the file
+    and line: it doesn't parse, or can't be read), else None. Config validation calls it,
+    so a broken template fails `run`, not the agent."""
+    name = config.prompt_template.name if config.prompt_template else "prompt template"
+    try:
+        _create_env().parse(load_template(config))
+    except TemplateSyntaxError as e:
+        return f"prompt_template {name}, line {e.lineno}: {e.message}"
+    except (RuntimeError, UnicodeDecodeError) as e:
+        return f"prompt_template {name}: {e}"
+    return None
+
+
 def unknown_variables(template: str) -> list[str]:
     """Names a template uses that are not prompt variables (nor Jinja globals), sorted:
-    e.g. `constraints` or `history_summary` from before config v2. A template that
-    doesn't parse reports none (rendering shows the error)."""
+    e.g. `constraints` or `history_summary` from before config v2. The template parses
+    (config validation, `template_problem`)."""
     from jinja2 import meta
 
     env = _create_env()
-    try:
-        names = meta.find_undeclared_variables(env.parse(template))
-    except TemplateSyntaxError:
-        return []
+    names = meta.find_undeclared_variables(env.parse(template))
     return sorted(names - VARIABLES - set(env.globals))
 
 
@@ -326,19 +337,17 @@ def _describe_gate(gate) -> str:
     return f"{gate.metric}: {bound} than the last accepted iteration"
 
 
-def render_template(template: str, variables: dict[str, Any]) -> str:
-    """Render a Jinja2 template with the given variables.
+def render_template(template: str, variables: dict[str, Any], name: str = "the built-in prompt") -> str:
+    """Render a Jinja2 template with the given variables. A template that doesn't parse
+    or render raises RuntimeError naming it (`name`: the config's template file)."""
+    from jinja2 import TemplateError
 
-    Falls back to returning the raw template with a warning prefix if the
-    template has syntax errors.
-    """
-    env = _create_env()
     try:
-        tmpl = env.from_string(template)
+        rendered = _create_env().from_string(template).render(**variables)
     except TemplateSyntaxError as e:
-        return f"[Template error: {e.message} at line {e.lineno}]\n\n{template}"
-
-    rendered = tmpl.render(**variables)
+        raise RuntimeError(f"prompt_template {name}, line {e.lineno}: {e.message}") from e
+    except TemplateError as e:
+        raise RuntimeError(f"prompt_template {name} could not be rendered: {e}") from e
 
     # Collapse 3+ consecutive newlines into 2
     import re

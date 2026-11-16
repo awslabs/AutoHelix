@@ -124,20 +124,21 @@ class AgentConfig:
             except (ValueError, OverflowError) as e:
                 errors.append(f"agent.timeout: {data['timeout']!r} is not a valid duration ({e})")
 
-        backend = data.get("backend", "claude")
-        if not isinstance(backend, str):
-            errors.append(f"agent.backend must be a string, got {backend!r}")
-            backend = "claude"
+        backend = agent_string(data, "backend", "agent", errors) or "claude"
+        auto_memory = data.get("auto_memory", False)
+        if not isinstance(auto_memory, bool):  # `"false"` would be true
+            errors.append(f"agent.auto_memory must be true or false, got {auto_memory!r}")
+            auto_memory = False
 
         return cls(
             backend=backend.lower(),
-            command=data.get("command"),
-            model=data.get("model"),
-            reasoning_effort=data.get("reasoning_effort"),
+            command=agent_string(data, "command", "agent", errors),
+            model=agent_string(data, "model", "agent", errors),
+            reasoning_effort=agent_string(data, "reasoning_effort", "agent", errors),
             timeout=timeout,
             settings=settings,
             extra_args=[str(arg) for arg in extra_args],
-            auto_memory=bool(data.get("auto_memory", False)),
+            auto_memory=auto_memory,
             require_notes=_require_notes(data.get("require_notes"), errors),
         ), errors
 
@@ -189,6 +190,19 @@ class AgentBackend(Protocol):
         project_path: Path | None = None,
     ) -> AgentRunResult:
         """Execute the agent inside the given worktree."""
+
+
+def agent_string(data: dict, key: str, where: str, errors: list[str]) -> str | None:
+    """`data[key]` when it is a non-empty string, None when absent; anything else is an
+    error (`where.key must be a string`): a list as `command` would crash the start."""
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip():
+        return value
+    hint = " (put arguments in agent.extra_args)" if key == "command" and isinstance(value, list) else ""
+    errors.append(f"{where}.{key} must be a non-empty string, got {value!r}{hint}")
+    return None
 
 
 def create_agent(config: AgentConfig, heartbeat_seconds: int = 30) -> AgentBackend:

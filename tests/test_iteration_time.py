@@ -89,7 +89,7 @@ def test_agent_timeout_allowed(agent_type):
         "agent": {"backend": agent_type, "command": f"/usr/bin/{agent_type}", "timeout": "1h"},
     }
     cfg = Config.from_dict(data)
-    errors = [issue for issue in cfg.validate(raw_data=data) if issue.level == "error"]
+    errors = [issue for issue in cfg.validate() if issue.level == "error"]
     assert errors == []
 
 

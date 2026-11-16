@@ -10,9 +10,8 @@ import pytest
 from types import SimpleNamespace
 
 from autohelix.iteration import prepare_state, save_notes
-from autohelix.runs import RunPaths
 from autohelix.config import scope_path
-from autohelix.runs import require_clean
+from autohelix.runs import RunPaths, require_clean
 from autohelix.sandbox import build_worktree_env
 from autohelix.workspace import Repo, path_in_scope
 

@@ -12,7 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 from autohelix.agents import AgentConfig, AgentRunResult
-from autohelix.checks import parse_metric_output
+from autohelix.checks import parse_structured_metrics
 from autohelix.cli import main
 from autohelix.judge import JudgeError, judge_config
 from autohelix.review import build_system_prompt, parse_review, review_budget, review_schema
@@ -128,7 +128,7 @@ def test_prints_prose_then_metric_lines(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.stderr
     assert result.stdout == "Item 2 is missing.\nFix the parser.\n##autohelix[missing=1]\n##autohelix[score=0.5]\n"
     assert "autohelix review: ok · $0.03" in result.stderr
-    assert parse_metric_output(result.stdout, "missing") == 1
+    assert parse_structured_metrics(result.stdout) == {"missing": 1, "score": 0.5}
 
 
 def test_prose_cannot_carry_a_metric(tmp_path, monkeypatch):

@@ -19,7 +19,7 @@ def project(tmp_path):
           - echo ok
         observe:
           - name: bench
-            command: 'echo speed: 42'
+            command: 'echo "##autohelix[speed=42]"'
             metrics:
               speed: higher
     """)
@@ -39,14 +39,14 @@ class TestPreflightCheck:
             mock_m.return_value = ObserveResult(
                 command="echo speed: 42", values={"speed": 42.0}, output="speed: 42\n", errors={},
             )
-            issues = preflight_check(config, raw, project)
+            issues = preflight_check(config, project)
         assert issues == []
 
     def test_empty_goal_is_error(self, tmp_path):
         (tmp_path / "autohelix.yaml").write_text("goal: ''\n")
         config, raw = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
-            issues = preflight_check(config, raw, tmp_path)
+            issues = preflight_check(config, tmp_path)
         errors = [i for i in issues if i.level == "error"]
         assert any("goal" in i.message.lower() for i in errors)
 
@@ -56,7 +56,7 @@ class TestPreflightCheck:
         )
         config, raw = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
-            issues = preflight_check(config, raw, tmp_path)
+            issues = preflight_check(config, tmp_path)
         errors = [i for i in issues if i.level == "error"]
         assert any("placeholder" in i.message for i in errors)
 
@@ -64,7 +64,7 @@ class TestPreflightCheck:
         (tmp_path / "autohelix.yaml").write_text("goal: Make it faster\n")
         config, raw = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
-            issues = preflight_check(config, raw, tmp_path)
+            issues = preflight_check(config, tmp_path)
         warnings = [i for i in issues if i.level == "warning"]
         assert any("No gates or observe entries" in i.message for i in warnings)
 
@@ -79,7 +79,7 @@ class TestPreflightCheck:
             mock_m.return_value = ObserveResult(
                 command="echo speed: 42", values={"speed": 42.0}, output="speed: 42\n", errors={},
             )
-            issues = preflight_check(config, raw, project)
+            issues = preflight_check(config, project)
         errors = [i for i in issues if i.level == "error"]
         assert any("not found in PATH" in i.message for i in errors)
 
@@ -92,7 +92,7 @@ class TestPreflightCheck:
         (tmp_path / "autohelix.yaml").write_text(config_text)
         config, raw = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
-            issues = preflight_check(config, raw, tmp_path)
+            issues = preflight_check(config, tmp_path)
         warnings = [i for i in issues if i.level == "warning"]
         assert any("matches no committed file" in i.message for i in warnings)
 
@@ -120,7 +120,7 @@ class TestPreflightCheck:
         (tmp_path / "autohelix.yaml").write_text("goal: Make it faster\ngates:\n  - pytest tests/\n")
         config, raw = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
-            issues = preflight_check(config, raw, tmp_path)
+            issues = preflight_check(config, tmp_path)
         assert not any("scope" in i.message.lower() for i in issues)
 
     def test_multiple_values_from_one_command(self, tmp_path):
@@ -143,7 +143,7 @@ class TestPreflightCheck:
                 output="throughput: 1500\nlatency: 0.5\n",
                 errors={},
             )
-            issues = preflight_check(config, raw, tmp_path)
+            issues = preflight_check(config, tmp_path)
         errors = [i for i in issues if i.level == "error"]
         assert not any("throughput" in i.message or "latency" in i.message for i in errors)
 
@@ -167,7 +167,7 @@ def _committed(folder: Path, files: dict[str, str], untracked: dict[str, str] = 
 def _scope_warnings(folder: Path, scope: str) -> list[str]:
     (folder / "autohelix.yaml").write_text(f"goal: g\nagent: {{backend: mock}}\nscope:\n{scope}")
     config, raw = load_config(folder)
-    return [i.message for i in preflight_check(config, raw, folder) if "scope." in i.message]
+    return [i.message for i in preflight_check(config, folder) if "scope." in i.message]
 
 
 def test_preflight_matches_like_the_harness(tmp_path):

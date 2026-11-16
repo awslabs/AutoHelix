@@ -43,9 +43,7 @@ def scope_warning(config: Config) -> str | None:
             "set scope.editable (and scope.frozen) to protect them.")
 
 
-def preflight_check(
-    config: Config, raw_config: dict, project_path: Path
-) -> list[PreflightIssue]:
+def preflight_check(config: Config, project_path: Path) -> list[PreflightIssue]:
     """Run preflight validation checks on a project.
 
     Checks config validity, agent availability, and scope patterns.
@@ -54,7 +52,7 @@ def preflight_check(
     issues: list[PreflightIssue] = []
 
     # 1. Config validation
-    config_issues = config.validate(raw_data=raw_config)
+    config_issues = config.validate()
     for ci in config_issues:
         issues.append(PreflightIssue(level=ci.level, message=ci.message))
 
@@ -337,53 +335,6 @@ def parse_structured_metrics(output: str) -> dict[str, float]:
     return results
 
 
-def parse_metric_output(
-    output: str,
-    metric_name: str | None = None,
-    allow_unnamed_fallback: bool = True,
-) -> float | None:
-    """Extract a numeric value from command output.
-
-    Recognized formats (in priority order):
-    - ##autohelix[name=1234] (structured protocol, recommended)
-    - "<metric_name>: 1234" or "<metric_name>=1234" (if metric_name provided)
-
-    Returns None if no value can be parsed. Metric commands should print
-    their result as: ##autohelix[name=value]
-
-    `allow_unnamed_fallback`: when a single structured metric is reported, use it
-    regardless of its name. Only safe when exactly one metric is *declared* —
-    otherwise the lone emitted value would be fabricated for every declared
-    metric (e.g. declaring throughput+latency but emitting only throughput would
-    record both as the same number). Callers with multiple declared metrics
-    should pass False.
-    """
-    # First, try the structured ##autohelix[key=value] protocol
-    structured = parse_structured_metrics(output)
-    if metric_name and metric_name in structured:
-        return structured[metric_name]
-    # If only one structured metric was reported, use it regardless of name
-    if allow_unnamed_fallback and len(structured) == 1:
-        return next(iter(structured.values()))
-
-    # A structured line for this name that isn't a finite number reports nothing; the
-    # name match below would read "1" out of "##autohelix[speed=1e999]".
-    if metric_name and f"##autohelix[{metric_name}=" in output:
-        return None
-
-    # Then, try to match the metric name from config (e.g., "throughput: 1234")
-    if metric_name:
-        pattern = rf"(?:{re.escape(metric_name)})[:\s=]+([0-9.]+)"
-        match = re.search(pattern, output, re.MULTILINE | re.IGNORECASE)
-        if match:
-            try:
-                return float(match.group(1))
-            except ValueError:
-                pass
-
-    return None
-
-
 @dataclass
 class ObserveResult:
     """Result of running an observe entry. A failed entry (non-zero exit, timeout, could
@@ -442,26 +393,20 @@ def run_observe_entry(
     if run.return_code != 0:
         return failed(f"exited {run.return_code}", run.return_code)
 
+    # Only `##autohelix[name=value]` lines on stdout count, matched by name: a
+    # `name: value` line or a structured line under another name is not the metric.
     values: dict[str, float] = {}
     errors: dict[str, str] = {}
-    # The unnamed-metric fallback is only safe when a single metric is
-    # declared; with several, it would copy the lone emitted value into
-    # every declared name (see parse_metric_output).
-    allow_unnamed_fallback = len(mc.metrics) == 1
     structured = parse_structured_metrics(run.stdout)
+    others = sorted(set(structured) - set(mc.metrics))
     for name in mc.metrics:
-        if mc.review is not None:  # the review's prose can't carry a number
-            value = structured.get(name)
-        else:
-            value = parse_metric_output(
-                output, metric_name=name, allow_unnamed_fallback=allow_unnamed_fallback
-            )
-        if value is not None:
-            values[name] = value
+        if name in structured:
+            values[name] = structured[name]
         else:
             errors[name] = (
-                f"Could not parse metric value from output. "
-                f"Recommended: print '##autohelix[{name}=<number>]' from your benchmark script."
+                f"Could not read metric {name!r}: print '##autohelix[{name}=<number>]' on stdout"
+                + (f" (it reported {', '.join(others)})" if others else "")
+                + "."
             )
     if mc.review is not None and errors:  # a review that leaves a declared number out fails
         return failed(f"did not report {', '.join(errors)}", run.return_code)

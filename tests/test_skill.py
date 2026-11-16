@@ -298,4 +298,4 @@ def test_documented_yaml_validates(resources, name):
             "gates": ["python validate_guide.py"],
             **raw,
         }
-        assert Config.from_dict(data).validate(data) == []
+        assert Config.from_dict(data).validate() == []

@@ -148,23 +148,15 @@ design; return to the proposal if a fix would materially change the experiment.
 Always validate the YAML and inspect its structure, declared metric names and
 gate references, scope/input paths, command and dependency setup, working
 directory/import paths, and expected output/capture locations without executing
-the configured commands. Inspect how declared metrics would be emitted; output
-files may not exist until evaluation. Validate the config file from the project
-root with AutoHelix's own Python: the one the session's first prompt names, else
-the interpreter on the first line of the `autohelix` executable
-(`head -1 "$(command -v autohelix)"`; for `#!/usr/bin/env python3`, that
-`python3`). Replace `/path/to/python` below with it:
-
-```sh
-/path/to/python - <<'EOF'
-from pathlib import Path
-from autohelix.config import load_config
-
-config, raw = load_config(Path("."), Path("autohelix.yaml"))  # the file you wrote, e.g. autohelix.yaml
-for issue in config.validate(raw):
-    print(f"{issue.level}: {issue.message}")
-EOF
-```
+the configured commands. Inspect how declared metrics would be emitted (only
+`##autohelix[name=value]` lines on stdout count); output files may not exist
+until evaluation. Check the config from the project root with `autohelix run
+--check` (`autohelix run perf --check` for `autohelix/perf.yaml`; use the
+launcher the session's first prompt names if `autohelix` isn't on PATH). It
+makes every check `autohelix run` makes before writing anything (the config,
+the prompt template, a clean checkout, the agent command, scope patterns),
+starts nothing and exits 0 when the run would start. Before the commit it may
+only report the uncommitted setup files; check again after committing.
 
 Resolve validation errors and explain material warnings. This static review is
 separate from executing checks, measurements, or evidence-gathering commands.

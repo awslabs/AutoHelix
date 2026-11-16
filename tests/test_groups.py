@@ -52,7 +52,7 @@ def watch_agent(harness, monkeypatch, seen):
 
 
 def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, monkeypatch):
-    configure(project, observe=[{"name": "bench", "command": "echo score: 3.5", "metrics": {"score": "higher"}}],
+    configure(project, observe=[{"name": "bench", "command": "echo '##autohelix[score=3.5]'", "metrics": {"score": "higher"}}],
               agent={"backend": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
                                                   "notes_content": "tried {iteration}"}})
     first = Harness(project, new=True, group="g")

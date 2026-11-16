@@ -345,7 +345,6 @@ def test_unknown_template_variables():
     template = ("{{ goal }} {{ constraints }} {% for g in gates %}{{ g.text }}{% endfor %} {{ range(2) }} "
                 "{% if history_summary %}{% endif %}{% set local = 1 %}{{ local }}")
     assert unknown_variables(template) == ["constraints", "history_summary"]
-    assert unknown_variables("{% if") == []
 
 
 def test_a_custom_template_with_old_variables_warns_at_run_start(repo, capsys):
