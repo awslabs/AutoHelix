@@ -81,16 +81,6 @@ function fmtClock(epochSeconds) {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-// What is left of the running segment's --time, as the console says it (run_table.time_cap):
-// "47m 55s left (--time 1h)", past it "time up (--time 1h)". '' when the run isn't
-// running or the segment has no --time (a stop reason says when time ended it).
-function timeCap(status, now = Date.now() / 1000) {
-  const s = status || {}, cap = s.max_time_seconds;
-  if (s.state !== 'running' || !isNumber(cap) || cap <= 0 || !isNumber(s.segment_started_at)) return '';
-  const left = Math.floor(cap) - Math.max(0, Math.floor(now - s.segment_started_at));
-  return `${left > 0 ? `${fmtDuration(left)} left` : 'time up'} (--time ${fmtLimit(cap)})`;
-}
-
 // "20261114-2333-sorting-1q3w" -> name "sorting-1q3w", started "2026-11-14 23:33";
 // a run of autohelix.yaml has only the suffix: "Run 1q3w".
 function splitRunId(id) {
@@ -146,6 +136,6 @@ function followTheme(logos = { light: '/logo-light.svg', dark: '/logo-dark.svg' 
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { fmtNumber, fmtChange, better, fmtDuration, fmtLimit, fmtMoney, fmtCap, plural, timeCap,
+  module.exports = { fmtNumber, fmtChange, better, fmtDuration, fmtLimit, fmtMoney, fmtCap, plural,
     shortId, landingWords, splitRunId, runNotes };
 }

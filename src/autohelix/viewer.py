@@ -351,17 +351,26 @@ class RunData:
         latest = ProjectRuns._metrics(records, {})
         return {m["name"]: {"value": m["value"], "iteration": latest["iteration"]} for m in latest["values"]} if latest else {}
 
-    def _run_row(self, records) -> dict | None:
-        """What the stats line says beside the metrics, as the run list does: the run's
-        time (the recorded iterations', the baseline's included), accepted iterations,
-        landing (`ProjectRuns.landing_state`) and mode."""
+    def _run_row(self, records, status: dict | None) -> dict | None:
+        """What the stats line says beside the metrics, as the run list does: iterations
+        (`3/14`, `run_words`), the run's time (the recorded iterations', the baseline's
+        included, and a running iteration's so far) and what is left of --time, accepted
+        iterations, landing (`ProjectRuns.landing_state`) and mode."""
         if not self.paths.run_id:
             return None
         try:
             data = self.paths.read_identity()
         except RuntimeError:
             return None
-        return {"id": self.paths.run_id, "seconds": sum(record_seconds(r) for r in records),
+        now = time.time()
+        seconds = sum(record_seconds(r) for r in records)
+        run = {"status": status, "progress": {"iterations": max((r.iteration for r in records), default=0),
+                                              "max_iterations": (status or {}).get("max_iterations")}}
+        started = status.get("iteration_started_at") if run_table._under_way(run) else None
+        if isinstance(started, (int, float)):
+            seconds += max(0.0, now - started)
+        return {"id": self.paths.run_id, "iterations": run_table._iterations(run), "seconds": seconds,
+                "time_left": run_table.time_cap(run, now),
                 "accepted": sum(1 for r in records if r.iteration > 0 and r.accepted),
                 **self._runs.landing_state(self.paths, data, self._runs._refs()), "land": data.get("land") or "auto"}
 
@@ -372,14 +381,15 @@ class RunData:
         total_cost = summarize_costs([usage for row in records for usage in row.cost_usages])
         iterations = self.iterations(records)
         tip = self._words(config, records, iterations)
-        status = with_words(read_run_status(self.project, self.paths.run_id))
+        status = read_run_status(self.project, self.paths.run_id)
+        # `autohelix stop` asked the running segment to end, as on the run list.
+        stop = pending_stop(self.paths, status) if self.paths.run_id else None
         return {
             "project": self.project.name,
             "goal": config.goal if config else None,
             "directions": config.metric_directions() if config else {},
-            "status": status,
-            # `autohelix stop` asked the running segment to end, as on the run list.
-            "stop_requested": pending_stop(self.paths, status) if self.paths.run_id else None,
+            "status": with_words(status, stop),
+            "stop_requested": stop,
             "run_id": self.paths.run_id,
             "config": self._config_summary(config, config_path),
             "notes_files": sorted(self._notes_files(), key=_note_order) if self.paths.run_id else [],
@@ -390,7 +400,7 @@ class RunData:
                 "incomplete": total_cost.incomplete,
             },
             "report": self._report(),
-            "run": self._run_row(records),
+            "run": self._run_row(records, status),
             **self._run_notes(),
         }
 
@@ -911,21 +921,46 @@ RUN_ID = r"[a-z0-9][a-z0-9-]{0,50}"
 JSON_SCHEMA = 1
 
 
-def with_words(status: dict | None) -> dict | None:
+def _tone(style: str | None) -> str | None:
+    """A console style as the pages' colour class: red is `error`, yellow `warning`."""
+    return "error" if style == RED else "warning" if style else None
+
+
+def with_words(status: dict | None, stop_requested=None) -> dict | None:
     """The status with the console's words for it (the stored values stay as they are;
-    this is where the pages get the words): `phase_word`, what a running run is doing as
-    the live row says it (`run_table._phase`: agent, gates, observe, stop, summary;
-    `baseline` at iteration 0), and for a run that isn't running `outcome`, the end
-    block's first line (`run_table._outcome`: {word: Done, detail: iteration budget
-    reached (14), error: whether the console writes it red})."""
+    this is where the pages get the words). Running: `line`, `view`'s status line
+    (`live.status_line`: `Running · iteration 3 · gates · 12s`, `· stopping` added once
+    `autohelix stop` asked), and `phase_word`, the live row's words (`run_table._live_what`:
+    agent, gates, `observe · bench`, stop, summary; `baseline` at iteration 0). Else
+    `outcome`, the end block's first line (`run_table._outcome`: {word: Done, detail:
+    iteration budget reached (14), tone: `error` where the console writes it red,
+    `warning` yellow})."""
     if not status:
         return status
-    run = {"status": status}
-    words = {"phase_word": run_table._phase(run)}
-    if status.get("state") != "running":
-        word, detail, style = run_table._outcome(run)
-        words["outcome"] = {"word": word, "detail": detail, "error": style == RED}
-    return {**status, **words}
+    run = {"status": status, "stop_requested": stop_requested}
+    if status.get("state") == "running":
+        from autohelix import live  # it imports this module
+        return {**status, "line": " · ".join(filter(None, [live.status_line(status), stop_requested and "stopping"])),
+                "phase_word": run_table._live_what(run)}
+    word, detail, style = run_table._outcome(run)
+    return {**status, "outcome": {"word": word, "detail": detail, "tone": _tone(style)}}
+
+
+def run_words(run: dict, now: float) -> dict:
+    """A run list row's cells in the console dashboard's words (run_table's): `state`
+    (running, running (stopping), finished, stopped unexpectedly, archived), `tone` (its
+    colour: `running`, `error`, `warning` or None), `iterations` (`3/14`, the one under
+    way counted), `activity` (`agent 1m 12s` while running, else `5m ago`), `spent`
+    (`spent 24s · $4.34`, a running iteration's time so far included) and `time_left`
+    (`47m 55s left (--time 1h)` while a segment with --time runs)."""
+    if run.get("error"):
+        return {"state": "unreadable", "tone": "error"}
+    live = run_table._live(run)
+    state = run_table._word(run)
+    return {"state": state, "tone": "running" if live else _tone(run_table.STATE_STYLES.get(state)),
+            "iterations": run_table._iterations(run),
+            "activity": run_table._phase(run, now) if live else run_table._ago(run.get("last_activity"), now),
+            "spent": run_table._spent(run, now), "time_left": run_table.time_cap(run, now)}
 
 
 def run_notes(data: dict) -> dict:
@@ -1207,10 +1242,11 @@ def make_server(project: Path, port: int = 8765, *, run_id: str | None = None) -
             elif path == "/api/runs":
                 with lock:
                     payload = dashboard.runs()
-                for row in payload["runs"]:  # the console dashboard's words (`run_table._word`)
-                    row["state_word"] = "unreadable" if row.get("error") else run_table._word(row)
+                now = time.time()
+                for row in payload["runs"]:  # the console dashboard's words
+                    row["words"] = run_words(row, now)
                     if row.get("status"):
-                        row["status"] = with_words(row["status"])
+                        row["status"] = with_words(row["status"], row.get("stop_requested"))
                 return 200, payload
             elif match := re.fullmatch(rf"/api/run/({RUN_ID})(/.+)", path):
                 if (rd := run_data(match[1])) and (response := run_route(rd, match[2])):

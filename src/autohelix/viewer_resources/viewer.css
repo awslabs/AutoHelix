@@ -1,5 +1,6 @@
 /* The console's calm colours, following the system's light or dark theme: ✓ green,
-   ✗ muted red, teal the one accent (what is live, links). Red text only for real errors. */
+   ✗ muted red, teal the one accent (what is live, links). Red text only for real errors,
+   yellow for an interrupted run; a finished one plain, as in the console. */
 :root {
   color-scheme: light dark;
   --bg: light-dark(#ffffff, #111618);
@@ -10,6 +11,7 @@
   --accent: light-dark(#0891b2, #06b6d4);
   --good: light-dark(#0a8a60, #10b981);
   --bad: light-dark(#b85454, #d77a7a);
+  --warn: light-dark(#9a6b00, #d4b04a);
   --code: light-dark(#f1f4f5, #1d2629);
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
@@ -46,8 +48,8 @@ h1 { margin: 0; font-size: 22px; font-weight: 650; }
 .status { padding: 4px 12px; border-radius: 999px; font-weight: 550; font-size: 13px; background: var(--panel); border: 1px solid var(--line); }
 .status.running { color: var(--accent); border-color: var(--accent); }
 .status.running::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
-.status.finished { color: var(--good); }
-.status.failed, .status.crashed { color: var(--bad); }
+.status.error, .state.error { color: var(--bad); }
+.status.warning, .state.warning { color: var(--warn); }
 @keyframes pulse { 50% { opacity: 0.3; } }
 /* Narrow: the status under the title, not squeezing it. */
 @media (max-width: 900px) {
@@ -207,7 +209,4 @@ pre.diff { margin: 4px 0 8px; white-space: pre; overflow-x: auto; border: 1px so
 .runs tr.archived { opacity: 0.55; }
 .runs th select { font-size: 12px; color: var(--muted); padding: 0 4px; }
 .state.running { color: var(--accent); }
-.state.finished { color: var(--good); }
-.state.failed, .state.crashed, .state.error { color: var(--bad); }
-.state.interrupted, .state.archived, .state.idle { color: var(--muted); }
 .empty { padding: 24px 8px; }

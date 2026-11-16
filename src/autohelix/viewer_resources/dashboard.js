@@ -9,73 +9,33 @@ let showArchived = false;
 
 const live = (run) => run.status?.state === 'running';
 
-function fmtAgo(epochSeconds) {
-  if (typeof epochSeconds !== 'number') return '';
-  const s = Date.now() / 1000 - epochSeconds;
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return new Date(epochSeconds * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' });
-}
-
-// The row's state, for its colour; the word is the console dashboard's (`state_word`).
-function outcome(run) {
-  if (run.error) return 'error';
-  if (live(run)) return 'running';
-  if (run.archived) return 'archived';
-  return run.status?.state || 'idle';
-}
-
-// The iteration under way while running, otherwise the last one finished.
-function currentIteration(run) {
-  const s = run.status, p = run.progress;
-  return live(run) && s.iteration > p.iterations ? s.iteration : p.iterations;
-}
-
-// Line 1: the state and what a running run is doing (`agent 1m 12s`), else when it was
-// last active. Line 2: time (baseline included) and cost so far, and what is left of --time.
-// Stop reason, budgets and dates are in the tooltip.
+// The console dashboard's cells (the server's `words`): line 1 the state and what a
+// running run is doing (`agent 1m 12s`), else when it was last active; line 2 time
+// (baseline included) and cost so far, and what is left of --time. Stop request,
+// stop reason, budgets and dates are in the tooltip.
 function statusCell(run) {
-  const kind = outcome(run);
+  const w = run.words;
   const s = run.status;
   const p = run.progress;
-  const notes = [];
-  let activity = '';
-  if (kind === 'running') {
-    activity = `${s.phase_word} ${fmtDuration(Date.now() / 1000 - s.phase_started_at)}`;
-    const asked = run.stop_requested; // `autohelix stop`: it ends after this iteration ("running (stopping)")
-    if (asked) {
-      notes.push(`Stop requested${asked.now ? ' (--now)' : ''}${asked.why ? `: ${asked.why}` : ''}`);
-    }
-  } else if (kind === 'error') {
-    notes.push(run.error);
-  } else {
-    activity = fmtAgo(run.last_activity);
-    if (s?.stop_reason?.detail) notes.push(`Stopped: ${s.stop_reason.detail}`);
-  }
-  if (run.last_activity) notes.push(`Last active ${fmtClock(run.last_activity)}`);
-  if (run.created_at) notes.push(`Created ${fmtClock(run.created_at)}`);
-  let spent = '';
-  if (p) {
-    // A running iteration's time so far is included; its cost arrives when it ends.
-    const seconds = p.seconds + (currentIteration(run) > p.iterations && s.iteration_started_at
-      ? Date.now() / 1000 - s.iteration_started_at : 0);
-    spent = [fmtDuration(seconds), fmtMoney(p.cost_usd, p.cost_incomplete), timeCap(s)].filter(Boolean).join(' · ');
-    if (p.max_cost_usd) notes.push(`Cost budget ${fmtCap(p.max_cost_usd)} (run total)`);
-    if (p.cost_incomplete) notes.push('Some call costs are unknown');
-  }
-  return el('td', { title: notes.join('\n') },
-    el('div', {}, el('span', { className: `state ${kind}`, textContent: run.state_word }),
-      activity ? el('span', { className: 'muted', textContent: ` ${activity}` }) : null),
+  const asked = run.stop_requested; // `autohelix stop`: it ends after this iteration ("running (stopping)")
+  const notes = [
+    run.error,
+    asked && `Stop requested${asked.now ? ' (--now)' : ''}${asked.why ? `: ${asked.why}` : ''}`,
+    !live(run) && s?.stop_reason?.detail && `Stopped: ${s.stop_reason.detail}`,
+    run.last_activity && `Last active ${fmtClock(run.last_activity)}`,
+    run.created_at && `Created ${fmtClock(run.created_at)}`,
+    p?.max_cost_usd && `Cost budget ${fmtCap(p.max_cost_usd)} (run total)`,
+    p?.cost_incomplete && 'Some call costs are unknown',
+  ];
+  const spent = [w.spent, w.time_left].filter(Boolean).join(' · ');
+  return el('td', { title: notes.filter(Boolean).join('\n') },
+    el('div', {}, el('span', { className: `state ${w.tone || ''}`, textContent: w.state }),
+      w.activity ? el('span', { className: 'muted', textContent: ` ${w.activity}` }) : null),
     spent ? el('div', { className: 'sub', textContent: spent }) : null);
 }
 
 function iterationsCell(run) {
-  const p = run.progress;
-  if (!p) return el('td');
-  const n = currentIteration(run);
-  return el('td', { className: 'num', title: live(run) && n > p.iterations ? `Iteration ${n} is under way` : '' },
-    p.max_iterations ? `${n}/${p.max_iterations}` : String(n));
+  return el('td', { className: 'num', textContent: run.words.iterations || '' });
 }
 
 function metricNames(runs) {
@@ -166,7 +126,7 @@ function render() {
   renderSubtitle(runs);
   const running = runs.filter(live).length;
   setText('status', running ? `${running} live` : 'No live runs');
-  $('status').className = `status ${running ? 'running' : 'idle'}`;
+  $('status').className = running ? 'status running' : 'status';
   renderMetricMenu(metricNames(runs));
   $('runs').replaceChildren(...shown.map(runRow));
   $('empty').hidden = runs.length > 0;
@@ -181,7 +141,7 @@ async function loop() {
   } catch (err) {
     console.error(err);
     setText('status', 'Disconnected — retrying');
-    $('status').className = 'status crashed';
+    $('status').className = 'status error';
   } finally {
     setTimeout(loop, document.hidden ? POLL_MS * 5 : POLL_MS);
   }

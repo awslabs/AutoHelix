@@ -55,23 +55,17 @@ function liveIteration() {
 
 const since = (t) => (typeof t === 'number' ? fmtDuration(Date.now() / 1000 - t) : '');
 
-// Running: where and what, with how long it has been at it, as `view`'s status line
-// (`Running · iteration 3 · gates · 12s`); else the console end block's first line (the
-// server's `outcome`: Done / Stopped / Interrupted / Error, and why), red where it is.
+// Running: `view`'s status line (the server's: `Running · iteration 3 · gates · 12s`);
+// else the console end block's first line (the server's `outcome`: Done / Stopped /
+// Interrupted / Error, and why), red or yellow where the console's is.
 function renderStatus() {
   const s = state.status;
   const node = $('status');
-  node.className = `status ${s ? s.state : 'idle'}`;
-  if (!s) { node.textContent = 'No run recorded'; return; }
-  if (s.state === 'running') {
-    const where = s.iteration > 0 && s.phase !== 'report' && `iteration ${s.iteration}`;
-    node.textContent = ['Running', where, s.phase_word, since(s.phase_started_at), state.stop_requested && 'stopping']
-      .filter(Boolean).join(' · ');
-    return;
-  }
+  if (!s) { node.className = 'status'; node.textContent = 'No run recorded'; return; }
+  if (s.state === 'running') { node.className = 'status running'; node.textContent = s.line; return; }
   const o = s.outcome || {};
+  node.className = `status ${o.tone || ''}`;
   node.textContent = [o.word, o.detail, s.stopped_at && fmtClock(s.stopped_at)].filter(Boolean).join(' · ');
-  if (o.error) node.className = 'status failed';
 }
 
 // ---------- report, shared notes ----------
@@ -130,9 +124,9 @@ function renderSharedNotes() {
 // ---------- stats ----------
 
 // As the console's end block: each metric's tip (the server's: the latest accepted
-// value, as the run list shows it) and its change against the baseline, then iterations
-// (as the run list counts them), time and cost (the server's totals, the baseline's
-// included; a running iteration's time so far added), landing.
+// value, as the run list shows it) and its change against the baseline, then iterations,
+// time (what is left of --time under it) and cost, all the server's (the baseline's time
+// included, a running iteration's so far), landing.
 function renderStats() {
   const run = state.run;
   const cost = state.cost;
@@ -145,16 +139,9 @@ function renderStats() {
     stats.push([name, fmtNumber(tip.value), moved ? [tip.value, base, state.directions[name]] : null,
       !moved ? 'baseline' : isNumber(base) ? `from ${fmtNumber(base)} · iter ${tip.iteration}` : `iter ${tip.iteration}`]);
   }
-  const live = liveIteration();
-  const last = state.iterations.at(-1)?.iteration || 0;
-  if (run && (last || live)) {
-    const n = Math.max(last, live || 0), cap = state.status?.max_iterations;
-    stats.push(['Iterations', cap ? `${n}/${cap}` : String(n), null, `${run.accepted} accepted`]);
-  }
+  if (run && run.iterations !== '0') stats.push(['Iterations', run.iterations, null, `${run.accepted} accepted`]);
   if (run) {
-    const started = state.status?.iteration_started_at;
-    const running = live !== null && !row(live) && typeof started === 'number' ? Date.now() / 1000 - started : 0;
-    stats.push(['Time', fmtDuration(run.seconds + running) || '—', null, '']);
+    stats.push(['Time', fmtDuration(run.seconds) || '—', null, run.time_left]);
     stats.push(['Cost', fmtMoney(cost.cost_usd, cost.incomplete) || '—', null, cost.incomplete ? 'some call costs unknown' : '']);
     const landing = landingWords(run, state.status?.state === 'running');
     if (landing.text !== '—') stats.push(['Landing', landing.text, null, landing.hint]);
@@ -250,7 +237,7 @@ function linearTicks(lo, hi) {
   const m = [1, 2, 2.5, 5, 10].find((k) => k * 10 ** power >= raw);
   const step = m * 10 ** power;
   const ticks = [];
-  for (let v = Math.floor(lo / step) * step; v <= hi + step * 1e-9; v += step) ticks.push(Number(v.toPrecision(12)));
+  for (let k = Math.floor(lo / step); k * step <= hi + step * 1e-9; k++) ticks.push(k * step);
   if (ticks.at(-1) < hi) ticks.push(ticks.at(-1) + step);
   return { ticks, decimals: Math.max(0, -power + (m === 2.5 ? 1 : 0) - (m === 10 ? 1 : 0)) };
 }
@@ -297,7 +284,7 @@ function renderRows() {
       rows.push(rowEl(running, 'running', [
         el('td', { textContent: String(running) }), el('td', { className: 'mark running', textContent: '●' }),
         ...names.map(() => el('td')),
-        el('td', { className: 'summary live', textContent: state.status.phase_word }),
+        el('td', { className: 'summary live', textContent: state.status.phase_word }), // `observe · bench`
         el('td', { className: 'num', id: 'live-time' }), el('td'),
       ]));
     }
@@ -421,7 +408,7 @@ function renderPanel() {
   $('panel-title').replaceChildren(label(n), ...[
     outcome === 'accepted' && el('span', { className: 'mark accepted', textContent: ' ✓ accepted' }),
     outcome === 'rejected' && el('span', { className: 'mark rejected', textContent: ' ✗ rejected' }),
-    outcome === 'running' && el('span', { className: 'mark running', textContent: ` ● ${state.status.phase_word} ${since(state.status.phase_started_at)}` }),
+    outcome === 'running' && el('span', { className: 'mark running', textContent: ` ● ${state.status.phase_word} · ${since(state.status.phase_started_at)}` }),
     why && el('span', { className: `why${why.error ? ' error' : ''}`, textContent: ` · ${why.text}` }),
   ].filter(Boolean));
   const order = iterationOrder();
@@ -445,7 +432,8 @@ function renderPanel() {
   const gates = d.gates || [];
   const byGate = gates.some((g) => g.passed === false);
   const full = r?.accepted === false && !byGate ? r.reason || r.summary : null;
-  const reason = full && !(why && full.includes(why.text)) ? full : null; // the title says it already
+  // Not an agent error's: the title says it in the console's words (its output is under Activity).
+  const reason = full && !why?.error && !(why && full.includes(why.text)) ? full : null;
   show('panel-reason', !!(reason || (!byGate && d.failure_output)));
   $('panel-reason').replaceChildren(...[reason && el('p', { textContent: reason }),
     !byGate && d.failure_output && el('pre', { textContent: d.failure_output })].filter(Boolean));
@@ -507,6 +495,7 @@ function changesSection(d, live, defaultOpen) {
   const text = own || d.diff;
   const sinceBaseline = !own && !!d.diff && !live; // report.html: baseline to the final code
   const error = text ? null : panel.diff?.error;
+  const loading = !text && !!d.attempt && (!panel.diff || panel.diff.loading); // not asked for yet, or on its way
   if (!text && !discarded.length && !d.attempt) return null;
   const s = section('changes', 'Changes', defaultOpen);
   const files = text ? parseDiff(text) : [];
@@ -515,12 +504,12 @@ function changesSection(d, live, defaultOpen) {
     files.length && `+${add} −${del}`, live && 'in progress', sinceBaseline && 'since the baseline',
     text?.includes('[… diff cut') && 'cut'].filter(Boolean).join(' · ');
   const frozen = new Set(d.discarded_frozen || []);
-  fill(s, count, JSON.stringify([text, error, discarded, panel.diff?.loading]), () => [
+  fill(s, count, JSON.stringify([text, error, discarded, loading]), () => [
     discarded.length ? el('p', { className: 'muted' }, 'Outside the scope, discarded: ',
       ...discarded.flatMap((p, i) => [i ? ', ' : '', el('code', { textContent: p }), frozen.has(p) ? ' (frozen)' : ''])) : null,
     ...(files.length === 1 ? [diffEl(files[0])] : files.map(diffFileEl)),
     !text && el('p', { className: 'muted', textContent: error
-      || (SNAPSHOT ? 'Not saved in this file; see autohelix view --web.' : panel.diff?.loading ? 'Loading…' : 'No changes.') }),
+      || (loading ? 'Loading…' : SNAPSHOT ? 'Not saved in this file; see autohelix view --web.' : 'No changes.') }),
   ].filter(Boolean));
   return s;
 }
@@ -530,11 +519,10 @@ function observeSection(d, o) {
   const s = section(`observe:${o.name}`, o.name, false);
   const failed = o.ok === false;
   const metrics = Object.entries(o.metrics || {}).map(([k, v]) => `${k} ${fmtNumber(v)}`).join(' · ');
-  s.count.className = failed ? 'error' : 'muted';
   fill(s, [o.review && 'review', failed && `failed${o.error ? `: ${o.error}` : ''}`, o.running && 'running', metrics,
     o.files.length && plural(o.files.length, 'file')].filter(Boolean).join(' · '), JSON.stringify(o), () => {
     const parts = [];
-    if (failed) parts.push(el('p', { className: 'error', textContent: `Failed${o.error ? `: ${o.error}` : ''}; its metrics are missing.` }));
+    if (failed) parts.push(el('p', { className: 'muted', textContent: `Failed${o.error ? `: ${o.error}` : ''}; its metrics are missing.` }));
     if (o.html) {
       const prose = el('div', { className: 'prose' });
       prose.innerHTML = o.html; // rendered by the server from Markdown with raw HTML disabled
@@ -836,19 +824,19 @@ function renderConfig() {
   }
   // Budgets are not config: the latest segment's flags, as its status records them.
   // Iterations and cost as run totals (spent before it plus its own cap); --time only
-  // while the segment runs, against its clock (a stop reason says when time ended it).
+  // while the segment runs (what is left of it is under the Time stat).
   const s = state.status || {};
   const budget = [
     s.max_iterations && `to iteration ${s.max_iterations}`,
     s.max_cost_usd && `${fmtCap(s.max_cost_usd)} total`,
-    timeCap(s),
+    s.state === 'running' && isNumber(s.max_time_seconds) && s.max_time_seconds > 0 && `--time ${fmtLimit(s.max_time_seconds)}`,
   ].filter(Boolean).join(' · ');
   const parts = [
     c.agent && ['Agent', c.agent],
     c.gates?.length && ['Gates', c.gates.join(' · '), c.gates.join('\n')],
     c.observe?.length && ['Observe', c.observe.map(observeLabel).join(' · ')],
     c.scope?.length && ['Editable', c.scope.join(', ')],
-    budget && ['Budget', budget, `${budget}: the latest run/resume's -n/--until and --cost as run totals, its --time as its own`],
+    budget && ['Budget', budget, `The latest run/resume's flags: ${budget} (iterations and cost as run totals, --time its own)`],
   ].filter(Boolean);
   summary.title = `Show the full ${c.file}`;
   rebuild(summary, JSON.stringify([c.file, parts]), () => [el('b', { textContent: 'Config' }),
@@ -913,7 +901,7 @@ async function loop() {
     state = await getJSON('/api/state');
   } catch {
     $('status').textContent = 'Viewer disconnected — retrying';
-    $('status').className = 'status crashed';
+    $('status').className = 'status error';
     if (!SNAPSHOT) setTimeout(loop, POLL_MS);
     return;
   }
