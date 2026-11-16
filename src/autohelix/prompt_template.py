@@ -87,7 +87,7 @@ def build_prompt_variables(
     config: Config,
     history: History,
     iteration: int,
-    worktree_dir: Path,
+    copy_dir: Path,
     *,
     group: str | None = None,
     members=(),
@@ -99,7 +99,7 @@ def build_prompt_variables(
     (`VARIABLES`; agent-written text in them is cleaned of control characters).
 
     - `goal`: the config's goal, whole; `title`: its first line (`Config.title`).
-    - `iteration`: this iteration's number (the baseline is 0); `worktree`: the agent's
+    - `iteration`: this iteration's number (the baseline is 0); `copy`: the agent's
       working directory (its copy), as a string.
     - `history`: the last iterations, one line each (`History.format_summary`); "" if none.
     - `gates`: every gate in list order, `{"text", "kind": "command"|"metric"}`; a metric
@@ -147,7 +147,7 @@ def build_prompt_variables(
     from autohelix.iteration import SEEDED_ITERATIONS
     from autohelix.workspace import ITERATION_DIR
 
-    state = Path(worktree_dir) / ITERATION_DIR
+    state = Path(copy_dir) / ITERATION_DIR
     latest = history.latest(before=iteration)
     # The latest rejection's failure output is shown in full (`last`), not in the history too.
     summary = history.format_summary(without_output=latest.iteration if latest and not latest.accepted else None)
@@ -156,7 +156,7 @@ def build_prompt_variables(
         "goal": config.goal.strip(),
         "title": config.title,
         "iteration": iteration,
-        "worktree": str(worktree_dir),
+        "copy": str(copy_dir),
         "history": "" if summary == "No previous iterations." else summary,
         "gates": [{"text": _describe_gate(gate), "kind": "metric" if isinstance(gate, MetricGate) else "command"}
                   for gate in config.gates],
@@ -292,10 +292,14 @@ def _describe_accepted(history, iteration: int, state: Path) -> dict[str, Any] |
 # The documented variables (`build_prompt_variables`); a custom template naming others
 # gets a warning at run start (`unknown_variables`).
 VARIABLES = frozenset({
-    "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable", "frozen",
+    "goal", "title", "iteration", "copy", "history", "gates", "observe", "stop", "editable", "frozen",
     "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted",
     "recent_iterations", "time_limit", "group", "group_runs", "imported",
 })
+
+
+# Variables that were renamed: a template naming the old one is a config error.
+RENAMED_VARIABLES = {"worktree": "copy"}
 
 
 def template_problem(config) -> str | None:
@@ -304,11 +308,17 @@ def template_problem(config) -> str | None:
     so a broken template fails `run`, not the agent."""
     name = config.prompt_template.name if config.prompt_template else "prompt template"
     try:
-        _create_env().parse(load_template(config))
+        parsed = _create_env().parse(load_template(config))
     except TemplateSyntaxError as e:
         return f"prompt_template {name}, line {e.lineno}: {e.message}"
     except (RuntimeError, UnicodeDecodeError) as e:
         return f"prompt_template {name}: {e}"
+    from jinja2 import meta
+
+    renamed = sorted(old for old in RENAMED_VARIABLES if old in meta.find_undeclared_variables(parsed))
+    if renamed:
+        return f"prompt_template {name}: " + "; ".join(
+            f"`{old}` is now `{RENAMED_VARIABLES[old]}` ({{{{ {RENAMED_VARIABLES[old]} }}}})" for old in renamed)
     return None
 
 

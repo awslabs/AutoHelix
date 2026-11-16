@@ -360,7 +360,7 @@ The variables a template gets are a stable, documented contract:
 | `goal` | The config's goal, whole |
 | `title` | Its first line, cut to about 80 characters |
 | `iteration` | This iteration's number (the baseline is 0) |
-| `worktree` | The agent's working directory (its copy) |
+| `copy` | The agent's working directory (its copy) |
 | `history` | The last iterations, one line each; empty if none |
 | `gates` | Every gate in list order: `{text, kind}`, `kind` being `command` or `metric`; a metric gate's text says what it compares ("speed: at most 5% worse than the last accepted iteration"). Elsewhere (console header, `view --json`, the `gates` of history records) a metric gate goes by its short text, `speed regress 5%` or `speed improve 0%` |
 | `observe` | Every observe entry: `{name, kind, metric_labels}`, `kind` being `command` (with `command`) or `review` (with `prompt`, on one line); `metric_labels` like `speed (↑)` |
@@ -382,6 +382,7 @@ one. Remove `prompt_template:` to return to it. A run warns when a custom
 template uses variables not in this table (such as the old `constraints` or
 `history_summary`; they render empty), and when it still names `.autohelix/`
 paths in the agent's copy (they are now `.autohelix-iteration/`).
+A template naming `worktree`, `copy`'s old name, is a config error.
 Agent-written text in the variables (summaries, discarded paths, errors,
 failure output) has its control characters removed; summaries are cut to 200
 characters.
@@ -391,7 +392,7 @@ characters.
 Editing the template is also how you can keep an evaluation *out of the agent's view*, useful for measuring generalization without the agent optimizing against the eval itself. Two prompt-only levers:
 
 - **Don't list the eval command.** Drop the `observe` (or `gates`) loop from your `prompt_template:` file. The command still runs and its metric still gates and ranks the run; it just isn't named in the prompt. Its output is still in the agent's copy under `.autohelix-iteration/iterations/NNN/`: an observe entry's `observe/<name>/` (a review's transcript included), and a *failing* gate's whole `gates/<k>/` folder (`command.txt`, so the gate's command verbatim, stdout, stderr, and an `ask:` gate's judge transcript; passing gates' output is not copied). A gate's command is in every record too (`record.json`, `history.jsonl`), so leaving a gate out of the prompt doesn't hide its command. So keep what it prints minimal, and prefer an observe entry or a gate that says little when it fails.
-- **Fence the agent into its copy.** Add an explicit instruction to only read and write inside `{{ worktree }}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in scope to reverse-engineer.
+- **Fence the agent into its copy.** Add an explicit instruction to only read and write inside `{{ copy }}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in scope to reverse-engineer.
 
 This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence: in testing, Claude declined to read an out-of-copy eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: copies live outside the project, but the agent runs as you, so one that is determined (or explicitly told to cheat) can still reach the project and anything else on disk by absolute path. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
 

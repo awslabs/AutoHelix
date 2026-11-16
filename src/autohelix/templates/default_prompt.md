@@ -1,6 +1,6 @@
 Goal: {{ goal }}
 
-Your working directory is {{ worktree }}. Don't modify files outside it unless
+Your working directory is {{ copy }}. Don't modify files outside it unless
 the goal directs you to.
 
 This is iteration {{ iteration }}. Baseline is iter-0.
@@ -133,4 +133,4 @@ Notes persist even if your changes are rejected, so they are the only way to pas
 
 Make changes to improve toward the goal.
 Do not create git commits; AutoHelix commits accepted changes for you.
-When done, write a one-line summary of what you changed and why to {{ worktree }}/.autohelix-iteration/commit_summary.txt
+When done, write a one-line summary of what you changed and why to {{ copy }}/.autohelix-iteration/commit_summary.txt

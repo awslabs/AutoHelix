@@ -100,7 +100,7 @@ class TestReportCommand:
 
     def test_errors_when_agent_changes_files(self, runner, project):
         def change(**kwargs):
-            (kwargs["worktree_path"] / "autohelix.yaml").write_text("goal: changed\n")
+            (kwargs["copy_path"] / "autohelix.yaml").write_text("goal: changed\n")
         touch = change
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok", also=touch)):
             result = runner.invoke(main, ["report", "-p", str(project)])

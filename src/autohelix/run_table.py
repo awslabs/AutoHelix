@@ -27,7 +27,7 @@ from autohelix.terminal import Row, Table
 
 WORDS = {"crashed": "stopped unexpectedly", "idle": "not started"}  # others as they are (dashboard.js)
 # The status's phase names, in the words the run's live row uses.
-PHASES = {"preparing checks": "gates", "checks": "gates", "benchmark": "observe", "stop check": "stop",
+PHASES = {"preparing checks": "gates", "checks": "gates", "observe": "observe", "stop check": "stop",
           "report": "summary"}
 STATE_STYLES = {"stopped unexpectedly": "#d77a7a", "interrupted": "yellow", "failed": "#d77a7a"}
 
@@ -227,7 +227,7 @@ def _live_what(run: dict) -> str:
     """The live row's words for a running run: the phase (`agent`, `gates`), an observe
     entry's name (`observe · bench`), `stopping` once `autohelix stop` asked."""
     status = run["status"]
-    entry = status.get("entry") if status.get("phase") == "benchmark" and isinstance(status.get("entry"), str) else ""
+    entry = status.get("entry") if status.get("phase") == "observe" and isinstance(status.get("entry"), str) else ""
     return " · ".join(filter(None, [_phase(run), clean(entry), "stopping" if run.get("stop_requested") else ""]))
 
 

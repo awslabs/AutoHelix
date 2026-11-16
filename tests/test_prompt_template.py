@@ -116,6 +116,18 @@ class TestLoadTemplate:
         assert any(m.startswith("prompt_template p.md, line 2: Unexpected end of template") for m in found), found
 
 
+    def test_a_template_naming_worktree_is_a_config_error_naming_copy(self, tmp_path):
+        """`worktree` was renamed `copy` (copies replaced worktrees), with no alias: it
+        would render empty ("Your working directory is .")."""
+        from autohelix.config import load_config
+
+        (tmp_path / "p.md").write_text("Work in {{ worktree }}.\n")
+        (tmp_path / "autohelix.yaml").write_text("goal: g\nprompt_template: p.md\n")
+        found = [i.message for i in load_config(tmp_path).validate() if i.level == "error"]
+        assert "prompt_template p.md: `worktree` is now `copy` ({{ copy }})" in found, found
+        (tmp_path / "p.md").write_text("Work in {{ copy }}.\n")
+        assert not [i for i in load_config(tmp_path).validate() if i.level == "error"]
+
 class TestBuildPromptVariables:
     def _make_config(self, iteration_time_seconds=None):
         config = Config(goal="test")
@@ -125,9 +137,9 @@ class TestBuildPromptVariables:
     def test_the_documented_variables(self, tmp_path):
         (tmp_path / ".autohelix").mkdir()
         variables = build_prompt_variables(Config(goal="Title line.\nMore."), History(tmp_path), iteration=1,
-                                           worktree_dir=tmp_path)
+                                           copy_dir=tmp_path)
         assert set(variables) == {
-            "goal", "title", "iteration", "worktree", "history", "gates", "observe", "stop", "editable",
+            "goal", "title", "iteration", "copy", "history", "gates", "observe", "stop", "editable",
             "frozen", "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted", "recent_iterations", "time_limit", "group",
             "group_runs", "imported"}
         assert variables["title"] == "Title line."
@@ -137,14 +149,14 @@ class TestBuildPromptVariables:
 
     def test_hints_empty_when_no_file(self, tmp_path):
         (tmp_path / ".autohelix").mkdir()
-        variables = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        variables = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1, copy_dir=tmp_path)
         assert variables["hints"] == ""
 
     def test_hints_is_the_copys_file(self, tmp_path):
         ah = tmp_path / ".autohelix"
         ah.mkdir(parents=True)
         (ah / "hints.md").write_text("- [2026-07-07 10:00] try numpy\n")
-        variables = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        variables = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1, copy_dir=tmp_path)
         assert variables["hints"] == ".autohelix-iteration/hints.md"
 
     def test_time_limit_is_compact_duration(self, tmp_path):
@@ -152,14 +164,14 @@ class TestBuildPromptVariables:
         # ("timed out after 15 minutes"), which would read as if the run already died.
         (tmp_path / ".autohelix").mkdir()
         config = self._make_config(iteration_time_seconds=900)
-        variables = build_prompt_variables(config, History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        variables = build_prompt_variables(config, History(tmp_path), iteration=1, copy_dir=tmp_path)
         assert variables["time_limit"] == "15m"
         rendered = render_template(load_template(config), variables)
         assert "Time limit: 15m." in rendered and "timed out" not in rendered
 
     def test_time_limit_empty_when_unset(self, tmp_path):
         (tmp_path / ".autohelix").mkdir()
-        variables = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        variables = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1, copy_dir=tmp_path)
         assert variables["time_limit"] == ""
         assert "Time limit" not in render_template(load_template(self._make_config()), variables)
 
@@ -173,7 +185,7 @@ class TestBuildPromptVariables:
                         {"name": "review", "review": "Review the\ndiff."}],
             "scope": {"editable": ["src/"], "frozen": ["src/fixtures/"]},
         })
-        variables = build_prompt_variables(config, History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        variables = build_prompt_variables(config, History(tmp_path), iteration=1, copy_dir=tmp_path)
         assert variables["gates"] == [
             {"text": "pytest -q", "kind": "command"}, {"text": "ask: Keeps the API?", "kind": "command"},
             {"text": "speed: at most 5% worse than the last accepted iteration", "kind": "metric"},
@@ -194,7 +206,7 @@ class TestBuildPromptVariables:
     def test_frozen_alone_renders(self, tmp_path):
         (tmp_path / ".autohelix").mkdir()
         config = Config.from_dict({"goal": "g", "scope": {"frozen": ["tests/"]}})
-        variables = build_prompt_variables(config, History(tmp_path), iteration=1, worktree_dir=tmp_path)
+        variables = build_prompt_variables(config, History(tmp_path), iteration=1, copy_dir=tmp_path)
         rendered = render_template(load_template(config), variables)
         assert "Frozen (changes to these files will be reverted): tests/" in rendered
         assert "Editable" not in rendered
@@ -211,10 +223,10 @@ CONFIG = {
 }
 
 
-def _seed(worktree, records):
+def _seed(copy_dir, records):
     """The iteration folders seeding would put in the copy: the record, failing gates', observe entries'."""
     for record in records:
-        folder = worktree / ".autohelix-iteration" / "iterations" / f"{record['iteration']:03d}"
+        folder = copy_dir / ".autohelix-iteration" / "iterations" / f"{record['iteration']:03d}"
         folder.mkdir(parents=True, exist_ok=True)
         for k, gate in enumerate(record.get("gates") or [], start=1):
             if gate.get("passed") is False and gate.get("kind", "command") == "command":
@@ -234,20 +246,20 @@ def _render(tmp_path, records, iteration, *, patch=False, group=None, members=()
     history = History(tmp_path)
     for record in records:
         history.append(IterationResult(**record))
-    worktree = tmp_path / "copy"
-    (worktree / ".autohelix-iteration").mkdir(parents=True, exist_ok=True)
+    copy_dir = tmp_path / "copy"
+    (copy_dir / ".autohelix-iteration").mkdir(parents=True, exist_ok=True)
     if patch:
-        (worktree / ".autohelix-iteration" / "rejected.patch").write_text("diff --git a/sort.py b/sort.py\n")
+        (copy_dir / ".autohelix-iteration" / "rejected.patch").write_text("diff --git a/sort.py b/sort.py\n")
     if seed:
-        _seed(worktree, records)
+        _seed(copy_dir, records)
     for run_id in [*members, *([imported] if imported else [])]:
         if run_id not in missing:
-            (worktree / ".autohelix-iteration" / "runs" / run_id / "notes").mkdir(parents=True)
+            (copy_dir / ".autohelix-iteration" / "runs" / run_id / "notes").mkdir(parents=True)
     if hints:
         history.paths.hints.write_text("- try a heap\n")
     config = Config.from_dict(CONFIG)
     variables = build_prompt_variables(
-        config, history, iteration, worktree, group=group,
+        config, history, iteration, copy_dir, group=group,
         members=[(RunPaths(tmp_path, run_id), {}) for run_id in members],
         imported=(RunPaths(tmp_path, imported), {}) if imported else None, rejected_diff=rejected_diff, head=head)
     return variables, render_template(load_template(config), variables)

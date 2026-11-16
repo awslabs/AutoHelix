@@ -142,13 +142,13 @@ CLAUDE_HOOK = Path(__file__).parent.parent / "src" / "autohelix" / "bin" / "clau
 
 
 def run_time_left(start_offset: int | None = None, budget: int | None = None) -> str:
-    from autohelix.harness import _format_time
+    from autohelix.iteration_time import format_limit
 
     env = os.environ.copy()
     if start_offset is not None and budget is not None:
         env["AUTOHELIX_ITERATION_START"] = str(1000 - start_offset)
         env["AUTOHELIX_ITERATION_BUDGET"] = str(budget)
-        env["AUTOHELIX_ITERATION_BUDGET_TEXT"] = _format_time(budget)  # as the harness sets it
+        env["AUTOHELIX_ITERATION_BUDGET_TEXT"] = format_limit(budget)  # as the harness sets it
     else:
         env.pop("AUTOHELIX_ITERATION_START", None)
         env.pop("AUTOHELIX_ITERATION_BUDGET", None)
@@ -202,10 +202,11 @@ def test_time_left_sub_minute_shown_in_seconds():
 
 
 def test_time_left_states_the_budget_exactly():
-    """It used to round to whole hours or minutes: "1h 30m left of 1h budget"."""
-    assert "1h 30m left of 1h 30m budget" in run_time_left(start_offset=0, budget=5400)
+    """It used to round to whole hours or minutes: "1h 30m left of 1h budget". The
+    budget is spelled as the config and flags spell a limit (`format_limit`)."""
+    assert "1h 30m left of 1h30m budget" in run_time_left(start_offset=0, budget=5400)
     assert "45s left of 45s budget" in run_time_left(start_offset=0, budget=45)
-    assert "of 1m 30s budget" in run_time_left(start_offset=0, budget=90)
+    assert "of 1m30s budget" in run_time_left(start_offset=0, budget=90)
 
 
 def test_the_claude_hook_logs_no_tool_calls(tmp_path):
@@ -251,7 +252,8 @@ def test_claude_hook_emits_valid_json():
 
 
 def test_the_agent_gets_its_budget_formatted(project, monkeypatch):
-    """`agent.timeout: 1h30m` reaches the time-left hint as "1h 30m", not rounded."""
+    """`agent.timeout: 1h30m` reaches the time-left hint as "1h30m" (as the config spells
+    it; it was "1h 30m", a third duration format), not rounded."""
     from autohelix.agents.mock import MockAgent
     from autohelix.harness import Budget, Harness
     from tests.test_runs import configure
@@ -269,5 +271,5 @@ def test_the_agent_gets_its_budget_formatted(project, monkeypatch):
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
     harness.close()
-    assert seen == ["1h 30m"]
+    assert seen == ["1h30m"]
     assert "AUTOHELIX_ITERATION_BUDGET_TEXT" not in os.environ  # restored after the call

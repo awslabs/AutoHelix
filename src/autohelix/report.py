@@ -131,7 +131,7 @@ def write_report(config: Config, project: Path, console, *, run_id: str, _owned:
     tip = before or run_tip(paths)
     root = claim_copies(paths, lambda message: console.print(f"[yellow]{message}[/yellow]"))
     copy = Copy.create(Repo(project), ensure_copies(root) / "iter-report", files=tip, head=tip,
-                       refs=(paths.ref,))  # the prompt names `autohelix/<id>`
+                       refs=(paths.ref,), watched=True)  # the prompt names `autohelix/<id>`
     started = time.monotonic()
     # Every summary call counts in the run's cost (`History.summary_usages`): recorded
     # before it starts (cost unknown until it returns), then with its usage.
@@ -143,7 +143,7 @@ def write_report(config: Config, project: Path, console, *, run_id: str, _owned:
     try:
         with Live(with_room(display), console=console, refresh_per_second=10, transient=True):
             result = agent.run(
-                worktree_path=copy.working_dir,
+                copy_path=copy.working_dir,
                 prompt=build_report_prompt(config, project, draft, paths.run_id),
                 iteration=0, log_path=log_path, event_callback=on_event,
             )

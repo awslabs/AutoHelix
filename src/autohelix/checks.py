@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 from autohelix.agents.runner import _kill_process_group, end_group
 from autohelix.agents import command_path
 from autohelix.config import DEFAULT_CHECK_TIMEOUT, CommandSpec, Config, MetricGate, ObserveEntry
-from autohelix.sandbox import build_worktree_env
+from autohelix.sandbox import build_copy_env
 from autohelix.workspace import git_env, path_in_scope, run_git
 
 # Progress callback type: (phase, command, elapsed_seconds | None)
@@ -118,7 +118,7 @@ def _command_env(project_path: Path | None, cwd: Path, timeout: int,
     """Environment for a check command: sys.path remapped to the copy, harness-provided
     variables (None removes one, so a variable can't leak in from the harness's own
     environment), and the command's deadline (for tools that run their own agents)."""
-    env = build_worktree_env(project_path, cwd) if project_path else os.environ.copy()
+    env = build_copy_env(project_path, cwd) if project_path else os.environ.copy()
     for key, value in (extra_env or {}).items():
         if value is None:
             env.pop(key, None)

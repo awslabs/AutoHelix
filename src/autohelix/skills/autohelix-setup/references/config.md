@@ -145,7 +145,7 @@ observe:
   display and `stop`, not recommended for gates.
 - `agent` on a review or `ask` entry takes only `backend` (`claude` or
   `codex`), `model`, `reasoning_effort`, `command`; the entry's `timeout:`
-  bounds its judge (an `ask` entry's defaults to 10 minutes).
+  bounds its judge (at least 1m; an `ask` entry's defaults to 10 minutes).
 
 An observe entry that fails (non-zero exit, timeout, a review without a valid
 answer) does not reject the iteration: the failure is recorded and shown, and

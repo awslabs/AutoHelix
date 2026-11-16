@@ -422,7 +422,7 @@ def test_running_iteration_marks_only_the_entry_running(project, server):
     paths = RunPaths(project, "test")
     paths.observe_entry(3, "bench").mkdir(parents=True)
     (paths.observe_entry(3, "bench") / "stdout.txt").write_text("done\n")
-    status = {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "benchmark",
+    status = {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "observe",
               "phase_started_at": 1, "iteration_started_at": 1}
     write_json(paths.status, status)
     sections = get_json(server + "/api/run/test/iteration/3")["observe"]

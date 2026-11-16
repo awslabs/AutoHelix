@@ -184,14 +184,14 @@ class AgentBackend(Protocol):
 
     def run(
         self,
-        worktree_path: Path,
+        copy_path: Path,
         prompt: str,
         iteration: int,
         log_path: Path,
         event_callback: EventCallback,
         project_path: Path | None = None,
     ) -> AgentRunResult:
-        """Execute the agent inside the given worktree."""
+        """Execute the agent inside the given copy."""
 
 
 # Every `agent.backend` (`create_agent`), and those an `ask:`/`review:` judge can use

@@ -241,3 +241,14 @@ def test_project_runs_unchanged_by_a_bare_view(folder_project):
     assert cli(folder_project, "view", "--once").exit_code == 0
     assert sorted(p.name for p in (folder_project / ".autohelix").rglob("*")) == before
     assert len(project_runs(folder_project)) == 1
+
+
+def test_paths_without_an_id_name_no_run_even_beside_an_old_pointer(tmp_path):
+    """There is no current-run pointer: an old `.internal/current` file is never followed
+    (it used to be, and a hand-edited one broke every command)."""
+    pointer = tmp_path / ".autohelix" / ".internal" / "current"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text("My Run\n")
+    paths = RunPaths(tmp_path)
+    assert paths.run_id is None
+    assert paths.config == tmp_path / ".autohelix" / "config.yaml"  # no run's stored config

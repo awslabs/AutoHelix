@@ -1,6 +1,6 @@
 """Integration tests for the full AutoHelix loop.
 
-These tests exercise the complete harness: worktree creation, agent execution,
+These tests exercise the complete harness: copy creation, agent execution,
 constraint checking, and merging/rejection.
 
 Tests marked with @pytest.mark.slow actually invoke Claude and take longer.
@@ -1008,31 +1008,13 @@ gates:
         assert all(not r.accepted for r in iterations)
 
 
-class TestFormatTime:
-    def test_seconds_only(self):
-        from autohelix.harness import _format_time
-        assert _format_time(45) == "45s"
+class TestFormatLimit:
+    """A limit (`--time`, `agent.timeout`) is spelled as the config spells it, in the
+    stop line too: harness.py's own `_format_time` ("2m 5s") was a third format."""
 
-    def test_minutes_and_seconds(self):
-        from autohelix.harness import _format_time
-        assert _format_time(125) == "2m 5s"
-
-    def test_hours_minutes_seconds(self):
-        from autohelix.harness import _format_time
-        assert _format_time(7265) == "2h 1m 5s"
-
-    def test_exact_hour(self):
-        from autohelix.harness import _format_time
-        assert _format_time(3600) == "1h"
-
-    def test_exact_minutes(self):
-        from autohelix.harness import _format_time
-        assert _format_time(120) == "2m"
-
-    def test_hours_and_seconds_skips_zero_minutes(self):
-        from autohelix.harness import _format_time
-        assert _format_time(7205) == "2h 5s"
-
-    def test_zero(self):
-        from autohelix.harness import _format_time
-        assert _format_time(0) == "0s"
+    @pytest.mark.parametrize("seconds, text", [
+        (45, "45s"), (125, "2m5s"), (7265, "2h1m5s"), (3600, "1h"), (120, "2m"), (7205, "2h5s"), (0, "0s"),
+    ])
+    def test_format_limit(self, seconds, text):
+        from autohelix.iteration_time import format_limit
+        assert format_limit(seconds) == text

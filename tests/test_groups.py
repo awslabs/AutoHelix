@@ -295,7 +295,9 @@ def test_a_broken_member_doesnt_stop_another_run(project):
     assert result.exit_code == 0, result.output
 
 
-def test_unchanged_notes_are_hard_links_and_a_removed_notes_folder_stays_removed(project, monkeypatch):
+def test_notes_versions_are_copies_and_a_removed_notes_folder_stays_removed(project, monkeypatch):
+    """An unchanged note used to be a hard link to the previous version's: editing the
+    latest in place rewrote every earlier version."""
     from autohelix import iteration
 
     paths, _ = started(project)
@@ -307,7 +309,10 @@ def test_unchanged_notes_are_hard_links_and_a_removed_notes_folder_stays_removed
     (notes / "keep.md").write_text("same\n")
     (notes / "new.md").write_text("new\n")
     iteration.save_notes(paths, copy, 2)
-    assert os.stat(paths.notes_versions / "1" / "keep.md").st_ino == os.stat(paths.notes / "keep.md").st_ino
+    assert os.stat(paths.notes_versions / "1" / "keep.md").st_ino != os.stat(paths.notes / "keep.md").st_ino
+    with open(paths.notes / "keep.md", "a") as latest:  # an edit in place, as `echo >>` makes
+        latest.write("edited\n")
+    assert (paths.notes_versions / "1" / "keep.md").read_text() == "same\n"
     assert (paths.notes / "new.md").read_text() == "new\n"
     import shutil
     shutil.rmtree(notes)

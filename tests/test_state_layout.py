@@ -452,12 +452,12 @@ def test_a_storage_failure_never_loses_a_gate_or_stop_outcome(project, monkeypat
 
 
 def _wrap_agent(harness, act):
-    """Calls `act(worktree, iteration)` before each agent call (the mock agent runs after)."""
+    """Calls `act(copy_dir, iteration)` before each agent call (the mock agent runs after)."""
     original = harness.run_agent
 
-    def run_agent(worktree, prompt, iteration):
-        act(worktree, prompt, iteration)
-        return original(worktree, prompt, iteration)
+    def run_agent(copy_dir, prompt, iteration):
+        act(copy_dir, prompt, iteration)
+        return original(copy_dir, prompt, iteration)
 
     harness.run_agent = run_agent
 
@@ -607,8 +607,8 @@ def test_an_agent_copy_holds_a_bounded_number_of_iterations(project):
                observe=[{"name": "bench", "command": 'echo "bench $AUTOHELIX_ITERATION"'}])
     seen = {}
 
-    def act(worktree, prompt, iteration):
-        state = worktree / ".autohelix-iteration"
+    def act(copy_dir, prompt, iteration):
+        state = copy_dir / ".autohelix-iteration"
         seen[iteration] = (_listing(state / "iterations"), prompt,
                            {n: _tree(state / "iterations" / n) for n in _listing(state / "iterations") or []})
 
@@ -634,8 +634,8 @@ def test_a_rejected_attempt_keeps_its_patch_in_its_folder(project):
     _configure(project, gates=['[ "$AUTOHELIX_ITERATION" != 1 ]'])
     patches = {}
 
-    def act(worktree, prompt, iteration):
-        patch = worktree / ".autohelix-iteration" / "rejected.patch"
+    def act(copy_dir, prompt, iteration):
+        patch = copy_dir / ".autohelix-iteration" / "rejected.patch"
         patches[iteration] = patch.read_bytes() if patch.exists() else None
 
     harness = Harness(project, land_mode="manual")
@@ -685,7 +685,7 @@ def test_the_iteration_patch_replaces_what_was_planted(project, tmp_path):
     victim.write_text("keep\n")
     harness = Harness(project, land_mode="manual")
 
-    def act(worktree, prompt, iteration):  # e.g. the agent, by absolute path
+    def act(copy_dir, prompt, iteration):  # e.g. the agent, by absolute path
         harness.paths.iteration_dir(iteration).mkdir(parents=True, exist_ok=True)
         harness.paths.rejected_patch(iteration).symlink_to(victim)
 

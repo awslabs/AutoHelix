@@ -44,7 +44,7 @@ class MockAgent:
 
     def run(
         self,
-        worktree_path: Path,
+        copy_path: Path,
         prompt: str,
         iteration: int,
         log_path: Path,
@@ -66,7 +66,7 @@ class MockAgent:
             return AgentRunResult(success=True, exit_code=0, usage=usage)
 
         if self.config.read_only:  # a judge call (`autohelix ask` or `review`)
-            return self._judge(settings, log_path, prompt, worktree_path)
+            return self._judge(settings, log_path, prompt, copy_path)
 
         # Check if we should fail
         if settings.get("should_fail", False):
@@ -81,7 +81,7 @@ class MockAgent:
         if "{iteration}" in change_content:
             change_content = change_content.replace("{iteration}", str(iteration))
 
-        file_path = worktree_path / change_file
+        file_path = copy_path / change_file
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Append to file if it exists, otherwise create
@@ -100,7 +100,7 @@ class MockAgent:
         # Optionally write notes
         notes_content = settings.get("notes_content")
         if notes_content:
-            notes_dir = worktree_path / ".autohelix-iteration" / "notes"
+            notes_dir = copy_path / ".autohelix-iteration" / "notes"
             notes_dir.mkdir(parents=True, exist_ok=True)
             notes_path = notes_dir / "notes.md"
 
@@ -110,7 +110,7 @@ class MockAgent:
             notes_path.write_text(notes_content)
 
         # Stage the change
-        subprocess.run(["git", "add", change_file], cwd=worktree_path, capture_output=True)
+        subprocess.run(["git", "add", change_file], cwd=copy_path, capture_output=True)
 
         event_callback(AgentEvent(kind=AgentEventKind.STATUS, text="mock agent completed"))
         event_callback(AgentEvent(kind=AgentEventKind.RESULT, text="success"))

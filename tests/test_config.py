@@ -88,6 +88,20 @@ class TestConfigFromDict:
         assert [e for e in found if "agent.timeout` is gone here: the entry's `timeout:` bounds its agent" in e], found
         assert not [e for e in found if "unknown key" in e]
 
+    @pytest.mark.parametrize("entry", [
+        {"gates": [{"ask": "Done?", "timeout": "30s"}]},
+        {"observe": [{"name": "r", "review": "Go", "timeout": 59}]},
+    ])
+    def test_a_judge_entry_timeout_under_a_minute_is_an_error(self, entry):
+        """In a run the judge keeps 30s for its usage and its copy: a 30s `ask:` failed
+        "no time left" on every iteration."""
+        from autohelix.config import JUDGE_MIN_TIMEOUT
+        from autohelix.judge import COPY_MARGIN, MIN_BUDGET
+
+        assert JUDGE_MIN_TIMEOUT > COPY_MARGIN + MIN_BUDGET
+        assert [e for e in errors({"goal": "x", **entry}) if "must be at least 1m here" in e]
+        assert not errors({"goal": "x", "gates": [{"ask": "Done?", "timeout": "1m"}]})
+
     @pytest.mark.parametrize("question", ["--help", "-n ok?", "--yes", "- dash"])
     def test_questions_and_prompts_starting_with_a_dash_stay_text(self, question):
         from click.testing import CliRunner

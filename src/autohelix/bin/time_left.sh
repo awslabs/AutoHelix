@@ -15,7 +15,7 @@ fi
 NOW=$(date +%s)
 ELAPSED=$((NOW - START))
 REMAINING=$((BUDGET - ELAPSED))
-# The harness formats the budget (1h 30m); a bare number of seconds otherwise.
+# The harness formats the budget (1h30m); a bare number of seconds otherwise.
 BUDGET_TEXT="${AUTOHELIX_ITERATION_BUDGET_TEXT:-${BUDGET}s}"
 
 # Human-friendly remaining time: hours+minutes, minutes, or seconds.

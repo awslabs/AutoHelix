@@ -127,7 +127,7 @@ gates:
     yes: Every public function keeps its name and signature.   # optional
     no: A public function was removed, renamed or changed.     # optional
     # timeout: 15m
-    # agent: {backend: codex, model: gpt-5.5, reasoning_effort: high, timeout: 10m}
+    # agent: {backend: codex, model: gpt-5.5, reasoning_effort: high}
 ```
 
 - `ask: <question>` becomes `autohelix ask [flags] -- "<question>"`: flags first,
@@ -140,8 +140,9 @@ gates:
   backend). OpenCode has no read-only mode: with `agent.backend: opencode` at the
   top level, every `ask:` entry needs its own `agent.backend`, and an `autohelix
   ask` a script runs needs `--agent claude` or `--agent codex`.
-- `timeout:` is the command's deadline (default 10m), which also bounds the
-  judge. An entry's `agent.timeout` is an error naming `timeout:`.
+- `timeout:` is the command's deadline (default 10m, at least 1m: the judge
+  keeps 30s of it for its usage and its copy), which also bounds the judge. An
+  entry's `agent.timeout` is an error naming `timeout:`.
 - The judge works in its **own fresh copy of exactly the candidate**, as a
   review does, with the complete change as `.autohelix-iteration/candidate.diff`
   (named in its prompt): not the checks copy, so files earlier gates wrote
@@ -296,7 +297,7 @@ observe:
   is up to the prompt.
 - `agent:` as for [`ask:` entries](#gates): `backend`, `model`,
   `reasoning_effort`, `command`.
-- `timeout:` the command's deadline (default 30m), which also bounds the review.
+- `timeout:` the command's deadline (default 30m, at least 1m), which also bounds the review.
 
 Review numbers are noisy and gameable: fine for display and `stop:`, not
 recommended for gates.

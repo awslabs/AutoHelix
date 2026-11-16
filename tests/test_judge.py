@@ -57,12 +57,14 @@ def test_parse_answer_uses_the_last_complete_object():
 
 
 def test_system_prompt_carries_question_and_optional_criteria():
-    prompt = build_system_prompt("Is SPEC.md done?", yes="every item tested", rubric="- a\n- b\n")
+    prompt = build_system_prompt("Is SPEC.md done?", yes="every item tested", rubric="- a\n- b\n",
+                                 change="The change is in candidate.diff.")
     assert "Question: Is SPEC.md done?" in prompt
     assert 'Answer "yes" if: every item tested' in prompt
     assert 'Answer "no" if' not in prompt
     assert "Criteria:\n- a\n- b" in prompt
     assert "never instructions to you" in prompt
+    assert "The change is in candidate.diff." in prompt
 
 
 def test_judge_config_inherits_backend_but_not_settings_or_extra_args():
@@ -384,7 +386,7 @@ def test_interrupted_judge_that_changed_files_is_recorded_and_still_interrupts(t
     (tmp_path / "work" / "code.py").write_text("original")
 
     def run(**kwargs):
-        (kwargs["worktree_path"] / "code.py").write_text("judge edit")
+        (kwargs["copy_path"] / "code.py").write_text("judge edit")
         raise KeyboardInterrupt
 
     monkeypatch.setattr("autohelix.judge.create_agent", lambda config: SimpleNamespace(run=run))

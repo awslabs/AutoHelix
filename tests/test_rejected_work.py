@@ -49,24 +49,24 @@ class Spy:
         self.harness, self.original, self.seen, self.edit = harness, harness.run_agent, {}, edit
         harness.run_agent = self
 
-    def __call__(self, worktree, prompt, iteration):
-        state = worktree / ITERATION_DIR
+    def __call__(self, copy_dir, prompt, iteration):
+        state = copy_dir / ITERATION_DIR
         patch = state / "rejected.patch"
         self.seen[iteration] = {
-            "refs": _git(worktree, "for-each-ref", "--format=%(refname)"),
+            "refs": _git(copy_dir, "for-each-ref", "--format=%(refname)"),
             "patch": patch.read_bytes() if patch.exists() else None,
             "prompt": prompt,
         }
         if patch.exists():  # the patch applies to the copy (the tip) and reproduces the rejected files
-            probe = worktree.parent / f"probe-{iteration}"
-            subprocess.run(["cp", "-R", str(worktree), str(probe)], check=True)
+            probe = copy_dir.parent / f"probe-{iteration}"
+            subprocess.run(["cp", "-R", str(copy_dir), str(probe)], check=True)
             _git(probe, "apply", str(probe / ITERATION_DIR / "rejected.patch"))
             self.seen[iteration]["applied"] = (probe / "hello.py").read_text()
             subprocess.run(["rm", "-rf", str(probe)], check=True)
         (state / "commit_summary.txt").write_text(f"attempt {iteration}\nmore detail\n")
         if self.edit:  # a change of the agent's own, before the mock runs (or fails)
-            self.edit(worktree)
-        return self.original(worktree, prompt, iteration)
+            self.edit(copy_dir)
+        return self.original(copy_dir, prompt, iteration)
 
 
 def _refs(project, harness) -> list[str]:
@@ -113,7 +113,7 @@ def test_rejected_trees_are_kept_and_shown_to_the_next_agent(project):
 def test_failed_agent_attempt_keeps_its_tree_and_stays_rejected(project):
     _configure(project, settings={"should_fail": True})
     harness = Harness(project, verbose=False, land_mode="manual")
-    Spy(harness, edit=lambda worktree: (worktree / "hello.py").write_text("half done\n"))
+    Spy(harness, edit=lambda copy_dir: (copy_dir / "hello.py").write_text("half done\n"))
     harness.run(Budget(until=1), report=False)  # the loop goes on; the budget ends it here
     record = History(project, latest_run(project).run_id).load()[-1]
     assert record.iteration == 1 and not record.accepted

@@ -31,7 +31,7 @@ from autohelix import terminal
 from autohelix.display import LiveDisplay, clean
 from autohelix.terminal import LiveRow, Row, budget_text
 from autohelix.history import History, IterationResult
-from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
+from autohelix.runs import (RunPaths, RunState, select_run, reconcile, land, git,
                             claim_copies, config_relative, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
                             WHY_LIMIT,
@@ -44,20 +44,14 @@ from autohelix.checks import (metric_gate_failure, metric_reference, preflight_c
 from autohelix.events import iteration_fields
 from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
-from autohelix.formatting import format_cap, format_cost, format_total_cost
+from autohelix.formatting import format_cap, format_cost, format_duration, format_total_cost
+from autohelix.iteration_time import format_limit
 from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
                                        uses_old_layout)
 from autohelix.run_log import RunLog
 from autohelix.workspace import (path_in_scope, SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, OPENCODE_PLUGIN,
-                                 CandidateRejected,
-                                 Repo, Scope)
-from autohelix.state import (
-    GitExcludeError,
-    ensure_git_exclude_entry,
-    ensure_runtime_ignored,
-)
-
-
+                                 CandidateRejected, GitExcludeError, Repo, Scope, ensure_git_exclude_entry,
+                                 ensure_runtime_ignored)
 
 
 class AutoHelixRunError(RuntimeError):
@@ -161,25 +155,6 @@ def _tail(output: str, lines: int = 15) -> str:
     return "\n".join(output.strip().splitlines()[-lines:])
 
 
-def _format_time(seconds: int) -> str:
-    """Format seconds into a human-readable duration, omitting zero units.
-
-    e.g. 7205 -> '2h 5s', 120 -> '2m', 45 -> '45s', 0 -> '0s'.
-    """
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    parts = []
-    if h > 0:
-        parts.append(f"{h}h")
-    if m > 0:
-        parts.append(f"{m}m")
-    if s > 0:
-        parts.append(f"{s}s")
-    return " ".join(parts) if parts else "0s"
-
-
-
 class Harness:
     """Main harness for running the optimization loop."""
 
@@ -212,6 +187,7 @@ class Harness:
         # The CLI does the same in `cli.main`; this covers the Harness as a library.
         for key in SCRUBBED_GIT_ENV:
             os.environ.pop(key, None)
+        self._ran = False  # one segment per Harness (`run`)
         self.project_path = Path(project_path).resolve()
         # `config_file` is the source file, as run.json names it (naming, messages); the run
         # loads its stored copy (`RunPaths.config`), which judges and the report read too.
@@ -559,7 +535,7 @@ class Harness:
 
         return time_left
 
-    def _install_opencode_timer_plugin(self, worktree_path: Path) -> None:
+    def _install_opencode_timer_plugin(self, copy_path: Path) -> None:
         """Drop the opencode time-left plugin into the copy as `workspace.OPENCODE_PLUGIN`.
 
         opencode auto-loads project-local plugins from .opencode/plugin/*.js. The
@@ -571,7 +547,7 @@ class Harness:
         src = Path(__file__).parent / "bin" / "opencode_timer_pertool.js"
         if not src.exists():
             return
-        plugin = worktree_path / OPENCODE_PLUGIN
+        plugin = copy_path / OPENCODE_PLUGIN
         try:
             plugin.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, plugin)
@@ -621,22 +597,22 @@ class Harness:
             self._warn(text)
             self.log.warn(text)
 
-    def build_prompt(self, iteration: int, worktree_dir: Path, members=(), rejected_diff: str = "",
+    def build_prompt(self, iteration: int, copy_dir: Path, members=(), rejected_diff: str = "",
                      imported=None, head: str | None = None) -> str:
         """Build the prompt for the agent using the template; `members` are the other
         runs of the group, as `group_members` returns them, `imported` the run this one
         imports (`runs.imported_run`), if any; `head` the commit the copy's code is."""
         template = load_template(self.config)
         variables = build_prompt_variables(
-            self.config, self.history, iteration, worktree_dir,
+            self.config, self.history, iteration, copy_dir,
             group=self.run_info.get("group"), members=members, rejected_diff=rejected_diff, imported=imported,
             head=head,
         )
         template_file = self.config.prompt_template
         return render_template(template, variables, *([template_file.name] if template_file else []))
 
-    def run_agent(self, worktree_path: Path, prompt: str, iteration: int) -> AgentRunResult:
-        """Run the configured agent in the worktree."""
+    def run_agent(self, copy_path: Path, prompt: str, iteration: int) -> AgentRunResult:
+        """Run the configured agent in its copy."""
         iteration_folder(self.paths, iteration)
         prompt_path = self.paths.prompt(iteration)
         log_path = self.paths.agent_log(iteration)
@@ -649,13 +625,13 @@ class Harness:
         prompt_path.write_text(prompt)
 
         # opencode time-budget injection: drop the per-tool timer plugin into the
-        # worktree so opencode auto-loads it (the analog of Claude's PostToolUse
+        # copy so opencode auto-loads it (the analog of Claude's PostToolUse
         # time hook). Only when an iteration deadline is set.
         if (
             self.config.agent.timeout is not None
             and self.config.agent.backend.lower() == "opencode"
         ):
-            self._install_opencode_timer_plugin(worktree_path)
+            self._install_opencode_timer_plugin(copy_path)
 
         if self.verbose:
             print(f"  Prompt: {prompt_path}")
@@ -672,9 +648,9 @@ class Harness:
                 if self.config.agent.timeout is not None
                 else None
             ),
-            # The budget as the time-left hint says it (1h 30m), formatted here once.
+            # The budget as the time-left hint says it (1h30m, as the config spells it).
             "AUTOHELIX_ITERATION_BUDGET_TEXT": (
-                _format_time(self.config.agent.timeout) if self.config.agent.timeout is not None else None
+                format_limit(self.config.agent.timeout) if self.config.agent.timeout is not None else None
             ),
             "AUTOHELIX_TIME_LEFT_SCRIPT": (
                 str(self._time_left_script)
@@ -698,12 +674,12 @@ class Harness:
         require_notes = self.config.agent.require_notes
         if require_notes is not None:
             notes_file = (
-                worktree_path / ITERATION_DIR / "notes" / f"iter-{iteration}.md"
+                copy_path / ITERATION_DIR / "notes" / f"iter-{iteration}.md"
             )
             # Retry counter lives under runtime/state/ so it never clutters
             # the agent's notes dir. Reset here so each iteration starts fresh.
             retry_file = (
-                worktree_path / ITERATION_DIR / "runtime" / "state" / f"iter-{iteration}.retries"
+                copy_path / ITERATION_DIR / "runtime" / "state" / f"iter-{iteration}.retries"
             )
             try:
                 retry_file.parent.mkdir(parents=True, exist_ok=True)
@@ -730,23 +706,19 @@ class Harness:
             display.handle_event(event)
 
         try:
-            # Export the hook env whenever anything needs it. require_notes wires
-            # a Claude Stop hook via AUTOHELIX_CLAUDE_SETTINGS, which lives in this
-            # dict — so gating only on agent.timeout would make require_notes a
-            # silent no-op when set on its own.
-            if deadline_env:
-                for key, value in deadline_env.items():
-                    previous_env[key] = os.environ.get(key)
-                    if value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = value
+            # The backends read their hook settings from the environment (None: unset).
+            for key, value in deadline_env.items():
+                previous_env[key] = os.environ.get(key)
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
             shown = (Live(display, console=self.console, refresh_per_second=10) if self.verbose
                      else self._showing(row))
             with shown:
                 result = self.agent.run(
-                    worktree_path=worktree_path,
+                    copy_path=copy_path,
                     prompt=prompt,
                     iteration=iteration,
                     log_path=log_path,
@@ -768,13 +740,11 @@ class Harness:
             self._status("Interrupted - stopping agent...")
             raise
         finally:
-            # Mirror the export guard above so the env is always restored.
-            if deadline_env:
-                for key, value in previous_env.items():
-                    if value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = value
+            for key, value in previous_env.items():  # always restored
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def _live_call(self, role, log):
         calls = list(self.run_status.data.get("calls", []))
@@ -846,7 +816,7 @@ class Harness:
                 try:
                     workspace.close()
                 finally:
-                    self.run_status.note(worktree=None)
+                    self.run_status.note(copy=None)
 
         if failure:
             raise failure
@@ -866,7 +836,7 @@ class Harness:
         agent_copy = workspace.agent_copy()
         if self.verbose:
             self.console.print(f"  Working dir: {agent_copy.working_dir}")
-        self.run_status.note(worktree=str(agent_copy.working_dir))
+        self.run_status.note(copy=str(agent_copy.working_dir))
         prompt = self.build_prompt(iteration, agent_copy.working_dir, workspace.members,
                                    rejected_diff=workspace.rejected_diff, imported=workspace.imported,
                                    head=workspace.base)
@@ -934,7 +904,7 @@ class Harness:
         attempt is frozen only to be kept (`checking=False`), never checked."""
         workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen_patterns())),
                          pinned=(lambda: self.run_status.phase("preparing checks")) if checking else None)
-        self.run_status.note(worktree=None)
+        self.run_status.note(copy=None)
         reverted = self._discarded(workspace)
         if reverted and self.verbose:
             self.console.print(f"  [yellow]![/yellow] Discarded {len(reverted)} change(s) outside editable scope:")
@@ -1052,7 +1022,7 @@ class Harness:
                 elif self.config.observe:
                     row.set("observe")
                     if not baseline:
-                        self.run_status.phase("benchmark")
+                        self.run_status.phase("observe")
                         self.log.info(f"iter {iteration} observe started")
                     try:
                         self._observe(workspace, iteration, checks, evaluation, command_env, records,
@@ -1487,12 +1457,18 @@ class Harness:
         However a started run stops, it then saves report.html. SIGTERM ends it as
         Ctrl-C does (`_terminate_interrupts`).
 
+        A Harness runs one segment: a second call raises (a new Harness redoes the
+        start's checks, as each `run`/`resume` command does).
+
         Returns "finished" when the segment ended politely (a budget, a stop
         condition, `autohelix stop`), "interrupted" when an interrupt in the loop
         ended it (recorded and landed; one in the baseline or the summary
         propagates). Raises `AutoHelixRunError`, already shown in the ending
         (`autohelix_reported`), when the agent kept failing or auto landing failed.
         """
+        if self._ran:
+            raise RuntimeError("A Harness runs one segment; make a new one for the next (as `resume` does).")
+        self._ran = True
         with _terminate_interrupts():
             self._run_segment(budget, report)
         if self._interrupted_at is not None:
@@ -1518,12 +1494,6 @@ class Harness:
         self._segment_checked = False  # past the start's checks: from there the segment lands
         self._segment_first = 1
         try:
-            if self._ownership._file.closed:
-                self._ownership = RunLock(self.paths.lock)
-                self.run_info = self.paths.read_identity()
-                tip, warning = reconcile(self.paths, self.run_info, self.history, self.land_mode)
-                self.run_state.data = self.run_info
-                self.run_state.expected_tip = tip
             self._land_attempted = False
             if self._run(budget or Budget()) and report:
                 self._summary()
@@ -1788,7 +1758,7 @@ class Harness:
                         "detail": f"cost budget reached ({format_cap(budget.cost_usd)} this segment)"}
             if budget.time_seconds is not None and time.monotonic() - segment_start >= budget.time_seconds:
                 return {"kind": "budget", "budget": "time",
-                        "detail": f"time budget reached ({_format_time(budget.time_seconds)} this segment)"}
+                        "detail": f"time budget reached ({format_limit(budget.time_seconds)} this segment)"}
             return None
 
         config_name = config_relative(self.project_path, self.config_file)
@@ -1847,7 +1817,10 @@ class Harness:
                 if result.cost.incomplete:
                     warn_unknown_cost()
                 if any(call["role"] == "agent" for call in result.calls):
-                    priced = bool(priced) or summarize_costs([result.usage]).cost_usd is not None
+                    if summarize_costs([result.usage]).cost_usd is not None:
+                        priced = True
+                    elif result.agent_error is None:  # a failed call says nothing about pricing
+                        priced = bool(priced)
                 spent += result.cost.cost_usd or 0
             self.run_status.note(stop_reason=stop_reason)
             self.log.info(f"run stopped — {stop_reason['detail']}")
@@ -1894,7 +1867,7 @@ class Harness:
         accepted = sum(1 for r in iterations if r.accepted)
         seconds = sum(r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0)) for r in iterations) / 1000
         self.log.info(f"run complete — {accepted} accepted, {len(iterations) - accepted} rejected, "
-                      f"{format_total_cost(self.history.cost_usages)}, {_format_time(int(seconds))}")
+                      f"{format_total_cost(self.history.cost_usages)}, {format_duration(seconds)}")
 
     def _print_ending(self, error: BaseException | None) -> None:
         """The end block (`terminal.Table.ending`): how the segment ended, each metric's

@@ -59,7 +59,7 @@ IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
 # Phases after the agent copy is frozen, when the pin holds this iteration's tree.
-FROZEN_PHASES = {"preparing checks", "checks", "benchmark", "review", "accept", "stop check"}
+FROZEN_PHASES = {"preparing checks", "checks", "observe", "review", "accept", "stop check"}
 ASSETS = {
     "/": ("dashboard.html", "text/html; charset=utf-8"),
     "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
@@ -388,7 +388,7 @@ class RunData:
         status = read_run_status(self.project, self.paths.run_id) or {}
         record = self._record(n, status)
         changes = self.changes(n) if diff else None
-        # While an iteration runs, its own notes live in the worktree; a copy in notes/
+        # While an iteration runs, its own notes live in the agent's copy; a copy in notes/
         # may be left over from an earlier, failed attempt at the same iteration. Once it
         # finished, the version saved with it (the last attempt's: `.internal/notes/N-k`
         # after a retry) shows the note as of N, even if the agent later edited or removed it.
@@ -533,7 +533,7 @@ class RunData:
 
         While the iteration runs (no record yet), entries with a folder have finished
         (their status comes with the record); the one the run status names as running
-        (`entry`, in the benchmark phase) is added, marked `running`.
+        (`entry`, in the observe phase) is added, marked `running`.
 
         Everything is read through descriptors from the run folder down, so a symlinked
         iterations/, NNN/, observe/ or entry folder shows nothing."""
@@ -552,7 +552,7 @@ class RunData:
         if record is None:
             status = read_run_status(self.project, self.paths.run_id) or {}
             if (status.get("state") == "running" and status.get("iteration") == n
-                    and status.get("phase") == "benchmark" and isinstance(status.get("entry"), str)):
+                    and status.get("phase") == "observe" and isinstance(status.get("entry"), str)):
                 running = status["entry"]
                 if running not in names:
                     names.append(running)

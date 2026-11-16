@@ -10,7 +10,7 @@
 // Appending to it injects the time-remaining line into the model's context after
 // each tool runs — the same idea, and the same wording, as the Claude hook.
 //
-// AutoHelix drops this file into <worktree>/.opencode/plugin/ for an iteration
+// AutoHelix drops this file into <copy>/.opencode/plugin/ for an iteration
 // when agent.timeout is set, and exports these env vars to the agent:
 //   AUTOHELIX_TIME_LEFT_SCRIPT  path to time_left.sh (the shared, tiered message)
 //

@@ -51,9 +51,9 @@ class Recorder:
 
     def __call__(self, config):
         def run(**kwargs):
-            seen = {"config": config, "prompt": kwargs["prompt"], "cwd": kwargs["worktree_path"]}
+            seen = {"config": config, "prompt": kwargs["prompt"], "cwd": kwargs["copy_path"]}
             if self.inspect:
-                seen.update(self.inspect(config, kwargs["worktree_path"]))
+                seen.update(self.inspect(config, kwargs["copy_path"]))
             self.calls.append(seen)
             kwargs["log_path"].write_text("fake reviewer\n")
             reply = self.replies[min(len(self.calls), len(self.replies)) - 1]

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, command_path
 from autohelix.agents.runner import format_timeout_seconds, run_process
-from autohelix.sandbox import build_worktree_env
+from autohelix.sandbox import build_copy_env
 
 
 class OpenCodeAgent:
@@ -100,7 +100,7 @@ class OpenCodeAgent:
 
     def run(
         self,
-        worktree_path: Path,
+        copy_path: Path,
         prompt: str,
         iteration: int,
         log_path: Path,
@@ -109,13 +109,13 @@ class OpenCodeAgent:
     ) -> AgentRunResult:
         self._usage = {}
         self._final_text = None
-        # Build env with remapped PYTHONPATH for worktree
-        env = build_worktree_env(project_path, worktree_path) if project_path else None
+        # Build env with remapped PYTHONPATH for the copy
+        env = build_copy_env(project_path, copy_path) if project_path else None
 
         try:
             result = run_process(
                 cmd=self._build_command(prompt),
-                cwd=worktree_path,
+                cwd=copy_path,
                 log_path=log_path,
                 line_callback=lambda line: self._handle_line(line, event_callback),
                 heartbeat_seconds=self.heartbeat_seconds,

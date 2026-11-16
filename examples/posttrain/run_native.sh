@@ -2,7 +2,7 @@
 # Native environment entrypoint.
 #
 # Runs commands in the prebuilt env, as the host user — NO Docker, NO root, so the
-# AutoHelix worktree stays clean and never crashes on cleanup.
+# AutoHelix copy stays clean and never crashes on cleanup.
 #
 # Usage:  ./run_native.sh python train_sft.py ...
 #         ./run_native.sh python evaluate.py ...

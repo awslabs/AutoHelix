@@ -93,6 +93,9 @@ RENAMED_TOP_LEVEL_KEYS = {
 ENTRY_AGENT_KEYS = ("backend", "model", "reasoning_effort", "command")
 # An `ask:` gate's deadline without a `timeout:`: the judge's own default (`autohelix ask`).
 ASK_TIMEOUT = 600
+# The least `timeout:` an `ask:` or `review:` entry may set: in a run the judge keeps
+# `judge.COPY_MARGIN` (30s) of it for its usage and its copy's removal, and needs time to answer.
+JUDGE_MIN_TIMEOUT = 60
 _NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _METRIC_NAME = re.compile(r"\w+")
 TITLE_LENGTH = 80
@@ -471,6 +474,9 @@ def _entry_agent(entry: dict, timeout: int | None, backend: str, where: str,
         if (value := agent_string(agent, key, f"{where} agent", errors)) is not None:
             flags += [flag, value]
     if timeout is not None:
+        if timeout < JUDGE_MIN_TIMEOUT:
+            errors.append(f"{where}: `timeout:` must be at least 1m here (the judge keeps 30s of it "
+                          "for its usage and its copy)")
         flags += ["--timeout", str(timeout)]
     if (command := agent_string(agent, "command", f"{where} agent", errors)) is not None:
         flags += ["--command", command]

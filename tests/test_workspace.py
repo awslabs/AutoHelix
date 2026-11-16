@@ -60,7 +60,7 @@ def names(root, tree):
 def agent_copy(repo_dir, copies, name="iter-1-agent"):
     repo = Repo(repo_dir)
     head = git(repo_dir, "rev-parse", "HEAD").stdout.strip()
-    return repo, head, Copy.create(repo, copies / name, files=head, head=head)
+    return repo, head, Copy.create(repo, copies / name, files=head, head=head, watched=True)
 
 
 def test_untouched_copy_snapshots_to_its_tree_and_leaves_user_state(repo_dir, copies):
@@ -100,7 +100,7 @@ def test_snapshot_keeps_in_scope_and_resets_out_of_scope_in_index_only(repo_dir,
     (repo_dir / "old.txt").write_text("old\n")
     head = commit_all(repo_dir)
     repo = Repo(repo_dir)
-    copy = Copy.create(repo, copies / "c", files=head, head=head)
+    copy = Copy.create(repo, copies / "c", files=head, head=head, watched=True)
     (copy.path / "code.py").write_text("print('fast')\n")
     (copy.path / "new.py").write_text("new\n")
     (copy.path / "tool.sh").chmod(0o755)
@@ -125,7 +125,7 @@ def test_frozen_directory_replaced_by_symlink_is_restored(repo_dir, copies, tmp_
     (repo_dir / "tests" / "test_a.py").write_text("frozen\n")
     head = commit_all(repo_dir)
     repo = Repo(repo_dir)
-    copy = Copy.create(repo, copies / "c", files=head, head=head)
+    copy = Copy.create(repo, copies / "c", files=head, head=head, watched=True)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (elsewhere / "test_a.py").write_text("weakened\n")
@@ -158,7 +158,7 @@ def test_crlf_autocrlf_and_working_tree_encoding_round_trip(repo_dir, copies):
     (copy.path / "a.txt").write_bytes(b"one\r\nthree\r\n")
     tree, _ = copy.snapshot(Scope())
     assert blob(repo_dir, tree, "a.txt") == b"one\nthree\n"
-    checks = Copy.create(repo, copies / "checks", files=tree, head=head)
+    checks = Copy.create(repo, copies / "checks", files=tree, head=head, watched=True)
     assert (checks.path / "a.txt").read_bytes() == b"one\r\nthree\r\n"
     assert checks.changed() == []
     # The agent's own git sees CRLF files as clean too.
@@ -174,7 +174,7 @@ def test_clean_filter_cannot_hide_a_write(repo_dir, copies):
     (repo_dir / "value.txt").write_text("GOOD\n")
     head = commit_all(repo_dir)
     repo = Repo(repo_dir)
-    copy = Copy.create(repo, copies / "review", files=head, head=head)
+    copy = Copy.create(repo, copies / "review", files=head, head=head, watched=True)
     (copy.path / "value.txt").write_text("EVIL\n")
     assert copy.changed() == ["value.txt"]
     # The filter is copied, so git inside the copy sees no change at all.
@@ -195,6 +195,24 @@ def test_touch_identical_rewrite_and_new_files_are_not_changes(repo_dir, copies)
     assert copy.changed() == ["code.py", "test_code.py"]
 
 
+def test_an_unwatched_copy_reads_no_file(repo_dir, copies, monkeypatch):
+    """Agent and judge copies don't fingerprint their files: it read and hashed every
+    tracked file for a fingerprint nobody read."""
+    import autohelix.workspace as workspace
+
+    read = []
+    real = workspace._read
+    monkeypatch.setattr(workspace, "_read", lambda root, name: read.append(name) or real(root, name))
+    repo = Repo(repo_dir)
+    head = git(repo_dir, "rev-parse", "HEAD").stdout.strip()
+    copy = Copy.create(repo, copies / "agent", files=head, head=head)
+    assert read == [] and copy.fingerprint is None
+    with pytest.raises(RuntimeError, match="isn't watched"):
+        copy.changed()
+    watched = Copy.create(repo, copies / "checks", files=head, head=head, watched=True)
+    assert "code.py" in read and watched.changed() == []
+
+
 def test_racily_clean_same_size_rewrite_is_detected(tmp_path):
     (tmp_path / "f").write_text("aaaa")
     fingerprint = Fingerprint.take(tmp_path, ["f"])
@@ -208,7 +226,7 @@ def test_symlinked_parent_directory_is_a_change(repo_dir, copies, tmp_path):
     (repo_dir / "pkg").mkdir()
     (repo_dir / "pkg" / "mod.py").write_text("x = 1\n")
     head = commit_all(repo_dir)
-    copy = Copy.create(Repo(repo_dir), copies / "c", files=head, head=head)
+    copy = Copy.create(Repo(repo_dir), copies / "c", files=head, head=head, watched=True)
     clone = tmp_path / "clone"
     shutil.copytree(copy.path / "pkg", clone)
     shutil.rmtree(copy.path / "pkg")
@@ -228,7 +246,7 @@ def test_three_thousand_files_are_fast(repo_dir, copies):
     copy = Copy.create(repo, copies / "agent", files=head, head=head)
     (copy.path / "d3" / "f7.py").write_text("value = -1\n")
     tree, _ = copy.snapshot(Scope(editable=("d3",)))
-    checks = Copy.create(repo, copies / "checks", files=tree, head=head)
+    checks = Copy.create(repo, copies / "checks", files=tree, head=head, watched=True)
     for _ in range(3):
         assert checks.changed() == []
     copy.remove()
@@ -240,7 +258,7 @@ def test_filenames_with_newlines(repo_dir, copies):
     (repo_dir / "odd\nname.py").write_text("x\n")
     (repo_dir / "frozen\nname.py").write_text("y\n")
     head = commit_all(repo_dir)
-    copy = Copy.create(Repo(repo_dir), copies / "c", files=head, head=head)
+    copy = Copy.create(Repo(repo_dir), copies / "c", files=head, head=head, watched=True)
     (copy.path / "odd\nname.py").write_text("changed\n")
     (copy.path / "frozen\nname.py").write_text("changed\n")
     tree, discarded = copy.snapshot(Scope(frozen=("frozen*",)))
@@ -351,7 +369,7 @@ def test_subdirectory_project(repo_dir, copies, ignored):
     (project / ".autohelix").mkdir()
     repo = Repo(project)
     assert repo.prefix == "proj/" and repo.root == repo_dir.resolve()
-    copy = Copy.create(repo, copies / "c", files=head, head=head)
+    copy = Copy.create(repo, copies / "c", files=head, head=head, watched=True)
     assert copy.working_dir == copy.path / "proj"
     (copy.working_dir / "code.py").write_text("edited\n")
     (copy.path / "code.py").write_text("outside the project\n")
@@ -392,7 +410,7 @@ def test_linked_worktree_project(repo_dir, tmp_path):
     copies = tmp_path.resolve() / "copies" / "run"
     copies.mkdir(parents=True)
     head = git(linked, "rev-parse", "HEAD").stdout.strip()
-    copy = Copy.create(repo, copies / "c", files=head, head=head)
+    copy = Copy.create(repo, copies / "c", files=head, head=head, watched=True)
     (copy.path / "code.py").write_text("linked\n")
     tree, _ = copy.snapshot(Scope())
     assert blob(repo_dir, tree, "code.py") == b"linked\n"
@@ -414,7 +432,7 @@ def with_submodule(repo_dir, tmp_path):
 
 
 def test_writes_inside_a_submodule_are_rejected(repo_dir, copies, with_submodule):
-    copy = Copy.create(Repo(repo_dir), copies / "c", files=with_submodule, head=with_submodule)
+    copy = Copy.create(Repo(repo_dir), copies / "c", files=with_submodule, head=with_submodule, watched=True)
     assert (copy.path / "lib").is_dir() and not any((copy.path / "lib").iterdir())
     tree, _ = copy.snapshot(Scope())
     assert tree == tree_of(repo_dir, with_submodule)
@@ -424,7 +442,7 @@ def test_writes_inside_a_submodule_are_rejected(repo_dir, copies, with_submodule
 
 
 def test_changed_or_new_gitlink_is_rejected(repo_dir, copies, with_submodule):
-    copy = Copy.create(Repo(repo_dir), copies / "c", files=with_submodule, head=with_submodule)
+    copy = Copy.create(Repo(repo_dir), copies / "c", files=with_submodule, head=with_submodule, watched=True)
     nested = copy.path / "vendor"
     nested.mkdir()
     git(nested, "init", "-q")
@@ -500,7 +518,7 @@ def test_attr_source_keeps_original_attributes(repo_dir, copies):
     repo = Repo(repo_dir)
     if not repo.attr_source:
         pytest.skip("git lacks --attr-source")
-    copy = Copy.create(repo, copies / "c", files=head, head=head)
+    copy = Copy.create(repo, copies / "c", files=head, head=head, watched=True)
     (copy.path / ".gitattributes").write_text("*.txt -text\n")
     (copy.path / "data.txt").write_bytes(b"a\r\nc\r\n")
     tree, discarded = copy.snapshot(Scope(editable=("data.txt",)))
@@ -514,13 +532,13 @@ def test_missing_attr_source_warns_and_checks_see_published_tree(repo_dir, copie
     head = commit_all(repo_dir)
     repo = Repo(repo_dir)
     repo.attr_source = False
-    copy = Copy.create(repo, copies / "c", files=head, head=head)
+    copy = Copy.create(repo, copies / "c", files=head, head=head, watched=True)
     (copy.path / ".gitattributes").write_text("*.txt -text\n")
     (copy.path / "data.txt").write_bytes(b"a\r\nc\r\n")
     tree, _ = copy.snapshot(Scope(editable=("data.txt",)))
-    checks = Copy.create(repo, copies / "checks", files=tree, head=head)
+    checks = Copy.create(repo, copies / "checks", files=tree, head=head, watched=True)
     published = git(repo_dir, "commit-tree", tree, "-p", head, "-m", "p").stdout.strip()
-    fresh = Copy.create(repo, copies / "fresh", files=published, head=published)
+    fresh = Copy.create(repo, copies / "fresh", files=published, head=published, watched=True)
     assert (checks.path / "data.txt").read_bytes() == (fresh.path / "data.txt").read_bytes()
 
 
@@ -536,7 +554,7 @@ def test_clean_smudge_round_trip_stores_clean_and_checks_see_smudged(repo_dir, c
     (copy.path / "code.py").write_text("DIRTY improvement")
     tree, _ = copy.snapshot(Scope())
     assert blob(repo_dir, tree, "code.py") == b"CLEAN improvement"
-    checks = Copy.create(repo, copies / "checks", files=tree, head=head)
+    checks = Copy.create(repo, copies / "checks", files=tree, head=head, watched=True)
     assert (checks.path / "code.py").read_text() == "DIRTY improvement"
     assert checks.changed() == []
 

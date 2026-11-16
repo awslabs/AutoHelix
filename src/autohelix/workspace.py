@@ -367,7 +367,7 @@ class Copy:
         # symlink that would make git write through it into the user's index.
         self.index = _private_index_dir() / (hashlib.sha256(os.fsencode(path)).hexdigest()[:16] + ".index")
         self.gitlinks: list[str] = []
-        self.fingerprint = Fingerprint()
+        self.fingerprint: Fingerprint | None = None  # `watched` copies only
 
     @property
     def env(self) -> dict[str, str]:
@@ -376,7 +376,10 @@ class Copy:
         return {"GIT_CEILING_DIRECTORIES": str(self.path.parent)}
 
     @classmethod
-    def create(cls, repo: Repo, path: Path, *, files: str, head: str, refs=()) -> "Copy":
+    def create(cls, repo: Repo, path: Path, *, files: str, head: str, refs=(), watched: bool = False) -> "Copy":
+        """A fresh copy of `files` with HEAD at `head`. A `watched` copy fingerprints
+        its files, for `changed()` (checks, stop and report copies; agent and judge
+        copies aren't, their files being the agent's to change or guarded otherwise)."""
         path = Path(path)
         _check_root(path.parent)
         if path.exists() or path.is_symlink():  # left over from an interrupted segment
@@ -393,7 +396,8 @@ class Copy:
                 metadata, name = record.split("\t", 1)
                 (copy.gitlinks if metadata.startswith(GITLINK + " ") else names).append(name)
             copy._init_private_git()
-            copy.fingerprint = Fingerprint.take(path, names)
+            if watched:
+                copy.fingerprint = Fingerprint.take(path, names)
         except BaseException:
             try:
                 copy.remove()
@@ -473,6 +477,8 @@ class Copy:
     def changed(self) -> list[str]:
         """Names of `files` modified or deleted since the copy was created."""
         _check_copy(self.path)
+        if self.fingerprint is None:
+            raise RuntimeError(f"copy {self.path} isn't watched (Copy.create(watched=True))")
         return self.fingerprint.changed(self.path)
 
     def _check_index(self) -> None:
@@ -495,3 +501,93 @@ def remove_copy(path: Path) -> None:
         path.unlink()
     elif path.exists():
         _remove_tree(path)
+
+
+# Keeping `.autohelix/` out of the user's git: a local info/exclude rule, checked effective.
+
+class GitExcludeError(RuntimeError):
+    """Local exclusions could not keep AutoHelix runtime state out of git."""
+
+
+def _exclude_file(project_path: Path) -> Path:
+    """The common git directory's info/exclude, shared by linked worktrees. Git may
+    return a relative path, including when the project is a subdirectory."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        cwd=project_path, capture_output=True, text=True, check=True,
+    )
+    common_dir = Path(result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = project_path / common_dir
+    return common_dir / "info" / "exclude"
+
+
+def ensure_git_exclude_entry(project_path: Path, entry: str) -> None:
+    """Add a local ignore rule without changing the working tree or index."""
+    exclude = _exclude_file(project_path)
+    content = exclude.read_text() if exclude.exists() else ""
+    if entry in content.splitlines():
+        return
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    with exclude.open("a") as f:
+        if content and not content.endswith("\n"):
+            f.write("\n")
+        f.write(f"{entry}\n")
+
+
+def ensure_runtime_ignored(project_path: Path) -> None:
+    """Require an effective runtime exclusion, including on repeated calls. A refusal
+    leaves info/exclude as it was (the entry it added is taken out again)."""
+    try:
+        exclude = _exclude_file(project_path)
+        before = exclude.read_bytes() if exclude.exists() else None
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise GitExcludeError(f"Could not configure local git exclusions: {e}") from e
+    try:
+        _require_runtime_ignored(project_path)
+    except GitExcludeError:
+        try:
+            if before is None:
+                exclude.unlink(missing_ok=True)
+            elif exclude.read_bytes() != before:
+                exclude.write_bytes(before)
+        except OSError:
+            pass
+        raise
+
+
+def _require_runtime_ignored(project_path: Path) -> None:
+    try:
+        ensure_git_exclude_entry(project_path, ".autohelix/")
+        result = subprocess.run(
+            ["git", "check-ignore", "--quiet", "--", ".autohelix/"],
+            cwd=project_path, capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            return
+        if result.returncode != 1:
+            raise GitExcludeError(
+                f"Could not check whether .autohelix/ is ignored: {result.stderr.strip()}"
+            )
+        # Without the trailing slash Git also identifies negations such as !.*.
+        detail = subprocess.run(
+            [
+                "git", "check-ignore", "--verbose", "--non-matching", "--",
+                ".autohelix/", ".autohelix",
+            ],
+            cwd=project_path, capture_output=True, text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise GitExcludeError(f"Could not configure local git exclusions: {e}") from e
+    rule = next(
+        (line.split("\t", 1)[0] for line in detail.stdout.splitlines()
+         if not line.startswith("::")),
+        None,
+    )
+    source = f" Conflicting ignore rule: {rule}." if rule else ""
+    raise GitExcludeError(
+        ".autohelix/ is not effectively ignored; a git ignore rule overrides "
+        f"the local exclusion.{source} Add .autohelix/ after the conflicting "
+        "negation rules in your .gitignore, then retry. "
+        "AutoHelix has not modified your .gitignore."
+    )

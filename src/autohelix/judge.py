@@ -169,7 +169,7 @@ def describe_agent(config: AgentConfig, source: str) -> str:
 
 
 def build_system_prompt(question: str, yes: str | None = None, no: str | None = None,
-                        rubric: str | None = None, *, change: str | None = None) -> str:
+                        rubric: str | None = None, *, change: str) -> str:
     """The judge's instructions; `change` says what the change is (`describe_change`)."""
     criteria = ""
     if yes:
@@ -178,7 +178,6 @@ def build_system_prompt(question: str, yes: str | None = None, no: str | None = 
         criteria += f'Answer "no" if: {no}\n'
     if rubric:
         criteria += f"Criteria:\n{rubric.strip()}\n"
-    change = change or describe_change(None, judging="judge")
     return SYSTEM_PROMPT.format(question=question.strip(), criteria=criteria, change=change)
 
 
@@ -316,7 +315,7 @@ def call_judge(cwd: Path, config: AgentConfig, *, source: str, record: dict, pro
         failure: BaseException | None = None
         try:
             result = create_agent(config).run(
-                worktree_path=cwd, prompt=text, iteration=0, log_path=log_path,
+                copy_path=cwd, prompt=text, iteration=0, log_path=log_path,
                 event_callback=_ignore_event,
             )
         except BaseException as e:

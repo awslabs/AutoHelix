@@ -279,7 +279,7 @@ class TestClaudeCodeRunResult:
             side_effect=fake_run_process,
         ):
             result = agent.run(
-                worktree_path=tmp_path,
+                copy_path=tmp_path,
                 prompt="test",
                 iteration=1,
                 log_path=tmp_path / "agent.log",
@@ -313,7 +313,7 @@ class TestClaudeCodeAutoMemory:
         with patch("autohelix.agents.claudecode.run_process", side_effect=fake_run_process):
             from pathlib import Path
             agent.run(
-                worktree_path=Path("/tmp/fake"),
+                copy_path=Path("/tmp/fake"),
                 prompt="test",
                 iteration=1,
                 log_path=Path("/tmp/fake.log"),
@@ -341,7 +341,7 @@ class TestClaudeCodeAutoMemory:
         with patch("autohelix.agents.claudecode.run_process", side_effect=fake_run_process):
             from pathlib import Path
             agent.run(
-                worktree_path=Path("/tmp/fake"),
+                copy_path=Path("/tmp/fake"),
                 prompt="test",
                 iteration=1,
                 log_path=Path("/tmp/fake.log"),
@@ -371,7 +371,7 @@ class TestClaudeCodeAutoMemory:
                 patch.dict(os.environ, {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}):
             from pathlib import Path
             agent.run(
-                worktree_path=Path("/tmp/fake"),
+                copy_path=Path("/tmp/fake"),
                 prompt="test",
                 iteration=1,
                 log_path=Path("/tmp/fake.log"),
@@ -551,7 +551,7 @@ class TestCodexRunResult:
             fake_run_process,
         )
         result = agent.run(
-            worktree_path=tmp_path,
+            copy_path=tmp_path,
             prompt="test",
             iteration=1,
             log_path=tmp_path / "agent.log",
@@ -683,7 +683,7 @@ class TestOpenCodeRunResult:
         monkeypatch.setattr("autohelix.agents.opencode.run_process", fake_run_process)
         agent = OpenCodeAgent(config=AgentConfig(backend="opencode", timeout=4))
         events = []
-        result = agent.run(worktree_path=tmp_path, prompt="test", iteration=1,
+        result = agent.run(copy_path=tmp_path, prompt="test", iteration=1,
                            log_path=tmp_path / "agent.log", event_callback=events.append)
         return result, events
 

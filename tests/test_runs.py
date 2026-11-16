@@ -491,6 +491,28 @@ def test_resume_keeps_its_own_tip_past_user_commits_and_land_divergence_is_safe(
     assert git(project, "rev-parse", "HEAD").stdout.strip() == target
 
 
+def test_land_into_a_missing_branch_names_it(project):
+    """It used to fail with git's own "fatal: Needed a single revision"."""
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    with RunLock(harness.paths.lock), pytest.raises(RuntimeError) as raised:
+        land(harness.paths, harness.run_info, harness.run_state.expected_tip, into="release")
+    assert str(raised.value) == "No branch release; create it first (git branch release <base>)."
+
+
+def test_a_corrupt_history_doesnt_break_a_bare_resume_of_another_run(project):
+    """A bare resume orders the config's runs by baseline: one unreadable history made it
+    fail for every run of the config."""
+    good = Harness(project, land_mode="manual")
+    good.run(Budget(until=1), report=False)
+    broken = Harness(project, new=True, land_mode="manual")
+    broken.run(Budget(until=1), report=False)
+    broken.paths.history.write_text('broken\n{"iteration":0,"accepted":true}\n')
+    result = CliRunner().invoke(main, ["resume", "-n", "1", "--no-report", "--path", str(project)])
+    assert result.exit_code == 0, result.output
+    assert History(project, good.paths.run_id).get_last_iteration() == 2
+
+
 def test_auto_land_before_report_and_after_abort(project, monkeypatch):
     harness = Harness(project)
     seen = []
@@ -534,15 +556,25 @@ def test_delete_symbolic_ref_does_not_delete_user_branch(project):
     assert git(project, "rev-parse", "--verify", paths.ref, check=False).returncode != 0
 
 
-def test_same_harness_failed_restart_does_not_land_old_tip(project):
+def test_a_failed_restart_does_not_land_old_tip(project):
     harness = Harness(project)
     harness.run(Budget(until=1), report=False)
     git(project, "reset", "--hard", harness.run_info["base_commit"])
     (project / ".gitignore").write_text("!.*\n")
     before = git(project, "rev-parse", "HEAD").stdout.strip()
     with pytest.raises(RuntimeError, match="gitignore"):
-        harness.run(Budget(until=2), report=False)
+        Harness(project).run(Budget(until=2), report=False)  # auto landing, as the first
     assert git(project, "rev-parse", "HEAD").stdout.strip() == before
+
+
+def test_a_harness_runs_one_segment(project):
+    """A second `run` on the same Harness used to re-take the lock and skip the rest of
+    the start (the config comparison, preflight): a path only tests took."""
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    with pytest.raises(RuntimeError, match="A Harness runs one segment"):
+        harness.run(Budget(until=2), report=False)
+    assert History(project, harness.paths.run_id).get_last_iteration() == 1
 
 
 def test_prompt_setup_failure_does_not_consume_attempt(project, monkeypatch):

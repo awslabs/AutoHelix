@@ -164,7 +164,10 @@ class RunPaths:
         """`$AUTOHELIX_USAGE_FILE` for the commands one iteration runs."""
         return self.internal / "usage" / f"{self.iteration_name(iteration)}.jsonl"
 
-    # One iteration's folder.
+    # One iteration's folder: these names in it.
+    RECORD, PROMPT, AGENT_LOG, NOTES = "record.json", "prompt.md", "agent.log", "notes"
+    GATES, OBSERVE, STOP, REJECTED_PATCH = "gates", "observe", "stop", "rejected.patch"
+
     @staticmethod
     def iteration_name(iteration: int) -> str:
         """`000`, `001`, ...: three digits, so listings sort in order (past 999 the width grows)."""
@@ -175,35 +178,35 @@ class RunPaths:
 
     def record(self, iteration: int) -> Path:
         """The iteration's record, pretty-printed: derived from history.jsonl, written last."""
-        return self.iteration_dir(iteration) / "record.json"
+        return self.iteration_dir(iteration) / self.RECORD
 
     def prompt(self, iteration: int) -> Path:
-        return self.iteration_dir(iteration) / "prompt.md"
+        return self.iteration_dir(iteration) / self.PROMPT
 
     def agent_log(self, iteration: int) -> Path:
-        return self.iteration_dir(iteration) / "agent.log"
+        return self.iteration_dir(iteration) / self.AGENT_LOG
 
     def iteration_notes(self, iteration: int) -> Path:
         """A link to the notes version saved with the iteration, if one was."""
-        return self.iteration_dir(iteration) / "notes"
+        return self.iteration_dir(iteration) / self.NOTES
 
     def observe_dir(self, iteration: int) -> Path:
-        return self.iteration_dir(iteration) / "observe"
+        return self.iteration_dir(iteration) / self.OBSERVE
 
     def observe_entry(self, iteration: int, name: str) -> Path:
         return self.observe_dir(iteration) / name
 
     def gate_dir(self, iteration: int, position: int) -> Path:
         """The output of the gate at 1-based `position` in `gates:`."""
-        return self.iteration_dir(iteration) / "gates" / str(position)
+        return self.iteration_dir(iteration) / self.GATES / str(position)
 
     def stop_dir(self, iteration: int, position: int) -> Path:
         """The output of the stop command at 1-based `position` in `stop:`."""
-        return self.iteration_dir(iteration) / "stop" / str(position)
+        return self.iteration_dir(iteration) / self.STOP / str(position)
 
     def rejected_patch(self, iteration: int) -> Path:
         """A rejected attempt's change (`base..tree`), when it had one under the size limit."""
-        return self.iteration_dir(iteration) / "rejected.patch"
+        return self.iteration_dir(iteration) / self.REJECTED_PATCH
 
     def attempt_dir(self, iteration: int, k: int) -> Path:
         """Where the k-th superseded attempt at an iteration's folder is kept."""
@@ -281,14 +284,14 @@ class RunPaths:
             rest = parts[len(attempts) + 1:]
         else:
             return False
-        if rest == [self.agent_log(0).name]:
+        if rest == [self.AGENT_LOG]:
             return True
         if len(rest) != 3 or not is_transcript(rest[2]):
             return False
         kind, name = rest[0], rest[1]
-        if kind in (self.gate_dir(0, 1).parent.name, self.stop_dir(0, 1).parent.name):
+        if kind in (self.GATES, self.STOP):
             return bool(_POSITION.fullmatch(name))
-        return kind == self.observe_dir(0).name and not name.startswith(".")
+        return kind == self.OBSERVE and not name.startswith(".")
 
     def live_transcript(self, value, running: int | None) -> list[str] | None:
         """A judge or review transcript a running call is writing, named by untrusted
@@ -932,7 +935,13 @@ def _resumable(project: Path, config_path: str) -> list[RunPaths]:
     (an empty run, `run` typed by mistake and interrupted, must not shadow the real one,
     but is resumed when it is all there is), then by activity."""
     candidates = [p for p, d in project_runs(project, config_path) if not is_archived(d)]
-    candidates.sort(key=has_baseline, reverse=True)  # stable: by activity within each
+    def baseline(paths: RunPaths) -> bool:
+        try:
+            return has_baseline(paths)
+        except RuntimeError:  # a corrupt history: that run's own resume says so, not every other's
+            return False
+
+    candidates.sort(key=baseline, reverse=True)  # stable: by activity within each
     return candidates
 
 
@@ -1054,7 +1063,7 @@ def repair_history(paths: RunPaths) -> None:
     without a record.json: its folder is incomplete), and rewrite the record.json of
     iterations whose record.json is missing or differs from history.jsonl (a process
     killed between the two writes)."""
-    from autohelix.history import stale_records, write_records
+    from autohelix.history import stale_records, valid_record, write_records
 
     path = paths.history
     if not path.exists():
@@ -1072,8 +1081,7 @@ def repair_history(paths: RunPaths) -> None:
             write_records(paths, records, mode="replace",
                           iterations=stale_records(paths, records) | ({int(torn[1])} if torn else set()))
             return
-        if (not isinstance(record, dict) or type(record.get("iteration")) is not int
-                or record["iteration"] < 0 or type(record.get("accepted")) is not bool):
+        if not valid_record(record):
             raise RuntimeError(f"Invalid history record {index + 1}: {path}")
         records.append(record)
     stale = stale_records(paths, records)
@@ -1166,7 +1174,10 @@ def land(paths: RunPaths, data: dict, expected_tip: str, into: str | None = None
     if not target:
         raise RuntimeError("This run started detached; land requires --into <branch>.")
     ref = f"refs/heads/{target}"
-    old = git(paths.project, "rev-parse", "--verify", ref).stdout.strip()
+    found = git(paths.project, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}", check=False)
+    if found.returncode:
+        raise RuntimeError(f"No branch {target}; create it first (git branch {target} <base>).")
+    old = found.stdout.strip()
     if git(paths.project, "merge-base", "--is-ancestor", expected_tip, old, check=False).returncode == 0:
         return
     hint = f"Run {paths.run_id} remains available: git merge autohelix/{paths.run_id}"

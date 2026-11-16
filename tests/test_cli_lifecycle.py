@@ -434,6 +434,27 @@ def test_cost_alone_stops_when_only_the_judges_are_priced(project, monkeypatch):
     assert status(paths)["stop_reason"]["detail"] == "cost unknown: --cost can't bound this segment (add -n or --time)"
 
 
+def test_cost_alone_goes_on_after_a_failed_first_agent_call(project, monkeypatch):
+    """A failed call without usage (an API error) says nothing about pricing: it used to
+    stop the segment "cost unknown" before the agent's priced calls had their chance."""
+    from autohelix.agents import AgentRunResult
+    from autohelix.agents.mock import MockAgent
+
+    real = MockAgent.run
+
+    def run(self, *args, **kwargs):
+        if kwargs.get("iteration") == 1:
+            return AgentRunResult(success=False, exit_code=1, error="API error")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(MockAgent, "run", run)
+    result = cli(project, "run", "--no-report", "--cost", "0.15")
+    assert result.exit_code == 0, result.output
+    paths = latest_run(project)
+    assert iterations(paths) == [0, 1, 2, 3]  # failed (unknown) + $0.10 + $0.10
+    assert status(paths)["stop_reason"]["detail"] == "cost budget reached ($0.15 this segment)"
+
+
 def test_until_already_reached_runs_nothing(project):
     paths = begun(project, "-n", "2")
     before = paths.status.read_bytes(), sorted(p.name for p in paths.run_dir.rglob("*"))

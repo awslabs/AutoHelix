@@ -352,7 +352,7 @@ def test_the_views_live_row_names_the_observe_entry(tmp_path, run_paths):
     status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
     status.lock = RunLock(latest_run(tmp_path).lock)  # a running segment holds the run's lock
     status.start()
-    status.phase("benchmark", 1)
+    status.phase("observe", 1)
     status.note(entry="bench")
     data = ProjectRuns(tmp_path).run("test")
     assert data["run"]["status"]["entry"] == "bench"

@@ -60,7 +60,7 @@ def _refs(repo, owner):
 
 
 class Agent:
-    """Stands in for Harness.run_agent: `act(worktree, iteration)` changes the copy and
+    """Stands in for Harness.run_agent: `act(copy_dir, iteration)` changes the copy and
     may return an AgentRunResult; else the mock agent runs. Records each copy's
     rejected.patch and prompt."""
 
@@ -68,32 +68,32 @@ class Agent:
         self.harness, self.original, self.act, self.seen = harness, harness.run_agent, act, {}
         harness.run_agent = self
 
-    def __call__(self, worktree, prompt, iteration):
-        patch = worktree / ITERATION_DIR / "rejected.patch"
+    def __call__(self, copy_dir, prompt, iteration):
+        patch = copy_dir / ITERATION_DIR / "rejected.patch"
         self.seen[iteration] = {"patch": patch.read_bytes() if patch.exists() else None, "prompt": prompt,
-                                "worktree": worktree}
+                                "copy": copy_dir}
         if patch.exists():
-            self.seen[iteration]["applied"] = _apply_in_probe(worktree, patch)
-        result = self.act(worktree, iteration) if self.act else None
-        return result if result is not None else self.original(worktree, prompt, iteration)
+            self.seen[iteration]["applied"] = _apply_in_probe(copy_dir, patch)
+        result = self.act(copy_dir, iteration) if self.act else None
+        return result if result is not None else self.original(copy_dir, prompt, iteration)
 
 
-def _apply_in_probe(worktree, patch):
+def _apply_in_probe(copy_dir, patch):
     """Apply rejected.patch with `git apply` in a copy of the agent's copy; returns the
     tree the probe's files hash to (the harness's material left out), or the error."""
-    copy_root = worktree
+    copy_root = copy_dir
     while not (copy_root / ".git").exists():
         copy_root = copy_root.parent
     probe = copy_root.parent / f"probe-{time.monotonic_ns()}"
     subprocess.run(["cp", "-Rp", str(copy_root), str(probe)], check=True)
-    cwd = probe / worktree.relative_to(copy_root)
+    cwd = probe / copy_dir.relative_to(copy_root)
     try:
         result = subprocess.run(["git", "apply", str(cwd / ITERATION_DIR / "rejected.patch")], cwd=cwd,
                                 capture_output=True, text=True)
         if result.returncode:
             return f"apply failed: {result.stderr}"
         index = {"GIT_INDEX_FILE": str(probe.parent / f"{probe.name}.index")}
-        state = (worktree.relative_to(copy_root) / ITERATION_DIR).as_posix()
+        state = (copy_dir.relative_to(copy_root) / ITERATION_DIR).as_posix()
         _git(probe, "add", "-A", "--", ".", env=index)
         _git(probe, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", state, env=index)
         return _git(probe, "write-tree", env=index)
@@ -172,12 +172,12 @@ def test_every_kind_of_change_round_trips_through_rejected_patch(repo):
     project = _project(repo, files={"tool.sh": "echo tool\n", "old.txt": "going\n"})
     _configure(project, repo, gates=['[ "$AUTOHELIX_ITERATION" != 1 ]'])
 
-    def act(worktree, iteration):
+    def act(copy_dir, iteration):
         if iteration == 1:
-            (worktree / "img.bin").write_bytes(bytes(range(256)) * 4)
-            os.symlink("hello.py", worktree / "link")
-            os.chmod(worktree / "tool.sh", 0o755)
-            (worktree / "old.txt").unlink()
+            (copy_dir / "img.bin").write_bytes(bytes(range(256)) * 4)
+            os.symlink("hello.py", copy_dir / "link")
+            os.chmod(copy_dir / "tool.sh", 0o755)
+            (copy_dir / "old.txt").unlink()
 
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness, act)
@@ -221,8 +221,8 @@ def test_a_timed_out_agent_is_kept_and_rejected_unchecked(repo, tmp_path):
     ran = tmp_path / "gate-ran"
     _configure(project, repo, gates=[f'[ "$AUTOHELIX_ITERATION" = 0 ] || touch {ran}'])
 
-    def act(worktree, iteration):
-        (worktree / "hello.py").write_text("half done\n")
+    def act(copy_dir, iteration):
+        (copy_dir / "hello.py").write_text("half done\n")
         return AgentRunResult(success=False, exit_code=-1, error="timed out after 1s")
 
     harness = Harness(project, verbose=False, land_mode="manual")
@@ -242,11 +242,11 @@ def test_a_failed_agent_that_replaced_its_material_by_a_symlink(repo, tmp_path):
     elsewhere.mkdir()
     (elsewhere / "commit_summary.txt").write_text("planted summary\n")
 
-    def act(worktree, iteration):
-        state = worktree / ITERATION_DIR
+    def act(copy_dir, iteration):
+        state = copy_dir / ITERATION_DIR
         subprocess.run(["rm", "-rf", str(state)], check=True)
         os.symlink(elsewhere, state)
-        (worktree / "hello.py").write_text("changed\n")
+        (copy_dir / "hello.py").write_text("changed\n")
         return AgentRunResult(success=False, exit_code=1, error="crashed")
 
     harness = Harness(project, verbose=False, land_mode="manual")
@@ -274,10 +274,10 @@ def test_delete_leaves_runs_whose_id_shares_a_prefix(repo):
 # --- 9, 10, 11: prompt wording, agent-written text, custom templates -------------------
 
 
-def _seed(worktree, records):
+def _seed(copy_dir, records):
     """The iteration folders seeding would put in the copy: the record, failing gates', observe entries'."""
     for record in records:
-        folder = worktree / ".autohelix-iteration" / "iterations" / f"{record['iteration']:03d}"
+        folder = copy_dir / ".autohelix-iteration" / "iterations" / f"{record['iteration']:03d}"
         folder.mkdir(parents=True, exist_ok=True)
         for k, gate in enumerate(record.get("gates") or [], start=1):
             if gate.get("passed") is False and gate.get("kind", "command") == "command":
@@ -291,13 +291,13 @@ def _render(tmp_path, records, iteration=2, patch=False):
     history = History(tmp_path, latest_run(tmp_path).run_id)
     for record in records:
         history.append(IterationResult(**record))
-    worktree = tmp_path / "copy"
-    (worktree / ITERATION_DIR).mkdir(parents=True, exist_ok=True)
+    copy_dir = tmp_path / "copy"
+    (copy_dir / ITERATION_DIR).mkdir(parents=True, exist_ok=True)
     if patch:
-        (worktree / ITERATION_DIR / "rejected.patch").write_text("diff\n")
-    _seed(worktree, records)
+        (copy_dir / ITERATION_DIR / "rejected.patch").write_text("diff\n")
+    _seed(copy_dir, records)
     config = Config(goal="g")
-    return render_template(load_template(config), build_prompt_variables(config, history, iteration, worktree))
+    return render_template(load_template(config), build_prompt_variables(config, history, iteration, copy_dir))
 
 
 BASELINE = {"iteration": 0, "accepted": True, "reason": "baseline"}
@@ -331,8 +331,8 @@ def test_summary_is_cleaned_and_capped_for_record_and_commit(repo):
     project = _project(repo)
     _configure(project, repo)
 
-    def act(worktree, iteration):
-        (worktree / ITERATION_DIR / "commit_summary.txt").write_text("\x1b[31mred\x1b[0m " + "w" * 500 + "\nmore\n")
+    def act(copy_dir, iteration):
+        (copy_dir / ITERATION_DIR / "commit_summary.txt").write_text("\x1b[31mred\x1b[0m " + "w" * 500 + "\nmore\n")
 
     harness = Harness(project, verbose=False, land_mode="manual")
     Agent(harness, act)
@@ -371,7 +371,7 @@ def test_status_names_the_running_observe_entry(repo):
 
     harness.run_status.note = note
     harness.run(Budget(until=1), report=False)
-    assert ("benchmark", "first") in seen and ("benchmark", "second") in seen
+    assert ("observe", "first") in seen and ("observe", "second") in seen  # the phase was "benchmark"
     assert seen[-1][1] is None
 
 
@@ -384,9 +384,9 @@ def test_frozen_discards_are_said_apart(repo):
     (project / "fixtures" / "data.txt").write_text("fixed\n")
     _configure(project, repo, scope={"editable": ["hello.py", "fixtures/"], "frozen": ["fixtures/"]})
 
-    def act(worktree, iteration):
-        (worktree / "fixtures" / "data.txt").write_text("edited\n")
-        (worktree / "notes.txt").write_text("not editable\n")
+    def act(copy_dir, iteration):
+        (copy_dir / "fixtures" / "data.txt").write_text("edited\n")
+        (copy_dir / "notes.txt").write_text("not editable\n")
 
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness, act)
@@ -481,9 +481,9 @@ def test_run_start_warnings_wrap_under_their_label(repo, capsys):
 
 def _failing(iterations, error="crashed"):
     """An `act` that fails the agent call on the given iterations (after editing hello.py)."""
-    def act(worktree, iteration):
+    def act(copy_dir, iteration):
         if iteration in iterations:
-            (worktree / "hello.py").write_text(f"attempt {iteration}\n")
+            (copy_dir / "hello.py").write_text(f"attempt {iteration}\n")
             return AgentRunResult(success=False, exit_code=1, error=error)
     return act
 

@@ -2,14 +2,14 @@
 # Evaluate the agent's model with the official scorer, natively.
 #
 # Reads the model from the FIXED artifacts path (outside the git repo), so it
-# works regardless of cwd / worktree. Falls back to the base model if no model
+# works regardless of cwd / copy. Falls back to the base model if no model
 # has been trained yet (used for the baseline measurement).
 set -euo pipefail
 
 TASK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$TASK_DIR/config.sh"
 
-# Keep inspect_ai's run transcripts in artifacts (not scattered in the worktree).
+# Keep inspect_ai's run transcripts in artifacts (not scattered in the copy).
 export INSPECT_LOG_DIR="$ARTIFACTS/logs"
 mkdir -p "$INSPECT_LOG_DIR"
 

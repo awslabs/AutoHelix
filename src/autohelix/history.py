@@ -196,6 +196,13 @@ def stale_records(paths: RunPaths, records: list[dict]) -> set[int]:
     return stale
 
 
+def valid_record(data) -> bool:
+    """Whether a parsed history line is an iteration record: a mapping with a
+    non-negative int `iteration` and a bool `accepted`."""
+    return (isinstance(data, dict) and type(data.get("iteration")) is int and data["iteration"] >= 0
+            and type(data.get("accepted")) is bool)
+
+
 class History:
     """Manages iteration history in .autohelix/."""
 
@@ -204,7 +211,7 @@ class History:
         self.paths = RunPaths(project_path, run_id)
         self.history_path = self.paths.history
         self._cache: list[IterationResult] | None = None
-        self._cache_mtime: float | None = None
+        self._cache_key: tuple[int, int, int] | None = None  # (mtime_ns, size, inode)
 
     def entry_dir(self, iteration: int, name: str) -> Path:
         """`iterations/NNN/observe/<name>/`, one observe entry's output."""
@@ -374,7 +381,7 @@ class History:
     def _invalidate_cache(self) -> None:
         """Invalidate the cached results."""
         self._cache = None
-        self._cache_mtime = None
+        self._cache_key = None
 
     @staticmethod
     def _record(result: IterationResult) -> dict:
@@ -410,14 +417,16 @@ class History:
         return read_usage(self.paths.summary_usage)
 
     def load(self) -> list[IterationResult]:
-        """Load all iteration results from history (cached by file mtime)."""
+        """Load all iteration results from history (cached by the file's mtime, size and
+        inode: two writes in one coarse mtime tick still differ, a replace by inode)."""
         if not self.history_path.exists():
             self._cache = []
-            self._cache_mtime = None
+            self._cache_key = None
             return []
 
-        current_mtime = self.history_path.stat().st_mtime
-        if self._cache is not None and self._cache_mtime == current_mtime:
+        info = self.history_path.stat()
+        key = (info.st_mtime_ns, info.st_size, info.st_ino)
+        if self._cache is not None and self._cache_key == key:
             return self._cache
 
         known_fields = {f.name for f in fields(IterationResult)}
@@ -431,8 +440,7 @@ class History:
                     continue
                 try:
                     data = json.loads(line)
-                    if (not isinstance(data, dict) or type(data.get("iteration")) is not int
-                            or data["iteration"] < 0 or type(data.get("accepted")) is not bool):
+                    if not valid_record(data):
                         raise ValueError("invalid iteration record")
                     # Tolerate forward-compat fields written by a newer version.
                     data = {k: v for k, v in data.items() if k in known_fields}
@@ -442,7 +450,7 @@ class History:
                         raise RuntimeError(f"Corrupt history record {lineno}: {self.history_path}") from e
                     logger.warning("Incomplete final history record in %s: %s", self.history_path, e)
         self._cache = results
-        self._cache_mtime = current_mtime
+        self._cache_key = key
         return results
 
     def get_last_iteration(self) -> int:

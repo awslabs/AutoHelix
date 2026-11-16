@@ -383,7 +383,7 @@ function rejection(r) {
 
 const PHASES = {
   starting: 'Starting…', baseline: 'Measuring the baseline…', agent: 'Agent is working…',
-  checks: 'Running gates…', benchmark: 'Running observe entries…',
+  checks: 'Running gates…', observe: 'Running observe entries…',
   merge: 'Merging the accepted change…', 'between iterations': 'Wrapping up…',
 };
 const phaseText = (phase) => PHASES[phase] || `${phase}…`;
