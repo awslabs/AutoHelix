@@ -729,7 +729,9 @@ Controls Claude Code's built-in memory system for the main agent:
 - Defaults to off for reproducible, self-contained iterations; set
   `agent.auto_memory: true` to opt in.
 - `ask` and `review` calls always run without it.
-- Disabled via `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`; ignored for non-Claude backends.
+- Disabled via `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`; with `auto_memory: true` an
+  inherited `CLAUDE_CODE_DISABLE_AUTO_MEMORY` is removed from the agent's
+  environment. Ignored for non-Claude backends.
 
 ## Cost Tracking
 

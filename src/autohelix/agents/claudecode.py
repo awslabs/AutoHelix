@@ -300,8 +300,11 @@ class ClaudeCodeAgent:
 
         # Build env with remapped PYTHONPATH for worktree
         env = build_worktree_env(project_path, worktree_path) if project_path else None
-        if not self.config.auto_memory:
-            env = env or os.environ.copy()
+        # auto_memory decides, whatever the harness's own environment says.
+        env = env or os.environ.copy()
+        if self.config.auto_memory:
+            env.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
+        else:
             env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
 
         try:

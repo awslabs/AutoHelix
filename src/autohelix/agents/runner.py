@@ -99,15 +99,24 @@ def run_process(
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
             line_buffer = ""
 
+            # After end of file (the child closed its output, maybe still
+            # running), the pipe is no longer selected: wait for the process
+            # instead, so the deadline still applies and nothing spins.
+            output_closed = False
             while True:
-                ready, _, _ = select.select([stdout_fd], [], [], 1.0)
-                if ready:
-                    chunk = os.read(stdout_fd, 4096)
-                    if not chunk:
-                        if process.poll() is not None:
-                            break
-                        continue
-                    else:
+                if output_closed:
+                    try:
+                        process.wait(timeout=1.0)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
+                else:
+                    ready, _, _ = select.select([stdout_fd], [], [], 1.0)
+                    if ready:
+                        chunk = os.read(stdout_fd, 4096)
+                        if not chunk:
+                            output_closed = True
+                            continue
                         text = decoder.decode(chunk)
                         log_file.write(text)
                         log_file.flush()
@@ -116,8 +125,8 @@ def run_process(
                             line, line_buffer = line_buffer.split("\n", 1)
                             if line.strip():
                                 line_callback(line)
-                elif process.poll() is not None:
-                    break
+                    elif process.poll() is not None:
+                        break
 
                 elapsed = int(time.monotonic() - start)
                 now = time.monotonic()

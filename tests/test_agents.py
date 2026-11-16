@@ -350,7 +350,8 @@ class TestClaudeCodeAutoMemory:
         assert captured_env.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY") == "1"
 
     def test_auto_memory_enabled_no_env(self):
-        """When auto_memory is True, env should not set the disable flag."""
+        """When auto_memory is True, env has no disable flag, even an inherited one."""
+        import os
         from unittest.mock import patch, MagicMock
         from autohelix.agents.claudecode import ClaudeCodeAgent
 
@@ -365,7 +366,8 @@ class TestClaudeCodeAutoMemory:
             result.timed_out = False
             return result
 
-        with patch("autohelix.agents.claudecode.run_process", side_effect=fake_run_process):
+        with patch("autohelix.agents.claudecode.run_process", side_effect=fake_run_process), \
+                patch.dict(os.environ, {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}):
             from pathlib import Path
             agent.run(
                 worktree_path=Path("/tmp/fake"),
@@ -375,6 +377,8 @@ class TestClaudeCodeAutoMemory:
                 event_callback=lambda e: None,
                 project_path=Path("/tmp/project"),
             )
+            assert os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+        assert captured_env  # the agent got an explicit environment
         assert "CLAUDE_CODE_DISABLE_AUTO_MEMORY" not in captured_env
 
 
