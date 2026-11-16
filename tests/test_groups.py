@@ -102,7 +102,7 @@ def test_group_and_landing_mode_are_stored_kept_and_changed(project):
     assert identity(grouped)["group"] == "other" and identity(grouped)["land"] == "manual"
     result = cli(project, "resume", short_id(run_id), "-n", "1", "--no-report", "--group", "", "--land", "auto")
     assert result.exit_code == 0, result.output
-    assert "leaves group other" in result.output and re.search(r"^  landed    \d+ commits? on main$", result.output, re.M)
+    assert "leaves group other" in result.output and re.search(r"^  landed     \d+ commits? on main$", result.output, re.M)
     data = identity(grouped)
     assert "group" not in data and data["land"] == "auto"
 
@@ -166,7 +166,7 @@ def test_dashboard_shows_the_group_after_the_id(project):
     assert rows[grouped.run_id]["group"] == "perf" and rows[grouped.run_id]["land"] == "manual"
     assert rows[plain.run_id]["group"] is None and rows[plain.run_id]["land"] == "manual"
     view = cli(project, "view", short_id(grouped.run_id), "--once")
-    assert "\n  Group    perf\n" in view.output
+    assert "\n  Group      perf\n" in view.output
 
 
 def test_notes_are_saved_as_versions_and_delete_removes_them(project):

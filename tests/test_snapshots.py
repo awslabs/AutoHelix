@@ -256,5 +256,5 @@ def test_view_says_what_waits_for_a_manual_landing():
 
     run = {**_run_payload(False), "land": "manual", "landing": {"commits": 3, "fast_forward": True}}
     text = _text(view_lines({**PROJECT, "run": run}, Saved(CONFIG, ROWS, []), 120, now=T))
-    assert "  unlanded  3 commits on autohelix/20261115-1402-sorting-krp3 (manual landing)\n" in text
-    assert "  next      autohelix resume krp3 · autohelix land krp3\n" in text
+    assert "  unlanded   3 commits on autohelix/20261115-1402-sorting-krp3 (manual landing)\n" in text
+    assert "  next       autohelix resume krp3 · autohelix land krp3\n" in text

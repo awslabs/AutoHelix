@@ -1,12 +1,12 @@
   AutoHelix  v0.3.0 · run krp3 · sorting · finished
-  Goal     Make sort_list faster in sort.py.
-  Agent    claude (sonnet)
-  Gates    pytest -q test_sort.py · speed regress 5%
-  Observe  bench (speed ↑, mem_mb ↓)
-  Scope    editable: sort.py
-  Budget   7 iterations · $10.00 · 30m each
+  Goal       Make sort_list faster in sort.py.
+  Agent      claude (sonnet)
+  Gates      pytest -q test_sort.py · speed regress 5%
+  Observe    bench (speed ↑, mem_mb ↓)
+  Scope      editable: sort.py
+  Budget     7 iterations · $10.00 · 30m each
   ────────────────────────────────────────────────────────────────────────────
   ! The run's history can't be read: no iterations to show.
 
   ────────────────────────────────────────────────────────────────────────────
-  Done     iteration budget reached (7)
+  Done       iteration budget reached (7)

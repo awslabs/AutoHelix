@@ -1,6 +1,6 @@
   AutoHelix  v0.3.0 · dashboard · sorting
-  Project  ~/code/sorting · main @ 4d05f32
-  Runs     2 runs · $6.25 spent · 1 archived (not listed; see --json)
+  Project    ~/code/sorting · main @ 4d05f32
+  Runs       2 runs · $6.25 spent · 1 archived (not listed; see --json)
   ────────────────────────────────────────────────────────────────────────────
   run           state     iter   speed ↑  landing    activity
   m2xq perf     running    4/7  35,310.7  2 to land  agent 1m 12s

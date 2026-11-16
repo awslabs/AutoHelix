@@ -263,14 +263,14 @@ def test_terminal_tables_show_gates_summaries_and_titles(project):
     assert listing[heading].split()[-1] == "goal" and listing[heading + 1].endswith("Make the sort faster")
     saved = run_table.Saved.read(RunPaths(project, "test"))
     lines = [line.rstrip() for line in run_table.format_run(runs.run("test"), saved).splitlines()]
-    assert "  Goal     Make the sort faster" in lines
+    assert "  Goal       Make the sort faster" in lines
     rows = lines[next(i for i, line in enumerate(lines) if line.lstrip().startswith("time")) + 1:]
     assert rows[:5] == ["  · base                         10",
                         "  ✓ 1                            12 +20%",
                         "          observe review failed: exited 2",
                         "          discarded, outside the scope: tests/test_sort.py",
                         "  ✗ 2                      pytest -q failed (exit 1)"]
-    assert "  accepted  1  Use the built-in sort" in lines  # no landing to list it under
+    assert "  accepted   1  Use the built-in sort" in lines  # no landing to list it under
 
     # On a short terminal, an iteration leaves with the lines under it; the baseline stays.
     head, iterations, tail = run_table.view_parts(runs.run("test"), saved)
@@ -404,7 +404,7 @@ def test_terminal_cells_carry_no_control_characters(project):
     lines = shown.splitlines()
     rows = lines[next(i for i, line in enumerate(lines) if line.lstrip().startswith("time")) + 1:]
     assert sum(1 for line in rows if line[2:3] in ("✓", "✗", "·")) == 3  # no fake row
-    assert "  Goal     Make it faster" in lines  # the escape sequence removed whole
+    assert "  Goal       Make it faster" in lines  # the escape sequence removed whole
     stop = {"state": "finished", "stopped_at": time.time(), "stop_reason": {"detail": "done\x1b[2J"}}
     assert "\x1b" not in status_line(stop)
 

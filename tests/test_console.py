@@ -45,19 +45,19 @@ def test_header_lines():
     lines = _header(Config.from_dict(CONFIG), Budget(iterations=20, cost_usd=10, time_seconds=7200))
     assert lines[:-1] == [
         "  AutoHelix  v0.3.0 · run 0mws · sorting · 12:00",
-        "  Goal     Make sort_list faster in sort.py.",
-        "  Agent    claude (opus)",
-        "  Gates    pytest -q · ask: keeps the public API? · speed regress 5%",
-        "  Observe  bench (speed ↑) · review · progress (missing ↓)",
-        "  Scope    editable: sort.py",
-        "  Budget   20 iterations · $10.00 · 2h · 30m each",
+        "  Goal       Make sort_list faster in sort.py.",
+        "  Agent      claude (opus)",
+        "  Gates      pytest -q · ask: keeps the public API? · speed regress 5%",
+        "  Observe    bench (speed ↑) · review · progress (missing ↓)",
+        "  Scope      editable: sort.py",
+        "  Budget     20 iterations · $10.00 · 2h · 30m each",
     ]
     assert set(lines[-1].strip()) == {"─"}
 
 
 def test_header_omits_empty_lines():
     lines = _header(Config.from_dict({"goal": "g"}), Budget(until=1))
-    assert lines[1:-1] == ["  Goal     g", "  Agent    claude", "  Budget   1 iteration"]
+    assert lines[1:-1] == ["  Goal       g", "  Agent      claude", "  Budget     1 iteration"]
 
 
 def test_the_mark_is_beside_the_header():
@@ -203,12 +203,12 @@ def test_ending_after_landing(project):
     result, short, run_id = _run(project)
     assert result.exit_code == 0, result.output
     ending = _ending(result.output)
-    assert ending[0] == "  Done      iteration budget reached (1)"
-    assert ending[1] == "  speed     3"  # no accepted change measured it again
-    assert ending[2].startswith("  run       1 iteration · 1 accepted")
-    assert ending[3] == "  landed    1 commit on main"
-    assert ending[4] == f"  next      autohelix view {short} · autohelix resume {short}"
-    assert ending[5].startswith("  page      ") and ending[5].endswith(f"{run_id}/report.html")
+    assert ending[0] == "  Done       iteration budget reached (1)"
+    assert ending[1] == "  speed      3"  # no accepted change measured it again
+    assert ending[2].startswith("  run        1 iteration · 1 accepted")
+    assert ending[3] == "  landed     1 commit on main"
+    assert ending[4] == f"  next       autohelix view {short} · autohelix resume {short}"
+    assert ending[5].startswith("  page       ") and ending[5].endswith(f"{run_id}/report.html")
     assert len(ending) == 6
 
 
@@ -216,7 +216,7 @@ def test_ending_when_nothing_landed(project):
     _configure(project, settings={"change_file": "elsewhere.txt"}, scope={"editable": ["hello.py"]})
     result, _, _ = _run(project)
     assert result.exit_code == 0, result.output
-    assert "  landed    nothing (no accepted changes)" in _ending(result.output)
+    assert "  landed     nothing (no accepted changes)" in _ending(result.output)
 
 
 def test_ending_with_manual_landing(project):
@@ -224,8 +224,8 @@ def test_ending_with_manual_landing(project):
     result, short, run_id = _run(project, "--land", "manual")
     assert result.exit_code == 0, result.output
     ending = _ending(result.output)
-    assert ending[2] == f"  unlanded  1 commit on autohelix/{run_id} (manual landing)"
-    assert ending[3] == f"  next      autohelix view {short} · autohelix resume {short} · autohelix land {short}"
+    assert ending[2] == f"  unlanded   1 commit on autohelix/{run_id} (manual landing)"
+    assert ending[3] == f"  next       autohelix view {short} · autohelix resume {short} · autohelix land {short}"
 
 
 def test_ending_when_landing_fails(project, monkeypatch):
@@ -253,7 +253,7 @@ def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):
     assert result.exit_code == 1
     ending = _ending(result.output)
     message = "Stop command failed on the baseline: echo broken; exit 3 (expected exit 0 to stop or 1 to continue)"
-    assert ending[0].startswith("  Error     Stop command failed on the baseline: echo broken;")
+    assert ending[0].startswith("  Error      Stop command failed on the baseline: echo broken;")
     totals = next(i for i, line in enumerate(ending) if line.startswith("  run "))
     assert " ".join(" ".join(ending[:totals]).split()) == f"Error {message}"  # wrapped, not cut
     assert [line.split()[0] for line in ending[totals:]] == ["run", "landed", "next", "page"]
@@ -267,7 +267,7 @@ def test_agent_failures_show_in_the_row_and_three_in_a_row_stop_the_run(project)
     assert result.exit_code == 0, result.output
     rows = [line.rstrip() for line in result.output.splitlines() if line.startswith("  ✗ ")]
     assert len(rows) == 3 and all(row.endswith("agent failed: Mock failure") for row in rows)
-    assert "  Stopped   the agent failed 3 times in a row: Mock failure" in result.output.splitlines()
+    assert "  Stopped    the agent failed 3 times in a row: Mock failure" in result.output.splitlines()
 
 
 def test_rejected_row_in_a_run(project):
@@ -310,7 +310,7 @@ def test_the_live_row_shows_the_phase_only_with_room_under_it(project):
 def test_columns_are_spaced_when_the_width_allows(width, spacing):
     """Roomier columns where a reason still fits after the values; today's at 80 (with no
     metric too). The values stay right-aligned under their headings, the live row's phase
-    in the cost column, the summary step's row too."""
+    right after the time (under no column), the summary step's row too."""
     from rich.console import Console
 
     from autohelix.display import LiveDisplay
@@ -319,11 +319,11 @@ def test_columns_are_spaced_when_the_width_allows(width, spacing):
     assert (Table({"a": "higher"} | {f"m{i}": "lower" for i in range(4)}, 120).gap) == terminal.COMPACT[0]
     table = Table({"speed": "higher", "mem_mb": "lower"}, width)
     assert (table.gap, table.sep) == spacing
-    summary = LiveDisplay(Console(), "summary", gap=table.gap).render(72).plain
+    summary = LiveDisplay(Console(), "summary").render(72).plain
     assert summary.index("summary") == table.live(1, 72, "agent").plain.index("agent")
     head = table.column_header().plain
     row = table.add(Row(0, True, {"speed": 46.9, "mem_mb": 120}))[-1].plain
     assert row.index("46.9") + len("46.9") == head.index("speed ↑") + len("speed ↑")
     assert row.index("120") + len("120") == head.index("mem_mb ↓") + len("mem_mb ↓")
     live = table.live(1, 72, "agent").plain
-    assert live.index("agent") == head.index("cost") + len("cost") - terminal.COST
+    assert live.index("agent") == head.index("time") + len("time") + 2

@@ -156,7 +156,7 @@ def test_live_dashboard_draws_the_table_until_ctrl_c(tmp_path, monkeypatch, run_
     with pytest.raises(KeyboardInterrupt):
         W.dashboard(tmp_path, Console(file=out, width=100, force_terminal=False))
     assert len(reads) == 2  # redrawn after the first sleep
-    assert "Runs     1 run" in out.getvalue() and "Ctrl-C to stop" in out.getvalue()
+    assert "Runs       1 run" in out.getvalue() and "Ctrl-C to stop" in out.getvalue()
     # Through the CLI, Ctrl-C ends it quietly.
     _stop_after(monkeypatch)
     result = _cli("dashboard", "-p", tmp_path)

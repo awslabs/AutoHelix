@@ -77,7 +77,7 @@ def test_a_request_during_the_baseline_stops_after_the_baseline(project):
     assert result.exit_code == 0, result.output
     paths = RunPaths(project)
     assert iterations(paths) == [0]
-    assert "  Stopped   requested by autohelix stop" in result.output
+    assert "  Stopped    requested by autohelix stop" in result.output
     reason = status(paths)["stop_reason"]
     assert isinstance(reason.pop("requested_at"), float)
     assert reason == {"kind": "request", "detail": "requested by autohelix stop", "why": None}

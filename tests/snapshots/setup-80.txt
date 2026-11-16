@@ -1,8 +1,8 @@
     ⢠⠞⠛⣢⢖⠛⠳⡄     AutoHelix  v0.3.0 · setup
-  ⣠⠖⢸⠐⠚⠁⠈⠓⠒⡒⠲⣄   Project  ~/code/sorting
-  ⢻⡠⠞      ⠳⣄⠟   Config   autohelix.yaml (new)
-  ⣴⠙⢦      ⡴⠊⣧   Agents   Claude Code · Codex (found on PATH)
-  ⠙⠦⠬⠤⢤⡀⢀⡤⠄⡇⠴⠋   Git      main · clean
+  ⣠⠖⢸⠐⠚⠁⠈⠓⠒⡒⠲⣄   Project    ~/code/sorting
+  ⢻⡠⠞      ⠳⣄⠟   Config     autohelix.yaml (new)
+  ⣴⠙⢦      ⡴⠊⣧   Agents     Claude Code · Codex (found on PATH)
+  ⠙⠦⠬⠤⢤⡀⢀⡤⠄⡇⠴⠋   Git        main · clean
     ⠘⢦⣤⠵⠫⣤⡴⠃
   ────────────────────────────────────────────────────────────────────────────
   How do you want to write it?

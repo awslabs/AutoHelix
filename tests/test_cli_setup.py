@@ -103,7 +103,7 @@ def test_bare_setup_writes_the_template_and_nothing_else(project):
     assert files(project) == ["autohelix.yaml", "main.py"]  # no .autohelix/, no excludes
     exclude = project / ".git" / "info" / "exclude"
     assert ".autohelix/" not in (exclude.read_text() if exclude.exists() else "")
-    assert "  Wrote    autohelix.yaml  the commented template" in lines(result)
+    assert "  Wrote      autohelix.yaml  the commented template" in lines(result)
     assert field(result, "next") == ("edit it: the goal, scope, gates and observe entries "
                                      "commit it, with any scripts its commands use autohelix run")
     assert "initialized" not in result.output.lower()
@@ -254,7 +254,7 @@ def test_outside_git_writes_and_warns(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert (tmp_path / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
     assert field(result, "Git") == "Not a git repository. AutoHelix requires git."
-    assert "  next     git init && git add -A && git commit -m 'init'" in lines(result)  # the first step
+    assert "  next       git init && git add -A && git commit -m 'init'" in lines(result)  # the first step
 
 
 def test_a_repository_without_commits_warns(tmp_path, monkeypatch):
@@ -265,7 +265,7 @@ def test_a_repository_without_commits_warns(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert (tmp_path / "autohelix.yaml").read_text() == CONFIG_TEMPLATE
     assert field(result, "Git") == "No commits yet; a run starts from a commit."
-    assert "  next     git add -A && git commit -m 'init'" in lines(result)
+    assert "  next       git add -A && git commit -m 'init'" in lines(result)
 
 
 @pytest.mark.parametrize("where", ["bare", "git-dir"])

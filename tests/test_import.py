@@ -236,7 +236,7 @@ def test_why_is_stored_kept_and_shown(project):
     assert "why: try the heap approach" in once
     assert f"continues from {paths.run_id}" in once
     view = cli(project, "view", short_id(paths.run_id), "--once").output
-    assert "  Notes    why: try the heap approach" in view
+    assert "  Notes      why: try the heap approach" in view
 
     short = short_id(other.run_id)
     assert cli(project, "archive", short, "--why", "superseded by k3f9").exit_code == 0

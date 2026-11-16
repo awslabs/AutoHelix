@@ -1,10 +1,10 @@
     ⢠⠞⠛⣢⢖⠛⠳⡄     AutoHelix  v0.3.0 · run krp3 · sorting · 14:02
-  ⣠⠖⢸⠐⠚⠁⠈⠓⠒⡒⠲⣄   Goal     Make sort_list faster in sort.py.
-  ⢻⡠⠞      ⠳⣄⠟   Agent    claude (sonnet)
-  ⣴⠙⢦      ⡴⠊⣧   Gates    pytest -q test_sort.py · speed regress 5%
-  ⠙⠦⠬⠤⢤⡀⢀⡤⠄⡇⠴⠋   Observe  bench (speed ↑, mem_mb ↓)
-    ⠘⢦⣤⠵⠫⣤⡴⠃     Scope    editable: sort.py
-                 Budget   7 iterations · $10.00 · 30m each
+  ⣠⠖⢸⠐⠚⠁⠈⠓⠒⡒⠲⣄   Goal       Make sort_list faster in sort.py.
+  ⢻⡠⠞      ⠳⣄⠟   Agent      claude (sonnet)
+  ⣴⠙⢦      ⡴⠊⣧   Gates      pytest -q test_sort.py · speed regress 5%
+  ⠙⠦⠬⠤⢤⡀⢀⡤⠄⡇⠴⠋   Observe    bench (speed ↑, mem_mb ↓)
+    ⠘⢦⣤⠵⠫⣤⡴⠃     Scope      editable: sort.py
+                 Budget     7 iterations · $10.00 · 30m each
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
              time      cost     speed ↑            mem_mb ↓
   · base                           46.9                 120
@@ -18,14 +18,14 @@
   ✗ 7          4s              agent failed: claude exited 1: rate limited
 
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  Done      iteration budget reached (7)
-  speed     46.9 → 57,520.8  1226×  iter 6
-  mem_mb    120 → 95  -21%  iter 6
-  run       7 iterations · 3 accepted · 38m 43s · $2.65
-  landed    3 commits on main
-            1  Replace bubble sort with a merge/insertion hybrid
-            3  Switch to built-in sorted() with key caching
-            6  Avoid the defensive list copy; sort in place
-  next      autohelix view krp3 · autohelix resume krp3
-  page      .autohelix/runs/20261115-1402-sorting-krp3/report.html
-  summary   .autohelix/runs/20261115-1402-sorting-krp3/report.md
+  Done       iteration budget reached (7)
+  speed      46.9 → 57,520.8  1226×  iter 6
+  mem_mb     120 → 95  -21%  iter 6
+  run        7 iterations · 3 accepted · 38m 43s · $2.65
+  landed     3 commits on main
+             1  Replace bubble sort with a merge/insertion hybrid
+             3  Switch to built-in sorted() with key caching
+             6  Avoid the defensive list copy; sort in place
+  next       autohelix view krp3 · autohelix resume krp3
+  page       .autohelix/runs/20261115-1402-sorting-krp3/report.html
+  summary    .autohelix/runs/20261115-1402-sorting-krp3/report.md

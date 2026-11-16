@@ -40,7 +40,7 @@ _MARK = [
     ("  ⠘⢦⣤⠵⠫⣤⡴⠃  ", "- - 0ab6ad 09b2ce 14a7dd 10aada 0cb1c2 0db792 09b6b0 07b5cf - -"),
 ]
 MARK_WIDTH = 12
-FIELD = 9  # "Observe  ": the width of a header field's label
+FIELD = 11  # "Observe    ": the width of a header field's label (and the end block's, at least)
 
 
 def mark() -> list[Text]:
@@ -409,8 +409,8 @@ class Table:
 
     def live(self, iteration: int, seconds: float, what: str, frame: int = 0) -> Text:
         """The row of the iteration under way: spinner, number, time so far, the phase
-        (`agent`, `observe · bench`) in the cost column."""
-        return live_line("base" if iteration == 0 else str(iteration), seconds, what, frame, self.width, self.gap)
+        (`agent`, `observe · bench`) right after the time."""
+        return live_line("base" if iteration == 0 else str(iteration), seconds, what, frame, self.width)
 
     # --- the end block ---
 
@@ -483,13 +483,13 @@ class Table:
         return lines
 
 
-def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int = 200, gap: int = COMPACT[0]) -> Text:
+def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int = 200) -> Text:
     """A live row: spinner, label (an iteration's number; blank for the summary step),
-    time so far in the time column, then (`gap` after it, where the cost column starts)
-    the phase."""
+    time so far in the time column, then the phase two spaces after it: with the time,
+    not under a column (the cost and values aren't known yet)."""
     return cut(_parts(("  ", None), (SPINNER[frame % len(SPINNER)] + " ", TEAL), (f"{label:<{LABEL - 2}}", None),
-                      ("  ", None), (f"{format_duration(seconds):>{TIME}}", None), (" " * gap, None),
-                      (clean(what), "dim")), width)
+                      ("  ", None), (f"{format_duration(seconds):>{TIME}}", None), ("  ", None), (clean(what), "dim")),
+               width)
 
 
 def with_room(renderable) -> Group:

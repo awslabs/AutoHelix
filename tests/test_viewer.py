@@ -446,9 +446,9 @@ def test_dashboard_json_and_once(measured_project):
     assert result.exit_code == 0, result.output
     lines = [line.rstrip() for line in result.output.splitlines()]
     assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(" · dashboard · test_project")
-    assert lines[1].startswith("  Project  ") and lines[1].endswith(" @ " + subprocess.run(
+    assert lines[1].startswith("  Project    ") and lines[1].endswith(" @ " + subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip())
-    assert lines[2].startswith("  Runs     2 runs") and lines[2].endswith("1 archived (not listed; see --json)")
+    assert lines[2].startswith("  Runs       2 runs") and lines[2].endswith("1 archived (not listed; see --json)")
     assert lines[4].split() == ["run", "state", "iter", "speed", "↑", "landing", "activity", "goal"]
     rows = {line.split()[0]: line for line in lines[5:] if not line.startswith("    ")}
     assert set(rows) == {short_id(first), short_id(second)}
@@ -476,17 +476,17 @@ def test_view_json_and_once(measured_project):
     text = _cli("view", first, "-p", project, "--once").output
     lines = [line.rstrip() for line in text.splitlines()]
     assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(f" · run {short_id(first)} · test_project · finished")
-    assert "  Goal     Test the integration" in lines
+    assert "  Goal       Test the integration" in lines
     rows = lines[lines.index(next(line for line in lines if line.lstrip().startswith("time"))) + 1:]
     assert rows[0].split() == ["·", "base", "100"]
     assert rows[1].split()[:2] == ["✓", "1"] and rows[1].split()[-2:] == ["110", "+10%"]
-    assert "  Done      iteration budget reached (2)" in lines
-    assert "  speed     100 → 120  +20%  iter 2" in lines
-    assert f"  landed    2 commits on {data['branch']}" in lines
-    assert f"  next      autohelix resume {short_id(first)}" in lines
+    assert "  Done       iteration budget reached (2)" in lines
+    assert "  speed      100 → 120  +20%  iter 2" in lines
+    assert f"  landed     2 commits on {data['branch']}" in lines
+    assert f"  next       autohelix resume {short_id(first)}" in lines
     manual = [line.rstrip() for line in _cli("view", second, "-p", project, "--once").output.splitlines()]
-    assert f"  unlanded  1 commit on autohelix/{second} (manual landing)" in manual  # as run says it
-    assert f"  next      autohelix resume {short_id(second)} · autohelix land {short_id(second)}" in manual
+    assert f"  unlanded   1 commit on autohelix/{second} (manual landing)" in manual  # as run says it
+    assert f"  next       autohelix resume {short_id(second)} · autohelix land {short_id(second)}" in manual
 
     missing = _cli("view", "missing-zzzz", "-p", project, "--json")
     assert missing.exit_code == 1 and "missing-zzzz" in missing.output
@@ -495,7 +495,7 @@ def test_view_json_and_once(measured_project):
     config = project / "autohelix.yaml"
     config.write_text(config.read_text().replace("Test the integration", '" "'))
     printed = _cli("view", first, "-p", project, "--once")
-    assert printed.exit_code == 0 and "  Goal     Test the integration\n" in printed.output
+    assert printed.exit_code == 0 and "  Goal       Test the integration\n" in printed.output
     stored = RunPaths(project, first).config
     stored.chmod(0o644)  # stored read-only
     stored.write_text(stored.read_text().replace("Test the integration", '" "'))
@@ -517,7 +517,7 @@ def test_table_shows_the_iteration_under_way():
     header = {"schema": 1, "project": "p", "host": "h", "path": "/x", "path_display": "/x", "branch": None,
               "commit": "abc1234"}
     listing = format_runs({**header, "runs": [run]}, now=1000).splitlines()
-    assert listing[1] == "  Project  /x · detached @ abc1234"
+    assert listing[1] == "  Project    /x · detached @ abc1234"
     assert listing[5].split() == ["r1", "running", "3/5", "—", "gates", "30s"]  # activity: what it is doing
     assert listing[6].strip() == "a.yaml · spent 2m 40s · $1.50+"  # 60s done + 100s under way
     one = format_run({**header, "run": run}, Saved(), now=1000).splitlines()
@@ -534,8 +534,8 @@ def test_live_view_shows_the_run_table_and_where_it_stopped(measured_project, mo
     result = _cli("view", short_id(first), "-p", project)
     assert result.exit_code == 0, result.output
     assert f"run {short_id(first)} · test_project · finished" in result.output
-    assert "  Goal     Test the integration" in result.output
-    assert "Done      iteration budget reached (2)" in result.output and "Iteration 2 · agent" in result.output
+    assert "  Goal       Test the integration" in result.output
+    assert "Done       iteration budget reached (2)" in result.output and "Iteration 2 · agent" in result.output
     assert "Finished at " in result.output and "Stopped watching. The run is unaffected." in result.output
 
 
