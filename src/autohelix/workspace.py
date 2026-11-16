@@ -11,10 +11,11 @@ it never runs git inside a copy once a call has used it. `Fingerprint` detects
 lasting changes to a copy's files from their raw bytes.
 """
 
-import fnmatch
+import functools
 import hashlib
 import logging
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -144,14 +145,61 @@ class Repo:
         return [f":(top,exclude){name}" for name in unfrozen if name not in ignored]
 
 
+@functools.lru_cache(maxsize=256)
+def _scope_regex(pattern: str) -> re.Pattern:
+    """A scope pattern as a regular expression over project-relative paths. `*` and
+    `?` stay within one folder, `[...]` is a character class, `**/` (at the start of a
+    component) is zero or more folders and a final `**` everything below. A pattern also
+    matches everything inside what it names (`src`, `src/`, `src/*` cover `src/a/b.py`)."""
+    pattern = pattern.rstrip("/")
+    out, i, n = [], 0, len(pattern)
+    while i < n:
+        at_component = i == 0 or pattern[i - 1] == "/"
+        if at_component and pattern.startswith("**/", i):
+            out.append("(?:[^/]*/)*")
+            i += 3
+        elif at_component and pattern.startswith("**", i) and i + 2 == n:
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif pattern[i] == "[":
+            j = i + 1
+            if j < n and pattern[j] in "!^":
+                j += 1
+            if j < n and pattern[j] == "]":
+                j += 1
+            while j < n and pattern[j] != "]":
+                j += 1
+            if j >= n:  # no closing bracket: a literal `[`
+                out.append(re.escape("["))
+                i += 1
+                continue
+            body = pattern[i + 1:j]
+            negated = body[:1] in ("!", "^")
+            body = re.sub(r"([\\\[\]&~|^])", r"\\\1", body[1:] if negated else body)
+            out.append(("[^/" if negated else "[") + body + "]")
+            i = j + 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("(?:" + "".join(out) + ")(?:/.*)?", re.S)
+
+
 def path_in_scope(path: str, patterns) -> bool:
-    for pattern in patterns:
-        if pattern in (".", "./"):
-            return True
-        prefix = pattern.rstrip("/")
-        if path == prefix or path.startswith(prefix + "/") or fnmatch.fnmatch(path, pattern):
-            return True
-    return False
+    """Whether a project-relative path is covered by one of the scope patterns
+    (`config.scope_path` normalised them: no `./`, `.` for the whole project). The one
+    matcher for freezing, discarded-change reports and preflight."""
+    return any(pattern == "." or _scope_regex(pattern).fullmatch(path) for pattern in patterns)
+
+
+def nested_repository(name: str) -> str:
+    """Why a candidate holding a git repository of its own is rejected, and what to do."""
+    return f"nested git repository at {name}: remove its .git or clone outside the project"
 
 
 @dataclass(frozen=True)
@@ -391,6 +439,8 @@ class Copy:
             repo.git(*attributes, "add", "-A", "--", ".", *repo.unfrozen_excludes(self.path, self.index),
                      work_tree=self.path, index=self.index)
         except RuntimeError as e:  # e.g. an unreadable file or an embedded repo without commits
+            if nested := re.search(r"'([^'\n]+?)/?' does not have a commit checked out", str(e)):
+                raise CandidateRejected(nested_repository(nested.group(1))) from e
             raise CandidateRejected(f"could not snapshot the candidate: {e}") from e
         changes = self._changes()
         # Reset to `files` in the index only; git drops new entries that conflict with a restored path.
@@ -409,6 +459,8 @@ class Copy:
         changes = {}
         for metadata, name in zip(records[::2], records[1::2]):
             old_mode, new_mode, old_oid, _ = metadata.lstrip(":").split(" ", 3)
+            if old_mode == "000000" and new_mode == GITLINK:  # a repository the agent made or cloned
+                raise CandidateRejected(nested_repository(name))
             if GITLINK in (old_mode, new_mode):
                 raise CandidateRejected(f"submodule changes are not supported: {name}")
             changes[name] = (old_mode, old_oid)

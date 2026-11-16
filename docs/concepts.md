@@ -95,7 +95,9 @@ when the copy is made; no stash, no remote). This means:
   absolute path. Copies sit outside the project, so lookups in parent directories
   (Node's `node_modules`, a `.venv` beside the project) don't find your project's.
 - **Submodule changes are not supported.** Submodules appear as empty directories in a
-  copy; changing one, or writing inside one, rejects the iteration.
+  copy; changing one, or writing inside one, rejects the iteration. So does a git
+  repository of its own the agent creates or clones into the copy ("nested git
+  repository at X: remove its .git or clone outside the project").
 
 Copies live in
 `${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/<project>-<hash>/<id>/` and are deleted
@@ -549,7 +551,7 @@ If you reset the target behind accepted run code, resuming that run with auto
 landing would reapply that code: `autohelix archive` it (or `delete` it) so a bare
 `resume` passes it over.
 Only first valid baseline capture requires a clean checkout, and every readiness
-check (clean checkout, editable patterns, preflight) runs before a first start
+check (clean checkout, preflight) runs before a first start
 allocates a run. The baseline, stop commands and summary run in copies of the
 accepted code. Agents can still reach the project, its `.git`, other runs and
 `~/.gitconfig` through absolute paths: main-checkout inspection is best effort and

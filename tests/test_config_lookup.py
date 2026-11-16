@@ -324,12 +324,25 @@ def test_a_dirty_tree_is_refused_before_anything_is_written(folder_project):
 def test_readiness_is_checked_before_anything_is_written(folder_project):
     config = folder_project / "autohelix" / "perf.yaml"
     data = yaml.safe_load(config.read_text())
-    data["scope"] = {"editable": ["missing/"]}
+    data["scope"] = {"editable": ["../elsewhere/"]}
     config.write_text(yaml.safe_dump(data))
     commit(folder_project)
     result = cli(folder_project, "run", "perf")
-    assert result.exit_code == 1 and "No files found matching editable pattern 'missing/'" in result.output
+    assert result.exit_code == 1 and "scope.editable: '../elsewhere/' has a `..` component" in flat(result.output)
     assert_untouched(folder_project)
+
+
+def test_an_editable_pattern_matching_nothing_yet_only_warns(folder_project):
+    """[01-2] The agent may be meant to create it: a warning, and the run starts."""
+    config = folder_project / "autohelix" / "perf.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["scope"] = {"editable": ["results/", "*.py"]}
+    config.write_text(yaml.safe_dump(data))
+    commit(folder_project)
+    result = cli(folder_project, "run", "perf", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert "scope.editable 'results/' matches no committed file" in flat(result.output)
+    assert "'*.py' matches" not in flat(result.output)
 
 
 def test_no_run_to_resume_is_refused_before_anything_is_written(folder_project):

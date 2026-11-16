@@ -79,7 +79,9 @@ that name their replacement; when editing an existing config, convert them (a
   inside `editable` (both together mean editable minus frozen). Changes outside
   the scope are discarded before gates run, and the next agent is told. Without
   either, code changes are unrestricted by scope, and a run with gate or observe
-  commands warns.
+  commands warns. Entries are project-relative paths (a folder covers its
+  contents) or globs: `*` stays within one folder, `**/` is zero or more folders
+  (`tests/**/*.py` includes `tests/test_a.py`); no absolute paths or `..`.
 - Prefer relative paths. Copies and scope isolate repository changes, not
   host access: processes can still write to external files and use credentials
   available to the agent.

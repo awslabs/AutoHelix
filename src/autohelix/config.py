@@ -304,8 +304,8 @@ class Config:
         if not isinstance(scope, dict):
             errors.append("scope must be a mapping with editable: and/or frozen:")
             scope = {}
-        editable = _paths(scope.get("editable"), "scope.editable", errors)
-        frozen = _paths(scope.get("frozen"), "scope.frozen", errors)
+        editable = _scope_paths(scope.get("editable"), "scope.editable", errors)
+        frozen = _scope_paths(scope.get("frozen"), "scope.frozen", errors)
         for key in scope:
             if key not in ("editable", "frozen"):
                 errors.append(f"Unknown key scope.{key} (known: editable, frozen)")
@@ -341,6 +341,30 @@ def _paths(value: Any, where: str, errors: list[str]) -> list[str]:
         errors.append(f"{where} must be a path or a list of paths")
         return []
     return list(value)
+
+
+def scope_path(pattern: str) -> str:
+    """A scope entry as the matcher (`workspace.path_in_scope`) takes it: relative to the
+    project, without `./` or empty components (`.` is the whole project; a trailing `/`
+    is kept). ValueError for an absolute path or a `..` component."""
+    if pattern.startswith("/"):
+        raise ValueError("is an absolute path; scope entries are relative to the project folder")
+    parts = [part for part in pattern.split("/") if part not in ("", ".")]
+    if ".." in parts:
+        raise ValueError("has a `..` component; scope entries stay inside the project folder")
+    if not parts:
+        return "."
+    return "/".join(parts) + ("/" if pattern.endswith("/") else "")
+
+
+def _scope_paths(value: Any, where: str, errors: list[str]) -> list[str]:
+    patterns = []
+    for pattern in _paths(value, where, errors):
+        try:
+            patterns.append(scope_path(pattern))
+        except ValueError as e:
+            errors.append(f"{where}: {pattern!r} {e}")
+    return patterns
 
 
 # An observe entry's own output files in `iterations/NNN/observe/<name>/`, and folders a

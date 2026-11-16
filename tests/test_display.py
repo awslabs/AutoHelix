@@ -227,3 +227,39 @@ class TestLiveDisplay:
                                   metadata={"tool_name": "Edit"}))
         plain = d.render(65).plain
         assert plain.endswith(" 1m 05s  Test Agent")
+
+
+# ---------------------------------------------------------------------------
+# Agent text reaches the terminal sanitised [11-5]
+# ---------------------------------------------------------------------------
+
+HOSTILE = "ok \x1b]0;pwned\x07 \x1b[31mred\x1b[0m \x1b]52;c;aGk=\x07done\x1b"
+
+
+class TestSanitisedPanel:
+    def test_truncate_removes_escape_sequences(self):
+        assert truncate_for_display(HOSTILE) == "ok red done"
+
+    def test_truncate_removes_control_characters_and_bidi(self):
+        assert truncate_for_display("a\x00b\x08c‮d") == "abcd"
+
+    def test_tool_name_label_is_cleaned(self):
+        event = AgentEvent(kind=AgentEventKind.TOOL_INPUT, text="x",
+                           metadata={"tool_name": "Bash\x1b]0;t\x07\n"})
+        assert event_presenter(event) == ("Bash input", "cyan")
+
+    def test_rendered_panel_has_no_escape_from_agent_text(self):
+        display = LiveDisplay(Console(), title="agent\x1b[2J [bold]x", verbose=True)
+        for kind, stream in ((AgentEventKind.ASSISTANT_TEXT, False),
+                             (AgentEventKind.TOOL_RESULT, False),
+                             (AgentEventKind.ERROR, False),
+                             (AgentEventKind.ASSISTANT_TEXT, True)):
+            display.handle_event(AgentEvent(kind=kind, text=HOSTILE, metadata={"stream": stream}))
+        # No colours: any ESC in the output would have come from the agent's text.
+        console = Console(force_terminal=True, color_system=None, width=200, record=False)
+        with console.capture() as captured:
+            console.print(display.render(elapsed=0))
+        out = captured.get()
+        assert "\x1b" not in out
+        assert "ok red done" in out
+        assert "[bold]x" in out  # the title is plain text, not markup

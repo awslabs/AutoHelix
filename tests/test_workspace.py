@@ -413,8 +413,27 @@ def test_changed_or_new_gitlink_is_rejected(repo_dir, copies, with_submodule):
     (nested / "x").write_text("x")
     git(nested, "add", ".")
     git(nested, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "x")
-    with pytest.raises(CandidateRejected, match="vendor"):
+    with pytest.raises(CandidateRejected, match="^nested git repository at vendor: remove its .git "
+                                                "or clone outside the project$"):
         copy.snapshot(Scope())
+
+
+@pytest.mark.parametrize("commits", [True, False])
+def test_a_nested_repository_is_rejected_with_what_to_do(repo_dir, copies, commits):
+    """[01-3] A repository the agent cloned or made, also outside the scope and also
+    without commits: rejected, the message naming it and the fix."""
+    _, _, copy = agent_copy(repo_dir, copies)
+    nested = copy.path / "vendor" / "lib"
+    nested.mkdir(parents=True)
+    git(nested, "init", "-q")
+    (nested / "x").write_text("x")
+    if commits:
+        git(nested, "add", ".")
+        git(nested, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "x")
+    with pytest.raises(CandidateRejected) as rejected:
+        copy.snapshot(Scope(editable=("src/",)))
+    assert str(rejected.value) == ("nested git repository at vendor/lib: "
+                                   "remove its .git or clone outside the project")
 
 
 def test_swapped_copies_root_is_refused_without_touching_outside(repo_dir, copies, tmp_path):
@@ -543,7 +562,8 @@ def test_planted_index_symlink_cannot_reach_user_index(repo_dir, copies):
 def test_agent_conditions_reject_instead_of_crashing(repo_dir, copies):
     _, _, copy = agent_copy(repo_dir, copies)
     git(copy.path / "scratch" if (copy.path / "scratch").mkdir() is None else copy.path, "init", "-q")
-    with pytest.raises(CandidateRejected, match="could not snapshot"):
+    (copy.path / "scratch" / "x").write_text("x")
+    with pytest.raises(CandidateRejected, match="nested git repository at scratch"):
         copy.snapshot(Scope())
     shutil.rmtree(copy.path / "scratch")
     (copy.path / ".autohelix").write_text("a file, not the state folder")
@@ -552,3 +572,17 @@ def test_agent_conditions_reject_instead_of_crashing(repo_dir, copies):
     (copy.path / "code.py").chmod(0)
     assert copy.changed() == ["code.py"]
     (copy.path / "code.py").chmod(0o644)
+
+
+def test_other_snapshot_failures_keep_the_generic_message(repo_dir, copies):
+    _, _, copy = agent_copy(repo_dir, copies)
+    unreadable = copy.path / "new.txt"
+    unreadable.write_text("secret")
+    unreadable.chmod(0)
+    try:
+        if os.access(unreadable, os.R_OK):
+            pytest.skip("running as a user that reads anything")
+        with pytest.raises(CandidateRejected, match="^could not snapshot the candidate"):
+            copy.snapshot(Scope())
+    finally:
+        unreadable.chmod(0o644)

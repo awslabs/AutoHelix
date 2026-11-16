@@ -94,7 +94,7 @@ class TestPreflightCheck:
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, raw, tmp_path)
         warnings = [i for i in issues if i.level == "warning"]
-        assert any("matches no files" in i.message for i in warnings)
+        assert any("matches no committed file" in i.message for i in warnings)
 
     @pytest.mark.parametrize("config, warns", [
         ({"gates": ["pytest tests/"]}, True),
@@ -146,3 +146,49 @@ class TestPreflightCheck:
             issues = preflight_check(config, raw, tmp_path)
         errors = [i for i in issues if i.level == "error"]
         assert not any("throughput" in i.message or "latency" in i.message for i in errors)
+
+
+# ── Scope patterns counted over `git ls-files` with the harness's matcher [01-1, 03-5] ──
+
+
+def _committed(folder: Path, files: dict[str, str], untracked: dict[str, str] = {}) -> Path:
+    import subprocess
+    folder.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=folder, check=True)
+    for name, text in {**files, **untracked}.items():
+        (folder / name).parent.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_text(text)
+    subprocess.run(["git", "add", "--", *files], cwd=folder, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "c"],
+                   cwd=folder, check=True)
+    return folder
+
+
+def _scope_warnings(folder: Path, scope: str) -> list[str]:
+    (folder / "autohelix.yaml").write_text(f"goal: g\nagent: {{backend: mock}}\nscope:\n{scope}")
+    config, raw = load_config(folder)
+    return [i.message for i in preflight_check(config, raw, folder) if "scope." in i.message]
+
+
+def test_preflight_matches_like_the_harness(tmp_path):
+    folder = _committed(tmp_path / "p", {"tests/test_a.py": "", "src/a.py": "", "top.py": ""},
+                        untracked={"notes/plan.md": ""})
+    assert _scope_warnings(folder, "  frozen: [tests/**/*.py, ./src/, '*.py']\n") == []
+    # Untracked files don't count; `*` stays within a folder.
+    assert _scope_warnings(folder, "  editable: [notes/, 'tests/*.md']\n") == [
+        "scope.editable 'notes/' matches no committed file",
+        "scope.editable 'tests/*.md' matches no committed file",
+    ]
+
+
+def test_preflight_in_a_folder_with_glob_characters(tmp_path):
+    """The project path is never read as a pattern: no false warning for `[` or `*`."""
+    folder = _committed(tmp_path / "proj[1]*", {"src/a.py": ""})
+    assert _scope_warnings(folder, "  editable: [src/]\n") == []
+
+
+def test_preflight_in_a_subdirectory_counts_its_own_files(tmp_path):
+    repo = _committed(tmp_path / "repo", {"sub/src/a.py": "", "src/other.py": ""})
+    assert _scope_warnings(repo / "sub", "  editable: [src/a.py]\n") == []
+    assert _scope_warnings(repo / "sub", "  editable: [src/other.py]\n") == [
+        "scope.editable 'src/other.py' matches no committed file"]

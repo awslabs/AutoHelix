@@ -731,14 +731,21 @@ def test_target_behind_after_baseline_warns_only_for_auto_landing(project):
     assert git(project, "rev-parse", "HEAD").stdout.strip() == base
 
 
-@pytest.mark.parametrize("problem", ["editable", "preflight"])
-def test_refused_first_start_creates_no_identity(project, problem):
-    if problem == "editable":
-        configure(project, scope={"editable": ["missing_dir/*.py"]})
-    else:
+@pytest.mark.parametrize("problem", ["scope", "preflight", "dirty"])
+def test_refused_first_start_creates_no_identity(project, problem, capsys):
+    if problem == "scope":  # an entry outside the project (one matching nothing only warns)
+        configure(project, scope={"editable": ["../missing_dir/*.py"]})
+    elif problem == "preflight":
         configure(project, agent={"backend": "claude", "command": "/nonexistent/agent"})
-    with pytest.raises(RuntimeError, match="No files found|Preflight checks failed"):
+    else:
+        (project / "code.py").write_text("edited\n")
+    # A config error ends the command (SystemExit) before the readiness checks.
+    with pytest.raises((RuntimeError, SystemExit)) as refused:
         Harness(project)
+    if problem != "scope":
+        assert re.search("Preflight checks failed|Uncommitted changes in tracked files", str(refused.value))
+    else:
+        assert "has a `..` component" in " ".join(capsys.readouterr().out.split())
     root = RunPaths(project).root
     assert not RunPaths(project).current.exists()
     assert not list((root / "runs").glob("*/run.json"))

@@ -166,6 +166,19 @@ class TestConfigFromDict:
         assert (config.editable, config.frozen) == (["src/"], ["src/fixtures/"])
         assert not errors({"goal": "x", "gates": ["t"], "scope": {"editable": ["src/"], "frozen": ["tests/"]}})
 
+    def test_scope_entries_are_normalised(self):
+        """[01-8] `./src/` used to match nothing: every change discarded, `frozen` freezing nothing."""
+        config = Config.from_dict({"goal": "x", "scope": {"editable": ["./src/", "./"], "frozen": "./tests//a.py"}})
+        assert (config.editable, config.frozen) == (["src/", "."], ["tests/a.py"])
+
+    @pytest.mark.parametrize("entry, message", [
+        ("/etc/passwd", "scope.frozen: '/etc/passwd' is an absolute path"),
+        ("../sibling", "scope.frozen: '../sibling' has a `..` component"),
+        ("src/../../x", "scope.frozen: 'src/../../x' has a `..` component"),
+    ])
+    def test_scope_entries_outside_the_project_are_errors(self, entry, message):
+        assert any(message in e for e in errors({"goal": "x", "scope": {"frozen": [entry]}}))
+
     def test_scope_one_side(self):
         assert Config.from_dict({"goal": "x", "scope": {"editable": ["src/"]}}).frozen == []
         assert Config.from_dict({"goal": "x", "scope": {"frozen": "tests/"}}).frozen == ["tests/"]

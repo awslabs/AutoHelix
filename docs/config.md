@@ -10,7 +10,8 @@ commented template there.
 repo, and every path (`capture:` files, the patterns in `scope.editable` and
 `scope.frozen`) is resolved there. Use relative paths (`src/`, `tests/`,
 `results/log.json`); absolute paths point outside the copy and will either be
-silently ignored, discard all the agent's work as out of scope, or crash the run.
+silently ignored or crash the run (in `scope:`, an absolute path or a `..`
+component is a config error).
 (The one exception is long-lived outputs you deliberately keep outside the repo,
 such as a model checkpoint directory, which are meant to live at a fixed absolute
 path.) Untracked files such as a virtualenv or downloaded data aren't in the copy;
@@ -441,6 +442,16 @@ Controls which files the agent's changes are kept for:
 - Both together: editable minus frozen (`editable: [src/, tests/]`,
   `frozen: [tests/acceptance/]`).
 
+An entry is a path relative to the project folder, or a glob. A path covers
+itself and, for a folder, everything inside it (`src`, `src/`). In a glob, `*`
+and `?` match within one folder (`*.py` is only the top-level files, not
+`tests/test_x.py`), `[abc]` is a character class, `**/` matches zero or more
+folders (`tests/**/*.py` covers `tests/test_a.py` and `tests/unit/test_b.py`),
+and a final `**` everything below. A glob that names a folder covers what is
+inside it (`src/*` covers `src/pkg/a.py`). A leading `./` is ignored (`./src/` is
+`src/`); `.` is the whole project; an absolute path or a `..` component is a
+config error.
+
 Changes outside the scope are discarded when the agent's copy is frozen, before
 any gate runs, so gates check exactly the tree that would be accepted. Nothing
 is written back into the agent's copy. Discarded paths are recorded with the
@@ -455,8 +466,14 @@ the config it started with: [CLI → Config files](cli.md#config-files)). Script
 the config calls are code: list them under `frozen:` if they must not change.
 
 With no scope, the agent may edit the tests and benchmarks that gate it; a run
-whose config has gate or observe commands but no scope warns at start. Patterns
-that match no file are warnings.
+whose config has gate or observe commands but no scope warns at start. A pattern
+that matches no committed file is a warning, not an error: an editable one may
+name a file or folder the agent is to create (`editable: [solver.py, results/]`).
+
+A git repository inside the copy (one the agent cloned or `git init`ed) rejects
+the iteration, inside the scope or not: "nested git repository at vendor/lib:
+remove its .git or clone outside the project". An agent that wants to read
+another repository clones it outside its copy (under `/tmp`, say).
 
 ## Agent
 

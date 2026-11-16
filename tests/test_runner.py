@@ -83,3 +83,27 @@ def test_timeout_kills_the_whole_process_group(tmp_path):
         time.sleep(0.1)
     else:
         raise AssertionError("background child survived the timeout")
+
+
+def test_exited_child_with_a_writing_grandchild_is_killed_at_the_timeout(tmp_path):
+    """The shell exits at once; its background loop keeps the pipe busy for 10 s. The
+    deadline still applies, and the loop is killed with the group."""
+    marker = tmp_path / "pid"
+    result, lines, elapsed = _run(
+        tmp_path,
+        f"(for i in $(seq 100); do echo x; sleep 0.1; done) & echo $! > {marker}; exit 0",
+        timeout_seconds=1,
+    )
+    assert (result.exit_code, result.timed_out) == (124, True)
+    assert elapsed < 8
+    assert lines and set(lines) == {"x"}
+    pid = int(marker.read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("background loop survived the timeout")

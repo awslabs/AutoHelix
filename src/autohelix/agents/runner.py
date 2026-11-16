@@ -65,6 +65,26 @@ def _kill_process_group(process: subprocess.Popen, grace: float = 3) -> None:
         pass
 
 
+def end_group(proc) -> None:
+    """SIGKILL whatever is left of a process group (its own session, from
+    `start_new_session`), also after its leader (the shell, the agent) exited: a
+    background child must not keep running, and writing files, once the harness has
+    moved on. A child that starts a session of its own escapes this (until commands
+    run in a sandbox).
+
+    PID reuse: once the shell is reaped, its PID (the group's id) is free again only
+    when no member of the group is left; a new process could then take it as its own
+    group id before this kill, a narrow race. Closing it means not reaping the shell
+    until after the kill (waitid with WNOWAIT, then reading the pipes ourselves instead
+    of `communicate`), which `subprocess` doesn't offer; left as is."""
+    if not isinstance(getattr(proc, "pid", None), int):
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:  # nothing left
+        pass
+
+
 def run_process(
     cmd: list[str],
     cwd: Path,
@@ -130,10 +150,13 @@ def run_process(
 
                 elapsed = int(time.monotonic() - start)
                 now = time.monotonic()
-                if process.poll() is None and deadline is not None and now >= deadline:
+                # Whatever is still running: also a grandchild writing to the pipe
+                # after the process itself exited.
+                if deadline is not None and now >= deadline:
                     log_file.write("[autohelix] Timeout\n")
                     log_file.flush()
                     _kill_process_group(process)
+                    end_group(process)
                     return ProcessRunResult(exit_code=124, timed_out=True)
                 if process.poll() is None and now >= next_heartbeat:
                     log_file.write(f"[autohelix] Heartbeat: {elapsed}s\n")
@@ -152,4 +175,5 @@ def run_process(
     except KeyboardInterrupt:
         if process is not None:
             _kill_process_group(process)
+            end_group(process)
         raise

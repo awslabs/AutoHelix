@@ -48,7 +48,6 @@ from autohelix.formatting import format_cap, format_cost, format_total_cost
 from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
                                        uses_old_layout)
 from autohelix.run_log import RunLog
-from autohelix.sandbox import ensure_clean_working_tree, ensure_editable_files_ready
 from autohelix.workspace import (path_in_scope, SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, CandidateRejected,
                                  Repo, Scope)
 from autohelix.state import (
@@ -1576,7 +1575,6 @@ class Harness:
         """Readiness checks for a first start, run before any run state exists: a run
         starts from a commit, so tracked files must be clean."""
         require_clean(self.project_path)
-        ensure_editable_files_ready(Repo(self.project_path), self.project_path, self.config.editable)
         if not self._preflight():
             raise RuntimeError("Preflight checks failed. Fix the issues above before running.")
         self._preflight_done = True
@@ -1665,12 +1663,11 @@ class Harness:
 
         needs_baseline = not any(r.iteration == 0 and r.accepted for r in self.history.load())
         if needs_baseline:
-            ensure_clean_working_tree(self.repo, self.project_path)
+            require_clean(self.project_path)  # also a resumed run whose baseline was never accepted
             if git(self.project_path, "rev-parse", "HEAD").stdout.strip() != self.run_state.expected_tip:
                 raise AutoHelixRunError("Baseline checkout moved since this run started. Restore its original commit, "
                                         f"or start a new run with `{run_command(self.run_info['config_path'])}` "
                                         f"(and `autohelix delete {short_id(self.paths.run_id)}` this one).")
-            ensure_editable_files_ready(self.repo, self.project_path, self.config.editable)
 
         # Show header
         self._print_header(budget, start_iter)

@@ -3,7 +3,6 @@
 
 """Run gate, observe and stop commands; compare metric gates."""
 
-import glob as globmod
 import logging
 import math
 import os
@@ -19,9 +18,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from autohelix.agents.runner import _kill_process_group
+from autohelix.agents.runner import _kill_process_group, end_group
 from autohelix.config import DEFAULT_CHECK_TIMEOUT, CommandSpec, Config, MetricGate, ObserveEntry
 from autohelix.sandbox import build_worktree_env
+from autohelix.workspace import git_env, path_in_scope, run_git
 
 # Progress callback type: (phase, command, elapsed_seconds | None)
 
@@ -69,15 +69,19 @@ def preflight_check(
                 message=f"Agent command '{agent_cmd}' not found in PATH",
             ))
 
-    # 3. Scope patterns that match nothing (no scope at all: `scope_warning`, at run start)
-    for label, patterns in [("editable", config.editable), ("frozen", config.frozen)]:
-        for pattern in patterns:
-            matches = globmod.glob(str(project_path / pattern), recursive=True)
-            if not matches:
-                issues.append(PreflightIssue(
-                    level="warning",
-                    message=f"scope.{label} '{pattern}' matches no files",
-                ))
+    # 3. Scope patterns that match no committed file, with the matcher the harness uses
+    # (no scope at all: `scope_warning`, at run start). Editable ones may name files the
+    # agent is to create, so warnings only.
+    if config.editable or config.frozen:
+        listed = run_git(["git", "ls-files", "-z"], cwd=project_path, capture_output=True, env=git_env())
+        files = os.fsdecode(listed.stdout).split("\0") if listed.returncode == 0 else []
+        for label, patterns in [("editable", config.editable), ("frozen", config.frozen)]:
+            for pattern in patterns:
+                if not any(path_in_scope(path, [pattern]) for path in files if path):
+                    issues.append(PreflightIssue(
+                        level="warning",
+                        message=f"scope.{label} '{pattern}' matches no committed file",
+                    ))
 
     return issues
 
@@ -130,25 +134,6 @@ class _Execution:
     duration_s: float = 0.0
 
 
-def _end_group(proc) -> None:
-    """SIGKILL whatever is left of a command's process group (its own session, from
-    `start_new_session`), also after the shell itself exited: a background child must not
-    keep running, and writing files, once the harness has checked them. A child that
-    starts a session of its own escapes this (until commands run in a sandbox).
-
-    PID reuse: once the shell is reaped, its PID (the group's id) is free again only
-    when no member of the group is left; a new process could then take it as its own
-    group id before this kill, a narrow race. Closing it means not reaping the shell
-    until after the kill (waitid with WNOWAIT, then reading the pipes ourselves instead
-    of `communicate`), which `subprocess` doesn't offer; left as is."""
-    if not isinstance(getattr(proc, "pid", None), int):
-        return
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except OSError:  # nothing left
-        pass
-
-
 def _text(data) -> str:
     """Command output as text: bytes decoded leniently (invalid UTF-8 can't lose it)."""
     if isinstance(data, bytes):
@@ -198,7 +183,7 @@ def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str]) -> _Exe
                     # Kill the whole process group, not just the /bin/sh wrapper,
                     # so a timed-out pytest/benchmark doesn't keep running detached.
                     _kill_process_group(proc, grace=CHECK_KILL_GRACE)
-                    _end_group(proc)
+                    end_group(proc)
                     stdout, stderr = _drain(proc)
                     return _Execution(-1, stdout, stderr, timed_out=True, duration_s=time.monotonic() - start)
         return _Execution(proc.returncode, _text(stdout), _text(stderr), duration_s=time.monotonic() - start)
@@ -210,7 +195,7 @@ def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str]) -> _Exe
         return _Execution(-1, error=str(e), duration_s=time.monotonic() - start)
     finally:
         if proc is not None:
-            _end_group(proc)
+            end_group(proc)
 
 
 def run_command(

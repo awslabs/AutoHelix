@@ -25,7 +25,7 @@ uv pip install -e ".[dev]"
 - `src/autohelix/config.py` - configuration dataclasses and parsing
 - `src/autohelix/agents/` - agent backends (claudecode, codex, opencode, mock)
 - `src/autohelix/iteration.py` - one iteration's copies: agent copy, freeze to a tree, evaluation copies, accept, notes/cleanup
-- `src/autohelix/sandbox.py` - child-process environments (PYTHONPATH remap) and checkout readiness checks
+- `src/autohelix/sandbox.py` - child-process environments (PYTHONPATH remap)
 - `src/autohelix/checks.py` - gate, observe and stop command execution; metric gate comparison
 - `src/autohelix/judge.py` / `review.py` - `autohelix ask` (yes/no) and `autohelix review` (feedback), read-only agent calls
 - `src/autohelix/launcher.py` - the `autohelix` launcher put first on harness commands' PATH
