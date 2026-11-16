@@ -95,6 +95,29 @@ def test_the_liveness_probe_creates_no_lock_file(tmp_path, run_paths):
     assert not run_paths.lock.exists()
 
 
+def test_a_probe_holding_a_free_lock_for_a_moment_doesnt_refuse_the_run(tmp_path, run_paths):
+    """`is_live` takes a free lock briefly; `RunLock` (resume, land, delete) tries again
+    for a moment instead of saying the run is running. A lock held longer refuses."""
+    import fcntl
+    import threading
+
+    run_paths.lock.parent.mkdir(parents=True, exist_ok=True)
+    run_paths.lock.touch()
+    probe = open(run_paths.lock)
+    fcntl.flock(probe, fcntl.LOCK_EX)  # what the probe does, held across RunLock's first try
+    timer = threading.Timer(0.02, probe.close)
+    timer.start()
+    try:
+        with RunLock(run_paths.lock):
+            pass
+    finally:
+        timer.join()
+    with open(run_paths.lock) as holder:
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        with pytest.raises(RuntimeError, match="is running"):
+            RunLock(run_paths.lock)
+
+
 def test_harness_records_finished_run(integration_project):  # noqa: F811
     Harness(integration_project).run(Budget(until=1))
     data = read_run_status(integration_project, latest_run(integration_project).run_id)

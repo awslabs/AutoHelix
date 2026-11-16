@@ -3,6 +3,7 @@
 
 """Command-line interface."""
 
+import functools
 import json
 import os
 import shlex
@@ -496,14 +497,25 @@ def _last_iteration(project: Path, config: Path | None, run_id: str | None) -> i
     return History(project, planned.run_id).get_last_iteration() if planned else -1
 
 
+def _interruptible(command):
+    """`run`/`resume`: Ctrl-C at any point (the checks before the segment, preflight's
+    agent commands, the segment) exits 130, not click's "Aborted!" (1)."""
+    @functools.wraps(command)
+    def wrapper(*args, **kwargs):
+        try:
+            return command(*args, **kwargs)
+        except KeyboardInterrupt:
+            raise SystemExit(130) from None
+    return wrapper
+
+
 def _segment(harness: Harness, budget: Budget, report: bool) -> None:
     """Run a segment; exit 0 when it ended politely (a budget, a stop condition,
     `autohelix stop`), 1 on an error (the agent kept failing, landing failed),
-    130 when interrupted (Ctrl-C, SIGTERM, `autohelix stop --now`)."""
+    130 when interrupted (Ctrl-C, SIGTERM, `autohelix stop --now`; see
+    `_interruptible`)."""
     try:
         ended = harness.run(budget, report=report)
-    except KeyboardInterrupt:
-        raise SystemExit(130) from None
     except RuntimeError as e:
         if getattr(e, "autohelix_reported", False):  # printed first, above landing and the run page
             raise SystemExit(1) from e
@@ -526,6 +538,7 @@ def _segment(harness: Harness, budget: Budget, report: bool) -> None:
 @click.option("--check", is_flag=True,
               help="Only make the checks a run makes before it writes anything (config, prompt template, "
                    "clean checkout, agent command, scope); exit 0 if it would start, else 1.")
+@_interruptible
 def run(config_name: str | None, path: Path, verbose: bool, no_report: bool, land_mode: str | None,
         iterations: int | None, until: int | None, cost_usd: float | None, time_seconds: int | None,
         group: str | None, import_run: str | None, why: str | None, check: bool):
@@ -602,6 +615,7 @@ def _resume_target(project: Path, value: str | None) -> tuple[str | None, Path |
 @_segment_options
 @_budget_options(" more")
 @click.option("--group", help="Set or change the run's group from its next iteration; '' clears it.")
+@_interruptible
 def resume(target: str | None, path: Path, verbose: bool, no_report: bool, land_mode: str | None,
            iterations: int | None, until: int | None, cost_usd: float | None, time_seconds: int | None,
            group: str | None):

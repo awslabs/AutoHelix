@@ -700,10 +700,12 @@ autohelix wait [RUN_ID...] [-p PATH] [--after CURSOR] --follow
 | `--follow` | Never exit: print one line per event, in order (not with `--timeout`; no `idle` events) |
 | `--path`, `-p` | Project directory (default: current dir) |
 
-It only reads `.autohelix/` (`history.jsonl`, `segments.jsonl`, `status.json`):
-nothing written or repaired, so it is safe beside running runs, and any number
-can wait at once. Whether an open segment's process is gone comes from the run's
-lock, probed (never held) only for a segment open on this host.
+It only reads each run's event log, `.autohelix/runs/<id>/.internal/segments.jsonl`
+(a line when a segment starts, when an iteration's record is final, when the
+segment ends; see [Concepts](concepts.md#runs-and-run-state)): nothing written
+or repaired, so it is safe beside running runs, and any number can wait at once.
+Whether an open segment's process is gone comes from the run's lock, probed only
+for a segment open on this host (once for a crashed one).
 
 ### The cursor
 
@@ -725,8 +727,9 @@ while :; do
 done
 ```
 
-A cursor records, per run, what has been reported; it doesn't compare times. It
-is opaque text (`1.` and base64): pass it back as printed. A cursor works with
+A cursor records, per run, how many lines of its log were reported (and the
+last crash); it doesn't compare times. It is opaque text (`2.` and base64):
+pass it back as printed. A cursor works with
 other run ids or none: it covers every run of the project, so `--after` reports
 only what happened since, whichever runs are watched. A run missing from a
 cursor (started after it) is new: everything it has is pending.
@@ -750,7 +753,8 @@ Per event:
 - **`started`**: a segment (one `run` or `resume` command) started. `segment`
   (1, 2, … in the run), `start_iteration` (`0` when it begins with the
   baseline), `resumed` (`segment` > 1). `time` is the segment's start.
-- **`iteration`**: an iteration was recorded (the baseline is iteration 0).
+- **`iteration`**: an iteration was recorded (the baseline is iteration 0; a
+  retried baseline is another event for 0).
   `iteration`, `accepted`, `reason` (as recorded: `baseline`, `gate failed:
   pytest -q`, `interrupted`, …; `null` for most accepted ones), `summary` (the
   agent's one line), `metrics`, `commit` (`null` when rejected or an accepted
@@ -763,9 +767,12 @@ Per event:
   `status.json`, or `null`), `error` (a failed segment's error, else `null`),
   `last_iteration` (the run's last iteration), `iterations` (the records this
   segment added). `time` is when it ended.
-- **`crashed`**: a segment never ended and its process is gone (nothing holds the run's lock). `segment`,
-  `last_iteration` (the run's last iteration when it crashed; `null` if it had
-  none, e.g. during its first baseline). Reported once per segment. `time` is its last sign of life.
+- **`crashed`**: a segment never ended and its process is gone (nothing holds
+  the run's lock, or a later segment started). `segment`, `last_iteration` (the
+  last iteration reported before it crashed; `null` if none was, e.g. during its
+  first baseline). Reported once per segment. `time` is its last event (its
+  start or its last iteration). An iteration whose process was killed between
+  its record and its log line is in the history but not reported.
 - **`idle`**: only with run ids, without `--follow`: none of them is running
   and nothing is pending. `runs`: one `{run, short, state}` per run named,
   `state` being how its last segment ended (`finished`, `interrupted`,
@@ -778,12 +785,11 @@ Per event:
   cursor continues where this wait started (the one given, or now): a timeout
   is a heartbeat, not a gap.
 
-A run's events come in the order they happened: a segment's `started`, its
+A run's events come in the order of its log: a segment's `started`, its
 iterations, then its `ended` or `crashed`. Across runs the oldest pending event
-comes first, but a record can be written after its `time`, so an event of one
-run may follow a newer one of another run. Only complete lines of
-`history.jsonl` and `segments.jsonl` count; a record rewritten in place (an
-accepted one updated after its stop commands) is not reported again.
+comes first, but a line can be written after its `time`, so an event of one
+run may follow a newer one of another run. Only complete lines of the log
+count.
 
 ### Exit codes and limits
 

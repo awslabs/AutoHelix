@@ -2,9 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Run events for `autohelix wait`: what happened in a project's runs, one JSON object
-per event, read from the files the harness writes (a pure reader: nothing is written,
-nothing is repaired; the run lock is only probed, for a segment open on this host,
-to tell whether its process is gone).
+per event, read from each run's event log, runs/<id>/.internal/segments.jsonl (a
+pure reader: nothing is written, nothing is repaired; the run lock is only probed, for
+a segment open on this host, to tell whether its process is gone).
+
+The log (`run_status.SegmentLog`) is append-only: the harness writes a line when a
+segment starts, when an iteration's record is final (after its stop commands; the
+baseline's too, a failed one included) and when the segment ends. `wait` reports
+those lines in order, plus a `crashed` event for a segment that never ended.
 
 Events
 ------
@@ -23,24 +28,26 @@ Per event:
 - `started`: a segment (one `run` or `resume` command) started; a new run's first
   segment or a resume. `segment` (1, 2, ... in the run), `start_iteration` (0 when it
   begins with the baseline), `resumed` (segment > 1). `time`: the segment's start.
-- `iteration`: an iteration was recorded (the baseline is iteration 0). `iteration`,
-  `accepted`, `reason` (as recorded: `baseline`, `gate failed: pytest -q`, ...; null
-  for most accepted ones), `summary` (the agent's one line), `metrics`, `commit`
-  (null when rejected or an accepted no-op), `cost_usd` (the known cost; null when
-  none is known), `cost_incomplete` (some of its calls' costs are unknown),
-  `agent_error` (why the agent call failed, else null). `time`: when it ended. An
-  accepted iteration is reported once its record is final (after its stop commands).
+- `iteration`: an iteration was recorded (the baseline is iteration 0; a retried
+  baseline is another event for 0). `iteration`, `accepted`, `reason` (as recorded:
+  `baseline`, `gate failed: pytest -q`, ...; null for most accepted ones), `summary`
+  (the agent's one line), `metrics`, `commit` (null when rejected or an accepted
+  no-op), `cost_usd` (the known cost; null when none is known), `cost_incomplete`
+  (some of its calls' costs are unknown), `agent_error` (why the agent call failed,
+  else null). `time`: when it ended. Reported once its record is final (after its
+  stop commands).
 - `ended`: a segment ended. `segment`, `state` (`finished`, `interrupted`, `failed`),
   `stop_reason` (why it stopped, as in `view --json`: an object with `kind` and
   `detail`, or null), `error` (a failed segment's error, else null),
   `last_iteration` (the run's last iteration), `iterations` (records this segment
   added). `time`: when it ended.
 - `crashed`: a segment never ended and its process is gone (nothing holds the run's
-  lock). `segment`, `last_iteration` (the run's last iteration when it crashed; null if
-  it had none). Reported once per segment. `time`: the last sign of life (its status's last update, or the run's
-  last event before it). Only a run on this host can be checked: one that
-  crashed on another host looks running until it is resumed; only `--timeout` ends
-  a wait on it.
+  lock, or a later segment started). `segment`, `last_iteration` (the last iteration
+  reported before it crashed; null if none was). Reported once per segment. `time`:
+  its last event (its start or its last iteration). An iteration whose process died
+  between its record and its event line is in the history but not reported. Only a
+  run on this host can be checked: one that crashed on another host looks running
+  until it is resumed; only `--timeout` ends a wait on it.
 - `idle`: only for `wait` with run ids, without `--follow`: none of them is running
   and nothing is pending. `runs`: `[{run, short, state}]`, state `finished`,
   `interrupted`, `failed` (how its last segment ended), `crashed`, `new` (nothing
@@ -52,88 +59,71 @@ Per event:
 
 Order and the cursor
 --------------------
-Events of a run come in the order they happened: a segment's `started`, its
-iterations, then its `ended` (or `crashed`). Among pending events (of several runs
-too) the oldest `time` comes first; ties go started < iteration < ended < crashed,
-then by run id. A record can land after its time (the harness timestamps first), so
-an event of one run may come after a newer one of another run.
+Events of a run come in the order of its log (a crash just before the next segment's
+start, or after everything when its process is gone). Among the runs' next events the
+oldest `time` comes first; ties go started < iteration < ended < crashed, then by run
+id. A line can land after its time (the harness timestamps first), so an event of one
+run may come after a newer one of another run.
 
-The cursor records, per run, what has been reported: the last iteration record (its
-number, and a fingerprint of its start time: a retried baseline is a new record 0
-that replaces the old one), the last segment reported started, ended and crashed.
-It never relies on comparing times, which the harness takes before writing (a
-segment's start time precedes its record by its preflight). A cursor is `1.` +
-base64url (unpadded) of zlib-compressed compact JSON `{"r": {run_id: [iteration,
-fingerprint, started, ended, crashed]}}` (trailing defaults dropped, runs with
-nothing reported left out; the format may change with its version prefix). A fresh
-`wait` (no `--after`) starts from every run's current state, all of the project's
-runs whichever are watched, so `--after` with other run ids or none reports only
-what happened since. A run missing from a cursor is new: everything it has is
-pending.
+The cursor records, per run, how many lines of its log were reported and the last
+segment reported crashed. A cursor is `2.` + base64url (unpadded) of zlib-compressed
+compact JSON `{"r": {run_id: [lines, crashed]}}` (runs with nothing reported left
+out; the format may change with its version prefix). A fresh `wait` (no `--after`)
+starts from every run's current state, all of the project's runs whichever are
+watched, so `--after` with other run ids or none reports only what happened since. A
+run missing from a cursor is new: everything it has is pending.
 
-Only complete, newline-terminated, parseable lines of history.jsonl and
-segments.jsonl count; others are skipped (a torn line counts once it is complete).
-A record rewritten in place (e.g. an accepted one updated after its stop commands)
-keeps its number and start time and is not reported again. The run's files are
-opened without following symlinks, only as regular files, and up to a size cap
-(`CAPS`); one that fails these checks reads as missing.
+Only complete, newline-terminated lines count; one that isn't an event is skipped (a
+torn line counts once it is complete). The log is opened without following symlinks,
+only as a regular file, and up to `LOG_CAP` bytes; one that fails these checks reads
+as empty.
 """
 
 import base64
+import bisect
 import json
 import os
-import stat
 import time
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from autohelix.costs import summarize_costs
-from autohelix.run_status import holder_gone, read_segments
+from autohelix.run_status import holder_gone
 from autohelix.runs import _ID, RunPaths, short_id
 from autohelix.safe_open import open_file
 
 EVENT_SCHEMA = 1
-CURSOR_VERSION = "1"
+CURSOR_VERSION = "2"
 CURSOR_CAP = 64 << 20  # bytes of cursor JSON, both ways: never print one `--after` refuses
 POLL_SECONDS = 0.5
-# Phases after which an accepted iteration's record is final (with the same iteration
-# number in the status). Before them (accept, stop check, or one read before those),
-# the harness may still rewrite it.
-FINAL_PHASES = ("between iterations", "report")
-# Each file's place in the run folder and the most `wait` reads of it.
-FILES = {"history": ("history.jsonl",), "segments": (".internal", "segments.jsonl"),
-         "status": (".internal", "status.json")}
-CAPS = {"history": 1 << 30, "segments": 16 << 20, "status": 1 << 20}
-LINE_CAP = 64 << 20  # one history record
+LOG_CAP = 1 << 30  # bytes of one run's segments.jsonl
 _RANK = {"started": 0, "iteration": 1, "ended": 2, "crashed": 3}
-_DEFAULTS = (-1, -1, 0, 0, 0)
 _NOT_A_CURSOR = "not a cursor printed by `autohelix wait`"
+# An iteration event's fields, as the harness writes them into the log (`iteration_fields`).
+ITERATION_FIELDS = ("iteration", "accepted", "reason", "summary", "metrics", "commit", "cost_usd",
+                    "cost_incomplete", "agent_error")
+_ENDED_FIELDS = ("state", "stop_reason", "error", "last_iteration", "iterations")
 
 
-@dataclass(frozen=True)
+def iteration_fields(result) -> dict:
+    """The `iteration` event's fields of a final record (`history.IterationResult`)."""
+    cost = result.cost
+    return {"iteration": result.iteration, "accepted": result.accepted, "reason": result.reason,
+            "summary": result.summary, "metrics": dict(result.metrics or {}), "commit": result.commit,
+            "cost_usd": cost.cost_usd, "cost_incomplete": bool(cost.incomplete), "agent_error": result.agent_error}
+
+
+@dataclass(frozen=True, order=True)
 class Marks:
-    """What a cursor says was reported for one run."""
+    """What a cursor says was reported for one run (compared in this order)."""
 
-    iteration: int = -1  # the last reported record's number (-1: none)
-    fingerprint: int = -1  # and its start time's (`_fingerprint`)
-    started: int = 0  # the last segment reported started (segments count from 1)
-    ended: int = 0  # ... ended
-    crashed: int = 0  # ... crashed
-
-    def as_list(self) -> list[int]:
-        values = [self.iteration, self.fingerprint, self.started, self.ended, self.crashed]
-        while values and values[-1] == _DEFAULTS[len(values) - 1]:
-            values.pop()
-        return values
-
-    def but(self, **changes) -> "Marks":
-        return Marks(**{**self.__dict__, **changes})
+    lines: int = 0  # lines of the log reported
+    crashed: int = 0  # the last segment reported crashed (segments count from 1)
 
 
 def encode_cursor(marks: dict[str, Marks]) -> str:
-    data = {"r": {run: m.as_list() for run, m in sorted(marks.items()) if m != Marks()}}
+    data = {"r": {run: [m.lines, m.crashed] for run, m in sorted(marks.items()) if m != Marks()}}
     raw = json.dumps(data, separators=(",", ":")).encode()
     if len(raw) > CURSOR_CAP:
         raise RuntimeError(f"Too many runs for a cursor ({len(data['r'])})")
@@ -160,21 +150,26 @@ def decode_cursor(cursor: str) -> dict[str, Marks]:
     marks = {}
     for run, values in runs.items():
         if (not isinstance(run, str) or not _ID.fullmatch(run) or not isinstance(values, list)
-                or len(values) > len(_DEFAULTS) or any(type(v) is not int for v in values)):
+                or len(values) != 2 or any(type(v) is not int or v < 0 for v in values)):
             raise ValueError(_NOT_A_CURSOR)
-        marks[run] = Marks(*values, *_DEFAULTS[len(values):])
+        marks[run] = Marks(*values)
     return marks
 
 
-def _number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+def _time(value) -> float:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
 
 
-def _fingerprint(started_at) -> int:
-    """Tells a record from an earlier one with its number (a retried baseline): its
-    start time in ms, modulo 10^6 (two attempts exactly a multiple of 1000 s apart, to
-    the ms, would collide); -1 without one."""
-    return int(round(started_at * 1000)) % 10**6 if _number(started_at) else -1
+def _line(raw: bytes) -> dict | None:
+    """A log line's record: an object with an int `segment` and a known `event`."""
+    try:
+        record = json.loads(raw)
+    except ValueError:  # UnicodeDecodeError included
+        return None
+    if (isinstance(record, dict) and type(record.get("segment")) is int
+            and record.get("event") in ("start", "iteration", "end")):
+        return record
+    return None
 
 
 @dataclass
@@ -189,284 +184,128 @@ class _Event:
         return self.time, _RANK[self.kind], self.run
 
 
-@dataclass
-class _Record:
-    """What events need of one history record."""
-
-    n: int
-    fingerprint: int
-    accepted: bool
-    ended_at: float | None
-    fields: dict
-
-
-def _slim(record) -> _Record | None:
-    if not isinstance(record, dict):
-        return None
-    n, accepted = record.get("iteration"), record.get("accepted")
-    if type(n) is not int or n < 0 or type(accepted) is not bool:
-        return None
-    cost = record.get("cost")
-    if not isinstance(cost, dict):
-        calls = record.get("calls") if isinstance(record.get("calls"), list) else []
-        summary = summarize_costs([c.get("usage") or {} for c in calls if isinstance(c, dict)])
-        cost = {"cost_usd": summary.cost_usd, "incomplete": summary.incomplete}
-    return _Record(n, _fingerprint(record.get("started_at")), accepted,
-                   float(record["ended_at"]) if _number(record.get("ended_at")) else None, {
-                       "iteration": n, "accepted": accepted, "reason": record.get("reason"),
-                       "summary": record.get("summary"), "metrics": record.get("metrics") or {},
-                       "commit": record.get("commit"), "cost_usd": cost.get("cost_usd"),
-                       "cost_incomplete": bool(cost.get("incomplete")), "agent_error": record.get("agent_error"),
-                   })
-
-
 class RunSource:
-    """One run's files, reread only when their stat changes (history.jsonl from where
-    the last read ended, while it only grows)."""
+    """One run's event log, read on from where the last read ended (it only grows)."""
 
     def __init__(self, runs: Path, run_id: str):
-        self.runs = runs  # the project's runs folder: files are opened below it
+        self.runs = runs  # the project's runs folder: the log is opened below it
         self.run = run_id
         self.paths = RunPaths(runs.parent.parent, run_id)
-        self._seen: dict[str, tuple | None] = {}
-        self.records: dict[int, _Record] = {}  # by number: the last line with it
-        self._offset = 0  # history bytes consumed (complete lines)
-        self._last_line = b""  # the last of them
-        self._sorted: list[_Record] | None = None
-        self.segments: list[dict] = []
-        self.status: dict = {}
-        self.dead: set[int] = set()  # open segments whose process is gone
-        self.version = 0  # bumped whenever anything read changed
+        self.lines: list[dict | None] = []  # each complete line's record (None: not one)
+        self._file: tuple | None = None  # (device, inode) of the file read
+        self._offset = 0  # bytes of complete lines read
+        self.dead: int | None = None  # the last segment, open, its process seen gone
+        self.events: list[_Event] = []
+        self._marks: list[Marks] = []  # each event's marks (sorted)
 
-    # --- reading ------------------------------------------------------------------
-
-    def _path(self, name: str) -> Path:
-        return self.runs.joinpath(self.run, *FILES[name])
-
-    def _signature(self, name: str):
-        """(inode, size, mtime) of a regular file; None for anything else (missing, a
-        symlink, a FIFO: never opened)."""
-        try:
-            st = os.lstat(self._path(name))
-        except OSError:
-            return None
-        return (st.st_ino, st.st_size, st.st_mtime_ns) if stat.S_ISREG(st.st_mode) else None
-
-    def _open(self, name: str):
-        """The file as a binary stream, or None: missing, or not a regular file reached
-        without symlinks from the run folder (`safe_open.open_file`)."""
-        if self._signature(name) is None:
-            return None
-        fd = open_file(self.runs / self.run, list(FILES[name]))
-        return None if fd is None else os.fdopen(fd, "rb")
-
-    def _read(self, name: str) -> bytes | None:
-        stream = self._open(name)
-        if stream is None:
-            return None
-        with stream:
-            data = stream.read(CAPS[name] + 1)
-        return data if len(data) <= CAPS[name] else None
-
-    def _json(self, name: str) -> dict:
-        data = self._read(name)
-        try:
-            value = json.loads(data) if data is not None else {}
-        except ValueError:
-            value = {}
-        return value if isinstance(value, dict) else {}
-
-    def _read_status(self) -> None:
-        signature = self._signature("status")
-        if self._seen.get("status", ()) != signature:
-            self._seen["status"] = signature
-            self.status = self._json("status")
-            self.version += 1
-
-    def _read_segments(self, force: bool = False) -> None:
-        signature = self._signature("segments")
-        if force or self._seen.get("segments", ()) != signature:
-            self._seen["segments"] = signature
-            data = self._read("segments")
-            segments = read_segments(None, data=data or b"", terminated=True)
-            if segments != self.segments:
-                self.segments = segments
-                self.version += 1
-
-    def _read_history(self) -> None:
-        signature = self._signature("history")
-        old = self._seen.get("history", ())
-        if old == signature:
-            return
-        self._seen["history"] = signature
-        self.version += 1
-        self._sorted = None
-        # Appended to (same file, grown, still ending with the last line read): read on
-        # from there. A replaced file (`History.update`) is read again from the start.
-        grown = signature is not None and old and old[0] == signature[0] and signature[1] > old[1]
-        stream = self._open("history")
-        if stream is None:
-            self.records, self._offset, self._last_line = {}, 0, b""
-            return
-        with stream:
-            if grown and self._offset:
-                stream.seek(self._offset - len(self._last_line))
-                grown = stream.read(len(self._last_line)) == self._last_line
-            if not grown:
-                self.records, self._offset, self._last_line = {}, 0, b""
+    def _read(self) -> bool:
+        """Read the lines appended since the last read; True if any were. A replaced or
+        shrunk file (not the harness's doing) is read again from the start."""
+        fd = open_file(self.runs / self.run, [".internal", "segments.jsonl"])
+        if fd is None:
+            changed = bool(self.lines)
+            self.lines, self._file, self._offset = [], None, 0
+            return changed
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            changed = False
+            if (info.st_dev, info.st_ino) != self._file or info.st_size < self._offset or info.st_size > LOG_CAP:
+                changed = bool(self.lines)
+                self.lines, self._file, self._offset = [], (info.st_dev, info.st_ino), 0
+                if info.st_size > LOG_CAP:
+                    return changed
+            if info.st_size == self._offset:
+                return changed
             stream.seek(self._offset)
-            offset = self._offset
-            while True:
-                line = stream.readline(LINE_CAP)
-                if not line.endswith(b"\n"):
-                    if len(line) >= LINE_CAP:  # a line no record can be: unreadable
-                        self.records, self._offset, self._last_line = {}, 0, b""
-                        return
-                    break  # unterminated: still being written
-                offset += len(line)
-                if offset > CAPS["history"]:
-                    self.records, self._offset, self._last_line = {}, 0, b""
-                    return
-                self._last_line = line
-                try:
-                    record = _slim(json.loads(line))
-                except ValueError:  # UnicodeDecodeError included
-                    continue
-                if record is not None:
-                    self.records.pop(record.n, None)  # keep file order: the last line wins
-                    self.records[record.n] = record
-            self._offset = offset
+            data = stream.read(LOG_CAP - self._offset)
+        complete = data[:data.rfind(b"\n") + 1]  # an unterminated last line may still be being written
+        if not complete:
+            return changed
+        self._offset += len(complete)
+        self.lines += [_line(raw) for raw in complete.split(b"\n")[:-1]]
+        return True
+
+    def _last_start(self) -> dict | None:
+        """The last segment's start record, if it has no end record (open)."""
+        for record in reversed(self.lines):
+            if record is not None and record["event"] in ("start", "end"):
+                return record if record["event"] == "start" else None
+        return None
 
     def refresh(self) -> None:
-        """Reread what changed, in the reverse of the harness's write order: the status
-        (a phase past an accepted record's rewrite is written after it), then the
-        segment log (an end record after the segment's last history record), then the
-        history, so what is read later is at least as new as what was read first.
-        Then confirm crashes: an open segment whose process is gone is dead only if a
-        reread of the log (after its process was seen gone: an ending process writes
-        its end record first) still shows it open; a later segment's start proves it."""
-        self._read_status()
-        self._read_segments()
-        self._read_history()
-        dead = {s["segment"] for s in self.segments[:-1] if s["open"]}
-        last = self.segments[-1] if self.segments else None
-        if last is not None and last["open"] and holder_gone(self.paths, last.get("host"), last.get("pid")):
-            self._read_segments(force=True)
-            self._read_history()
-            dead = {s["segment"] for s in self.segments[:-1] if s["open"]}
-            if self.segments[-1]["segment"] == last["segment"] and self.segments[-1]["open"]:
-                dead.add(last["segment"])
-        if dead != self.dead:
-            self.dead = dead
-            self.version += 1
+        """Read what was appended; then confirm a crash: an open last segment whose
+        process is gone is dead only if a reread of the log (after its process was seen
+        gone: an ending process writes its end record first) still shows it open. Once
+        dead it stays so (not probed again) until the log grows."""
+        changed = self._read()
+        last = self._last_start()
+        if last is None or (self.dead is not None and self.dead != last["segment"]):
+            changed |= self.dead is not None
+            self.dead = None
+        if last is not None and self.dead is None and holder_gone(self.paths, last.get("host"), last.get("pid")):
+            changed |= self._read()
+            if self._last_start() is last:
+                self.dead, changed = last["segment"], True
+        if changed:
+            self.events = self._derive()
+            self._marks = [event.marks for event in self.events]
 
-    # --- what the files say -------------------------------------------------------
+    def _derive(self) -> list[_Event]:
+        """Every event the log holds, in order, each with the marks past it."""
+        events, run = [], self.run
+        crashed, last_iteration = 0, None
+        lives: dict[int, float] = {}  # open segments: their last sign of life
 
-    @property
-    def live(self) -> bool:
-        """The last segment is open and not known dead."""
-        return bool(self.segments) and self.segments[-1]["open"] and self.segments[-1]["segment"] not in self.dead
+        def crash(segment: int, lines: int) -> None:
+            nonlocal crashed
+            crashed = max(crashed, segment)
+            events.append(_Event(lives.pop(segment), "crashed", run,
+                                 {"segment": segment, "last_iteration": last_iteration}, Marks(lines, crashed)))
 
-    def _sorted_records(self) -> list[_Record]:
-        if self._sorted is None:
-            self._sorted = sorted(self.records.values(), key=lambda r: r.n)
-        return self._sorted
-
-    def _settled(self) -> list[_Record]:
-        """The records, by number, but an accepted latest one the running harness may
-        still rewrite: while its segment is open and live, and the status says that
-        iteration is running in a phase before its record is final."""
-        records = self._sorted_records()
-        if records and records[-1].accepted and records[-1].n > 0 and self.live:
-            s = self.status
-            if (s.get("state") == "running" and s.get("iteration") == records[-1].n
-                    and s.get("phase") not in FINAL_PHASES and not holder_gone(self.paths, s.get("host"), s.get("pid"))):
-                return records[:-1]
-        return records
-
-    def _record_time(self, record: _Record) -> float:
-        if record.ended_at is not None:
-            return record.ended_at
-        for path in (self.paths.record(record.n), self.paths.history):
-            try:
-                return os.lstat(path).st_mtime
-            except OSError:
-                pass
-        return 0.0
-
-    def _crash(self, segment: dict) -> tuple[float, int | None]:
-        """A dead segment's time (its last sign of life) and the run's last iteration then:
-        from the records before the next segment's start."""
-        start = _time(segment.get("started_at"))
-        later = [_time(s.get("started_at")) for s in self.segments if s["segment"] > segment["segment"]]
-        until = min(later, default=float("inf"))
-        before = [(self._record_time(r), r.n) for r in self._sorted_records()]
-        before = [(t, n) for t, n in before if t < until]
-        times = [start] + [t for t, _ in before if t >= start]
-        if not later and self.status.get("pid") == segment.get("pid"):
-            times += [self.status[k] for k in ("updated_at", "stopped_at") if _number(self.status.get(k))]
-        return max(times), max((n for _, n in before), default=None)
+        for i, record in enumerate(self.lines):
+            if record is None:
+                continue
+            n, kind = record["segment"], record["event"]
+            if kind == "start":
+                for open_segment in sorted(lives):  # never ended, and a later one started
+                    crash(open_segment, i)
+                lives[n] = _time(record.get("started_at"))
+                events.append(_Event(lives[n], "started", run, {
+                    "segment": n, "start_iteration": record.get("start_iteration"), "resumed": n > 1,
+                }, Marks(i + 1, crashed)))
+            elif kind == "iteration":
+                at = _time(record.get("ended_at"))
+                if n in lives:
+                    lives[n] = max(lives[n], at)
+                if type(record.get("iteration")) is int:
+                    last_iteration = record["iteration"]
+                events.append(_Event(at, "iteration", run, {k: record.get(k) for k in ITERATION_FIELDS},
+                                     Marks(i + 1, crashed)))
+            else:
+                lives.pop(n, None)
+                events.append(_Event(_time(record.get("ended_at")), "ended", run, {
+                    "segment": n, **{k: record.get(k) for k in _ENDED_FIELDS}}, Marks(i + 1, crashed)))
+        if self.dead is not None and self.dead in lives:
+            crash(self.dead, len(self.lines))
+        return events
 
     def state(self) -> str:
-        """`running`, `starting`, or how it stands idle (see the module docstring)."""
-        if self.segments:
-            last = self.segments[-1]
-            if last["open"]:
-                return "crashed" if last["segment"] in self.dead else "running"
-            return last.get("state") if isinstance(last.get("state"), str) else "failed"
-        if self.status.get("state") == "running":  # between the status's start and the log's
-            return "crashed" if holder_gone(self.paths, self.status.get("host"), self.status.get("pid")) else "starting"
+        """`running`, or how it stands idle (see the module docstring)."""
+        for record in reversed(self.lines):
+            if record is not None and record["event"] == "start":
+                return "crashed" if record["segment"] == self.dead else "running"
+            if record is not None and record["event"] == "end":
+                return record.get("state") if isinstance(record.get("state"), str) else "failed"
         return "new"
 
-    # --- events -------------------------------------------------------------------
-
-    def pending(self, marks: Marks) -> list[_Event]:
-        """The next pending event of each kind after `marks` (at most one each, the
-        lowest: marks advance one event at a time, so nothing is skipped)."""
-        events = []
-        run = self.run
-        for record in self._settled():
-            if record.n > marks.iteration or (record.n == marks.iteration and record.fingerprint != marks.fingerprint):
-                events.append(_Event(self._record_time(record), "iteration", run, dict(record.fields),
-                                     marks.but(iteration=record.n, fingerprint=record.fingerprint)))
-                break
-        for segment in self.segments:
-            n = segment["segment"]
-            if n > marks.started:
-                events.append(_Event(_time(segment.get("started_at")), "started", run, {
-                    "segment": n, "start_iteration": segment.get("start_iteration"), "resumed": n > 1,
-                }, marks.but(started=n)))
-                break
-        for segment in self.segments:
-            n = segment["segment"]
-            if n > marks.ended and not segment["open"]:
-                events.append(_Event(_time(segment.get("ended_at")), "ended", run, {
-                    "segment": n, "state": segment.get("state"), "stop_reason": segment.get("stop_reason"),
-                    "error": segment.get("error"), "last_iteration": segment.get("last_iteration"),
-                    "iterations": segment.get("iterations"),
-                }, marks.but(ended=n)))
-                break
-        for segment in self.segments:
-            n = segment["segment"]
-            if n > marks.crashed and n in self.dead:
-                at, last = self._crash(segment)
-                events.append(_Event(at, "crashed", run, {"segment": n, "last_iteration": last},
-                                     marks.but(crashed=n)))
-                break
-        return events
+    def pending(self, marks: Marks) -> _Event | None:
+        """The first event past `marks`."""
+        i = bisect.bisect_right(self._marks, marks)
+        return self.events[i] if i < len(self.events) else None
 
     def current(self) -> Marks:
         """Marks past everything reportable now (a fresh `wait`'s starting point)."""
-        records = self._settled()
-        last = records[-1] if records else None
-        return Marks(iteration=last.n if last else -1, fingerprint=last.fingerprint if last else -1,
-                     started=max((s["segment"] for s in self.segments), default=0),
-                     ended=max((s["segment"] for s in self.segments if not s["open"]), default=0),
-                     crashed=max(self.dead, default=0))
-
-
-def _time(value) -> float:
-    return float(value) if _number(value) else 0.0
+        return Marks(len(self.lines), self.events[-1].marks.crashed if self.events else 0)
 
 
 @dataclass
@@ -484,7 +323,6 @@ class Watcher:
     poll_seconds: float = POLL_SECONDS
     marks: dict[str, Marks] = field(init=False)
     _sources: dict[str, RunSource] = field(init=False, default_factory=dict)
-    _quiet: dict[str, tuple] = field(init=False, default_factory=dict)  # run: (version, marks) with nothing pending
 
     def __post_init__(self):
         self.project = Path(self.project).resolve()
@@ -524,7 +362,6 @@ class Watcher:
         self.marks = {run: m for run, m in self.marks.items() if run in present}
         for run in [run for run in self._sources if run not in present]:
             del self._sources[run]
-            self._quiet.pop(run, None)
 
     def _event(self, kind: str, run: str | None, at: float, fields: dict) -> dict:
         return {"schema": EVENT_SCHEMA, "event": kind, "run": run, "short": short_id(run) if run else None,
@@ -533,28 +370,18 @@ class Watcher:
     def poll(self) -> dict | None:
         """One look: the oldest pending event (the cursor advanced past it), else None."""
         present = self._present()
-        pending = []
-        for source in self._scan(present):
-            marks = self.marks.get(source.run, Marks())
-            # Nothing changed since nothing was pending; a live segment may die unseen.
-            if not source.live and self._quiet.get(source.run) == (source.version, marks):
-                continue
-            found = source.pending(marks)
-            if found:
-                self._quiet.pop(source.run, None)
-                pending += found
-            else:
-                self._quiet[source.run] = (source.version, marks)
+        pending = [event for source in self._scan(present)
+                   if (event := source.pending(self.marks.get(source.run, Marks()))) is not None]
         self._prune(present)
         if not pending:
             return None
         event = min(pending, key=_Event.key)
         self.marks[event.run] = event.marks
-        return self._event(event.kind, event.run, event.time, event.fields)
+        return self._event(event.kind, event.run, event.time, dict(event.fields))
 
     def idle(self) -> dict | None:
         """With run ids: one more look, its event if it found one; else the `idle` event
-        if none of the runs is running or starting (states from that same look)."""
+        if none of the runs is running (states from that same look)."""
         if self.run_ids is None:
             return None
         if (event := self.poll()) is not None:
@@ -564,7 +391,7 @@ class Watcher:
         for run in self.run_ids:
             source = self._sources.get(run)
             state = source.state() if source is not None else "gone"
-            if state in ("running", "starting"):
+            if state == "running":
                 return None
             runs.append({"run": run, "short": short_id(run), "state": state})
         return self._event("idle", None, now, {"runs": runs})

@@ -3,6 +3,7 @@ condition, `autohelix stop`), 1 on an error, 130 when interrupted. And a segment
 as soon as its command holds the run's lock: a start its checks refuse is a recorded
 segment that failed."""
 
+import pytest
 from click.testing import CliRunner
 
 from autohelix.cli import main
@@ -121,3 +122,19 @@ def test_a_start_refused_by_its_checks_lands_nothing(project):
     last = read_segments(paths.segments)[-1]
     assert last["state"] == "failed" and "Uncommitted changes" in last["error"]
     assert "landing" not in result.output.split("Error", 1)[1]
+
+
+@pytest.mark.parametrize("command", ["run", "resume"])
+def test_an_interrupt_before_the_segment_exits_130(project, monkeypatch, command):
+    """Ctrl-C during the checks before a segment (a new run's preflight runs agent
+    commands) exits 130 too, not click's "Aborted!" (1)."""
+    if command == "resume":
+        assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
+
+    def interrupted(self, *args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Harness, "__init__", interrupted)
+    result = cli(project, command, "--no-report")
+    assert result.exit_code == 130, result.output
+    assert "Aborted" not in result.output

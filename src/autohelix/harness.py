@@ -41,6 +41,7 @@ from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning, StopCheckResult)
+from autohelix.events import iteration_fields
 from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, read_usage
 from autohelix.formatting import format_cap, format_cost, format_total_cost
@@ -834,6 +835,7 @@ class Harness:
                     # Failures before the agent call don't consume the iteration.
                     if attempt.agent_attempted:
                         workspace.record(result)
+                        self.segment_log.iteration(ended_at=result.ended_at, **iteration_fields(result))
             except BaseException as e:
                 if failure is None:
                     failure = e
@@ -1398,6 +1400,7 @@ class Harness:
             self.history.update(baseline)
         else:
             self.history.append(baseline)
+        self.segment_log.iteration(ended_at=baseline.ended_at, **iteration_fields(baseline))
 
     def _capture_baseline(self) -> dict[str, str] | None:
         """Evaluate A in a checks copy and check stop commands.

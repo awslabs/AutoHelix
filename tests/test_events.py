@@ -1,5 +1,6 @@
-"""`autohelix wait` and its event source (`autohelix.events`): hand-written run folders
-for each event kind, ordering and the cursor; then real harness runs."""
+"""`autohelix wait` and its event source (`autohelix.events`): hand-written event logs
+(runs/<id>/.internal/segments.jsonl) for each event kind, ordering and the cursor; then
+real harness runs."""
 
 import json
 import os
@@ -37,19 +38,28 @@ def append(path: Path, record: dict, end: str = "\n") -> None:
         stream.write(json.dumps(record) + end)
 
 
-def record(paths, iteration, at, accepted=True, started=None, **fields):
-    data = {"iteration": iteration, "accepted": accepted, "started_at": at - 1 if started is None else started,
-            "ended_at": at, "metrics": {}, "commit": None, "reason": None, "summary": None,
-            "agent_error": None, "cost": {"cost_usd": 0.5, "incomplete": False}, **fields}
-    append(paths.history, data)
+def record(paths, iteration, at, accepted=True, segment=1, **fields):
+    """The harness's line for a final iteration record (`SegmentLog.iteration`)."""
+    data = {"segment": segment, "event": "iteration", "ended_at": at, "iteration": iteration,
+            "accepted": accepted, "metrics": {}, "commit": None, "reason": None, "summary": None,
+            "agent_error": None, "cost_usd": 0.5, "cost_incomplete": False, **fields}
+    append(paths.segments, data)
     return data
 
 
-_HELD: list[RunLock] = []  # the locks of runs this process "runs" (alive while held)
+@pytest.fixture(autouse=True)
+def _held():
+    """The locks of runs this process "runs" (alive while held), released after each test."""
+    yield _HELD
+    while _HELD:
+        _HELD.pop().close()
+
+
+_HELD: list[RunLock] = []
 
 
 def hold(paths) -> None:
-    """Hold the run's lock, as the process running it does: a segment or status with this
+    """Hold the run's lock, as the process running it does: a segment with this
     process's pid is alive."""
     if not held_here(paths.lock):
         _HELD.append(RunLock(paths.lock))
@@ -66,13 +76,6 @@ def end(paths, segment, at, state="finished", stop_reason=None, last_iteration=1
     append(paths.segments, {"segment": segment, "event": "end", "ended_at": at, "state": state,
                             "stop_reason": stop_reason, "last_iteration": last_iteration,
                             "iterations": iterations, "error": None})
-
-
-def status(paths, **data):
-    if "pid" not in data:
-        hold(paths)
-    paths.status.parent.mkdir(parents=True, exist_ok=True)
-    paths.status.write_text(json.dumps({"state": "running", "pid": os.getpid(), "host": HOST, **data}))
 
 
 def dead_pid() -> int:
@@ -135,13 +138,14 @@ def test_a_resume_is_a_started_event_with_resumed(tmp_path):
 
 def test_a_rejected_iteration_carries_its_reason_and_unknown_cost(tmp_path):
     paths = make_run(tmp_path, "20261114-1000-a-aaaa")
-    record(paths, 3, T0, accepted=False, reason="gate failed: pytest -q", cost={"cost_usd": None, "incomplete": True})
-    record(paths, 4, T0 + 1, accepted=False, reason="Iteration 4 agent failed: boom", agent_error="boom",
-           cost=None, calls=[{"role": "agent", "usage": {"cost_usd": 0.25}}])
-    rejected, failed = drain(Watcher(tmp_path, after=EMPTY))
+    start(paths, 1, T0)
+    record(paths, 3, T0 + 1, accepted=False, reason="gate failed: pytest -q", cost_usd=None, cost_incomplete=True)
+    record(paths, 4, T0 + 2, accepted=False, reason="Iteration 4 agent failed: boom", agent_error="boom",
+           cost_usd=0.25)
+    _, rejected, failed = drain(Watcher(tmp_path, after=EMPTY))
     assert (rejected["accepted"], rejected["reason"], rejected["cost_usd"], rejected["cost_incomplete"]) == (
         False, "gate failed: pytest -q", None, True)
-    assert (failed["agent_error"], failed["cost_usd"]) == ("boom", 0.25)  # no `cost`: from the calls
+    assert (failed["agent_error"], failed["cost_usd"]) == ("boom", 0.25)
 
 
 # --- ordering ---------------------------------------------------------------------------
@@ -162,8 +166,9 @@ def test_events_of_several_runs_come_oldest_first(tmp_path):
     assert [e["time"] for e in events] == sorted(e["time"] for e in events)
 
 
-def test_inverted_times_within_a_run_lose_nothing(tmp_path):
-    """Kinds advance separately, each in its own order: a clock step backwards only reorders."""
+def test_inverted_times_within_a_run_keep_the_log_order(tmp_path):
+    """A clock step backwards loses nothing and reorders nothing within a run: its events
+    come in the order of its log."""
     paths = make_run(tmp_path, "20261114-1000-a-aaaa")
     start(paths, 1, T0 + 100)
     record(paths, 0, T0 + 50)
@@ -171,8 +176,8 @@ def test_inverted_times_within_a_run_lose_nothing(tmp_path):
     start(paths, 2, T0 + 200)
     end(paths, 2, T0 + 30)
     events = drain(Watcher(tmp_path, after=EMPTY))
-    assert sorted(brief(events)) == sorted([("started", "aaaa", 1), ("iteration", "aaaa", 0), ("ended", "aaaa", 1),
-                                            ("started", "aaaa", 2), ("ended", "aaaa", 2)])
+    assert brief(events) == [("started", "aaaa", 1), ("iteration", "aaaa", 0), ("ended", "aaaa", 1),
+                             ("started", "aaaa", 2), ("ended", "aaaa", 2)]
 
 
 # --- the cursor ---------------------------------------------------------------------------
@@ -209,19 +214,20 @@ def test_a_fresh_wait_starts_from_now_for_every_run(tmp_path):
 
 
 def test_cursors_round_trip_and_bad_ones_are_refused(tmp_path):
-    marks = {"20261114-1000-a-aaaa": Marks(3, 1234, 2, 1, 1), "20261114-1000-b-bbbb": Marks(),
-             "20261114-1000-c-cccc": Marks(5, 77, 1, 1)}
-    assert decode_cursor(encode_cursor(marks)) == {"20261114-1000-a-aaaa": Marks(3, 1234, 2, 1, 1),
-                                                   "20261114-1000-c-cccc": Marks(5, 77, 1, 1)}
+    marks = {"20261114-1000-a-aaaa": Marks(12, 1), "20261114-1000-b-bbbb": Marks(),
+             "20261114-1000-c-cccc": Marks(5)}
+    assert decode_cursor(encode_cursor(marks)) == {"20261114-1000-a-aaaa": Marks(12, 1),
+                                                   "20261114-1000-c-cccc": Marks(5, 0)}
     good = encode_cursor(marks)
-    for bad in ["", "nonsense", "2." + good[2:], "1.", "1.!!!", good[:-3], "1." + "A" * 40]:
+    assert good.startswith("2.")
+    for bad in ["", "nonsense", "1." + good[2:], "2.", "2.!!!", good[:-3], "2." + "A" * 40]:
         with pytest.raises(ValueError, match="not a cursor"):
             decode_cursor(bad)
     import base64
     import zlib
-    for payload in [b"[]", b'{"r": []}', b'{"r": {"x/y": [1,2,3,4,5]}}', b'{"r": {"a": [1, 2, 3, 4, 5, 6]}}',
-                    b'{"r": {"a": [1, 2, 3, 4, true]}}']:
-        cursor = "1." + base64.urlsafe_b64encode(zlib.compress(payload)).decode().rstrip("=")
+    for payload in [b"[]", b'{"r": []}', b'{"r": {"x/y": [1, 2]}}', b'{"r": {"a": [1, 2, 3]}}', b'{"r": {"a": [1]}}',
+                    b'{"r": {"a": [1, true]}}', b'{"r": {"a": [-1, 0]}}']:
+        cursor = "2." + base64.urlsafe_b64encode(zlib.compress(payload)).decode().rstrip("=")
         with pytest.raises(ValueError, match="not a cursor"):
             decode_cursor(cursor)
 
@@ -229,7 +235,7 @@ def test_cursors_round_trip_and_bad_ones_are_refused(tmp_path):
 def test_every_cursor_printed_is_accepted(monkeypatch):
     from autohelix import events
 
-    many = {f"20261114-1000-r-{i:04d}": Marks(300, 999_999, 9, 9, 9) for i in range(2000)}
+    many = {f"20261114-1000-r-{i:04d}": Marks(300_000, 9) for i in range(2000)}
     assert decode_cursor(encode_cursor(many)) == many
     monkeypatch.setattr(events, "CURSOR_CAP", 1000)
     with pytest.raises(RuntimeError, match="Too many runs"):
@@ -268,132 +274,91 @@ def test_deleted_runs_leave_the_cursor(tmp_path):
 
 def test_a_torn_final_line_counts_once_it_is_complete(tmp_path):
     paths = make_run(tmp_path, "20261114-1000-a-aaaa")
+    start(paths, 1, T0)
     record(paths, 0, T0)
     watcher = Watcher(tmp_path)
-    line = json.dumps({"iteration": 1, "accepted": False, "started_at": T0 + 1, "ended_at": T0 + 2})
-    with open(paths.history, "a") as stream:
+    line = json.dumps({"segment": 1, "event": "iteration", "iteration": 1, "accepted": False, "ended_at": T0 + 2})
+    with open(paths.segments, "a") as stream:
         stream.write(line[:20])
     assert watcher.poll() is None
-    with open(paths.history, "a") as stream:
+    with open(paths.segments, "a") as stream:
         stream.write(line[20:])  # complete JSON, but no newline yet
     assert watcher.poll() is None
-    with open(paths.history, "a") as stream:
+    with open(paths.segments, "a") as stream:
         stream.write("\n")
     assert brief(drain(watcher)) == [("iteration", "aaaa", 1)]
     # A damaged line in the middle is skipped; what follows still counts.
-    with open(paths.history, "a") as stream:
-        stream.write("{not json\n" + json.dumps({"iteration": "x"}) + "\n")
+    with open(paths.segments, "a") as stream:
+        stream.write("{not json\n" + json.dumps({"segment": "x", "event": "iteration"}) + "\n"
+                     + json.dumps({"segment": 1, "event": "other"}) + "\n")
     record(paths, 2, T0 + 3)
     assert brief(drain(watcher)) == [("iteration", "aaaa", 2)]
-
-
-def test_a_rewritten_record_with_its_start_time_is_not_reported_again(tmp_path):
-    paths = make_run(tmp_path, "20261114-1000-a-aaaa")
-    record(paths, 0, T0)
-    first = record(paths, 1, T0 + 2, started=T0 + 1)
-    watcher = Watcher(tmp_path, after=EMPTY)
-    assert len(drain(watcher)) == 2
-    cursor = watcher.cursor
-    # `History.update`: the whole file replaced, record 1 with a new end time and stop calls.
-    lines = paths.history.read_text().splitlines()
-    replaced = {**first, "ended_at": T0 + 3, "stop": {"command": "true", "reason": "done"}}
-    tmp = paths.history.with_suffix(".tmp")
-    tmp.write_text("\n".join([lines[0], json.dumps(replaced)]) + "\n")
-    tmp.replace(paths.history)
-    assert watcher.poll() is None and Watcher(tmp_path, after=cursor).poll() is None
+    assert decode_cursor(watcher.cursor)[paths.run_id] == Marks(7, 0)  # every complete line, damaged ones too
 
 
 def test_a_retried_baseline_is_a_new_event(tmp_path):
+    """Each final record is its own line: a retried baseline (record 0 again) too."""
     paths = make_run(tmp_path, "20261114-1000-a-aaaa")
     start(paths, 1, T0, pid=dead_pid())
-    failed = record(paths, 0, T0 + 1, accepted=False, reason="baseline failed: boom")
+    record(paths, 0, T0 + 1, accepted=False, reason="baseline failed: boom")
     end(paths, 1, T0 + 2, state="failed")
     watcher = Watcher(tmp_path, after=EMPTY)
     assert brief(drain(watcher)) == [("started", "aaaa", 1), ("iteration", "aaaa", 0), ("ended", "aaaa", 1)]
     start(paths, 2, T0 + 10)
-    retried = {**failed, "accepted": True, "reason": "baseline", "started_at": T0 + 11, "ended_at": T0 + 12}
-    paths.history.write_text(json.dumps(retried) + "\n")  # `_write_baseline` updates record 0 in place
+    record(paths, 0, T0 + 12, segment=2, reason="baseline")
     events = drain(watcher)
     assert brief(events) == [("started", "aaaa", 2), ("iteration", "aaaa", 0)]
     assert (events[1]["accepted"], events[1]["reason"]) == (True, "baseline")
 
 
-def test_an_accepted_record_waits_for_its_stop_commands(tmp_path):
-    """Accepted, the record is written before the stop commands and rewritten after:
-    reported once, in its final form."""
+def test_a_dead_process_is_a_crash_after_its_last_event(tmp_path):
     paths = make_run(tmp_path, "20261114-1000-a-aaaa")
-    start(paths, 1, T0)
-    record(paths, 0, T0 + 1)
-    status(paths, iteration=1, phase="accept")
-    watcher = Watcher(tmp_path, after=EMPTY)
-    assert brief(drain(watcher)) == [("started", "aaaa", 1), ("iteration", "aaaa", 0)]
-    provisional = record(paths, 1, T0 + 2, commit="c1", cost={"cost_usd": 0.5, "incomplete": False})
-    status(paths, iteration=1, phase="stop check")
-    assert watcher.poll() is None
-    fresh = Watcher(tmp_path)  # a fresh wait now: its starting point leaves it pending
-    paths.history.write_text(paths.history.read_text().splitlines()[0] + "\n" + json.dumps(
-        {**provisional, "ended_at": T0 + 3, "cost": {"cost_usd": 0.75, "incomplete": False}}) + "\n")
-    assert watcher.poll() is None  # rewritten, still in the stop check
-    status(paths, iteration=1, phase="between iterations")
-    for w in (watcher, fresh):
-        [event] = drain(w)
-        assert (event["iteration"], event["cost_usd"], event["time"]) == (1, 0.75, T0 + 3)
-
-
-def test_an_accepted_record_seen_before_its_phase_is_held(tmp_path):
-    """The status read says "checks", then the harness accepts (phase, append) before the
-    history read: the record is held until the phase moves past acceptance."""
-    paths = make_run(tmp_path, "20261114-1000-a-aaaa")
-    start(paths, 1, T0)
-    record(paths, 0, T0 + 1)
-    status(paths, iteration=1, phase="checks")
-    watcher = Watcher(tmp_path)
+    start(paths, 1, T0, pid=dead_pid())
     record(paths, 1, T0 + 2, commit="c1")
-    assert watcher.poll() is None
-    status(paths, iteration=1, phase="report")
-    assert brief(drain(watcher)) == [("iteration", "aaaa", 1)]
-
-
-def test_a_record_is_never_held_once_its_segment_ended(tmp_path):
-    """Interrupted in the stop check: the end record follows the final history write."""
-    paths = make_run(tmp_path, "20261114-1000-a-aaaa")
-    start(paths, 1, T0)
-    record(paths, 1, T0 + 2, commit="c1")
-    status(paths, iteration=1, phase="stop check")
-    watcher = Watcher(tmp_path, after=EMPTY)
-    assert brief(drain(watcher)) == [("started", "aaaa", 1)]
-    end(paths, 1, T0 + 3, state="interrupted")
-    assert brief(drain(watcher)) == [("iteration", "aaaa", 1), ("ended", "aaaa", 1)]
-
-
-def test_a_provisional_record_of_a_dead_process_is_reported(tmp_path):
-    paths = make_run(tmp_path, "20261114-1000-a-aaaa")
-    pid = dead_pid()
-    start(paths, 1, T0, pid=pid)
-    record(paths, 1, T0 + 2, commit="c1")
-    status(paths, iteration=1, phase="stop check", pid=pid, updated_at=T0 + 2.5)
     events = drain(Watcher(tmp_path, after=EMPTY))
     assert brief(events) == [("started", "aaaa", 1), ("iteration", "aaaa", 1), ("crashed", "aaaa", 1)]
-    assert events[2]["time"] == T0 + 2.5 and events[2]["last_iteration"] == 1
+    assert events[2]["time"] == T0 + 2 and events[2]["last_iteration"] == 1
 
 
 def test_a_crash_is_reported_once(tmp_path):
     paths = make_run(tmp_path, "20261114-1000-a-aaaa")
-    pid = dead_pid()
-    start(paths, 1, T0, pid=pid)
+    start(paths, 1, T0, pid=dead_pid())
     record(paths, 0, T0 + 1)
-    status(paths, iteration=1, phase="agent", pid=pid, updated_at=T0 + 1.5)
     watcher = Watcher(tmp_path, after=EMPTY)
     events = drain(watcher)
     assert brief(events) == [("started", "aaaa", 1), ("iteration", "aaaa", 0), ("crashed", "aaaa", 1)]
-    assert (events[-1]["last_iteration"], events[-1]["time"]) == (0, T0 + 1.5)
+    assert (events[-1]["last_iteration"], events[-1]["time"]) == (0, T0 + 1)
     assert watcher.poll() is None
     assert Watcher(tmp_path, after=events[-1]["cursor"]).poll() is None
     assert Watcher(tmp_path).poll() is None  # a fresh wait: already crashed, not news
     # Resumed: the crashed segment stays open; the new one is reported, not another crash.
     start(paths, 2, T0 + 10, start_iteration=1)
-    status(paths, iteration=None, phase="starting")
     assert brief(drain(watcher)) == [("started", "aaaa", 2)]
+    assert brief(drain(Watcher(tmp_path, after=events[-1]["cursor"]))) == [("started", "aaaa", 2)]
+
+
+def test_a_crashed_segment_is_probed_once_and_a_live_one_every_look(tmp_path, monkeypatch):
+    """The liveness probe takes a free lock for a moment: a crash, once confirmed, isn't
+    probed again (until the log grows); a live segment's held lock is never taken."""
+    from autohelix import events
+
+    calls = []
+    original = events.holder_gone
+    monkeypatch.setattr(events, "holder_gone", lambda *args: calls.append(args) or original(*args))
+    crashed = make_run(tmp_path, "20261114-1000-a-aaaa")
+    start(crashed, 1, T0, pid=dead_pid())
+    watcher = Watcher(tmp_path, run_ids=[crashed.run_id])
+    for _ in range(5):
+        assert watcher.poll() is None
+    assert len(calls) == 1
+    assert watcher.idle()["runs"][0]["state"] == "crashed" and len(calls) == 1
+    live = make_run(tmp_path, "20261114-1000-b-bbbb")
+    start(live, 1, T0)
+    watcher = Watcher(tmp_path, run_ids=[live.run_id])
+    calls.clear()
+    for _ in range(3):
+        watcher.poll()
+    assert len(calls) == 3
 
 
 def test_an_open_segment_followed_by_another_was_a_crash(tmp_path):
@@ -413,18 +378,15 @@ def test_a_live_segment_is_no_crash_and_an_ending_one_is_no_crash(tmp_path, monk
     start(paths, 1, T0)
     watcher = Watcher(tmp_path, after=EMPTY)
     assert brief(drain(watcher)) == [("started", "aaaa", 1)]
-    # The process writes its end record, then exits: seen dead before the record is read.
+    # The process writes its end record, then exits: seen gone before the record is read.
     from autohelix import events
 
-    monkeypatch.setattr(events, "holder_gone", lambda paths, host, pid: True)
-    original = events.RunSource._read_segments
-
-    def read_segments(self, force=False):
-        if force and not paths.segments.read_text().count('"end"'):
+    def gone(paths_, host, pid):
+        if '"end"' not in paths.segments.read_text():
             end(paths, 1, T0 + 5)
-        original(self, force)
+        return True
 
-    monkeypatch.setattr(events.RunSource, "_read_segments", read_segments)
+    monkeypatch.setattr(events, "holder_gone", gone)
     assert brief(drain(watcher)) == [("ended", "aaaa", 1)]
 
 
@@ -456,36 +418,44 @@ def test_a_crash_reported_late_has_its_own_last_iteration(tmp_path):
 def test_planted_files_read_as_missing(tmp_path):
     """Candidate code can't make wait block (a FIFO) or eat memory (a link to a device)."""
     paths = finished_run(tmp_path)
-    good = paths.history.read_text()
-    paths.history.unlink()
-    os.mkfifo(paths.history)
+    good = paths.segments.read_text()
+    paths.segments.unlink()
+    os.mkfifo(paths.segments)
+    assert drain(Watcher(tmp_path, after=EMPTY)) == []
     paths.segments.unlink()
     os.symlink("/dev/zero", paths.segments)
-    paths.status.parent.mkdir(parents=True, exist_ok=True)
-    os.symlink("/dev/zero", paths.status)
-    events = drain(Watcher(tmp_path, after=EMPTY))
-    assert events == []
-    paths.history.unlink()
-    paths.history.write_text(good)
-    assert [e["event"] for e in drain(Watcher(tmp_path, after=EMPTY))] == ["iteration", "iteration"]
+    assert drain(Watcher(tmp_path, after=EMPTY)) == []
+    paths.segments.unlink()
+    paths.segments.write_text(good)
+    assert [e["event"] for e in drain(Watcher(tmp_path, after=EMPTY))] == ["started", "iteration", "iteration",
+                                                                            "ended"]
 
 
-def test_an_appended_history_is_read_on_and_a_replaced_one_again(tmp_path):
+def test_a_log_over_its_cap_reads_as_empty(tmp_path, monkeypatch):
+    from autohelix import events
+
+    paths = finished_run(tmp_path)
+    monkeypatch.setattr(events, "LOG_CAP", paths.segments.stat().st_size - 1)
+    assert drain(Watcher(tmp_path, after=EMPTY)) == []
+
+
+def test_an_appended_log_is_read_on_and_a_replaced_one_again(tmp_path):
     paths = make_run(tmp_path, "20261114-1000-a-aaaa")
-    record(paths, 0, T0)
+    start(paths, 1, T0)
     watcher = Watcher(tmp_path, after=EMPTY)
+    assert brief(drain(watcher)) == [("started", "aaaa", 1)]
+    record(paths, 0, T0 + 2)
     assert brief(drain(watcher)) == [("iteration", "aaaa", 0)]
-    record(paths, 1, T0 + 2)
+    # Not the harness's doing (the log is only appended to), but read again from the start:
+    # a shrunk file, and another file in its place.
+    lines = paths.segments.read_text().splitlines(keepends=True)
+    paths.segments.write_text(lines[0])
+    assert watcher.poll() is None  # one line: nothing past the cursor's two
+    tmp = paths.segments.with_suffix(".tmp")
+    tmp.write_text("".join(lines) + json.dumps({"segment": 1, "event": "iteration", "iteration": 1,
+                                                "accepted": True, "ended_at": T0 + 3}) + "\n")
+    tmp.replace(paths.segments)
     assert brief(drain(watcher)) == [("iteration", "aaaa", 1)]
-    # Replaced by a longer file whose earlier lines differ (a reused inode looks the same).
-    lines = paths.history.read_text().splitlines()
-    replaced = [json.loads(line) for line in lines]
-    replaced[1]["summary"] = "x" * 50
-    replaced.append({**replaced[1], "iteration": 2, "started_at": T0 + 3, "ended_at": T0 + 4})
-    with open(paths.history, "r+") as stream:  # same inode, grown
-        stream.write("".join(json.dumps(r) + "\n" for r in replaced))
-    [event] = drain(watcher)
-    assert (event["iteration"], event["summary"]) == (2, "x" * 50)
 
 
 # --- idle and timeout ---------------------------------------------------------------------
@@ -507,44 +477,44 @@ def test_idle_with_ids_when_none_is_running(tmp_path):
     assert event["event"] == "started"
 
 
-def test_a_running_or_starting_run_is_not_idle(tmp_path):
+def test_a_running_run_is_not_idle(tmp_path):
     running = make_run(tmp_path, "20261114-1000-a-aaaa")
     start(running, 1, T0)
-    starting = make_run(tmp_path, "20261114-1000-b-bbbb")
-    status(starting, phase="starting")  # between the status's start and the segment log's
     clock = [0.0]
 
     def sleep(seconds):
         clock[0] += seconds
 
-    for paths in (running, starting):
-        watcher = Watcher(tmp_path, run_ids=[paths.run_id], clock=lambda: clock[0], sleep=sleep)
-        event = watcher.next(timeout=3, idle=True)
-        assert (event["event"], event["timeout_seconds"], event["run"]) == ("timeout", 3, None)
-        assert clock[0] >= 3
-        assert event["cursor"] == watcher.cursor
+    watcher = Watcher(tmp_path, run_ids=[running.run_id], clock=lambda: clock[0], sleep=sleep)
+    event = watcher.next(timeout=3, idle=True)
+    assert (event["event"], event["timeout_seconds"], event["run"]) == ("timeout", 3, None)
+    assert clock[0] >= 3
+    assert event["cursor"] == watcher.cursor
 
 
 
 def test_a_run_not_started_yet_is_new_however_recent(tmp_path):
     """No clock heuristic: a segment starts as soon as its command holds the run's lock,
-    so until then a run (just created, or being resumed) is idle."""
+    so until then a run (just created, or being resumed) is idle. `wait` reads only the
+    log: a status saying running isn't a segment."""
     fresh = make_run(tmp_path, "20261114-1000-b-bbbb", created_at=time.time())
     assert Watcher(tmp_path, run_ids=[fresh.run_id]).next(idle=True)["runs"][0]["state"] == "new"
-    # A status that says running whose process is gone: crashed, not starting.
-    status(fresh, pid=dead_pid(), phase="starting")
-    assert Watcher(tmp_path, run_ids=[fresh.run_id]).next(idle=True)["runs"][0]["state"] == "crashed"
+    hold(fresh)
+    fresh.status.parent.mkdir(parents=True, exist_ok=True)
+    fresh.status.write_text(json.dumps({"state": "running", "pid": os.getpid(), "host": HOST}))
+    assert Watcher(tmp_path, run_ids=[fresh.run_id]).next(idle=True)["runs"][0]["state"] == "new"
 
 
 def test_a_run_without_segments_is_new(tmp_path):
     """Every segment writes its start record beside its status: a run with history or a
-    stopped status but no segments is a development build's, and reads as `new` (no
-    `ended` state for it)."""
+    stopped status but no segments is a development build's, and reads as `new`; its
+    history isn't read."""
     paths = make_run(tmp_path, "20261114-1000-a-aaaa")
-    record(paths, 0, T0)
-    assert Watcher(tmp_path, run_ids=[paths.run_id]).idle()["runs"][0]["state"] == "new"
-    status(paths, state="finished", pid=1)
-    assert Watcher(tmp_path, run_ids=[paths.run_id]).idle()["runs"][0]["state"] == "new"
+    append(paths.history, {"iteration": 0, "accepted": True, "started_at": T0, "ended_at": T0 + 1})
+    paths.status.parent.mkdir(parents=True, exist_ok=True)
+    paths.status.write_text(json.dumps({"state": "finished", "pid": 1, "host": HOST}))
+    watcher = Watcher(tmp_path, run_ids=[paths.run_id], after=EMPTY)
+    assert watcher.idle()["runs"][0]["state"] == "new"
 
 
 def test_next_blocks_until_an_event(tmp_path):
@@ -655,6 +625,19 @@ def test_a_real_run_reports_its_whole_sequence(project):
         "finished", "budget", 2, 3)
     idle = json.loads(cli(project, short_id(run_id), "--after", cursor).output)
     assert idle["event"] == "idle" and idle["runs"][0]["state"] == "finished"
+
+
+def test_a_failed_baseline_is_an_iteration_event(project):
+    from tests.test_runs import configure
+
+    configure(project, gates=["echo formatted >> code.py"])  # a gate that edits files: the baseline fails
+    cursor = Watcher(project).cursor
+    result = CliRunner().invoke(main, ["run", "-n", "1", "--no-report", "-p", str(project)])
+    assert result.exit_code == 1, result.output
+    events = drain(Watcher(project, after=cursor))
+    assert [(e["event"], e.get("iteration")) for e in events] == [("started", None), ("iteration", 0), ("ended", None)]
+    assert not events[1]["accepted"] and events[1]["reason"].startswith("baseline failed: ")
+    assert events[2]["state"] == "failed"
 
 
 def test_wait_follows_a_live_run(project):

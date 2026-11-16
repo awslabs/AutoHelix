@@ -64,9 +64,11 @@ class RunStatus:
 
 
 class SegmentLog:
-    """runs/<id>/.internal/segments.jsonl, append-only: for every segment (one `run`
-    or `resume` command) that started, a start record, and an end record when it
-    ended, linked by `segment` (1, 2, ... in the run). Each record is one `write()`
+    """runs/<id>/.internal/segments.jsonl, the run's event log, append-only: for
+    every segment (one `run` or `resume` command) that started, a start record, an
+    iteration record each time one of its iterations is final, and an end record
+    when it ended, linked by `segment` (1, 2, ... in the run; `autohelix wait`
+    reads it, `events`). Each record is one `write()`
     on an O_APPEND descriptor, then fsync: nothing earlier is ever rewritten, so a
     damaged line costs only itself. A segment whose process died has no end record
     (`read_segments` reports it open). Best-effort, like the status; the run lock
@@ -86,6 +88,12 @@ class SegmentLog:
         self.segment = segment
         self._append({"segment": self.segment, "event": "start", "started_at": started_at, "pid": os.getpid(),
                       "host": socket.gethostname(), "budget": budget, "start_iteration": start_iteration})
+
+    def iteration(self, *, ended_at: float | None, **fields) -> None:
+        """An iteration's record is final (`events.iteration_fields`; nothing outside a
+        segment): the line `autohelix wait` reports as its `iteration` event."""
+        if self.segment is not None:
+            self._append({"segment": self.segment, "event": "iteration", "ended_at": ended_at, **fields})
 
     def end(self, *, state: str | None, stop_reason: dict | None, last_iteration: int | None,
             iterations: int | None, error: str | None = None) -> None:
@@ -132,8 +140,8 @@ def _segment_records(path: Path | None, data: bytes | None = None, terminated: b
 
 
 def read_segments(path: Path | None, *, data: bytes | None = None, terminated: bool = False) -> list[dict]:
-    """The segments in the log, oldest first: each start record with its end record's
-    fields merged in (`ended_at`, `state`, `stop_reason`, `last_iteration`,
+    """The segments in the log, oldest first (iteration records aside): each start
+    record with its end record's fields merged in (`ended_at`, `state`, `stop_reason`, `last_iteration`,
     `iterations`, `error`), and `open` true when it has none (still running, or its
     process died). Lines that aren't records (damaged, undecodable) are skipped. The
     log is read from `path`, or given as `data`; `terminated` ignores an unterminated

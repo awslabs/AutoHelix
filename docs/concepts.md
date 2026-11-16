@@ -441,16 +441,22 @@ of truth (`jq` on it for numbers across iterations; see
 retried baseline, reuses its number: the earlier attempt's folder is moved to
 `.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
 
-`.internal/segments.jsonl` records every segment (one `run` or `resume`
+`.internal/segments.jsonl` is the run's event log (what [`autohelix
+wait`](cli.md#autohelix-wait) reads): every segment (one `run` or `resume`
 command) that started (as soon as the command held the run's lock, before its
-checks: a start they refuse is a segment that failed), append-only, two JSON lines each, linked by `segment`
-(1, 2, … in the run) and told apart by `event`:
+checks: a start they refuse is a segment that failed), append-only, JSON lines
+linked by `segment` (1, 2, … in the run) and told apart by `event`:
 
 - `"event": "start"`: `started_at` (epoch seconds), `budget` as given
   (`iterations`, `until`, `cost_usd`, `time_seconds`, each `null` when unset,
   and `default`: no budget flag, so the default `-n 1` applied),
   `start_iteration` (the first iteration it may run, `0` when it captures the
   baseline), `pid` and `host`;
+- `"event": "iteration"`, one per record once it is final (after its stop
+  commands; a failed or retried baseline too): `ended_at` and the fields of
+  `wait`'s [`iteration` event](cli.md#events) (`iteration`, `accepted`,
+  `reason`, `summary`, `metrics`, `commit`, `cost_usd`, `cost_incomplete`,
+  `agent_error`);
 - `"event": "end"`: `ended_at`, `state` (`finished`, `interrupted` or
   `failed`), `stop_reason` (as in `status.json`: why the loop ended, kept when
   Ctrl-C or an error comes later, during landing or the report; `null` only when

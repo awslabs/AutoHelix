@@ -437,9 +437,16 @@ def test_each_segment_that_started_is_in_the_segment_log(project):
     assert first["started_at"] <= first["ended_at"] <= second["started_at"] <= second["ended_at"]
     assert second["started_at"] == status(paths)["segment_started_at"]
     assert second["pid"] == os.getpid() and second["host"] == socket.gethostname()
-    # Append-only: a start and an end record each.
-    events = [json.loads(line)["event"] for line in paths.segments.read_text().splitlines()]
-    assert events == ["start", "end", "start", "end"]
+    # Append-only: a start record, an iteration record per final record, an end record.
+    lines = [json.loads(line) for line in paths.segments.read_text().splitlines()]
+    assert [(r["segment"], r["event"], r.get("iteration")) for r in lines] == [
+        (1, "start", None), (1, "iteration", 0), (1, "iteration", 1), (1, "end", None),
+        (2, "start", None), (2, "iteration", 2), (2, "iteration", 3), (2, "end", None)]
+    records = {r.iteration: r for r in History(project, paths.run_id).load()}
+    for line in lines[1:3] + lines[5:7]:
+        record = records[line["iteration"]]
+        assert (line["ended_at"], line["accepted"], line["commit"]) == (record.ended_at, record.accepted,
+                                                                        record.commit)
     # --until already reached: no segment, nothing written.
     assert cli(project, "resume", "--until", "3").exit_code == 0
     assert len(segments(paths)) == 2

@@ -450,8 +450,8 @@ def sweep_copies(project: Path) -> None:
             if not _ID.fullmatch(entry.name) or not entry.is_dir():
                 continue
             try:
-                lock = RunLock(RunPaths(project, entry.name).lock)
-            except RuntimeError:  # live
+                lock = RunLock(RunPaths(project, entry.name).lock, retries=())
+            except RuntimeError:  # live (a probe's moment aside: swept next time)
                 continue
             with lock:
                 remove_copies(entry, warn=lambda message: None)
@@ -507,17 +507,27 @@ def held_here(path: Path) -> bool:
     return os.path.realpath(path) in _HELD
 
 
-class RunLock:
-    """Nonblocking, process-held ownership; the persistent inode is never removed."""
+LOCK_RETRIES = (0.01, 0.02, 0.04, 0.08)  # seconds between nonblocking tries: outlast an `is_live` probe
 
-    def __init__(self, path: Path, *, blocking=False):
+
+class RunLock:
+    """Nonblocking, process-held ownership; the persistent inode is never removed. A
+    held lock is tried again for a moment (`LOCK_RETRIES`): an observer's `is_live`
+    probe takes a free lock for microseconds. `retries=()` tries once (a sweep that
+    skips running runs)."""
+
+    def __init__(self, path: Path, *, blocking=False, retries=LOCK_RETRIES):
         path.parent.mkdir(parents=True, exist_ok=True)
         self._file = path.open("a+")
-        try:
-            fcntl.flock(self._file, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-        except BlockingIOError:
-            self._file.close()
-            raise RuntimeError(f"Run {short_id(path.stem)} is running.") from None
+        for pause in (*retries, None):
+            try:
+                fcntl.flock(self._file, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+                break
+            except BlockingIOError:
+                if pause is None:
+                    self._file.close()
+                    raise RuntimeError(f"Run {short_id(path.stem)} is running.") from None
+                time.sleep(pause)
         self._key = os.path.realpath(path)
         _HELD.add(self._key)
 
