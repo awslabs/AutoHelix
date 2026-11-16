@@ -131,7 +131,7 @@ class RunPaths:
     @property
     def iterations(self): return self.run_dir / "iterations"
     @property
-    def logs(self): return self.run_dir / "logs"  # run logs per segment, report.log, hook audit
+    def logs(self): return self.run_dir / "logs"  # run logs per segment, report.log
 
     # One run's internal files.
     @property

@@ -40,9 +40,21 @@ def runner():
 
 
 @pytest.fixture
-def resources():
+def bundled():
     root = files("autohelix").joinpath("skills", SKILL_NAME)
     return {name: root.joinpath(*name.split("/")).read_bytes() for name in RESOURCE_PATHS}
+
+
+@pytest.fixture
+def resources(bundled):
+    """What an export writes: the bundle, SKILL.md with the version that wrote it."""
+    from autohelix.terminal import version
+
+    front, body = bundled["SKILL.md"].decode().split("\n---\n", 1)
+    line = (f"> Written for AutoHelix {version()}. If `autohelix --version` prints another version, "
+            "tell the user this copy of the skill may be out of date and suggest reinstalling it "
+            "(`autohelix skill install --force` with the same `--agent` and `--scope`).\n")
+    return {**bundled, "SKILL.md": f"{front}\n---\n\n{line}{body}".encode()}
 
 
 @pytest.fixture(autouse=True)
@@ -211,11 +223,21 @@ def test_force_rejects_symlinks_before_writing(runner, tmp_path, link_path, dang
     assert snapshot(tmp_path) == before
 
 
-def test_export_from_zip_resources(runner, resources, tmp_path, monkeypatch):
+def test_an_exported_skill_says_which_version_wrote_it(runner, tmp_path):
+    destination = tmp_path / "export"
+    assert runner.invoke(main, ["skill", "export", str(destination)]).exit_code == 0
+    text = (destination / "SKILL.md").read_text()
+    assert yaml.safe_load(text.split("\n---\n")[0].removeprefix("---\n"))["name"] == SKILL_NAME  # front matter intact
+    from autohelix.terminal import version
+
+    assert f"Written for AutoHelix {version()}." in text and "autohelix --version" in text
+
+
+def test_export_from_zip_resources(runner, bundled, resources, tmp_path, monkeypatch):
     """Resource access must work without treating package data as filesystem paths."""
     archive = tmp_path / "resources.zip"
     with zipfile.ZipFile(archive, "w") as bundle:
-        for name, content in resources.items():
+        for name, content in bundled.items():
             bundle.writestr(f"autohelix/skills/{SKILL_NAME}/{name}", content)
     with zipfile.ZipFile(archive) as bundle:
         monkeypatch.setattr("autohelix.skill.files", lambda package: zipfile.Path(bundle, "autohelix/"))

@@ -53,6 +53,11 @@ the destination or bundled paths and incompatible file/directory types are
 rejected before copying. Updates replace individual files; an I/O failure can
 leave a partially updated folder. Correct the error and repeat with `--force`.
 
+The copied `SKILL.md` says which AutoHelix version wrote it (a line after its
+front matter), and tells the agent to point out a different `autohelix
+--version` and suggest reinstalling with `--force`: an installed copy stays as
+it was when AutoHelix is upgraded.
+
 After installation, ask your agent to use `autohelix-setup` to prepare your
 experiment (or let [`autohelix setup`](#autohelix-setup) start the agent with
 the bundled skill, without installing anything). It will inspect the project
@@ -821,7 +826,7 @@ The run is `--run RUN_ID`, else the [running or latest run](#which-run-a-command
 Ask an agent a yes/no question about the current directory.
 
 ```bash
-autohelix ask [--yes TEXT] [--no TEXT] [--rubric FILE] [--agent BACKEND] [--model MODEL] [--effort LEVEL] [--timeout SECONDS] [--command PATH] -- "QUESTION"
+autohelix ask [--yes TEXT] [--no TEXT] [--rubric FILE] [--agent BACKEND] [--model MODEL] [--effort LEVEL] [--timeout DURATION] [--command PATH] -- "QUESTION"
 ```
 
 | Option | Description |
@@ -830,7 +835,7 @@ autohelix ask [--yes TEXT] [--no TEXT] [--rubric FILE] [--agent BACKEND] [--mode
 | `--rubric` | A file with criteria for the answer |
 | `--agent` | `claude` or `codex` (default: `agent.backend` from the config, else `claude`) |
 | `--model`, `--effort` | Model and reasoning effort (default: from the config's `agent:`, unless `--agent` names another backend) |
-| `--timeout` | Seconds before giving up, including the retry (default 600) |
+| `--timeout` | How long before giving up, including the retry: a duration (`90s`, `10m`; a bare number is seconds; default 10m) |
 | `--command` | The backend's executable (default: `agent.command` from the config, unless `--agent` names another backend) |
 
 Put the question after `--`, so a question starting with `-` isn't read as an
@@ -844,29 +849,29 @@ stop:
 ```
 
 - **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run: the run's stored config), else the config a bare `autohelix run` in the current directory would use (none, or several: the defaults): backend, command, model and effort only, never `agent.settings` or `extra_args`.
-- **Candidate contents are checked before and after every judge call.** Tracked and nonignored files, modes, symlinks and submodule contents must remain unchanged; runtime feedback/log outputs are allowed. A stop judge after acceptance cannot change accepted code: its edits are discarded and its verdict ignored, with error and usage recorded. Backend restrictions remain best effort.
-- **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox; it still reads an `AGENTS.md` in the directory. OpenCode can't be used as a judge yet: it has no read-only mode.
+- **What it judges.** In a run (`$AUTOHELIX_CANDIDATE` is set, as for every command the harness runs), its own fresh copy of exactly the candidate tree, made in `$AUTOHELIX_SCRATCH` and removed afterwards, as `autohelix review` does: the complete change (new files included) is `.autohelix-iteration/candidate.diff` there, and the judge's prompt names it. Files earlier commands wrote aren't in that copy: a gate that wants one judged writes it to `$AUTOHELIX_SCRATCH` and names it by absolute path in the question (`python bench.py > "$AUTOHELIX_SCRATCH/report.txt" && autohelix ask -- "Does $AUTOHELIX_SCRATCH/report.txt show ..."`). By hand, the current directory in place; the change, named in the prompt, is its working tree against `HEAD` (computed as for `review`). Outside a git repository there is no diff: the judge judges the files as they are.
+- **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox, with `project_doc_max_bytes=0` so it loads no `AGENTS.md` from the judged files (unconfirmed against a real Codex call). OpenCode can't be used as a judge yet: it has no read-only mode.
 - **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `--cost`, and its transcript is saved with the output of the command that ran it: `.autohelix/runs/<id>/iterations/NNN/gates/<k>/ask.log` for an `ask:` gate (`stop/<k>/` for a stop command, `observe/<name>/` for an observe entry; `ask-2.log`, … for further calls). While the command runs it is written to the command's private `$AUTOHELIX_LOG_DIR`. Outside a run, a line on stderr gives the answer, the agent and where its settings came from, and the cost: `autohelix ask: yes · codex gpt-5 (autohelix/a.yaml) · $0.0120`, or `· claude (defaults: several configs here) · …`, so a by-hand answer from other settings than a run's is visible.
 - An invalid answer or failed call is retried once. The command stays inside the timeout of the command that runs it.
 - **Scripts own the exit code.** `ask` exits non-zero when it can't answer; a script that swallows that (`autohelix ask ... || true`) and exits 0 passes.
-- **Judges can't change what they judge.** Each call fingerprints the files in its directory first. If the call changes one or adds a non-ignored file, it ends without retry: standalone ask exits 2, and in a run the call's usage record keeps an `integrity_violation` flag that rejects the iteration even if a wrapper script restores the files and exits 0.
-- **Limits.** The judge reads the directory it runs in. In a run that is the checks or stop copy: the candidate's files and (in the checks copy) `.autohelix-iteration/candidate.diff`, with no notes or other harness material, but with any new or gitignored files earlier commands left there. Keep criteria files out of `scope.editable`.
+- **One write guard.** Each call fingerprints the judged files first (git's tracked and non-ignored untracked files, modes, symlinks and submodule contents; outside a repository, every file but cache folders); only the call's own transcript and the usage file may change. If the call changes or adds one, it ends without retry and `ask` exits 2. In a run that write was in the judge's own copy, so it never reaches the candidate.
+- **Limits.** Keep criteria files out of `scope.editable`: the judged agent could edit them.
 
 ## `autohelix review`
 
 Review a change with a read-only agent; prints the review as feedback.
 
 ```bash
-autohelix review [--previous] [--metric NAME:higher|lower]... [--agent BACKEND] [--model MODEL] [--effort LEVEL] [--timeout SECONDS] [--command PATH] [--base REV] -- "PROMPT"
+autohelix review [--previous] [--metric NAME]... [--agent BACKEND] [--model MODEL] [--effort LEVEL] [--timeout DURATION] [--command PATH] [--base REV] -- "PROMPT"
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--previous` | In a run: include this entry's own review from the last accepted iteration |
-| `--metric NAME:higher\|lower` | A number the review must report (repeatable) |
+| `--metric NAME` | A number the review must report (repeatable). Which way is better is the config's business (a `review:` entry's `metrics:`); `NAME:higher` is an error naming `--metric NAME` |
 | `--agent` | `claude` or `codex` (default: `agent.backend` from the config, else `claude`) |
 | `--model`, `--effort` | Model and reasoning effort (default: from the config's `agent:`, unless `--agent` names another backend) |
-| `--timeout` | Seconds before giving up, including the retry (default: the command's deadline in a run, else 1800) |
+| `--timeout` | How long before giving up, including the retry: a duration (default: the command's deadline in a run, else 30m) |
 | `--command` | The backend's executable (default: `agent.command` from the config, unless `--agent` names another backend) |
 | `--base REV` | By hand: the commit the working tree is compared with (default `HEAD`) |
 
@@ -875,7 +880,7 @@ PROMPT is the review request; put it after `--`. A `review:` entry in
 [Configuration → Review entries](config.md#review-entries)), and scripts can
 call it directly, as they call `autohelix ask`.
 
-**Two modes:**
+**Two modes** (the same as `ask`'s):
 
 - **In a run** (`$AUTOHELIX_CANDIDATE` is set, as for every command the harness
   runs): it makes its own fresh copy of exactly the candidate tree, with HEAD at
@@ -906,17 +911,11 @@ Outside a run, a line on stderr names the agent, where its settings came from an
 produced (after one retry), a requested number is missing, or the reviewer
 changed files; 130 when interrupted.
 
-**Read-only, three layers:**
-
-1. The backend's read-only mode, as for `ask` (Claude Code: read, grep and glob
-   tools, user-level settings only, no MCP; Codex: its read-only sandbox).
-2. The reviewed directory is fingerprinted before and after the call, and in a
-   run `candidate.diff` and `previous.md` must be unchanged too. A change fails
-   the call; in a run its usage record keeps a sticky `integrity_violation`
-   flag that rejects the iteration, even though observe failures otherwise
-   don't.
-3. In a run, its own fresh copy of the candidate tree, so nothing earlier
-   commands or the agent wrote is in front of the reviewer.
+**Read-only**, as for `ask`: the backend's read-only mode (Claude Code: read,
+grep and glob tools, user-level settings only, no MCP; Codex: its read-only
+sandbox, no `AGENTS.md`), the one write guard around each call (a change fails
+the call), and in a run its own fresh copy of the candidate tree, so nothing
+earlier commands wrote is in front of the reviewer.
 
 Costs and logs are recorded as for `ask`
 (`.autohelix/runs/<id>/iterations/NNN/observe/<name>/review.log` for a `review:` entry).

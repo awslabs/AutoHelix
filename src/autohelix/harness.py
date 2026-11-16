@@ -48,7 +48,8 @@ from autohelix.formatting import format_cap, format_cost, format_total_cost
 from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
                                        uses_old_layout)
 from autohelix.run_log import RunLog
-from autohelix.workspace import (path_in_scope, SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, CandidateRejected,
+from autohelix.workspace import (path_in_scope, SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, OPENCODE_PLUGIN,
+                                 CandidateRejected,
                                  Repo, Scope)
 from autohelix.state import (
     GitExcludeError,
@@ -559,25 +560,21 @@ class Harness:
         return time_left
 
     def _install_opencode_timer_plugin(self, worktree_path: Path) -> None:
-        """Drop the opencode time-left plugin into the worktree's .opencode/plugin/.
+        """Drop the opencode time-left plugin into the copy as `workspace.OPENCODE_PLUGIN`.
 
         opencode auto-loads project-local plugins from .opencode/plugin/*.js. The
         plugin appends time_left.sh output to each tool result — the opencode
-        analog of Claude's PostToolUse time hook. It lives in the worktree (never
-        installed for the agent call) and reads $AUTOHELIX_TIME_LEFT_SCRIPT from the agent env.
+        analog of Claude's PostToolUse time hook — and reads $AUTOHELIX_TIME_LEFT_SCRIPT
+        from the agent env. The snapshot leaves that one file out by pathspec, as it
+        does `.autohelix-iteration/`; the project's own `.opencode/` files are untouched.
         """
         src = Path(__file__).parent / "bin" / "opencode_timer_pertool.js"
         if not src.exists():
             return
-        plugin_dir = worktree_path / ".opencode" / "plugin"
+        plugin = worktree_path / OPENCODE_PLUGIN
         try:
-            plugin_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, plugin_dir / "opencode_timer_pertool.js")
-            # Mark the whole .opencode/ tree as gitignored within the worktree so
-            # scope enforcement (revert_out_of_scope, which keys off
-            # --exclude-standard) treats this harness-managed tooling like
-            # .autohelix-iteration/ and doesn't flag/delete it as an out-of-scope change.
-            (worktree_path / ".opencode" / ".gitignore").write_text("*\n")
+            plugin.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, plugin)
         except OSError:
             pass
 
@@ -674,6 +671,10 @@ class Harness:
                 str(self.config.agent.timeout)
                 if self.config.agent.timeout is not None
                 else None
+            ),
+            # The budget as the time-left hint says it (1h 30m), formatted here once.
+            "AUTOHELIX_ITERATION_BUDGET_TEXT": (
+                _format_time(self.config.agent.timeout) if self.config.agent.timeout is not None else None
             ),
             "AUTOHELIX_TIME_LEFT_SCRIPT": (
                 str(self._time_left_script)
@@ -996,8 +997,6 @@ class Harness:
                 changed = ["its copy was removed or replaced"]
             if changed:
                 raise CandidateRejected(f"checks modified candidate files: {command} ({', '.join(changed[:5])})")
-            if violation := self._integrity_violation(iteration):
-                raise CandidateRejected(violation)
 
         positions = {id(gate): index for index, gate in enumerate(self.config.gates)}
         current: dict = {}  # the running command's call folders; the gate item of the one that just ran
@@ -1075,8 +1074,6 @@ class Harness:
         if evaluation.metrics and not baseline:
             self.log.info(f"iter {iteration} observe: "
                           + ", ".join(f"{k}={v:g}" for k, v in evaluation.metrics.items()))
-        if violation := self._integrity_violation(iteration):
-            raise CandidateRejected(violation)
 
     def _observe(self, workspace: IterationWorkspace, iteration: int, checks, evaluation: _Evaluation,
                  command_env: dict, records, *, verify, notes: list[str]) -> None:
@@ -1257,13 +1254,6 @@ class Harness:
             commands.append({"role": "command", "usage": usage, "log": self._relative_log(log)})
         result.calls = agents + commands
 
-    def _integrity_violation(self, iteration: int) -> str | None:
-        """A judge call in this attempt changed the files it judged (sticky)."""
-        for usage in read_usage(self.paths.usage(iteration)):
-            if usage.get("id") not in self._usage_starts and usage.get("integrity_violation"):
-                return f"a judge call changed the files it judged ({usage.get('source', 'judge')})"
-        return None
-
     def _start_command_usage(self, iteration: int, moved: Path | None = None) -> None:
         """Start an empty usage file for the commands this iteration runs. A baseline
         retry keeps the earlier attempts' calls, which still count toward its cost; their
@@ -1382,8 +1372,6 @@ class Harness:
         errors = [r for r in results if r.error]
         for r in errors:  # shown under the iteration's row (`terminal.Table._notes`, from `record.stops`)
             self.log.info(f"iter {iteration} stop command error ({r.problem()}): {r.command}")
-        if violation := self._integrity_violation(iteration):
-            raise AutoHelixRunError(violation)
         fired = next((r for r in results if r.stop), None)
         if fired is None:
             return None, errors
@@ -1782,14 +1770,17 @@ class Harness:
         spent = (summarize_costs(self.history.cost_usages).cost_usd or 0) - cost_before
 
         cost_unknown = False  # some of this segment's charges are unavailable
-        priced = False  # some of this segment's charges are known
-        # With --cost the only bound, unknown charges and none known mean the backend
-        # can't price: --cost may never be reached. One unknown among priced ones (a
-        # timeout) only warns; three agent failures in a row stop the segment anyway.
+        # Whether the main agent's cost was known in one of this segment's iterations
+        # (None: no agent call yet). With --cost the only bound, unknown charges and an
+        # agent never priced mean the backend can't price: --cost may never be reached.
+        # Priced judges don't count (they alone would take long to reach the cap). One
+        # unknown after a priced agent call (a timeout) only warns; three agent failures
+        # in a row stop the segment anyway.
+        priced: bool | None = None
         cost_only = budget.cost_usd is not None and max_iter is None and budget.time_seconds is None
 
         def out_of_budget() -> dict | None:
-            if cost_only and cost_unknown and not priced:
+            if cost_only and cost_unknown and priced is False:
                 return {"kind": "budget", "budget": "cost",
                         "detail": "cost unknown: --cost can't bound this segment (add -n or --time)"}
             if budget.cost_usd is not None and spent >= budget.cost_usd:
@@ -1819,7 +1810,6 @@ class Harness:
             baseline = next((r for r in self.history.load() if r.iteration == 0 and r.accepted), None)
             if baseline is not None and baseline.cost.incomplete:
                 warn_unknown_cost()
-            priced = baseline is not None and baseline.cost.cost_usd is not None
 
         # Why the loop ended: stop conditions, then `autohelix stop`, then budgets.
         stop_reason: dict | None = None
@@ -1856,7 +1846,8 @@ class Harness:
                     break
                 if result.cost.incomplete:
                     warn_unknown_cost()
-                priced = priced or result.cost.cost_usd is not None
+                if any(call["role"] == "agent" for call in result.calls):
+                    priced = bool(priced) or summarize_costs([result.usage]).cost_usd is not None
                 spent += result.cost.cost_usd or 0
             self.run_status.note(stop_reason=stop_reason)
             self.log.info(f"run stopped — {stop_reason['detail']}")

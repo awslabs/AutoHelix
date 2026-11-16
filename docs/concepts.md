@@ -82,8 +82,9 @@ when the copy is made; no stash, no remote). This means:
   generated code should be accepted, generating it is the agent's job.
 - In a checks copy, plain `git diff` shows changes to tracked files; new files show as
   untracked. The complete change is in `.autohelix-iteration/candidate.diff`; that is
-  the only harness material a checks copy gets (no notes, history or prompt). A review's
-  copy gets the same, plus `previous.md` with `previous: true`.
+  the only harness material a checks copy gets (no notes, history or prompt). A judge's
+  (`ask`) or review's own copy gets the same, a review's also `previous.md` with
+  `previous: true`.
 - Accepted commits advance the run's hidden `refs/autohelix/<id>` first.
 - A process-held per-run lock lets only one process write a run at a time.
 - PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo), and
@@ -287,11 +288,11 @@ observe:
   agent. List them last: a metric gate failure skips the entries after it, so
   their cost isn't spent on an iteration already rejected.
 - A review is **feedback**, not a gate. A failed review (no valid answer, a
-  timeout) is recorded and shown to the next agent, and the run continues. A
-  reviewer that changes the files it reviews rejects the iteration.
-- Read-only has three layers: the backend's read-only mode, a fingerprint of
-  the copy before and after the call (a change is a sticky
-  `integrity_violation` that rejects the iteration), and its own fresh copy.
+  timeout) is recorded and shown to the next agent, and the run continues; so
+  is a reviewer that changes the files it reviews (its call fails; the change
+  was in its own copy).
+- Read-only: the backend's read-only mode, one write guard around each call
+  (a change fails the call), and its own fresh copy.
 
 ## Progress tracking
 
@@ -413,7 +414,7 @@ harness keeps for itself is in `.internal/` folders:
 │   ├── iterations/
 │   │   ├── 000/                # the baseline
 │   │   └── 001/ ...            # one folder per iteration (below)
-│   ├── logs/                   # run logs per segment, report.log, hook audit
+│   ├── logs/                   # run logs per segment, report.log
 │   └── .internal/              # status.json, segments.jsonl, stop.json (autohelix stop), usage/,
 │                               # notes versions notes/<n>/, superseded attempts attempts/,
 │                               # report.json, the copies path

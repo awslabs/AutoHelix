@@ -413,6 +413,27 @@ def test_cost_alone_goes_on_past_an_unknown_cost_once_a_charge_was_priced(projec
     assert status(paths)["stop_reason"]["detail"] == "cost budget reached ($0.25 this segment)"
 
 
+def test_cost_alone_stops_when_only_the_judges_are_priced(project, monkeypatch):
+    """Priced `ask:` judges don't make an agent that can't price bounded by --cost."""
+    from autohelix.agents.mock import MockAgent
+
+    real = MockAgent.run
+
+    def run(self, *args, **kwargs):
+        result = real(self, *args, **kwargs)
+        if not self.config.read_only:
+            result.usage.pop("cost_usd", None)  # the main agent can't price; its judges can
+        return result
+
+    monkeypatch.setattr(MockAgent, "run", run)
+    configure(project, gates=["ask: Is it fine?"])
+    result = cli(project, "run", "--no-report", "--cost", "5")
+    assert result.exit_code == 0, result.output
+    paths = latest_run(project)
+    assert iterations(paths) == [0, 1]
+    assert status(paths)["stop_reason"]["detail"] == "cost unknown: --cost can't bound this segment (add -n or --time)"
+
+
 def test_until_already_reached_runs_nothing(project):
     paths = begun(project, "-n", "2")
     before = paths.status.read_bytes(), sorted(p.name for p in paths.run_dir.rglob("*"))

@@ -84,7 +84,7 @@ files; a review entry's stdout is its review text, review.log its transcript.
 keeps the tree).
 - .internal/attempts/NNN-<k>/: earlier attempts at iteration N that were superseded (a killed \
 iteration, a baseline retry), laid out like iterations/NNN/.
-- logs/: the harness's own logs: run-<time>.log per run or resume, hook_audit.log, report.log.
+- logs/: the harness's own logs: run-<time>.log per run or resume, report.log.
 {git}
 - config.yaml: the run's config, as stored when it started (verbatim); prompt_template.md: its prompt template's text, if it has one.
 

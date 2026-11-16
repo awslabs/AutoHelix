@@ -154,7 +154,7 @@ class TestConfigFromDict:
         assert entry.capture == [] and entry.timeout == 600
         assert shlex.split(entry.command) == [
             "autohelix", "review", "--previous",
-            "--metric", "missing:lower", "--metric", "done:higher", "--agent", "claude", "--model", "opus",
+            "--metric", "missing", "--metric", "done", "--agent", "claude", "--model", "opus",
             "--timeout", "600", "--", "List items; report `missing`. Don't trust 'STATUS'.",
         ]
         assert Config.from_dict({"goal": "x", "observe": [{"name": "r", "review": "Go"}]}).observe[0].command \

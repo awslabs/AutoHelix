@@ -40,6 +40,19 @@ def _bundled_files() -> dict[Path, bytes]:
     return dict(walk(root))
 
 
+STAMP = ("> Written for AutoHelix {version}. If `autohelix --version` prints another version, "
+         "tell the user this copy of the skill may be out of date and suggest reinstalling it "
+         "(`autohelix skill install --force` with the same `--agent` and `--scope`).\n")
+
+
+def stamped(skill_md: bytes, version: str) -> bytes:
+    """SKILL.md as exported: which version wrote it, right after the front matter, so
+    an installed copy that outlives an upgrade can say it is stale."""
+    text = skill_md.decode("utf-8")
+    end = text.index("\n---\n", 3) + len("\n---\n")  # the front matter opens the file
+    return (text[:end] + "\n" + STAMP.format(version=version) + text[end:]).encode("utf-8")
+
+
 def export_skill(destination: Path, *, force: bool = False) -> None:
     """Copy the complete skill, preserving unrelated files on explicit updates."""
     try:
@@ -53,7 +66,10 @@ def export_skill(destination: Path, *, force: bool = False) -> None:
         if destination.exists() and not destination.is_dir():
             raise click.ClickException(f"Skill destination is not a directory: {destination}")
 
+        from autohelix.terminal import version
+
         resources = _bundled_files()
+        resources[Path("SKILL.md")] = stamped(resources[Path("SKILL.md")], version())
         # Check all existing bundled paths before writing any of them.
         for relative in resources:
             target = destination / relative

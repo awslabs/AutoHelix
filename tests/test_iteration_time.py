@@ -142,10 +142,13 @@ CLAUDE_HOOK = Path(__file__).parent.parent / "src" / "autohelix" / "bin" / "clau
 
 
 def run_time_left(start_offset: int | None = None, budget: int | None = None) -> str:
+    from autohelix.harness import _format_time
+
     env = os.environ.copy()
     if start_offset is not None and budget is not None:
         env["AUTOHELIX_ITERATION_START"] = str(1000 - start_offset)
         env["AUTOHELIX_ITERATION_BUDGET"] = str(budget)
+        env["AUTOHELIX_ITERATION_BUDGET_TEXT"] = _format_time(budget)  # as the harness sets it
     else:
         env.pop("AUTOHELIX_ITERATION_START", None)
         env.pop("AUTOHELIX_ITERATION_BUDGET", None)
@@ -198,6 +201,26 @@ def test_time_left_sub_minute_shown_in_seconds():
     _asserts_system_facts(out)
 
 
+def test_time_left_states_the_budget_exactly():
+    """It used to round to whole hours or minutes: "1h 30m left of 1h budget"."""
+    assert "1h 30m left of 1h 30m budget" in run_time_left(start_offset=0, budget=5400)
+    assert "45s left of 45s budget" in run_time_left(start_offset=0, budget=45)
+    assert "of 1m 30s budget" in run_time_left(start_offset=0, budget=90)
+
+
+def test_the_claude_hook_logs_no_tool_calls(tmp_path):
+    """No audit log of every tool call's payload, in the run folder or /tmp."""
+    run = tmp_path / "run"
+    run.mkdir()
+    env = {**os.environ, "AUTOHELIX_RUN_DIR": str(run), "AUTOHELIX_TIME_LEFT_SCRIPT": str(TIME_LEFT),
+           "AUTOHELIX_ITERATION_START": "1", "AUTOHELIX_ITERATION_BUDGET": "60"}
+    result = subprocess.run([str(CLAUDE_HOOK)], env=env, input='{"tool_input": "' + "x" * 1000 + '"}',
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0
+    assert list(run.iterdir()) == []
+    assert "AUDIT" not in CLAUDE_HOOK.read_text() and "audit" not in (CLAUDE_HOOK.parent / "opencode_timer_pertool.js").read_text()
+
+
 def test_time_left_passed():
     out = run_time_left(start_offset=4200, budget=3600)
     assert "Deadline passed" in out
@@ -211,6 +234,7 @@ def test_claude_hook_emits_valid_json():
     env = os.environ.copy()
     env["AUTOHELIX_ITERATION_START"] = str(int(_time.time()) - 300)
     env["AUTOHELIX_ITERATION_BUDGET"] = "3600"
+    env["AUTOHELIX_ITERATION_BUDGET_TEXT"] = "1h"
     env["AUTOHELIX_TIME_LEFT_SCRIPT"] = str(TIME_LEFT)
     result = subprocess.run(
         [str(CLAUDE_HOOK)],
@@ -224,3 +248,26 @@ def test_claude_hook_emits_valid_json():
     data = json.loads(result.stdout)
     assert data["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert "left of 1h budget" in data["hookSpecificOutput"]["additionalContext"]
+
+
+def test_the_agent_gets_its_budget_formatted(project, monkeypatch):
+    """`agent.timeout: 1h30m` reaches the time-left hint as "1h 30m", not rounded."""
+    from autohelix.agents.mock import MockAgent
+    from autohelix.harness import Budget, Harness
+    from tests.test_runs import configure
+
+    seen = []
+    real = MockAgent.run
+
+    def run(self, *args, **kwargs):
+        seen.append(os.environ.get("AUTOHELIX_ITERATION_BUDGET_TEXT"))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(MockAgent, "run", run)
+    data = __import__("yaml").safe_load((project / "autohelix.yaml").read_text())
+    configure(project, agent={**data["agent"], "timeout": "1h30m"})
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    harness.close()
+    assert seen == ["1h 30m"]
+    assert "AUTOHELIX_ITERATION_BUDGET_TEXT" not in os.environ  # restored after the call

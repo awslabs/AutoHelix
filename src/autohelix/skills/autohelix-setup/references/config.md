@@ -68,7 +68,10 @@ that name their replacement; when editing an existing config, convert them (a
   - A command (a string, or a mapping with `command` and `timeout`) must exit 0.
   - `ask: <question>` is shorthand for `autohelix ask -- "<question>"`, a yes/no
     judgment by a read-only agent; `yes:` / `no:` keys (quoted or not) say what each
-    answer means.
+    answer means. The judge sees its own fresh copy of the candidate, with the
+    complete change as `.autohelix-iteration/candidate.diff`, not files earlier
+    gates wrote: a gate whose output should be judged writes it to
+    `$AUTOHELIX_SCRATCH` and names that path in its own `autohelix ask`.
   - `metric: NAME` with `regress: N%` or `improve: N%` compares a number from an
     `observe` entry with the last accepted iteration (see below).
 - Time values are durations: a bare number is seconds, a string uses `h`, `m`,
@@ -146,8 +149,9 @@ observe:
 
 An observe entry that fails (non-zero exit, timeout, a review without a valid
 answer) does not reject the iteration: the failure is recorded and shown, and
-it contributes no metrics. Only gates reject. A command or reviewer that
-changes the candidate's files does reject the iteration.
+it contributes no metrics. Only gates reject. A command that changes the
+candidate's files does reject the iteration; a reviewer or `ask` judge that
+writes only fails its own call (it works in its own fresh copy).
 
 Without metric gates, passing gates can accept a change even if a measured
 value regresses. A metric gate compares with the last accepted iteration (the

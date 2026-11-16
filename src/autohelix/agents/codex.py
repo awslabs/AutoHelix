@@ -106,6 +106,8 @@ class CodexAgent:
         if self.config.reasoning_effort:
             cmd.extend(["-c", f'model_reasoning_effort="{self.config.reasoning_effort}"'])
         if self.config.read_only:
+            # A judge's instructions are AutoHelix's only: no AGENTS.md from the judged files.
+            cmd.extend(["-c", "project_doc_max_bytes=0"])
             if self._schema_path:
                 cmd.extend(["--output-schema", str(self._schema_path)])
             # Codex has no flag to append to its system prompt, so the judge's

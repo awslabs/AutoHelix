@@ -77,6 +77,24 @@ def test_untouched_copy_snapshots_to_its_tree_and_leaves_user_state(repo_dir, co
     assert not copy.path.exists() and not copy.index.exists()
 
 
+def test_the_opencode_plugin_is_left_out_and_the_projects_opencode_files_kept(repo_dir, copies):
+    """The harness's plugin file is excluded by pathspec; it used to write `*` into
+    `.opencode/.gitignore`, replacing the project's and hiding the agent's new files there."""
+    (repo_dir / ".opencode").mkdir()
+    (repo_dir / ".opencode" / ".gitignore").write_text("node_modules\n")
+    commit_all(repo_dir, "opencode config")
+    repo, head, copy = agent_copy(repo_dir, copies)
+    plugin = copy.path / workspace.OPENCODE_PLUGIN
+    plugin.parent.mkdir(parents=True)
+    plugin.write_text("// the harness's\n")
+    (copy.path / ".opencode" / "agent").mkdir()
+    (copy.path / ".opencode" / "agent" / "helper.md").write_text("the agent's\n")
+    tree, discarded = copy.snapshot(Scope())
+    assert names(repo_dir, tree) == {".opencode/.gitignore", ".opencode/agent/helper.md", "code.py", "test_code.py"}
+    assert blob(repo_dir, tree, ".opencode/.gitignore") == b"node_modules\n" and discarded == []
+    copy.remove()
+
+
 def test_snapshot_keeps_in_scope_and_resets_out_of_scope_in_index_only(repo_dir, copies):
     (repo_dir / "tool.sh").write_text("echo\n")
     (repo_dir / "old.txt").write_text("old\n")
@@ -345,7 +363,7 @@ def test_subdirectory_project(repo_dir, copies, ignored):
     assert blob(repo_dir, tree, "proj/code.py") == b"edited\n"
     assert not any(".autohelix" in name for name in names(repo_dir, tree))
     assert (copy.path / ".git" / "info" / "exclude").read_text().endswith(
-        "\n/proj/.autohelix/\n/proj/.autohelix-iteration/\n")
+        "\n/proj/.autohelix/\n/proj/.autohelix-iteration/\n/proj/.opencode/plugin/autohelix_time_left.js\n")
 
 
 def test_the_freeze_never_hashes_harness_material(repo_dir, copies):

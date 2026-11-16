@@ -61,9 +61,12 @@ def diff_args(*args: str) -> tuple[str, ...]:
 # The harness's per-iteration material in agent and reviewer copies (prompt, notes,
 # history, other runs of the group); never part of a candidate.
 ITERATION_DIR = ".autohelix-iteration"
+# The OpenCode time-left plugin the harness puts in an agent copy (OpenCode loads
+# project plugins from there); the project's own `.opencode/` is left alone.
+OPENCODE_PLUGIN = ".opencode/plugin/autohelix_time_left.js"
 # Never frozen: the project's own state folder (only in a copy if an inner run made it)
 # and the harness's material. Excluded by pathspec, so their files are never hashed.
-_UNFROZEN = (".autohelix", ITERATION_DIR)
+_UNFROZEN = (".autohelix", ITERATION_DIR, OPENCODE_PLUGIN)
 # Transient lock contention from a concurrent git process on the same repository
 # (packed-refs, reflogs, a ref's own lock); a CAS mismatch is not one.
 # Matched by the lock file's name (`<path>.lock'`), which git prints in every language.
@@ -417,7 +420,8 @@ class Copy:
         (private / "info").mkdir(exist_ok=True)
         (private / "info" / "exclude").write_text(
             (user.read_text() if user.is_file() else "")
-            + "".join(f"\n/{repo.prefix}{name}/" for name in _UNFROZEN) + "\n")
+            + "".join(f"\n/{repo.prefix}{name}{'' if name == OPENCODE_PLUGIN else '/'}" for name in _UNFROZEN)
+            + "\n")
         # The private index starts stat-valid for `files`, then points at `head`.
         shutil.copyfile(self.index, private / "index")
         if self.files != self.head:  # entries unchanged between the two keep their stat data

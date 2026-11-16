@@ -111,7 +111,8 @@ class SegmentLog:
             return
         for result in records:
             if result.iteration not in logged:
-                self._append({"segment": last, "event": "iteration", "ended_at": result.ended_at,
+                # A recovered record has no end time: now, so the event keeps its place.
+                self._append({"segment": last, "event": "iteration", "ended_at": result.ended_at or time.time(),
                               **iteration_fields(result)})
 
     def end(self, *, state: str | None, stop_reason: dict | None, last_iteration: int | None,

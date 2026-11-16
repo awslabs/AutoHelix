@@ -142,6 +142,12 @@ gates:
   ask` a script runs needs `--agent claude` or `--agent codex`.
 - `timeout:` is the command's deadline (default 10m), which also bounds the
   judge. An entry's `agent.timeout` is an error naming `timeout:`.
+- The judge works in its **own fresh copy of exactly the candidate**, as a
+  review does, with the complete change as `.autohelix-iteration/candidate.diff`
+  (named in its prompt): not the checks copy, so files earlier gates wrote
+  aren't in front of it. A gate whose output should be judged writes it to
+  `$AUTOHELIX_SCRATCH` and names it by absolute path in an `autohelix ask` of
+  its own.
 
 **`metric:` entries** run nothing. They compare a number from an `observe:`
 entry with the **last accepted iteration**, the code being built on:
@@ -274,7 +280,7 @@ observe:
       For each PRD.md item, give done / partial / missing with file:line evidence.
       Report `missing`: the number of items that are not fully done.
     previous: true            # = --previous
-    metrics: {missing: lower} # = --metric missing:lower
+    metrics: {missing: lower} # = --metric missing (the direction is for the metric gate)
     # timeout: 30m
     # agent: {backend: codex, model: gpt-5.5}
 ```

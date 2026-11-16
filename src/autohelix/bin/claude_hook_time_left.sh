@@ -6,16 +6,6 @@
 
 INPUT="$(cat)"
 
-if [ -n "$AUTOHELIX_HOOK_AUDIT_LOG" ]; then
-    AUDIT_LOG="$AUTOHELIX_HOOK_AUDIT_LOG"
-elif [ -n "$AUTOHELIX_RUN_DIR" ] && [ -d "$AUTOHELIX_RUN_DIR" ]; then
-    mkdir -p "$AUTOHELIX_RUN_DIR/logs" 2>/dev/null || true
-    AUDIT_LOG="$AUTOHELIX_RUN_DIR/logs/hook_audit.log"
-else
-    AUDIT_LOG="/tmp/autohelix_hook_audit.log"
-fi
-echo "$(date +'%Y-%m-%dT%H:%M:%SZ') hook fired: $INPUT" >> "$AUDIT_LOG" 2>/dev/null || true
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TIME_LEFT_SCRIPT="${AUTOHELIX_TIME_LEFT_SCRIPT:-$SCRIPT_DIR/time_left.sh}"
 

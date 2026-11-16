@@ -540,20 +540,20 @@ def test_metric_gate_on_a_later_entry_passes_the_earlier_one(project, log):
     assert [g["passed"] for g in record.gates] == [False, True]
 
 
-def test_ask_integrity_violation_in_a_gate_stops_later_commands(project, log):
+def test_a_judge_writes_in_its_own_copy_not_the_checks_copy(project, log):
+    """An `ask` in a gate judges its own fresh copy: its write fails its call (swallowed
+    here) and never reaches the checks copy later commands run in."""
     _configure(project, gates=[f'[ "$AUTOHELIX_ITERATION" = 0 ] || autohelix ask "Done?" || true',
-                               f'echo "$AUTOHELIX_ITERATION later" >> {log}'],
+                               f'test ! -e planted.md && echo "$AUTOHELIX_ITERATION later" >> {log}'],
                observe=[{"name": "bench", "command": f'echo "$AUTOHELIX_ITERATION bench" >> {log}'}])
     config = yaml.safe_load((project / "autohelix.yaml").read_text())
     config["agent"]["settings"]["judge_change_file"] = "planted.md"
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     _git(project, "commit", "-qam", "judge edits")
     _, record = _run(project, 1)
-    assert not record.accepted
-    assert _lines(log) == ["0 later", "0 bench"]
-    first, second = record.gates
-    assert first["passed"] is False and first["reason"] == record.reason  # it exited 0, but changed files
-    assert second["passed"] is None and record.observe == []
+    assert record.accepted
+    assert _lines(log) == ["0 later", "0 bench", "1 later", "1 bench"]
+    assert [g["passed"] for g in record.gates] == [True, True]
 
 
 def test_gate_that_modifies_the_candidate_is_recorded_failed(project):

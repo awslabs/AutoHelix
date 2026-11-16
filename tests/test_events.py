@@ -704,6 +704,30 @@ def test_wait_follows_a_live_run(project):
             assert (event["time"], event["cost_usd"]) == (final["ended_at"], final["cost"]["cost_usd"])
 
 
+def test_a_recovered_record_without_an_end_time_keeps_its_place(project):
+    """A record `reconcile` recovers has no `ended_at`: its caught-up line gets the time
+    it was logged, so neither it nor its open segment's crash reads as 1970."""
+    from tests.test_runs import configure
+
+    configure(project, stop=["exit 1"])
+    assert CliRunner().invoke(main, ["run", "-n", "1", "--no-report", "--land", "manual",
+                                     "-p", str(project)]).exit_code == 0
+    paths = latest_run(project)
+    lines = paths.segments.read_text().splitlines()
+    paths.segments.write_text("\n".join(line for line in lines
+                                         if not ('"iteration": 1' in line or '"end"' in line)) + "\n")
+    history = [json.loads(line) for line in paths.history.read_text().splitlines()]
+    history[-1]["ended_at"] = None  # as recovered
+    paths.history.write_text("".join(json.dumps(record) + "\n" for record in history))
+    before = time.time()
+    assert CliRunner().invoke(main, ["resume", "-n", "1", "--no-report", "-p", str(project)]).exit_code == 0
+    caught_up = [json.loads(line) for line in paths.segments.read_text().splitlines()][2]
+    assert (caught_up["segment"], caught_up["iteration"]) == (1, 1) and caught_up["ended_at"] >= before
+    events = drain(Watcher(project, after=EMPTY))
+    assert [e["event"] for e in events][:5] == ["started", "iteration", "iteration", "crashed", "started"]
+    assert all(e["time"] > before - 3600 for e in events)
+
+
 def test_an_iteration_killed_in_its_stop_commands_is_reported_at_the_resume(project):
     """Accepted and published, then the process died before its line (in the stop
     commands): the next segment logs it for the dead one, before its start."""

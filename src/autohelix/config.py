@@ -622,8 +622,8 @@ def _parse_observe(value: Any, backend: str, errors: list[str]) -> list[ObserveE
             if not isinstance(previous, bool):
                 errors.append(f"{where}: `previous:` must be true or false")
             flags = ["--previous"] if previous is True else []
-            for metric, direction in metrics.items():
-                flags += ["--metric", f"{metric}:{direction}"]
+            for metric in metrics:  # the direction is the metric gate's, not the reviewer's
+                flags += ["--metric", metric]
             agent_flags, judge = _entry_agent(entry, timeout, backend, where, errors)
             command = _render(["autohelix", "review"], flags + agent_flags, text or "")
         else:

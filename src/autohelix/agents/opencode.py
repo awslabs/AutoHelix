@@ -35,12 +35,6 @@ class OpenCodeAgent:
             cmd.extend(["--model", self.config.model])
         if self.config.reasoning_effort:
             cmd.extend(["--variant", self.config.reasoning_effort])
-        if self.config.read_only:
-            # OpenCode has no reliable read-only mode or system-prompt flag; the
-            # judge's instructions lead the prompt and nothing else is passed.
-            system = self.config.system_prompt
-            cmd.append(f"{system}\n\n{prompt}" if system else prompt)
-            return cmd
         cmd.extend(self.config.extra_args)
         cmd.append(prompt)
         return cmd

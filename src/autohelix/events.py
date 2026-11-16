@@ -292,7 +292,7 @@ class RunSource:
                 }, i + 1))
             elif kind == "iteration":
                 at = _time(record.get("ended_at"))
-                if n in lives:
+                if n in lives and at:  # an unknown time isn't a sign of life
                     lives[n] = max(lives[n], at)
                 if type(record.get("iteration")) is int:
                     last_iteration = record["iteration"]

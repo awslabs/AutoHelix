@@ -321,14 +321,16 @@ def test_normalize_git_state_before_validation(project, monkeypatch, operation, 
 
 
 @pytest.mark.parametrize("slot", ["gates", "observe", "stop"])
-def test_nested_ask_mutation_cannot_be_swallowed(project, slot):
+def test_a_judge_writing_in_a_run_fails_its_call_in_its_own_copy(project, slot):
+    """The judge's write lands in its own copy, never in what commands check or what is
+    accepted; its call fails (exit 2), and the script owns that exit code."""
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
     data["agent"]["settings"]["judge_change_file"] = "code.py"
-    ask = 'autohelix ask "Done?" || true'
+    ask = 'autohelix ask "Done?"; echo "ask=$?" >&2; grep -q "judge edit" code.py && exit 9; exit 1'
     if slot == "gates":
-        data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] || ' + ask]
+        data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; ' + ask.replace("exit 1", "exit 0")]
     elif slot == "observe":
-        data["observe"] = [{"name": "judge", "command": '[ "$AUTOHELIX_ITERATION" = 0 ] || ' + ask}]
+        data["observe"] = [{"name": "judge", "command": '[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; ' + ask}]
     else:
         data["stop"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 1; ' + ask]
     (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
@@ -337,15 +339,20 @@ def test_nested_ask_mutation_cannot_be_swallowed(project, slot):
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
     record = harness.history.load()[-1]
-    assert record.accepted == (slot == "stop")
-    assert record.stop is None
-    assert any(call["usage"].get("integrity_violation") for call in record.calls)
+    assert record.accepted and record.stop is None
+    [judge] = [call for call in record.calls if call["role"] == "command"]
+    assert judge["usage"]["status"] == "error" and judge["usage"]["error"] == "the judge changed files: code.py"
+    assert "integrity_violation" not in judge["usage"]
     assert record.cost.cost_usd == pytest.approx(0.2)
     accepted = git(project, "show", f"{harness.paths.ref}:code.py").stdout
     assert "Unvalidated judge edit" not in accepted
+    folder = {"gates": "gates/1", "observe": "observe/judge", "stop": "stop/1"}[slot]
+    assert "ask=2" in (harness.paths.iteration_dir(1) / folder / "stderr.txt").read_text()
 
 
-def test_baseline_judge_mutation_fails_and_cost_survives(project):
+def test_baseline_judge_writing_fails_only_its_call_and_cost_counts(project):
+    """At the baseline too, a judge writes only in its own copy: the checks copy and the
+    project stay as they were, and its call's cost is counted."""
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
     data["agent"]["settings"]["judge_change_file"] = "code.py"
     data["observe"] = [{"name": "judge", "command": 'autohelix ask "Done?" || true'}]
@@ -353,16 +360,13 @@ def test_baseline_judge_mutation_fails_and_cost_survives(project):
     git(project, "add", ".")
     git(project, "commit", "-qm", "baseline judge")
     harness = Harness(project, land_mode="manual")
-    with pytest.raises(AutoHelixRunError, match="Baseline command modified candidate files"):
-        harness.run(Budget(until=1), report=False)
-    [baseline] = harness.history.load()
-    assert not baseline.accepted and baseline.iteration == 0
+    harness.run(Budget(until=1), report=False)
+    baseline = harness.history.load()[0]
+    assert baseline.accepted and baseline.iteration == 0
     assert baseline.cost.cost_usd == 0.1
+    assert [call["usage"]["status"] for call in baseline.calls] == ["error"]
     assert (project / "code.py").read_text() == "print('baseline')\n"
-    retry = Harness(project, land_mode="manual")
-    with pytest.raises(AutoHelixRunError, match="Baseline command modified candidate files"):
-        retry.run(Budget(until=1), report=False)
-    assert retry.history.load()[0].cost.cost_usd == pytest.approx(0.2)
+    harness.close()
 
 
 @pytest.mark.parametrize("change", ["dirty", "new", "delete", "mode", "symlink"])
@@ -423,20 +427,18 @@ def test_guard_detects_submodule_edit_and_commit(project, tmp_path):
     assert DirectoryGuard(project).violations() == []
 
 
-def test_judge_violation_stays_recorded_after_wrapper_restores_files(project):
+def test_an_ask_gate_whose_judge_writes_rejects(project):
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
     data["agent"]["settings"]["judge_change_file"] = "code.py"
-    data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; cp code.py /tmp/ah-saved.$$; '
-                           'autohelix ask "Done?"; cp /tmp/ah-saved.$$ code.py; exit 0']
+    data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; autohelix ask "Done?"']
     (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
     git(project, "add", ".")
-    git(project, "commit", "-qm", "restoring wrapper")
+    git(project, "commit", "-qm", "judge gate")
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
     record = harness.history.load()[-1]
-    assert not record.accepted
-    assert "judge call changed the files it judged" in record.reason
-    assert any(call["usage"].get("integrity_violation") for call in record.calls)
+    assert not record.accepted and record.gates[0]["passed"] is False and record.gates[0]["return_code"] == 2
+    assert "the judge changed files: code.py" in (harness.paths.iteration_dir(1) / "gates" / "1" / "stderr.txt").read_text()
     harness.close()
 
 

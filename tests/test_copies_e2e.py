@@ -50,7 +50,7 @@ def test_swallowed_failed_ask_passes_and_keeps_its_usage(project):
     judges = [call for call in record.calls if call["role"] == "command"]
     assert judges and all(call["usage"]["status"] == "error" for call in judges)
     assert all(call["log"] and (harness.paths.run_dir / call["log"]).exists() for call in judges)
-    assert not any(call["usage"].get("integrity_violation") for call in judges)
+    assert all(call["usage"]["error"] == "Mock judge failure" for call in judges)
     harness.close()
 
 

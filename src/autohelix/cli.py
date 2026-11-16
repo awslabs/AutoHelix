@@ -414,6 +414,17 @@ def _start(project: Path, config: Path | None, **selection) -> Harness:
         raise click.ClickException(str(e)) from e
 
 
+class JudgeBackend(click.Choice):
+    """`--agent` of `ask`/`review`: claude or codex. The test backend (`mock`) is accepted
+    but not offered."""
+
+    def __init__(self):
+        super().__init__([name for name in JUDGE_BACKENDS if name != "mock"])
+
+    def convert(self, value, param, ctx):
+        return value if value == "mock" else super().convert(value, param, ctx)
+
+
 def _duration_option(ctx, param, value: str | None) -> int | None:
     if value is None:
         return None
@@ -752,11 +763,12 @@ def delete(run_ids: tuple[str, ...], path: Path, force: bool):
 @click.option("--yes", "yes_means", help='What a "yes" answer means.')
 @click.option("--no", "no_means", help='What a "no" answer means.')
 @click.option("--rubric", type=click.Path(exists=True, dir_okay=False), help="File with criteria for the answer.")
-@click.option("--agent", "agent_type", type=click.Choice(JUDGE_BACKENDS),
+@click.option("--agent", "agent_type", type=JudgeBackend(),
               help="Agent backend (default: agent.backend from the config, else claude).")
 @click.option("--model", help="Model (default: agent.model from the config).")
 @click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
-@click.option("--timeout", type=click.IntRange(min=1), help="Seconds before giving up (default 600).")
+@click.option("--timeout", callback=_duration_option, metavar="DURATION",
+              help="How long before giving up, retry included: 90s, 10m (a bare number is seconds; default 10m).")
 @click.option("--command", "agent_command",
               help="The backend's executable (default: agent.command from the config, unless --agent "
                    "names another backend).")
@@ -811,8 +823,12 @@ def _review_metrics(ctx, param, values: tuple[str, ...]) -> list[str]:
     names: list[str] = []
     for value in values:
         name, _, direction = value.rpartition(":")
-        if not re.fullmatch(r"\w+", name) or direction not in ("higher", "lower"):
-            raise click.BadParameter(f"{value!r}: expected NAME:higher or NAME:lower")
+        if name and direction in ("higher", "lower"):
+            raise click.BadParameter(f"{value!r}: the direction is gone, give the name only (--metric {name}); "
+                                     "a `review:` entry's `metrics:` keeps it for its metric gate")
+        name = value
+        if not re.fullmatch(r"\w+", name):
+            raise click.BadParameter(f"{value!r}: expected a metric NAME (letters, digits, _)")
         if name in names:
             raise click.BadParameter(f"{name!r} is given twice")
         names.append(name)
@@ -823,14 +839,15 @@ def _review_metrics(ctx, param, values: tuple[str, ...]) -> list[str]:
 @click.argument("prompt")
 @click.option("--previous", is_flag=True,
               help="Include this entry's review from the last accepted iteration (in a run).")
-@click.option("--metric", "metrics", multiple=True, metavar="NAME:higher|lower", callback=_review_metrics,
+@click.option("--metric", "metrics", multiple=True, metavar="NAME", callback=_review_metrics,
               help="A number the review must report, printed as ##autohelix[NAME=value]. Repeatable.")
-@click.option("--agent", "agent_type", type=click.Choice(JUDGE_BACKENDS),
+@click.option("--agent", "agent_type", type=JudgeBackend(),
               help="Agent backend (default: agent.backend from the config, else claude).")
 @click.option("--model", help="Model (default: agent.model from the config).")
 @click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
-@click.option("--timeout", type=click.IntRange(min=1),
-              help="Seconds before giving up (default: the command's timeout in a run, else 1800).")
+@click.option("--timeout", callback=_duration_option, metavar="DURATION",
+              help="How long before giving up, retry included: 90s, 10m (a bare number is seconds; default: "
+                   "the command's deadline in a run, else 30m).")
 @click.option("--command", "agent_command",
               help="The backend's executable (default: agent.command from the config, unless --agent "
                    "names another backend).")
