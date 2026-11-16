@@ -7,6 +7,7 @@ import subprocess
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -115,7 +116,8 @@ def test_iteration_detail_has_notes_and_diff(viewer):
     detail = json.loads(get(viewer + "/api/iteration/2")[1])
     assert "<strong>the obvious</strong>" in detail["notes"]
     assert "<script>" not in detail["notes"]  # Raw HTML is escaped, not rendered.
-    assert "Modified in iteration 2" in detail["diff"]
+    assert detail["diff"] is None  # a finished iteration's change is its own route
+    assert "Modified in iteration 2" in json.loads(get(viewer + "/api/iteration/2/diff")[1])["diff"]
     assert [(g["text"], g["passed"]) for g in detail["gates"]] == [("true", True)]
     assert detail["observe"] == [] and detail["discarded"] == []
     assert isinstance(detail["agent"], list)
@@ -170,11 +172,11 @@ def test_artifacts_listed_and_served_safely(viewer, integration_project):  # noq
     assert get(viewer + "/api/artifact/2/bench/../../../history.jsonl")[0] == 404
 
 
-def test_diff_is_relative_to_baseline(viewer):
-    one = json.loads(get(viewer + "/api/iteration/1")[1])["diff"]
-    two = json.loads(get(viewer + "/api/iteration/2")[1])["diff"]
-    assert "Modified in iteration 1" in one and "Modified in iteration 2" not in one
-    assert "+# Modified in iteration 1" in two and "+# Modified in iteration 2" in two
+def test_each_iteration_shows_its_own_change(viewer):
+    one = json.loads(get(viewer + "/api/iteration/1/diff")[1])["diff"]
+    two = json.loads(get(viewer + "/api/iteration/2/diff")[1])["diff"]
+    assert "+# Modified in iteration 1" in one and "Modified in iteration 2" not in one
+    assert "+# Modified in iteration 2" in two and two != one
 
 
 def test_running_iteration_shows_copy_diff(viewer, integration_project):  # noqa: F811
@@ -195,6 +197,33 @@ def test_running_iteration_shows_copy_diff(viewer, integration_project):  # noqa
     assert "+NEW = 1" in diff
     assert "SEEDED NOTE" not in diff and ".autohelix-iteration" not in diff
     assert (copy.path / ".git" / "index").read_bytes() == private_index
+    copy.remove()
+
+
+def test_live_diffs_write_nothing_into_the_users_objects(viewer, integration_project):  # noqa: F811
+    from autohelix.runs import ensure_copies
+    from autohelix.workspace import Copy, Repo
+
+    def objects():
+        git_dir = Path(subprocess.run(["git", "rev-parse", "--absolute-git-dir"], cwd=integration_project,
+                                      capture_output=True, text=True, check=True).stdout.strip())
+        return [p.relative_to(git_dir) for p in (git_dir / "objects").rglob("*") if p.is_file()]
+
+    paths = RunPaths(integration_project)
+    ensure_copies(paths.copies)
+    copy = Copy.create(Repo(integration_project), paths.copies / "iter-3-agent", files="HEAD", head="HEAD")
+    before = objects()
+    (copy.path / "hello.py").write_text('print("work in progress")\n')
+    (copy.path / "big.bin").write_bytes(os.urandom(256 * 1024))  # untracked
+    (copy.path / "odd [*] name.py").write_text("ODD = 1\n")  # not a pathspec
+    for k in range(3):
+        (copy.path / "brand_new.py").write_text(f"NEW = {k}\n")
+        diff = json.loads(get(viewer + "/api/iteration/3")[1])["diff"]
+        assert f"+NEW = {k}" in diff and '+print("work in progress")' in diff and "+ODD = 1" in diff
+    (copy.path / "brand_new.py").unlink()  # gone again: no longer in the diff
+    assert "brand_new.py" not in json.loads(get(viewer + "/api/iteration/3")[1])["diff"]
+    # At most git's empty blob, which `add -N` records for a new file (once, 15 bytes).
+    assert set(objects()) - set(before) <= {Path("objects/e6/9de29bb2d1d6434b8b29ae775ad8c2e48c5391")}
     copy.remove()
 
 
@@ -298,7 +327,7 @@ def test_stopped_run_saves_static_page(integration_project):  # noqa: F811
     assert data["logos"]["dark"].startswith("data:image/svg+xml,%3Csvg")
     assert data["saved_at"] > 0  # shown as "Run report · saved HH:MM"
     assert len(page) < 300_000  # mostly the two logos; this run's data is small
-    assert page.count("</script>") == 2  # the data script and the viewer script
+    assert page.count("</script>") == 3  # the data, common.js and viewer.js
 
 
 def test_interrupted_run_still_saves_static_page(integration_project, monkeypatch):  # noqa: F811
@@ -356,7 +385,7 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
         state = json.loads(get(base + f"/api/run/{first.paths.run_id}/state")[1])
         assert state["run_id"] == first.paths.run_id and len(state["iterations"]) == 3
         assert json.loads(get(base + "/api/state")[1])["run_id"] == second.paths.run_id
-        detail = json.loads(get(base + f"/api/run/{first.paths.run_id}/iteration/2")[1])
+        detail = json.loads(get(base + f"/api/run/{first.paths.run_id}/iteration/2/diff")[1])
         assert "Modified in iteration 2" in detail["diff"]
 
         for path in ("/run/missing-zzzz/", "/api/run/missing-zzzz/state", "/run/../", "/api/run/..%2f/state",

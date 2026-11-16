@@ -6,6 +6,7 @@
   <title>AutoHelix</title>
   <link rel="icon" href="/logo-light.svg">
   <link rel="stylesheet" href="/viewer.css">
+  <script src="/common.js" defer></script>
   <script src="/viewer.js" defer></script>
 </head>
 <body>
@@ -14,12 +15,11 @@
       <p id="crumbs" class="kind crumbs" hidden><a id="crumb-project" href="/" title="All runs"></a></p>
       <p id="kind" class="kind" hidden></p>
       <h1><span id="title">AutoHelix</span> <span id="title-date" class="title-date"></span></h1>
-      <p id="goal" class="goal"></p>
+      <p class="goal-line"><span id="goal" class="goal"></span> <button id="goal-more" class="link" hidden>more</button></p>
       <p id="why" class="run-why" hidden></p>
     </div>
     <div class="top-right">
       <span id="status" class="status">Connecting…</span>
-      <button id="theme" class="theme" title="Theme: follow the system, or force light or dark"></button>
       <img id="logo" src="/logo-light.svg" alt="AutoHelix" class="logo">
     </div>
   </header>
@@ -32,28 +32,39 @@
     <section class="overview">
       <div class="stats" id="stats"></div>
       <div id="chart-box">
-      <div class="chart-head">
-        <span id="scale" class="muted"></span>
-        <select id="metric" aria-label="Metric" hidden></select>
-      </div>
-      <svg id="chart" class="chart" viewBox="0 0 640 200" role="img" aria-label="Metric by iteration"></svg>
+        <div class="chart-head">
+          <span id="scale" class="muted"></span>
+          <select id="metric" aria-label="Metric" hidden></select>
+        </div>
+        <svg id="chart" class="chart" viewBox="0 0 640 200" role="img" aria-label="Metric by iteration"></svg>
       </div>
       <table class="iterations">
-        <thead><tr><th>#</th><th>Outcome</th><th id="metric-col">Metric</th><th>Summary</th><th class="num">Time</th><th class="num">Cost</th></tr></thead>
+        <thead><tr id="columns"></tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </section>
 
-    <details class="box card report" id="report" hidden title=".autohelix/runs/<id>/report.md">
-      <summary><span class="card-title">Summary</span> <span id="report-meta" class="muted"></span></summary>
-      <div id="report-body" class="card-body prose"></div>
-    </details>
-
     <section class="detail">
-      <div id="cards" class="cards"></div>
-      <details id="shared-notes" class="box card" hidden title=".autohelix/runs/<id>/notes/">
-        <summary><span class="card-title">Shared notes</span> <span id="shared-count" class="muted"></span></summary>
-        <div id="shared-list" class="card-body note-list"></div>
+      <details class="bar" id="report" hidden>
+        <summary><b>Report</b> <span id="report-meta" class="muted"></span></summary>
+        <div id="report-body" class="prose"></div>
+      </details>
+      <section class="panel" id="panel" hidden>
+        <div class="panel-head">
+          <h2 id="panel-title"></h2>
+          <span class="panel-nav">
+            <button id="prev" title="Older (k)">← k</button>
+            <button id="next" title="Newer (j)">j →</button>
+          </span>
+        </div>
+        <p id="panel-facts" class="facts"></p>
+        <p id="panel-summary" class="agent-summary" hidden></p>
+        <div id="panel-reason" class="reason" hidden></div>
+        <div id="sections"></div>
+      </section>
+      <details class="bar" id="shared-notes" hidden>
+        <summary><b>Shared notes</b> <span id="shared-count" class="muted"></span></summary>
+        <div id="shared-list" class="note-list"></div>
       </details>
     </section>
   </main>

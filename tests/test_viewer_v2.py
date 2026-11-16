@@ -142,6 +142,17 @@ def test_goal_and_config_in_state(server):
     assert [g["passed"] for g in two["gates"]] == [False, None]
 
 
+def test_rows_say_what_the_console_says(server):
+    state = get_json(server + "/api/state")
+    rows = state["iterations"]
+    assert [r["why"] for r in rows] == [None, None, {"text": "pytest -q failed (exit 1)", "error": False}]
+    assert [n["text"] for n in rows[1]["notes"]] == ["observe review failed: exited 2",
+                                                     "discarded, outside the scope: tests/test_sort.py"]
+    # The stats line's totals: the baseline's time included, and the landing state.
+    assert state["run"]["seconds"] == sum(r["seconds"] or 0 for r in rows)
+    assert state["run"]["accepted"] == 1 and state["run"]["land"] == "auto"
+
+
 def test_observe_sections_by_entry(server):
     detail = get_json(server + "/api/iteration/1")
     bench, review = detail["observe"]

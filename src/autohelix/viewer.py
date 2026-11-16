@@ -63,6 +63,7 @@ LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
 FROZEN_PHASES = {"preparing checks", "checks", "benchmark", "review", "accept", "stop check"}
 ASSETS = {
     "/": ("dashboard.html", "text/html; charset=utf-8"),
+    "/common.js": ("common.js", "text/javascript; charset=utf-8"),
     "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
     "/viewer.css": ("viewer.css", "text/css; charset=utf-8"),
     "/viewer.js": ("viewer.js", "text/javascript; charset=utf-8"),
@@ -238,6 +239,7 @@ class RunData:
         self._subject_cache: dict[str, str | None] = {}
         self._repository = None
         self._configs: dict[Path, tuple[tuple, object, str | None]] = {}  # path -> (stat key, config, text)
+        self._runs = ProjectRuns(self.project)
 
     def _refresh_current(self):
         if self.run_id in (None, "current"):
@@ -327,12 +329,42 @@ class RunData:
             })
         return rows
 
+    def _words(self, config, records, rows: list[dict]) -> None:
+        """Each row's `why` (a rejection in the console's words: `python3 check.py failed
+        (exit 1)`, `speed 6.5% worse than iter 3 (5% allowed)`, `agent timed out`) and
+        `notes` (the console's lines under it: a gate failing at the baseline, a failed
+        observe entry, discarded paths), each with `error` for the console's red."""
+        from autohelix.terminal import RED, Row, Table
+
+        table = Table.of(config, 200) if config else Table({}, 200)
+        for record, row in zip(records, rows):
+            line = Row.of(record)
+            why, style = table._reason(line)
+            row["why"] = {"text": why, "error": style == RED} if why else None
+            row["notes"] = [{"text": text, "error": style == RED} for text, style in table._notes(line)]
+            table._remember(line)
+
+    def _run_row(self, records) -> dict | None:
+        """What the stats line says beside the metrics, as the run list does: the run's
+        time (the recorded iterations', the baseline's included), accepted iterations,
+        landing (`ProjectRuns.landing_state`) and mode."""
+        if not self.paths.run_id:
+            return None
+        try:
+            data = self.paths.read_identity()
+        except RuntimeError:
+            return None
+        return {"seconds": sum(record_seconds(r) for r in records),
+                "accepted": sum(1 for r in records if r.iteration > 0 and r.accepted),
+                **self._runs.landing_state(self.paths, data, self._runs._refs()), "land": data.get("land") or "auto"}
+
     def state(self) -> dict:
         self._refresh_current()
         config, config_path = self._config()
         records = self.records() if self.paths.run_id else []
         total_cost = summarize_costs([usage for row in records for usage in row.cost_usages])
         iterations = self.iterations(records)
+        self._words(config, records, iterations)
         status = read_run_status(self.project, self.paths.run_id)
         return {
             "project": self.project.name,
@@ -350,6 +382,7 @@ class RunData:
                 "incomplete": total_cost.incomplete,
             },
             "report": self._report(),
+            "run": self._run_row(records),
             **self._run_notes(),
         }
 
@@ -385,23 +418,25 @@ class RunData:
         return record
 
     def changes(self, n: int) -> str | None:
-        """Changes vs baseline: an accepted iteration's code against the run's start, or a
-        running one's edits so far. Runs git; the server calls it outside its lock."""
-        if not self.paths.run_id:
+        """A running iteration's edits so far (a finished one's change is `attempt_diff`).
+        Runs git; the server calls it outside its lock."""
+        if not self.paths.run_id or self._record(n) is not None:
             return None
+        base = _object(self.paths.read_identity().get("base_commit"))
+        return self._live_diff(n, base) if base else None
+
+    def landed_diff(self, n: int) -> str | None:
+        """Everything an accepted iteration's code changed since the run's start (report.html)."""
         record = self._record(n)
         base = _object(self.paths.read_identity().get("base_commit"))
-        if not base:
+        if not (record and record.accepted and base and _object(record.commit)):
             return None
-        if record is None:
-            return self._live_diff(n, base)
-        if record.accepted and _object(record.commit):
-            return self._diff(base, record.commit)
-        return None
+        return self._diff(base, record.commit)
 
     def iteration(self, n: int, logs: bool = True, diff: bool = True, outputs: bool = True) -> dict:
-        """One iteration's card. Without `outputs` (report.html), observe entries keep their
-        status and review text but not their stdout, stderr or captured files."""
+        """One iteration, for the run page's panel. Without `outputs` (report.html),
+        observe entries keep their status and review text but not their stdout, stderr
+        or captured files."""
         self._refresh_current()
         if not self.paths.run_id:
             return {"iteration": n, "failure_output": None, "notes": None, "diff": None, "agent": [],
@@ -684,7 +719,9 @@ class RunData:
         routes = {"/api/state": state}
         for r in state["iterations"]:
             n = r["iteration"]
-            routes[f"/api/iteration/{n}"] = self.iteration(n, logs=False, diff=n == final, outputs=False)
+            routes[f"/api/iteration/{n}"] = self.iteration(n, logs=False, diff=False, outputs=False)
+        if final is not None:
+            routes[f"/api/iteration/{final}"]["diff"] = self.landed_diff(final)
         for name in state["notes_files"]:
             # The page builds this URL with encodeURIComponent, which leaves !'()* as is.
             routes["/api/notes/" + quote(name, safe="!'()*")] = self.note(name)
@@ -806,8 +843,9 @@ class RunData:
         the frozen candidate once the agent's copy is gone.
 
         Git runs from outside the copy, through the user's repository, with an
-        index of the viewer's own (kept per copy so unchanged files aren't rehashed;
-        one request at a time uses it)."""
+        index of the viewer's own (kept per copy so unchanged files aren't reread;
+        one request at a time uses it): the base's entries, new files intent-to-add,
+        diffed against the work tree. Nothing is hashed into the user's objects."""
         if not _object(base):
             return None
         copy = self._agent_copy(n)
@@ -830,9 +868,18 @@ class RunData:
                         for old in folder.glob(f"view-{run}-*.index"):
                             old.unlink(missing_ok=True)  # an earlier iteration's copy
                         repo.git("read-tree", base, index=index, timeout=5)
-                    repo.git("add", "-A", "--", ".", *repo.unfrozen_excludes(copy, index, timeout=5),
-                             work_tree=copy, index=index, timeout=5)
-                    diff, error = self._run_diff(["--cached", base, "--"], work_tree=copy, index=index)
+                    # Nothing is staged: new files are only marked intent-to-add, and the
+                    # diff reads the work tree, so no blob is written to the user's objects.
+                    excludes = repo.unfrozen_excludes(copy, index, timeout=5)
+                    new = repo.git("ls-files", "-z", "--others", "--exclude-standard", "--", ".", *excludes,
+                                   work_tree=copy, index=index, timeout=5).stdout
+                    if new.strip(b"\0"):
+                        specs = b"".join(b":(top,literal)" + path + b"\0" for path in new.split(b"\0") if path)
+                        repo.git("add", "-N", "--pathspec-from-file=-", "--pathspec-file-nul", input=specs,
+                                 work_tree=copy, index=index, timeout=5)
+                    # Stat data for the next poll: unchanged files aren't read again.
+                    repo.git("update-index", "-q", "--refresh", work_tree=copy, index=index, check=False, timeout=5)
+                    diff, error = self._run_diff([base, "--"], work_tree=copy, index=index)
             except (OSError, RuntimeError, subprocess.TimeoutExpired):
                 diff, error = None, "failed"
             if error is not None and index is not None:
@@ -952,6 +999,12 @@ class ProjectRuns:
                 "commits": int(count.stdout), "fast_forward": ancestor.returncode == 0}
         return self._counts[key]
 
+    def landing_state(self, paths: RunPaths, data: dict, refs: dict[str, str]) -> dict:
+        """`target_branch` (run.json's) and `landing` (`_landing`: the run's commits it lacks)."""
+        target = data.get("target_branch")
+        tip = refs.get(paths.ref) or data.get("abandoned_tip")
+        return {"target_branch": target, "landing": self._landing(refs.get(f"refs/heads/{target}") if target else None, tip)}
+
     @staticmethod
     def _metrics(records, directions: dict[str, str]) -> dict | None:
         """The latest accepted measurement (the code a land would deliver) against the baseline.
@@ -978,9 +1031,6 @@ class ProjectRuns:
         attempts = [r for r in records if r.iteration > 0]
         cost = summarize_costs([usage for r in records for usage in r.cost_usages])
         budget = status or {}
-        tip = refs.get(paths.ref) or data.get("abandoned_tip")
-        target = data.get("target_branch")
-        target_tip = refs.get(f"refs/heads/{target}") if target else None
         return {
             "id": run_id,
             "name": data.get("name"),
@@ -1013,8 +1063,7 @@ class ProjectRuns:
                 "seconds": sum(record_seconds(r) for r in records),
                 "max_seconds": budget.get("max_time_seconds"),  # the segment's, not a run total
             },
-            "target_branch": target,
-            "landing": self._landing(target_tip, tip),
+            **self.landing_state(paths, data, refs),
             "group": data.get("group"),
             "land": data.get("land") or "auto",  # recorded at creation
             **run_notes(data),
@@ -1025,7 +1074,7 @@ def write_static(project: Path, *, run_id: str | None = None) -> Path:
     """Write report.html: the viewer page with this run's data built in."""
     resources = files("autohelix").joinpath("viewer_resources")
     read = lambda name: resources.joinpath(name).read_text(encoding="utf-8")  # noqa: E731
-    # Each logo once, in the data; the page's theme code sets the <img> from it.
+    # Each logo once, in the data; the page sets the <img> from it for the system's theme.
     logos = {theme: "data:image/svg+xml," + quote(read(f"autohelix-{theme}.svg"), safe=" =:/-.,;'\"()")
              for theme in ("light", "dark")}
     data = {"routes": RunData(project, run_id).snapshot(), "logos": logos, "saved_at": time.time()}
@@ -1036,10 +1085,12 @@ def write_static(project: Path, *, run_id: str | None = None) -> Path:
             .replace('<meta charset="utf-8">',
                      f'<meta charset="utf-8">\n  <meta http-equiv="Content-Security-Policy" content="{STATIC_CSP}">')
             .replace('<link rel="stylesheet" href="/viewer.css">', f"<style>\n{read('viewer.css')}</style>")
+            .replace('<script src="/common.js" defer></script>\n', "")
             .replace('<script src="/viewer.js" defer></script>', "")
             .replace('  <link rel="icon" href="/logo-light.svg">\n', "")
             .replace(' src="/logo-light.svg"', "")
             .replace("</body>", f"<script>window.AUTOHELIX_SNAPSHOT = {script};</script>\n"
+                                f"<script>\n{read('common.js')}</script>\n"
                                 f"<script>\n{read('viewer.js')}</script>\n</body>"))
     out = RunPaths(project, run_id).report_html
     out.parent.mkdir(parents=True, exist_ok=True)

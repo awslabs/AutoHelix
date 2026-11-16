@@ -1,95 +1,40 @@
-// AutoHelix live viewer: a browser for a run's .autohelix/ state. Polls /api/state
-// and the details of whichever iteration cards are open. In report.html the same
-// routes come from data built into the file, and nothing is polled.
+// AutoHelix run page: one run's .autohelix/ state. Polls /api/state, and the selected
+// iteration's details for the panel beside the table. In report.html the same routes
+// come from data built into the file, and nothing is polled. Formatting: common.js.
 'use strict';
 
 const POLL_MS = 2000;
 const SNAPSHOT = window.AUTOHELIX_SNAPSHOT || null;
-const $ = (id) => document.getElementById(id);
 // On /run/<id>/ the routes are /api/run/<id>/...; the snapshot keys them as /api/....
 const RUN_PAGE = SNAPSHOT ? null : location.pathname.match(/^\/run\/([a-z0-9][a-z0-9-]*)\/$/);
 const api = (route) => (RUN_PAGE ? route.replace(/^\/api\//, `/api/run/${RUN_PAGE[1]}/`) : route);
+const NARROW = matchMedia('(max-width: 1100px)'); // one column: the panel follows the table
 
 let state = null;
-let selected = null;   // iteration whose card was opened last
-let followLive = true; // keep selecting the running iteration until the user picks another
-let metric = null;
+let selected = null;   // the iteration in the panel: always one once the state is in
+let followLive = true; // keep selecting the running (or latest) iteration until the user picks another
+let metric = null;     // the chart's
+const opened = new Map(); // section -> open, as the user left it (kept across selections)
 
-// ---------- small helpers ----------
+const label = (n) => (n === 0 ? 'Baseline' : `Iteration ${n}`);
+const row = (n) => state.iterations.find((r) => r.iteration === n);
+const baselineValue = (name) => row(0)?.metrics?.[name];
+const valueText = (v) => (isNumber(v) ? fmtNumber(v) : '');
+// Why an iteration was rejected, in the console's words (the server's), else its reason.
+const whyOf = (r) => (r?.accepted === false && r.iteration > 0 ? r.why || { text: r.reason || 'rejected' } : null);
 
-function el(tag, props = {}, ...children) {
-  const node = document.createElement(tag);
-  Object.assign(node, props);
-  node.append(...children.filter((c) => c !== null && c !== undefined));
-  return node;
+function show(id, visible) { (typeof id === 'string' ? $(id) : id).hidden = !visible; }
+
+// Only for HTML the server rendered from Markdown with raw HTML disabled.
+function setHTML(node, html) {
+  if (node.dataset.html !== html) { node.dataset.html = html; node.innerHTML = html; }
 }
 
-function fmtNumber(v) {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return '—';
-  return Math.abs(v) >= 100 ? v.toFixed(1) : Number(v.toPrecision(4)).toString();
-}
-
-// A dollar cap as formatting.format_cap writes it: cents, else up to four significant digits.
-function fmtCap(v) {
-  if (Math.abs(v * 100 - Math.round(v * 100)) < 1e-9) return `$${v.toFixed(2)}`;
-  const decimals = Math.min(12, Math.max(2, 3 - Math.floor(Math.log10(v))));
-  return `$${v.toFixed(decimals).replace(/0+$/, '').replace(/\.$/, '')}`;
-}
-
-function fmtDuration(seconds) {
-  if (!seconds && seconds !== 0) return '—';
-  const s = Math.max(0, Math.round(seconds)); // clock skew: never "-5s"
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
-  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
-}
-
-// A --time cap, and the time against it, as the terminal writes them
-// (iteration_time.format_duration): "10m", "2h", "1h30m", "12m5s".
-function fmtLimit(seconds) {
-  const s = Math.max(0, Math.floor(seconds));
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
-  return `${h ? `${h}h` : ''}${m ? `${m}m` : ''}${r || (!h && !m) ? `${r}s` : ''}`;
-}
-
-function fmtClock(epochSeconds) {
-  const t = new Date(epochSeconds * 1000);
-  const time = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return t.toDateString() === new Date().toDateString()
-    ? time : `${t.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
-}
-
-function fmtCost(v) {
-  return typeof v === 'number' ? `$${v.toFixed(2)}` : '—';
-}
-
-function label(n) {
-  return n === 0 ? 'Baseline' : `Iteration ${n}`;
-}
-
-const better = (dir, a, b) => (dir === 'lower' ? a < b : a > b);
-
-// Same rules as formatting.format_delta in the terminal summary.
-function formatDelta(value, baseline) {
-  if (typeof value !== 'number' || typeof baseline !== 'number' || baseline === 0 || value === baseline) return '';
-  const pct = ((value - baseline) / baseline) * 100;
-  const arrow = pct < 0 ? '↓' : '↑';
-  const abs = Math.abs(pct);
-  if (pct > 0 && abs >= 900) return `${arrow} ${(abs / 100 + 1).toFixed(0)}x`;
-  if (pct < 0 && abs >= 90 && abs < 100 && 100 / (100 - abs) >= 10) return `${arrow} ${(100 / (100 - abs)).toFixed(0)}x`;
-  return `${arrow} ${abs.toFixed(1)}%`;
-}
-
-function deltaEl(value, baseline, wrap = true) {
-  const text = formatDelta(value, baseline);
+function changeEl(value, reference, direction) {
+  const text = fmtChange(value, reference);
   if (!text) return null;
-  const dir = state.directions[metric];
-  const cls = !dir ? '' : better(dir, value, baseline) ? 'better' : 'worse';
-  return el('span', { className: `delta ${cls}`, textContent: wrap ? ` (${text})` : text });
-}
-
-function baselineValue() {
-  return state.iterations.find((r) => r.iteration === 0)?.metrics?.[metric];
+  const cls = !direction ? '' : better(value, reference, direction) ? 'better' : 'worse';
+  return el('span', { className: `change ${cls}`, textContent: text });
 }
 
 // ---------- status ----------
@@ -99,32 +44,29 @@ function liveIteration() {
   return s?.state === 'running' && s.phase !== 'report' && s.iteration !== null ? s.iteration : null;
 }
 
+const since = (t) => (typeof t === 'number' ? fmtDuration(Date.now() / 1000 - t) : '');
+
+// Running: where and what, with how long it has been at it; else the console end
+// block's first line: Done / Stopped / Interrupted / Error, and why.
 function renderStatus() {
   const s = state.status;
   const node = $('status');
-  if (!s) {
-    node.textContent = 'No run recorded';
-    node.className = 'status idle';
+  node.className = `status ${s ? s.state : 'idle'}`;
+  if (!s) { node.textContent = 'No run recorded'; return; }
+  if (s.state === 'running') {
+    const where = s.phase === 'report' || s.iteration === 0 || s.iteration === null ? '' : ` · iteration ${s.iteration}`;
+    const stopping = state.stop_requested ? ' · stopping (autohelix stop)' : '';
+    node.textContent = `Running${where} · ${phaseWord(s)} ${since(s.phase_started_at)}${stopping}`;
     return;
   }
-  const now = Date.now() / 1000;
-  if (s.state === 'running' && s.phase === 'report') {
-    node.textContent = `Running · writing the summary · ${fmtDuration(now - s.phase_started_at)}`;
-  } else if (s.state === 'running') {
-    const where = s.iteration === null ? '' : ` · ${label(s.iteration).toLowerCase()}`;
-    const stopping = state.stop_requested ? ' · stopping (autohelix stop)' : '';
-    node.textContent = `Running${where} · ${s.phase} · ${fmtDuration(now - s.phase_started_at)}${stopping}`;
-  } else {
-    const when = s.stopped_at ? ` at ${fmtClock(s.stopped_at)}` : '';
-    const words = { finished: 'Finished', interrupted: 'Interrupted', failed: 'Failed', crashed: 'Stopped unexpectedly' };
-    // Interrupted with a reason: `autohelix stop --now` (or Ctrl-C while the ending landed).
-    const why = ['finished', 'interrupted'].includes(s.state) && s.stop_reason ? ` · ${s.stop_reason.detail}` : '';
-    node.textContent = (words[s.state] || s.state) + when + why;
-  }
-  node.className = `status ${s.state}`;
+  const kind = s.stop_reason?.kind;
+  const word = { interrupted: 'Interrupted', failed: 'Error', crashed: 'Stopped unexpectedly' }[s.state]
+    || (['budget', 'condition'].includes(kind) ? 'Done' : 'Stopped');
+  node.textContent = [word, s.stop_reason?.detail, s.stopped_at && fmtClock(s.stopped_at)].filter(Boolean).join(' · ');
+  if (kind === 'agent') node.className = 'status failed';
 }
 
-// ---------- summary ----------
+// ---------- report, shared notes ----------
 
 function renderReport() {
   const r = state.report;
@@ -132,28 +74,16 @@ function renderReport() {
   if (!r) return;
   const body = $('report-body');
   if (body.dataset.html !== r.html) {
-    body.dataset.html = r.html;
-    body.innerHTML = r.html; // rendered by the server from Markdown with raw HTML disabled
+    setHTML(body, r.html);
     linkIterations(body);
   }
   setText('report-meta', [
     r.last_iteration && `iterations 1–${r.last_iteration}`,
     r.written_at && `written ${fmtClock(r.written_at)}`,
-    r.seconds && fmtDuration(r.seconds),
-    r.cost_usd && fmtCost(r.cost_usd),
   ].filter(Boolean).join(' · '));
-  // Open a new summary, or the summary when the run finishes; fold it while a run is going.
-  // In between, the user's fold wins.
-  const running = state.status?.state === 'running';
-  const box = $('report');
-  const key = `${r.written_at}:${running}`;
-  if (box.dataset.key !== key) {
-    box.dataset.key = key;
-    box.open = !running;
-  }
 }
 
-// "iter N" in the summary links to that iteration's card.
+// "iter N" in the report selects that iteration.
 function linkIterations(root) {
   const known = new Set(state.iterations.map((r) => r.iteration));
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -172,7 +102,75 @@ function linkIterations(root) {
   }
 }
 
-// ---------- overview ----------
+function renderSharedNotes() {
+  // Notes that belong to the whole run rather than one iteration (e.g. ideas.md).
+  const files = (state.notes_files || []).filter((name) => !/^iter-\d+\.md$/.test(name));
+  show('shared-notes', files.length > 0);
+  setText('shared-count', files.join(' · '));
+  const list = $('shared-list');
+  const key = JSON.stringify(files);
+  if (list.dataset.key === key) return;
+  list.dataset.key = key;
+  list.replaceChildren(...files.map((name) => {
+    const body = el('div', { className: 'prose' });
+    const item = el('details', { className: 'note' }, el('summary', { textContent: name }), body);
+    item.addEventListener('toggle', async () => {
+      if (!item.open) return;
+      try { setHTML(body, (await getJSON(`/api/notes/${encodeURIComponent(name)}`)).html || ''); }
+      catch { body.textContent = 'Could not load this note.'; }
+    });
+    return item;
+  }));
+}
+
+// ---------- stats ----------
+
+// As the console's end block: each metric's baseline → tip (the latest accepted value,
+// what landing delivers) and its change, then iterations, time and cost (the server's
+// totals, the baseline's included; a running iteration's time so far added), landing.
+function renderStats() {
+  const run = state.run;
+  const cost = state.cost;
+  const stats = [];
+  for (const name of metricNames()) {
+    const base = baselineValue(name);
+    const tip = tipValue(name);
+    if (!isNumber(tip)) continue;
+    stats.push([name, [fmtNumber(tip), tip !== base ? changeEl(tip, base, state.directions[name]) : null],
+      tip !== base && isNumber(base) ? `from ${fmtNumber(base)}` : 'baseline']);
+  }
+  const its = state.iterations.filter((r) => r.iteration > 0);
+  const live = liveIteration();
+  if (its.length || live) {
+    const accepted = its.filter((r) => r.accepted).length;
+    stats.push(['Iterations', [String(its.length)], `${accepted} accepted${live ? ` · iteration ${live} under way` : ''}`]);
+  }
+  if (run) {
+    const started = state.status?.iteration_started_at;
+    const running = live !== null && !row(live) && typeof started === 'number' ? Date.now() / 1000 - started : 0;
+    stats.push(['Time', [fmtDuration(run.seconds + running) || '—']]);
+    stats.push(['Cost', [fmtMoney(cost.cost_usd, cost.incomplete) || '—'], cost.incomplete ? 'some call costs unknown' : '']);
+    const landing = landingText();
+    if (landing) stats.push(['Landing', [landing[0]], landing[1]]);
+  }
+  $('stats').replaceChildren(...stats.map(([k, value, sub]) => el('div', { className: 'stat' },
+    el('span', { className: 'stat-label', textContent: k }),
+    el('span', { className: 'stat-value' }, ...value),
+    sub ? el('span', { className: 'stat-sub', textContent: sub }) : null)));
+}
+
+// [what, the line under it]: `landed` on main, `3 commits to land` and the command.
+function landingText() {
+  const { landing, target_branch: target, land, accepted } = state.run;
+  const short = (state.run_id || '').split('-').at(-1);
+  if (!target) return accepted ? ['not landed', `detached HEAD: autohelix land ${short} --into <branch>`] : null;
+  if (!landing) return null;
+  if (landing.commits === 0) return accepted ? ['landed', `on ${target}`] : null;
+  const n = plural(landing.commits, 'commit');
+  if (!landing.fast_forward) return [`${n} to merge`, `${target} has moved on: git merge autohelix/${state.run_id}`];
+  const live = state.status?.state === 'running';
+  return [`${n} to land`, live && land !== 'manual' ? `on ${target} when the run ends` : `autohelix land ${short}`];
+}
 
 function metricNames() {
   const names = new Set(Object.keys(state.directions || {}));
@@ -180,124 +178,77 @@ function metricNames() {
   return [...names];
 }
 
-function bestSoFar() {
-  // Running best over accepted iterations, used for both the chart and deltas.
-  const dir = state.directions[metric] || 'higher';
-  let best = null;
-  const out = new Map();
-  for (const r of state.iterations) {
-    const v = r.metrics?.[metric];
-    if (r.accepted && typeof v === 'number' && (best === null || better(dir, v, best))) best = v;
-    out.set(r.iteration, best);
-  }
-  return out;
+// The latest accepted value: what the run's code measures now (not the best ever seen).
+function tipValue(name) {
+  return state.iterations.filter((r) => r.accepted && isNumber(r.metrics?.[name])).at(-1)?.metrics[name];
 }
 
-function renderStats() {
-  // Best metric, then run totals (as in the terminal's run summary): time over the
-  // iterations (finished, and the running one so far); cost also includes the baseline's calls.
-  const its = state.iterations.filter((r) => r.iteration > 0);
-  const cost = state.cost;
-  const stats = [];
-  if (metric) {
-    const best = [...bestSoFar().values()].at(-1);
-    stats.push([`Best ${metric}`, fmtNumber(best), deltaEl(best, baselineValue())]);
-  }
-  // The running iteration counts from its start, so the total moves while it runs.
-  const live = liveIteration();
-  const started = state.status?.iteration_started_at;
-  const running = live > 0 && !its.some((r) => r.iteration === live) && typeof started === 'number'
-    ? Math.max(0, Date.now() / 1000 - started) : null;
-  if (its.length || running !== null) {
-    const timed = its.filter((r) => typeof r.seconds === 'number');
-    stats.push(['Time', timed.length || running !== null
-      ? fmtDuration(timed.reduce((sum, r) => sum + r.seconds, running ?? 0)) + (timed.length < its.length ? ' (incomplete)' : '')
-      : '—']);
-  }
-  if (its.length || typeof cost?.cost_usd === 'number' || cost?.incomplete) {
-    stats.push(['Cost', typeof cost?.cost_usd === 'number'
-      ? fmtCost(cost.cost_usd) + (cost.incomplete ? ' (incomplete)' : '')
-      : 'unavailable']);
-  }
-  $('stats').replaceChildren(...stats.map(([k, v, extra]) => el('div', { className: 'stat' },
-    el('span', { className: 'stat-label', textContent: k }),
-    el('span', { className: 'stat-value', textContent: v }, extra))));
-}
+// ---------- chart ----------
 
 function renderMetricSelect(names) {
-  const select = $('metric'); // only shown when there is more than one metric
-  select.hidden = names.length < 2;
-  if (JSON.stringify(Array.from(select.options, (option) => option.value)) !== JSON.stringify(names)) {
-    select.replaceChildren(...names.map((n) => el('option', { value: n, textContent: n })));
+  const menu = $('metric'); // only shown when there is more than one metric
+  menu.hidden = names.length < 2;
+  if (JSON.stringify(Array.from(menu.options, (o) => o.value)) !== JSON.stringify(names)) {
+    menu.replaceChildren(...names.map((n) => el('option', { value: n, textContent: n })));
   }
-  select.value = metric;
-  $('metric-col').textContent = metric || '';
+  menu.value = metric;
 }
 
+function svgEl(tag, attrs, text) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+// Every measured value as a dot (hollow: rejected), the tip as a step line carried on
+// to the running iteration (a ring at its end). Click a dot to select it.
 function renderChart() {
   const svg = $('chart');
-  $('chart-box').hidden = !metric; // runs without metrics have no chart (`hidden` does not apply to <svg>)
-  if (!metric) return;
+  const points = metric ? state.iterations.filter((r) => isNumber(r.metrics?.[metric])) : [];
+  show('chart-box', points.length > 0); // `hidden` does not apply to <svg> itself
+  if (!points.length) return;
   const W = 640, H = 200, pad = { l: 52, r: 12, t: 10, b: 22 };
-  const points = state.iterations.filter((r) => typeof r.metrics?.[metric] === 'number');
   const values = points.map((r) => r.metrics[metric]);
-  if (!values.length) { svg.replaceChildren(); return; }
-  const best = bestSoFar();
-  const n = Math.max(1, state.iterations.at(-1).iteration, liveIteration() ?? 0);
+  const live = liveIteration();
+  const last = state.iterations.at(-1).iteration;
+  const n = Math.max(1, last, live ?? 0);
   const lo = Math.min(...values), hi = Math.max(...values);
   const log = lo > 0 && hi / lo > 20; // big speedups are unreadable on a linear axis
   const ticks = log ? logTicks(lo, hi) : linearTicks(lo, hi);
-  const [y0, y1] = [ticks[0], ticks.at(-1)];
   const f = (v) => (log ? Math.log10(v) : v);
+  const [y0, y1] = [f(ticks[0]), f(ticks.at(-1))];
   const x = (i) => pad.l + (i / n) * (W - pad.l - pad.r);
-  const y = (v) => (y0 === y1 ? H / 2 : pad.t + (1 - (f(v) - f(y0)) / (f(y1) - f(y0))) * (H - pad.t - pad.b));
-  const svgEl = (tag, attrs, text) => {
-    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
-    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-    if (text !== undefined) node.textContent = text;
-    return node;
-  };
+  const y = (v) => (y0 === y1 ? H / 2 : pad.t + (1 - (f(v) - y0) / (y1 - y0)) * (H - pad.t - pad.b));
   const children = [];
   for (const v of ticks) {
     children.push(svgEl('line', { x1: pad.l, x2: W - pad.r, y1: y(v), y2: y(v), class: 'grid' }));
-    children.push(svgEl('text', { x: pad.l - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'axis' }, fmtTick(v, log ? null : ticks[1] - ticks[0])));
+    children.push(svgEl('text', { x: pad.l - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'axis' },
+      fmtTick(v, log ? null : ticks[1] - ticks[0])));
   }
   const dir = state.directions[metric];
   setText('scale', [dir && `${dir} is better`, log && 'log scale'].filter(Boolean).join(' · '));
-  const xTicks = Math.min(n, 10);
-  for (let k = 0; k <= xTicks; k++) {
-    const i = Math.round((k / xTicks) * n);
+  const step = Math.ceil(n / 10); // whole iterations, evenly spaced
+  for (let i = 0; i <= n; i += step) {
     children.push(svgEl('text', { x: x(i), y: H - 4, 'text-anchor': 'middle', class: 'axis' }, String(i)));
   }
-  // Step line: best accepted value so far, carried on to the running iteration.
-  let d = '';
-  for (const r of state.iterations) {
-    const b = best.get(r.iteration);
-    if (b === null) continue;
-    d += d ? ` H${x(r.iteration)} V${y(b)}` : `M${x(r.iteration)} ${y(b)}`;
-  }
-  const live = liveIteration();
-  if (d && live !== null) d += ` H${x(n)}`;
-  children.push(svgEl('path', { d, class: 'best-line' }));
-  // The running iteration: a hollow ring at the end of the line (no result yet).
-  const bestNow = best.get(state.iterations.at(-1).iteration);
-  if (live !== null && live > state.iterations.at(-1).iteration && bestNow != null) {
-    const ring = svgEl('circle', {
-      cx: x(live), cy: y(bestNow), r: live === selected ? 6 : 5,
-      class: `dot live${live === selected ? ' selected' : ''}`,
-    });
-    ring.append(svgEl('title', {}, `${label(live)}: running`));
-    ring.addEventListener('click', () => select(live));
-    children.push(ring);
-  }
+  let d = '', tip = null;
   for (const r of points) {
-    const dot = svgEl('circle', {
-      cx: x(r.iteration), cy: y(r.metrics[metric]), r: r.iteration === selected ? 6 : 4,
-      class: `dot ${r.accepted ? 'accepted' : 'rejected'}${r.iteration === selected ? ' selected' : ''}`,
-    });
-    dot.append(svgEl('title', {}, `${label(r.iteration)}: ${fmtNumber(r.metrics[metric])}`));
-    dot.addEventListener('click', () => select(r.iteration));
-    children.push(dot);
+    if (!r.accepted) continue;
+    tip = r.metrics[metric];
+    d += d ? ` H${x(r.iteration)} V${y(tip)}` : `M${x(r.iteration)} ${y(tip)}`;
+  }
+  if (d) d += ` H${x(live !== null ? n : last)}`;
+  children.push(svgEl('path', { d, class: 'tip-line' }));
+  const dot = (i, v, cls, title) => {
+    const node = svgEl('circle', { cx: x(i), cy: y(v), r: i === selected ? 6 : 4, class: `dot ${cls}${i === selected ? ' selected' : ''}` });
+    node.append(svgEl('title', {}, title));
+    node.addEventListener('click', () => select(i));
+    children.push(node);
+  };
+  if (live !== null && live > last && tip !== null) dot(live, tip, 'live', `${label(live)}: running`);
+  for (const r of points) {
+    dot(r.iteration, r.metrics[metric], r.accepted ? 'accepted' : 'rejected', `${label(r.iteration)}: ${fmtNumber(r.metrics[metric])}`);
   }
   svg.replaceChildren(...children);
 }
@@ -320,86 +271,64 @@ function linearTicks(lo, hi) {
   return ticks;
 }
 
-const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumSignificantDigits: 3 });
-// Labels get as many decimals as the tick step needs, so close ticks stay distinct.
+const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumSignificantDigits: 3 });
+// Log axis: 10, 1K, 10K. Linear: as many decimals as the step has, so close ticks stay distinct.
 function fmtTick(v, step) {
-  if (Math.abs(v) >= 1000 && (!step || step >= 100)) return compact.format(v);
-  if (!step) return String(Number(v.toPrecision(3)));
-  const decimals = Math.max(0, Math.ceil(-Math.log10(step) - 1e-9) + (String(Number((step / 10 ** Math.floor(Math.log10(step))).toPrecision(6))).includes('.') ? 1 : 0));
-  return v.toFixed(Math.min(decimals, 10));
+  if (!step) return compact.format(v);
+  const decimals = (String(Number(step.toPrecision(6))).split('.')[1] || '').length;
+  return v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
+// ---------- table ----------
+
+// As the console's rows: # and outcome, one column per metric (rejected rows dimmed,
+// no change), why it was rejected (grey) or the agent's summary on one line, time, cost.
 function renderRows() {
-  const base = baselineValue();
+  const names = metricNames();
+  const head = ['#', '', ...names.map((n) => `${n} ${state.directions[n] === 'lower' ? '↓' : '↑'}`), 'Summary', 'Time', 'Cost'];
+  const columns = $('columns');
+  if (columns.dataset.key !== head.join('\n')) {
+    columns.dataset.key = head.join('\n');
+    columns.replaceChildren(...head.map((h, i) => el('th', {
+      textContent: h, className: i >= 2 && i < 2 + names.length ? 'value' : i > 2 + names.length ? 'num' : '' })));
+  }
   const rows = state.iterations.map((r) => {
-    const v = r.metrics?.[metric];
     const outcome = r.iteration === 0 ? 'baseline' : r.accepted ? 'accepted' : 'rejected';
-    return rowEl(r.iteration, [
-      el('td', { textContent: r.iteration === 0 ? '0' : String(r.iteration) }),
-      el('td', {}, el('span', { className: `pill ${outcome}`, textContent: outcome })),
-      el('td', { className: 'value' }, metric ? fmtNumber(v) : '', metric && r.iteration > 0 ? deltaEl(v, base) : null),
-      summaryCell(r),
-      el('td', { className: 'num', textContent: r.seconds ? fmtDuration(r.seconds) : '' }),
-      el('td', { className: 'num', textContent: fmtCost(r.cost) + (typeof r.cost === 'number' && r.cost_incomplete ? ' (incomplete)' : ''),
-        title: r.cost_incomplete ? 'Some call costs are unavailable' : '' }),
+    const why = whyOf(r);
+    const summary = why ? why.text : (r.summary || '').split('\n')[0];
+    const notes = (r.notes || []).map((n) => el('span', { className: n.error ? 'flag error' : 'flag', textContent: ` · ${n.text}` }));
+    return rowEl(r.iteration, outcome, [
+      el('td', { textContent: String(r.iteration) }),
+      el('td', { className: `mark ${outcome}`, textContent: { baseline: 'base', accepted: '✓', rejected: '✗' }[outcome] }),
+      ...names.map((name) => el('td', { className: `value${outcome === 'rejected' ? ' dim' : ''}` },
+        valueText(r.metrics?.[name]),
+        outcome === 'accepted' ? changeEl(r.metrics?.[name], baselineValue(name), state.directions[name]) : null)),
+      el('td', { className: `summary${why?.error ? ' error' : ''}`, title: [summary, ...(r.notes || []).map((n) => n.text)].join('\n') },
+        summary, ...notes),
+      el('td', { className: 'num', textContent: fmtDuration(r.seconds) }),
+      el('td', { className: 'num', textContent: fmtMoney(r.cost, r.cost_incomplete) || '—' }),
     ]);
   });
   const live = liveIteration();
-  if (live !== null && !state.iterations.some((r) => r.iteration === live)) {
-    rows.push(rowEl(live, [
-      el('td', { textContent: String(live) }),
-      el('td', {}, el('span', { className: 'pill running', textContent: 'running' })),
-      el('td'), el('td', { className: 'summary muted', textContent: phaseText(state.status.phase) }), el('td'), el('td'),
+  if (live !== null && !row(live)) {
+    rows.push(rowEl(live, 'running', [
+      el('td', { textContent: String(live) }), el('td', { className: 'mark running', textContent: '●' }),
+      ...names.map(() => el('td')),
+      el('td', { className: 'summary live', textContent: phaseWord(state.status) }),
+      el('td', { className: 'num', textContent: since(state.status.iteration_started_at) }), el('td'),
     ]));
   }
   $('rows').replaceChildren(...rows);
 }
 
-// Rejected rows: why (the failing gate), then the agent's one-line summary under it.
-// Observe failures and discarded changes are flagged; the details are in the card.
-function summaryCell(r) {
-  const why = r.accepted === false ? rejection(r) : '';
-  const summary = r.summary && r.summary !== r.reason ? r.summary.split('\n')[0] : '';
-  const failed = (r.observe || []).filter((o) => o.ok === false).map((o) => o.name);
-  const baselineGates = r.iteration === 0
-    ? (r.gates || []).filter((g) => g.kind === 'command' && g.passed === false).map((g) => g.text) : [];
-  const flags = [
-    baselineGates.length && `gate failed at the baseline: ${baselineGates.join(', ')}`,
-    failed.length && `${failed.join(', ')} failed`,
-    r.discarded?.length && `${r.discarded.length} out-of-scope change${r.discarded.length === 1 ? '' : 's'} discarded`,
-  ].filter(Boolean).join(' · ');
-  return el('td', { className: 'summary' },
-    why ? el('div', { className: 'why', textContent: why }) : null,
-    summary ? el('div', { textContent: summary }) : null,
-    flags ? el('div', { className: 'flag', textContent: flags }) : null);
-}
-
-// A rejection in a few words: the failing gate's text, else the harness's reason.
-function rejection(r) {
-  const gate = (r.gates || []).find((g) => g.passed === false);
-  if (gate) return gate.text.length > 60 ? `✗ ${gate.text.slice(0, 60)}…` : `✗ ${gate.text}`;
-  return shortReason(r.reason || r.summary);
-}
-
-const PHASES = {
-  starting: 'Starting…', baseline: 'Measuring the baseline…', agent: 'Agent is working…',
-  checks: 'Running gates…', benchmark: 'Running observe entries…',
-  merge: 'Merging the accepted change…', 'between iterations': 'Wrapping up…',
-};
-const phaseText = (phase) => PHASES[phase] || `${phase}…`;
-
-function rowEl(iteration, cells) {
-  const tr = el('tr', { tabIndex: 0, className: iteration === selected ? 'selected' : '' }, ...cells);
-  tr.addEventListener('click', () => select(iteration));
-  tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') select(iteration); });
+function rowEl(iteration, outcome, cells) {
+  const tr = el('tr', { tabIndex: 0, title: outcome, className: iteration === selected ? 'selected' : '' }, ...cells);
+  tr.addEventListener('click', () => select(iteration, true));
+  tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') select(iteration, true); });
   return tr;
 }
 
-// ---------- iteration cards ----------
-// One foldable card per iteration (notes, activity, changes, output), in table order.
-// Selecting an iteration (row, chart point, j/k) opens its card and closes the others.
-
-const cards = new Map(); // iteration -> card
+// ---------- selection ----------
 
 function iterationOrder() {
   const order = state.iterations.map((r) => r.iteration);
@@ -408,340 +337,213 @@ function iterationOrder() {
   return order;
 }
 
-function select(iteration) {
-  if (iteration === undefined || !state) return;
-  followLive = iteration === liveIteration();
-  openOnly(iteration);
-  history.replaceState(null, '', followLive ? location.pathname : `#iter-${iteration}`);
+// `byUser` (a row, a dot, j/k): on the one-column layout, bring the panel into view.
+function select(iteration, byUser = true) {
+  if (iteration === undefined || iteration === null || !state) return;
+  followLive = iteration === (liveIteration() ?? state.iterations.at(-1)?.iteration);
+  if (iteration !== selected) {
+    selected = iteration;
+    panel = newPanel(iteration);
+  }
+  if (byUser) history.replaceState(null, '', followLive ? location.pathname : `#iter-${iteration}`);
   render();
-  cards.get(iteration)?.node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  refreshCards();
+  if (byUser && NARROW.matches) $('panel').scrollIntoView({ block: 'start', behavior: 'smooth' });
+  loadDetail();
 }
 
-function openOnly(iteration) {
-  selected = iteration;
-  for (const [i, card] of cards) card.node.open = i === iteration;
-}
-
-function setText(id, text) {
-  const node = typeof id === 'string' ? $(id) : id;
-  if (node.textContent !== text) node.textContent = text;
-}
-
-function show(id, visible) { (typeof id === 'string' ? $(id) : id).hidden = !visible; }
-
-// Only for HTML the server rendered from Markdown with raw HTML disabled.
-function setHTML(node, html) {
-  if (node.dataset.html !== html) { node.dataset.html = html; node.innerHTML = html; }
-}
-
-function section(title, source, open = false) {
-  const count = el('span', { className: 'muted' });
-  const body = el('div');
-  const head = el('summary', { title: source ? `.autohelix/${source}` : '' }, title + ' ', count);
-  const node = el('details', { className: 'sec', open, hidden: true }, head, body);
-  return { node, count, body };
-}
-
-// Where a card's parts are stored, below .autohelix/ (section tooltips).
-function iterDir(i) {
-  return `runs/${state?.run_id || '<id>'}/iterations/${String(i).padStart(3, '0')}`;
-}
-
-function cardEl(i) {
-  const where = iterDir(i);
-  const summary = el('summary');
-  const said = el('p', { className: 'agent-summary', hidden: true });
-  const failure = section('Why rejected', `${where}/record.json`);
-  const discarded = section('Discarded changes', `${where}/record.json`, true);
-  const gates = section('Gates', `${where}/gates/`);
-  const notes = section('Agent note', `${where}/notes/iter-${i}.md`);
-  const attempt = section('Changes in this iteration', null);
-  const changes = section('Changes vs baseline', null);
-  const observe = el('div', { className: 'observe' }); // one section per observe entry
-  const stop = section('Stop checks', `${where}/stop/`);
-  const activity = section('Agent activity', `${where}/agent.log`);
-  const phases = section('Call activity', `${where}/: agent.log; ask*.log, review*.log in gates/<k>/, observe/<name>/, stop/<k>/`);
-  notes.body.className = 'prose';
-  activity.body.className = 'log';
-  attempt.body.className = changes.body.className = 'diff';
-  gates.body.className = stop.body.className = 'gates';
-  discarded.body.className = 'entry';
-  const node = el('details', { className: 'box card', open: i === selected }, summary,
-    // Outcome first, then the agent's account, the evidence, and raw logs last.
-    el('div', { className: 'card-body' }, said, failure.node, discarded.node, gates.node, notes.node,
-      attempt.node, changes.node, observe, stop.node, activity.node, phases.node));
-  const card = { i, node, summary, said, failure, discarded, gates, notes, attempt, changes, observe, stop, activity,
-                 phases, key: undefined, attemptKey: undefined, opened: new Set(),
-                 expanded: { activity: new Set(), outputs: new Map() } };
-  attempt.node.addEventListener('toggle', () => attempt.node.open && loadAttempt(card));
-  node.addEventListener('toggle', () => {
-    if (!node.open) return;
-    // Opened by hand: select it like a row click (closing the others now, not on the next poll).
-    if (selected !== i) select(i);
-    else refreshCards();
-  });
-  return card;
-}
-
-function renderCards() {
-  const box = $('cards');
+function step(by) {
   const order = iterationOrder();
-  for (const i of order) {
-    if (!cards.has(i)) cards.set(i, cardEl(i));
-    const card = cards.get(i);
-    const r = state.iterations.find((x) => x.iteration === i);
-    const live = i === liveIteration() && !r;
-    const outcome = live ? 'running' : i === 0 ? 'baseline' : r.accepted ? 'accepted' : 'rejected';
-    // Title shows only the outcome; metric values live in the table and chart.
-    const why = outcome === 'rejected' ? rejection(r) : '';
-    const key = JSON.stringify([outcome, why, live && state.status.phase]);
-    if (card.summary.dataset.key !== key) {
-      card.summary.dataset.key = key;
-      card.summary.replaceChildren(...[
-        el('span', { className: 'card-title', textContent: label(i) }),
-        i > 0 ? el('span', { className: `pill ${outcome}`, textContent: outcome }) : null,
-        live ? el('span', { className: 'muted', textContent: phaseText(state.status.phase) }) : null,
-        why ? el('span', { className: 'muted', textContent: why }) : null,
-      ].filter(Boolean));
-    }
+  const i = order.indexOf(selected);
+  select(order[Math.min(order.length - 1, Math.max(0, i + by))]);
+}
+
+// ---------- the detail panel ----------
+// One iteration: a header (outcome and why), its facts and summary, then folding
+// sections: Gates, Changes, one per observe entry, Stop, Agent note, Activity.
+// Defaults: Gates open on a rejection by a gate, Changes on an acceptance or while it
+// runs; a section the user opened or closed stays so for the next iteration.
+
+let panel = newPanel(null);
+
+function newPanel(iteration) {
+  return { iteration, key: undefined, detail: null, sections: new Map(), files: new Set(), diffOpen: new Map(),
+           expanded: new Map(), diff: null };
+}
+
+function section(key, title, defaultOpen) {
+  let s = panel.sections.get(key);
+  if (!s) {
+    const count = el('span', { className: 'muted' });
+    const summary = el('summary', {}, el('b', { textContent: title }), ' ', count);
+    const node = el('details', { className: 'sec', open: opened.has(key) ? opened.get(key) : defaultOpen },
+      summary, el('div', { className: 'sec-body' }));
+    summary.addEventListener('click', () => opened.set(key, !node.open)); // before it toggles
+    s = { node, count, body: node.lastChild, key: undefined };
+    panel.sections.set(key, s);
   }
-  for (const [i, card] of cards) if (!order.includes(i)) { card.node.remove(); cards.delete(i); }
-  const wanted = order.map((i) => cards.get(i).node);
-  if (wanted.some((node, k) => box.children[k] !== node)) box.replaceChildren(...wanted);
-  renderSharedNotes();
+  return s;
 }
 
-// Harness rejection reasons, shortened for a card title (full text is in "Why rejected").
-function shortReason(reason) {
-  if (!reason) return '';
-  const check = reason.match(/^(?:constraint|gate) failed: (.*)$/s);
-  if (check) {
-    // Name the check by its tool: "python -m pytest …" -> "pytest failed".
-    const cmd = check[1].trim();
-    if (cmd.startsWith('ask: ')) return 'ask: no';
-    const name = cmd.match(/^python3? -m (\S+)/)?.[1] || (/^python3? -c /.test(cmd) ? 'inline check' : cmd.split(/\s/)[0].split('/').pop());
-    return `${name} failed`;
-  }
-  const gate = reason.match(/^metric gate: (\S+) (.*)$/s);
-  if (gate) {
-    const worse = gate[2].match(/is ([\d.]+%) worse/);
-    if (worse) return `${gate[1]} ${worse[1]} worse`;
-    return gate[2].startsWith('was not measured') ? `${gate[1]} not measured` : `${gate[1]} not improved enough`;
-  }
-  return reason.length > 40 ? reason.slice(0, 40) + '…' : reason;
+// Fill a section's body only when its data changed (a poll redraws nothing else).
+function fill(s, count, key, build) {
+  setText(s.count, count ? `· ${count}` : '');
+  if (s.key === key) return;
+  s.key = key;
+  s.body.replaceChildren(...build());
 }
 
-function renderSharedNotes() {
-  // Notes that belong to the whole run rather than one iteration (e.g. ideas.md).
-  const files = (state.notes_files || []).filter((name) => !/^iter-\d+\.md$/.test(name));
-  const box = $('shared-notes');
-  show(box, files.length > 0);
-  setText('shared-count', files.length ? `· ${files.length} file${files.length === 1 ? '' : 's'}` : '');
-  const list = $('shared-list');
-  const key = JSON.stringify(files);
-  if (list.dataset.key === key) return;
-  list.dataset.key = key;
-  list.replaceChildren(...files.map((name) => {
-    const body = el('div', { className: 'prose' });
-    const item = el('details', { className: 'note' }, el('summary', { textContent: name }), body);
-    item.addEventListener('toggle', () => item.open && loadNote(name, body));
-    return item;
-  }));
+async function loadDetail() {
+  const n = selected;
+  if (n === null || !state) return;
+  // Finished iterations change only when their record or notes do; the running one constantly.
+  const r = row(n);
+  const key = n === liveIteration() && !r ? null : JSON.stringify([r, state.notes_files.includes(`iter-${n}.md`)]);
+  if (key !== null && key === panel.key) return;
+  let d;
+  try { d = await getJSON(`/api/iteration/${n}`); }
+  catch { return; } // the next poll retries
+  if (selected !== n) return;
+  panel.key = key;
+  panel.detail = d;
+  renderPanel();
+  if (d.attempt) loadAttempt(n, d.attempt);
 }
 
-async function loadNote(name, body) {
-  try { body.innerHTML = (await getJSON(`/api/notes/${encodeURIComponent(name)}`)).html || ''; } // raw HTML disabled server-side
-  catch { body.textContent = 'Could not load this note.'; }
+// The attempt's own change (start commit to frozen tree), once per attempt.
+async function loadAttempt(n, attempt) {
+  const key = `${attempt.base}:${attempt.tree}`;
+  if (panel.diff?.key === key) return;
+  panel.diff = { key, text: null, error: null, loading: true };
+  let d;
+  try { d = await getJSON(`/api/iteration/${n}/diff`); }
+  catch { d = { diff: null, error: SNAPSHOT ? null : 'Could not load the diff.' }; }
+  if (selected !== n || panel.diff?.key !== key) return;
+  panel.diff = { key, text: d.diff, error: d.error };
+  if (!d.diff && !SNAPSHOT && d.error === 'Could not load the diff.') panel.diff.key = null; // retry next time
+  renderPanel();
 }
 
-async function refreshCards() {
-  // Only open cards are loaded. Finished iterations change only when history or notes
-  // do (observations are saved before the record); the running one changes constantly.
-  for (const [i, card] of cards) {
-    if (!card.node.open) continue;
-    const r = state.iterations.find((x) => x.iteration === i);
-    const key = i === liveIteration() ? null
-      : JSON.stringify([r, state.notes_files.includes(`iter-${i}.md`)]);
-    if (key !== null && key === card.key) continue;
-    try {
-      const d = await getJSON(`/api/iteration/${i}`);
-      card.key = key;
-      fillCard(card, d);
-    } catch { /* the next poll retries */ }
-  }
-}
-
-function fillCard(card, d) {
-  const live = d.iteration === liveIteration() && !state.iterations.some((x) => x.iteration === d.iteration);
-  const row = state.iterations.find((x) => x.iteration === d.iteration && x.accepted === false);
-  const reason = row && (row.reason || row.summary);
-  setText(card.said, d.summary || '');
-  show(card.said, !!d.summary);
-  show(card.failure.node, !!(reason || d.failure_output));
-  card.failure.body.replaceChildren(...[
-    reason ? el('p', { className: 'reason', textContent: reason }) : null,
-    d.failure_output ? el('pre', { textContent: d.failure_output }) : null,
+function renderPanel() {
+  const n = selected;
+  show('panel', n !== null);
+  if (n === null) return;
+  const r = row(n);
+  const live = !r && n === liveIteration();
+  const outcome = live ? 'running' : !r ? '' : n === 0 ? 'baseline' : r.accepted ? 'accepted' : 'rejected';
+  const why = whyOf(r);
+  $('panel-title').replaceChildren(label(n), ...[
+    outcome === 'accepted' && el('span', { className: 'mark accepted', textContent: ' ✓ accepted' }),
+    outcome === 'rejected' && el('span', { className: 'mark rejected', textContent: ' ✗ rejected' }),
+    outcome === 'running' && el('span', { className: 'mark running', textContent: ` ● ${phaseWord(state.status)} ${since(state.status.phase_started_at)}` }),
+    why && el('span', { className: `why${why.error ? ' error' : ''}`, textContent: ` · ${why.text}` }),
   ].filter(Boolean));
-
-  const discarded = d.discarded || [];
-  const frozen = new Set(d.discarded_frozen || []);
-  show(card.discarded.node, discarded.length > 0);
-  setText(card.discarded.count, discarded.length ? `· ${discarded.length} path${discarded.length === 1 ? '' : 's'}` : '');
-  card.discarded.body.replaceChildren(...(discarded.length ? [
-    el('p', { className: 'warn', textContent: 'Changes outside the scope (not editable, or frozen) were discarded:' }),
-    el('ul', { className: 'paths' }, ...discarded.map((p) => el('li', {}, el('code', { textContent: p }),
-      frozen.has(p) ? ' (frozen)' : ''))),
-  ] : []));
-
-  fillGates(card, d.iteration, d.gates || [], d.failure_output);
-  fillStop(card, d.iteration, d.stop || []);
-
-  const attemptKey = d.attempt ? `${d.attempt.base}:${d.attempt.tree}` : null;
-  show(card.attempt.node, !!d.attempt);
-  if (attemptKey !== card.attemptKey) {
-    card.attemptKey = attemptKey;
-    card.attempt.loaded = null;
-    card.attempt.body.replaceChildren();
-    setText(card.attempt.count, '');
-    if (card.attempt.node.open) loadAttempt(card);
+  const order = iterationOrder();
+  $('prev').disabled = order.indexOf(n) <= 0;
+  $('next').disabled = order.indexOf(n) >= order.length - 1;
+  setText('panel-facts', r ? [fmtDuration(r.seconds), fmtMoney(r.cost, r.cost_incomplete),
+    ...metricNames().filter((m) => isNumber(r.metrics?.[m])).map((m) => {
+      const change = r.accepted && n > 0 ? fmtChange(r.metrics[m], baselineValue(m)) : '';
+      return `${m} ${fmtNumber(r.metrics[m])}${change ? ` (${change})` : ''}`;
+    })].filter(Boolean).join(' · ') : '');
+  const d = panel.detail;
+  if (!d || d.iteration !== n) { // loading: nothing of the previous selection stays
+    show('panel-summary', false);
+    show('panel-reason', false);
+    $('sections').replaceChildren();
+    return;
   }
-  card.attempt.node.querySelector('summary').title = d.attempt
-    ? `git diff ${d.attempt.base.slice(0, 12)} ${d.attempt.tree.slice(0, 12)}`
-      + (d.attempt.rejected_ref ? ` (kept as ${d.attempt.rejected_ref})` : '') : '';
+  setText('panel-summary', d.summary || '');
+  show('panel-summary', !!d.summary);
+  // Why it was rejected, in full, when no gate says it (agent error, integrity, ...).
+  const gates = d.gates || [];
+  const byGate = gates.some((g) => g.passed === false);
+  const reason = r?.accepted === false && !byGate ? r.reason || r.summary : null;
+  show('panel-reason', !!(reason || (!byGate && d.failure_output)));
+  $('panel-reason').replaceChildren(...[reason && el('p', { textContent: reason }),
+    !byGate && d.failure_output && el('pre', { textContent: d.failure_output })].filter(Boolean));
 
-  fillObserve(card, d);
-
-  // Notes are written at the end of the agent's turn, before checks decide the outcome.
-  show(card.notes.node, !!d.notes);
-  setHTML(card.notes.body, (live ? '<p class="muted">Written before checks ran.</p>' : '') + (d.notes || ''));
-
-  const shown = steps(d.agent);
-  const calls = shown.filter((x) => x.type === 'tool').length;
-  const says = shown.filter((x) => x.type === 'say').length;
-  show(card.activity.node, shown.length > 0);
-  setText(card.activity.count, [
-    calls && `${calls} tool call${calls === 1 ? '' : 's'}`,
-    says && `${says} message${says === 1 ? '' : 's'}`,
-    d.agent_clipped && 'earliest activity not shown',
-  ].filter(Boolean).map((x) => `· ${x}`).join(' '));
-  renderEvents(card.activity.body, d.agent, card.expanded.activity);
-
-  show(card.changes.node, !!d.diff);
-  const diffKey = JSON.stringify([d.diff, live]);
-  if (card.changes.body.dataset.key !== diffKey) {
-    card.changes.body.dataset.key = diffKey;
-    renderDiff(card.changes.body, card.changes.count, d.diff || '', live);
+  const list = [];
+  if (gates.length) list.push(gatesSection(d, gates, live, byGate));
+  const changes = changesSection(d, live, outcome === 'accepted' || live);
+  if (changes) list.push(changes);
+  for (const o of d.observe || []) list.push(observeSection(d, o));
+  if (d.stop?.length) list.push(stopSection(d));
+  if (d.notes) {
+    const s = section('note', 'Agent note', false);
+    s.body.className = 'sec-body prose';
+    setText(s.count, `· notes/iter-${n}.md`);
+    setHTML(s.body, d.notes);
+    list.push(s);
   }
-
-  const phases = (d.calls || []).filter((call) => call.events.length > 0);
-  show(card.phases.node, phases.length > 0);
-  if (phases.length) {
-    show(card.activity.node, false);
-    card.phases.body.replaceChildren(...phases.map((call, index) => {
-      const heading = el('h4', { textContent: `Call ${index + 1} · ${call.role}` });
-      const log = el('div', { className: 'log' });
-      card.expanded.phases ||= new Map();
-      const key = call.log || call.live_log || call.id || `${call.role}-${index}`;
-      if (!card.expanded.phases.has(key)) card.expanded.phases.set(key, new Set());
-      renderEvents(log, call.events, card.expanded.phases.get(key));
-      return el('div', {}, heading, log);
-    }));
-  }
+  const activity = activitySection(d);
+  if (activity) list.push(activity);
+  const nodes = list.map((s) => s.node);
+  for (const [key, s] of panel.sections) if (!list.includes(s)) panel.sections.delete(key);
+  const box = $('sections');
+  if (nodes.length !== box.children.length || nodes.some((node, k) => box.children[k] !== node)) box.replaceChildren(...nodes);
 }
 
-// Gates in list order: ✓ passed, ✗ failed, ○ not reached (pending); each with its stored output.
-function fillGates(card, iteration, gates, failureOutput) {
-  show(card.gates.node, gates.length > 0);
+// Gates in list order: ✓ passed, ✗ failed with its output, ○ not run (after a failure,
+// or not reached yet while the iteration runs); each with its stored output.
+function gatesSection(d, gates, live, byGate) {
+  const s = section('gates', 'Gates', byGate);
   const count = (v) => gates.filter((g) => g.passed === v).length;
-  setText(card.gates.count, gates.length ? '· ' + [
-    count(true) && `${count(true)} passed`, count(false) && `${count(false)} failed`, count(null) && `${count(null)} pending`,
-  ].filter(Boolean).join(' · ') : '');
-  const key = JSON.stringify([gates, failureOutput]);
-  if (card.gatesKey === key) return;
-  card.gatesKey = key; // a property, not an attribute: it holds output text
-  card.gates.body.replaceChildren(...gates.map((g, index) => {
-    const outcome = g.passed === true ? 'passed' : g.passed === false ? 'failed' : 'pending';
+  const words = [count(true) && `${count(true)} passed`, count(false) && `${count(false)} failed`,
+    count(null) && `${count(null)} ${live ? 'to run' : 'not run'}`].filter(Boolean).join(' · ');
+  fill(s, words, JSON.stringify([gates, d.failure_output, live]), () => gates.map((g, index) => {
+    const outcome = g.passed === true ? 'passed' : g.passed === false ? 'failed' : 'not-run';
     const facts = [
-      g.kind === 'metric' && typeof g.value === 'number'
-        ? `${fmtNumber(g.value)}${typeof g.reference === 'number' ? ` vs ${fmtNumber(g.reference)}` : ''}` : null,
-      typeof g.duration_s === 'number' ? fmtDuration(g.duration_s) : null,
-      g.passed === null ? 'pending' : null,
+      g.kind === 'metric' && isNumber(g.value) && `${fmtNumber(g.value)}${isNumber(g.reference) ? ` vs ${fmtNumber(g.reference)}` : ''}`,
+      isNumber(g.duration_s) && fmtDuration(g.duration_s),
+      g.passed === null && !live && 'not run',
     ].filter(Boolean).join(' · ');
+    const output = g.passed === false ? g.output || (g.kind === 'command' ? d.failure_output : null) : null;
     return el('div', { className: `gate ${outcome}` },
-      el('div', {},
-        el('span', { className: 'mark', textContent: { passed: '✓', failed: '✗', pending: '○' }[outcome] }),
-        el('code', { textContent: g.text }),
-        facts ? el('span', { className: 'muted', textContent: `  ${facts}` }) : null),
-      g.passed === false && g.reason ? el('p', { className: 'reason', textContent: g.reason }) : null,
-      // The failing command's output tail ("Why rejected" shows it too when it is the same).
-      g.passed === false && g.output && g.output !== failureOutput ? el('pre', { textContent: g.output }) : null,
-      storedEl(card, iteration, 'gates', index + 1, g.stored));
+      el('div', {}, el('span', { className: 'gate-mark', textContent: { passed: '✓', failed: '✗', 'not-run': '○' }[outcome] }),
+        el('code', { textContent: g.text }), facts ? el('span', { className: 'muted', textContent: `  ${facts}` }) : null),
+      g.passed === false && g.reason ? el('p', { className: 'gate-reason', textContent: g.reason }) : null,
+      output ? el('pre', { textContent: output }) : null,
+      storedEl(d.iteration, 'gates', index + 1, g.stored));
   }));
+  return s;
 }
 
-// The stop commands that ran after this iteration (accepted ones only): ■ the one that stopped the run.
-function fillStop(card, iteration, stops) {
-  show(card.stop.node, stops.length > 0);
-  setText(card.stop.count, stops.length ? `· ${stops.length} ran${stops.some((x) => x.stopped) ? ' · stopped the run' : ''}` : '');
-  const key = JSON.stringify(stops);
-  if (card.stopKey === key) return;
-  card.stopKey = key;
-  card.stop.body.replaceChildren(...stops.map((x) => el('div', { className: `gate ${x.stopped ? 'stopped' : 'ran'}` },
-    el('div', {},
-      el('span', { className: 'mark', textContent: x.stopped ? '■' : '·' }),
-      el('code', { textContent: x.command || `stop/${x.position}` }),
-      x.stopped ? el('span', { className: 'muted', textContent: '  stopped the run' }) : null),
-    storedEl(card, iteration, 'stop', x.position, x.stored))));
+// This attempt's change: its own diff (start commit to frozen tree), or the edits so
+// far while it runs. report.html keeps one diff, baseline to the final code.
+function changesSection(d, live, defaultOpen) {
+  const discarded = d.discarded || [];
+  const own = panel.diff?.text;
+  const text = own || d.diff;
+  const sinceBaseline = !own && !!d.diff && !live; // report.html: baseline to the final code
+  const error = text ? null : panel.diff?.error;
+  if (!text && !discarded.length && !d.attempt) return null;
+  const s = section('changes', 'Changes', defaultOpen);
+  const files = text ? parseDiff(text) : [];
+  const add = files.reduce((sum, f) => sum + f.add, 0), del = files.reduce((sum, f) => sum + f.del, 0);
+  const count = [files.length === 1 ? files[0].path : files.length > 1 && plural(files.length, 'file'),
+    files.length && `+${add} −${del}`, live && 'in progress', sinceBaseline && 'since the baseline',
+    text?.includes('[… diff cut') && 'cut'].filter(Boolean).join(' · ');
+  const frozen = new Set(d.discarded_frozen || []);
+  fill(s, count, JSON.stringify([text, error, discarded, panel.diff?.loading]), () => [
+    discarded.length ? el('p', { className: 'muted' }, 'Outside the scope, discarded: ',
+      ...discarded.flatMap((p, i) => [i ? ', ' : '', el('code', { textContent: p }), frozen.has(p) ? ' (frozen)' : ''])) : null,
+    ...files.map((f) => diffFileEl(f, files.length === 1)),
+    !text && el('p', { className: 'muted', textContent: error
+      || (SNAPSHOT ? 'Not saved in this file; see autohelix view --web.' : panel.diff?.loading ? 'Loading…' : 'No changes.') }),
+  ].filter(Boolean));
+  return s;
 }
 
-// A gate's or stop command's stored files (loaded when opened) and its ask/review transcripts.
-function storedEl(card, iteration, kind, k, stored) {
-  if (!stored) return null;
-  const items = stored.files.map((f) => {
-    const id = `${kind}/${k}/${f.name}`;
-    return fileEl(api(`/api/output/${iteration}/${kind}/${k}/${encodeURIComponent(f.name)}`), f.name, f.size,
-      { opened: card.opened, id, headTail: true });
-  });
-  for (const t of stored.transcripts) {
-    const id = `${kind}/${k}/${t.name}`;
-    const log = el('div', { className: 'log' });
-    if (!card.expanded.outputs.has(id)) card.expanded.outputs.set(id, new Set());
-    const count = t.events.length ? ` · ${t.events.length} event${t.events.length === 1 ? '' : 's'}` : '';
-    const item = el('details', { className: 'artifact', open: card.opened.has(id) },
-      el('summary', {}, el('span', { textContent: t.name }), el('span', { className: 'muted', textContent: count })),
-      el('div', { className: 'artifact-body' }, log));
-    item.addEventListener('toggle', () => (item.open ? card.opened.add(id) : card.opened.delete(id)));
-    renderEvents(log, t.events, card.expanded.outputs.get(id));
-    items.push(item);
-  }
-  return items.length ? el('div', { className: 'artifacts stored', title: `.autohelix/${iterDir(iteration)}/${stored.folder}/` }, ...items) : null;
-}
-
-// One section per observe entry, in the order they ran.
-function fillObserve(card, d) {
-  const key = JSON.stringify(d.observe);
-  if (card.observeKey === key) return;
-  card.observeKey = key;
-  card.observe.replaceChildren(...(d.observe || []).map((o) => {
-    const id = o.name;
-    const s = section(o.name, `${iterDir(d.iteration)}/observe/${o.name}/`, card.opened.has(id));
-    s.node.hidden = false;
-    s.body.className = 'entry';
-    s.node.addEventListener('toggle', () => (s.node.open ? card.opened.add(id) : card.opened.delete(id)));
-    const metrics = Object.entries(o.metrics || {}).map(([k, v]) => `${k} ${fmtNumber(v)}`).join(' · ');
-    const failed = o.ok === false;
-    setText(s.count, [
-      o.review ? 'review' : null,
-      failed ? `failed${o.error ? `: ${o.error}` : ''}` : null,
-      // While the iteration runs, entries with output have finished; their status comes with the record.
-      o.running ? 'running' : null,
-      metrics || null,
-      o.files.length ? `${o.files.length} file${o.files.length === 1 ? '' : 's'}` : null,
-    ].filter(Boolean).map((x) => `· ${x}`).join(' '));
-    if (failed) s.node.classList.add('failed');
+// One observe entry: its status and metrics, output (a review's as Markdown), files.
+function observeSection(d, o) {
+  const s = section(`observe:${o.name}`, o.name, false);
+  const failed = o.ok === false;
+  const metrics = Object.entries(o.metrics || {}).map(([k, v]) => `${k} ${fmtNumber(v)}`).join(' · ');
+  s.count.className = failed ? 'error' : 'muted';
+  fill(s, [o.review && 'review', failed && `failed${o.error ? `: ${o.error}` : ''}`, o.running && 'running', metrics,
+    o.files.length && plural(o.files.length, 'file')].filter(Boolean).join(' · '), JSON.stringify(o), () => {
     const parts = [];
-    if (failed) parts.push(el('p', { className: 'reason', textContent: `Failed${o.error ? `: ${o.error}` : ''}; its metrics are missing.` }));
+    if (failed) parts.push(el('p', { className: 'error', textContent: `Failed${o.error ? `: ${o.error}` : ''}; its metrics are missing.` }));
     if (o.html) {
       const prose = el('div', { className: 'prose' });
       prose.innerHTML = o.html; // rendered by the server from Markdown with raw HTML disabled
@@ -751,40 +553,69 @@ function fillObserve(card, d) {
     } else if (o.stdout === null && SNAPSHOT) {
       parts.push(el('p', { className: 'muted', textContent: 'Output is not saved in this file; see autohelix view --web.' }));
     }
-    if (o.stderr) {
-      parts.push(el('details', { className: 'artifact' }, el('summary', { textContent: 'stderr' }),
-        el('div', { className: 'artifact-body' }, el('pre', { textContent: o.stderr }))));
-    }
-    if (o.files.length) {
-      parts.push(el('div', { className: 'artifacts' }, ...o.files.map((a) => artifactEl(d.iteration, a, `${o.name}/`))));
-    }
+    if (o.stderr) parts.push(fileLike('stderr', el('pre', { textContent: o.stderr })));
+    for (const a of o.files) parts.push(fileEl(artifactUrl(d.iteration, a.path), a.path.slice(o.name.length + 1), a.size));
     if (o.stdout_file && !SNAPSHOT) {
       parts.push(el('a', { className: 'raw', href: artifactUrl(d.iteration, o.stdout_file), target: '_blank', rel: 'noopener', textContent: 'stdout.txt' }));
     }
-    s.body.replaceChildren(...parts);
-    return s.node;
-  }));
+    return parts;
+  });
+  return s;
 }
 
-
-// The attempt's own change (start commit to frozen tree), loaded when its section opens.
-async function loadAttempt(card) {
-  const key = card.attemptKey;
-  if (!key || card.attempt.loaded === key) return;
-  card.attempt.loaded = key;
-  let d;
-  try { d = await getJSON(`/api/iteration/${card.i}/diff`); }
-  catch {
-    d = { diff: null, error: SNAPSHOT ? 'Not saved in this file; see autohelix view --web.' : 'Could not load the diff.' };
-    if (!SNAPSHOT) card.attempt.loaded = null; // retry on the next open
-  }
-  if (card.attemptKey !== key) return;
-  if (d.diff) renderDiff(card.attempt.body, card.attempt.count, d.diff, false);
-  else {
-    setText(card.attempt.count, '');
-    card.attempt.body.replaceChildren(el('p', { className: 'muted', textContent: d.error || 'No changes.' }));
-  }
+// The stop commands that ran after this iteration (accepted ones only): ■ the one that stopped the run.
+function stopSection(d) {
+  const s = section('stop', 'Stop', false);
+  const stops = d.stop;
+  fill(s, `${stops.length} ran${stops.some((x) => x.stopped) ? ' · stopped the run' : ''}`, JSON.stringify(stops),
+    () => stops.map((x) => el('div', { className: `gate ${x.stopped ? 'stopped' : 'passed'}` },
+      el('div', {}, el('span', { className: 'gate-mark', textContent: x.stopped ? '■' : '·' }),
+        el('code', { textContent: x.command || `stop/${x.position}` }),
+        x.stopped ? el('span', { className: 'muted', textContent: '  stopped the run' }) : null),
+      storedEl(d.iteration, 'stop', x.position, x.stored))));
+  return s;
 }
+
+// The agent's and judges' calls, live while they run; headed by role when there are several.
+function activitySection(d) {
+  const calls = (d.calls || []).filter((call) => call.events.length > 0);
+  if (!calls.length) return null;
+  const s = section('activity', 'Activity', false);
+  const shown = steps(calls.flatMap((call) => call.events));
+  const tools = shown.filter((x) => x.type === 'tool').length;
+  const says = shown.filter((x) => x.type === 'say').length;
+  setText(s.count, [tools && plural(tools, 'tool call'), says && plural(says, 'message'),
+    d.agent_clipped && 'earliest activity not shown'].filter(Boolean).map((x) => `· ${x}`).join(' '));
+  if (s.body.childElementCount !== calls.length) {
+    s.body.replaceChildren(...calls.map(() => el('div', {}, el('h4'), el('div', { className: 'log' }))));
+  }
+  calls.forEach((call, index) => {
+    const [heading, log] = s.body.children[index].children;
+    setText(heading, calls.length > 1 ? `${index + 1} · ${call.usage?.source || call.role}` : '');
+    const key = call.log || call.live_log || `${call.role}-${index}`;
+    if (!panel.expanded.has(key)) panel.expanded.set(key, new Set());
+    const eventsKey = JSON.stringify(call.events);
+    if (log.dataset.key !== eventsKey) { log.dataset.key = eventsKey; renderEvents(log, call.events, panel.expanded.get(key)); }
+  });
+  return s;
+}
+
+// A gate's or stop command's stored files (loaded when opened) and its ask/review transcripts.
+function storedEl(iteration, kind, k, stored) {
+  if (!stored) return null;
+  const items = stored.files.map((f) => fileEl(api(`/api/output/${iteration}/${kind}/${k}/${encodeURIComponent(f.name)}`),
+    f.name, f.size, { id: `${kind}/${k}/${f.name}`, headTail: true }));
+  for (const t of stored.transcripts) {
+    const id = `${kind}/${k}/${t.name}`;
+    const log = el('div', { className: 'log' });
+    if (!panel.expanded.has(id)) panel.expanded.set(id, new Set());
+    renderEvents(log, t.events, panel.expanded.get(id));
+    items.push(fileLike(t.name + (t.events.length ? ` · ${plural(t.events.length, 'event')}` : ''), log, id));
+  }
+  return items.length ? el('div', { className: 'stored' }, ...items) : null;
+}
+
+// ---------- files and diffs ----------
 
 function fmtSize(bytes) {
   return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
@@ -795,19 +626,20 @@ function artifactUrl(iteration, path) {
   return api(`/api/artifact/${iteration}/${path.split('/').map(encodeURIComponent).join('/')}`);
 }
 
-function artifactEl(iteration, a, prefix = '') {
-  const name = a.path.startsWith(prefix) ? a.path.slice(prefix.length) : a.path;
-  return fileEl(artifactUrl(iteration, a.path), name, a.size);
+// A folding row with content already at hand; with `id` it stays open across redraws.
+function fileLike(name, content, id = null) {
+  const item = el('details', { className: 'file', open: !!id && panel.files.has(id) },
+    el('summary', { textContent: name }), el('div', { className: 'file-body' }, content));
+  if (id) item.addEventListener('toggle', () => (item.open ? panel.files.add(id) : panel.files.delete(id)));
+  return item;
 }
 
-// A file loaded when its row is opened. With `opened`/`id` the row stays open across
-// re-renders; `headTail` keeps both ends of a long text (gate output: errors at the top,
-// summaries at the bottom), else its start.
-function fileEl(url, name, size, { opened = null, id = null, headTail = false } = {}) {
-  const body = el('div', { className: 'artifact-body' });
-  const item = el('details', { className: 'artifact', open: !!(opened && opened.has(id)) },
-    el('summary', {}, el('span', { textContent: name }), el('span', { className: 'muted', textContent: ` · ${fmtSize(size)}` })),
-    body);
+// A file loaded when its row is opened. `headTail` keeps both ends of a long text
+// (gate output: errors at the top, summaries at the bottom), else its start.
+function fileEl(url, name, size, { id = null, headTail = false } = {}) {
+  const body = el('div', { className: 'file-body' });
+  const item = el('details', { className: 'file', open: !!id && panel.files.has(id) },
+    el('summary', {}, name, el('span', { className: 'muted', textContent: ` · ${fmtSize(size)}` })), body);
   let loading = false;
   const load = async () => {
     if (!item.open || loading || body.childElementCount) return;
@@ -826,147 +658,61 @@ function fileEl(url, name, size, { opened = null, id = null, headTail = false } 
     } catch { /* opened again, it retries */ } finally { loading = false; }
   };
   item.addEventListener('toggle', () => {
-    if (opened) item.open ? opened.add(id) : opened.delete(id);
+    if (id) item.open ? panel.files.add(id) : panel.files.delete(id);
     load();
   });
   if (item.open) load();
   return item;
 }
 
-// Light YAML highlighting: keys tinted, comments dimmed. Text inside block scalars
-// (`goal: |`) is literal, so a "#" there is not a comment.
-function highlightYaml(text) {
-  const nodes = [];
-  let blockIndent = null; // indentation of the key that opened a block scalar
-  for (const line of text.split('\n')) {
-    const indent = line.match(/^ */)[0].length;
-    if (blockIndent !== null && (line.trim() === '' || indent > blockIndent)) {
-      nodes.push(line + '\n');
-      continue;
-    }
-    blockIndent = null;
-    let comment = -1, quote = null;
-    for (let k = 0; k < line.length; k++) {
-      const ch = line[k];
-      if (quote) { if (ch === quote) quote = null; }
-      else if (ch === '"' || ch === "'") quote = ch;
-      else if (ch === '#' && (k === 0 || /\s/.test(line[k - 1]))) { comment = k; break; }
-    }
-    const code = comment < 0 ? line : line.slice(0, comment);
-    const key = code.match(/^(\s*(?:-\s+)?)([\w.-]+)(:)(.*)$/);
-    if (key) {
-      nodes.push(key[1], el('span', { className: 'yaml-key', textContent: key[2] }), key[3] + key[4]);
-      if (/^\s*[|>][+-]?\s*$/.test(key[4])) blockIndent = indent;
-    } else {
-      nodes.push(code);
-    }
-    if (comment >= 0) nodes.push(el('span', { className: 'yaml-comment', textContent: line.slice(comment) }));
-    nodes.push('\n');
-  }
-  return nodes;
-}
-
-// "bench (speed ↑)", as the console header lists observe entries.
-function observeLabel(o) {
-  const metrics = Object.entries(o.metrics || {}).map(([k, dir]) => `${k} ${dir === 'lower' ? '↓' : '↑'}`);
-  return metrics.length ? `${o.name} (${metrics.join(', ')})` : o.name;
-}
-
-function renderConfig() {
-  const c = state.config;
-  if (c?.missing) { // a run started by an older AutoHelix: never its source file instead
-    $('config').hidden = false;
-    const summary = $('config-summary');
-    summary.title = '';
-    summary.dataset.key = 'missing';
-    summary.replaceChildren(el('b', { textContent: 'Config' }),
-      el('span', { className: 'config-file', textContent: `${c.file}: not stored with this run` }));
-    const pre = $('config-text');
-    pre.dataset.text = '';
-    pre.replaceChildren();
-    return;
-  }
-  $('config').hidden = !c?.text;
-  if (!c?.text) return;
-  // Budgets are not config: the latest segment's flags, as its status records them.
-  // Iterations and cost as run totals (spent before it plus its own cap); --time only
-  // while the segment runs, against its clock (run_table.time_cap; a stop reason says
-  // when time ended it).
-  const s = state.status || {};
-  const elapsed = s.state === 'running' && typeof s.segment_started_at === 'number'
-    ? Math.max(0, Math.floor(Date.now() / 1000 - s.segment_started_at)) : null;
-  const budget = [
-    s.max_iterations && `to iteration ${s.max_iterations}`,
-    s.max_cost_usd && `${fmtCap(s.max_cost_usd)} total`,
-    s.max_time_seconds && elapsed !== null
-      && `${fmtLimit(elapsed)} of ${fmtLimit(s.max_time_seconds)} (this segment)${elapsed >= s.max_time_seconds ? ' (time up)' : ''}`,
-  ].filter(Boolean).join(' · ');
-  const parts = [
-    c.agent && ['Agent', c.agent],
-    c.gates?.length && ['Gates', c.gates.join(' · '), c.gates.join('\n')],
-    c.observe?.length && ['Observe', c.observe.map(observeLabel).join(' · ')],
-    c.scope?.length && ['Editable', c.scope.join(', ')],
-    budget && ['Budget', budget, `${budget}: the latest run/resume's -n/--until and --cost as run totals, its --time as its own`],
-  ].filter(Boolean);
-  const summary = $('config-summary');
-  summary.title = `Show the full ${c.file}`;
-  const key = JSON.stringify(parts);
-  if (summary.dataset.key !== key) {
-    summary.dataset.key = key;
-    summary.replaceChildren(el('b', { textContent: 'Config' }), el('span', { className: 'config-file', textContent: c.file }),
-      // One line; long values are cut with "…" (hover, or open the config, for the full text).
-      ...parts.map(([k, v, full]) => el('span', { className: 'chip', title: full || v }, el('b', { textContent: k + ' ' }), v)));
-  }
-  const pre = $('config-text');
-  if (pre.dataset.text !== c.text) { pre.dataset.text = c.text; pre.replaceChildren(...highlightYaml(c.text)); }
-}
-
-function renderDiff(box, stat, text, live) {
-  // One block per file with old/new line numbers; unchanged stretches between
-  // changed regions are shown as "⋯ N unchanged lines" instead of git's @@ headers.
+// git diff text -> files with their rows (old/new line numbers); unchanged stretches
+// between changed regions as "⋯ N unchanged lines" instead of git's @@ headers.
+function parseDiff(text) {
   const files = [];
   let file = null, oldNo = 0, newNo = 0, lastNew = 0;
-  const row = (kind, a, b, sign, code) => el('div', { className: `row ${kind}` },
-    el('span', { className: 'ln', textContent: a }), el('span', { className: 'ln', textContent: b }),
-    el('span', { className: 'sign', textContent: sign }), el('span', { className: 'code', textContent: code }));
-  let cut = '';
   for (const line of text.split('\n')) {
     if (line.startsWith('[… diff cut')) { // the server stopped reading there
-      cut = line.replace(/^\[|\]$/g, '');
-      file?.rows.push(el('div', { className: 'gap', textContent: cut }));
-    } else if (line === '') {
-      continue; // the end (empty context lines are " ")
+      file?.rows.push(['gap', line.replace(/^\[|\]$/g, '')]);
     } else if (line.startsWith('diff --git ')) {
       file = { path: line.replace(/^diff --git .* b\/(.*)$/, '$1'), rows: [], add: 0, del: 0 };
       files.push(file);
       lastNew = 0;
-    } else if (!file || /^(index |--- |\+\+\+ |new file mode|deleted file mode|similarity |rename |\\ No newline)/.test(line)) {
-      continue;
+    } else if (!file || line === '' || /^(index |--- |\+\+\+ |new file mode|deleted file mode|similarity |rename |\\ No newline)/.test(line)) {
+      continue; // the end (empty context lines are " "), or headers
     } else if (line.startsWith('@@')) {
       const m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
       if (!m) continue;
       [oldNo, newNo] = [Number(m[1]), Number(m[2])];
       const skipped = newNo - lastNew - 1;
-      if (skipped > 0) file.rows.push(el('div', { className: 'gap', textContent: `⋯ ${skipped} unchanged line${skipped === 1 ? '' : 's'}` }));
+      if (skipped > 0) file.rows.push(['gap', `⋯ ${skipped} unchanged line${skipped === 1 ? '' : 's'}`]);
     } else if (line[0] === '+') {
       file.add++; lastNew = newNo;
-      file.rows.push(row('add', '', newNo++, '+', line.slice(1)));
+      file.rows.push(['add', '', newNo++, '+', line.slice(1)]);
     } else if (line[0] === '-') {
       file.del++;
-      file.rows.push(row('del', oldNo++, '', '−', line.slice(1)));
+      file.rows.push(['del', oldNo++, '', '−', line.slice(1)]);
     } else {
       lastNew = newNo;
-      file.rows.push(row('ctx', oldNo++, newNo++, '', line.slice(1)));
+      file.rows.push(['ctx', oldNo++, newNo++, '', line.slice(1)]);
     }
   }
-  const total = files.reduce((n, f) => [n[0] + f.add, n[1] + f.del], [0, 0]);
-  setText(stat, (files.length ? `· ${files.length} file${files.length === 1 ? '' : 's'} · +${total[0]} −${total[1]}` : '')
-    + (live ? ' · in progress' : '') + (cut ? ' · cut' : ''));
-  box.replaceChildren(...(files.length ? files.map((f) => el('div', { className: 'diff-file' },
-    el('div', { className: 'diff-path' }, el('span', { textContent: f.path }),
-      el('span', { className: 'muted', textContent: ` +${f.add} −${f.del}` })),
-    el('pre', {}, ...f.rows))) : [el('pre', { textContent: text })]));
+  return files;
 }
+
+// One file of a diff, folding on its own (`path +a −d`); its fold is kept by path.
+function diffFileEl(f, only) {
+  const item = el('details', { className: 'diff-file', open: panel.diffOpen.get(f.path) ?? only },
+    el('summary', {}, el('code', { textContent: f.path }), el('span', { className: 'muted', textContent: ` +${f.add} −${f.del}` })),
+    el('pre', {}, ...f.rows.map(([kind, a, b, sign, code]) => (kind === 'gap'
+      ? el('div', { className: 'gap', textContent: a })
+      : el('div', { className: `line ${kind}` }, el('span', { className: 'ln', textContent: a }),
+        el('span', { className: 'ln', textContent: b }), el('span', { className: 'sign', textContent: sign }),
+        el('span', { className: 'code', textContent: code }))))));
+  item.addEventListener('toggle', () => panel.diffOpen.set(f.path, item.open));
+  return item;
+}
+
+// ---------- activity ----------
 
 function shortCommand(text) {
   // Codex wraps commands as: /bin/zsh -lc '...'
@@ -1014,30 +760,113 @@ function steps(events) {
 
 function renderEvents(box, events, expanded) {
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-  const nodes = steps(events).map((step, i) => {
-    if (step.html) {
+  box.replaceChildren(...steps(events).map((s, i) => {
+    if (s.html) {
       const node = el('div', { className: 'ev say prose' });
-      node.innerHTML = step.html; // Server-rendered Markdown, raw HTML disabled.
+      node.innerHTML = s.html; // Server-rendered Markdown, raw HTML disabled.
       return node;
     }
-    if (step.type === 'hidden-think') return el('div', { className: 'ev think', textContent: 'Thinking (not logged)' });
-    if (step.type !== 'tool') return el('div', { className: `ev ${step.type}`, textContent: step.text });
+    if (s.type === 'hidden-think') return el('div', { className: 'ev think', textContent: 'Thinking (not logged)' });
+    if (s.type !== 'tool') return el('div', { className: `ev ${s.type}`, textContent: s.text });
     // Claude: name "Bash" + input; Codex: the name is the command itself.
-    const command = shortCommand(step.input || step.name);
+    const command = shortCommand(s.input || s.name);
     const first = command.split('\n')[0];
-    const label = step.input ? `${step.name}  ${first}` : first;
-    const body = [command.includes('\n') ? command : null, step.result || null].filter(Boolean).join('\n\n');
-    const node = el('details', { className: `ev tool${step.error ? ' error' : ''}`, open: expanded.has(i) },
-      el('summary', { textContent: label.length > 160 ? label.slice(0, 160) + '…' : label }),
+    const text = s.input ? `${s.name}  ${first}` : first;
+    const body = [command.includes('\n') ? command : null, s.result || null].filter(Boolean).join('\n\n');
+    const node = el('details', { className: `ev tool${s.error ? ' error' : ''}`, open: expanded.has(i) },
+      el('summary', { textContent: text.length > 160 ? text.slice(0, 160) + '…' : text }),
       body ? el('pre', { textContent: body.length > 4000 ? body.slice(0, 4000) + '\n…' : body }) : null);
     node.addEventListener('toggle', () => (node.open ? expanded.add(i) : expanded.delete(i)));
     return node;
-  });
-  box.replaceChildren(...nodes);
+  }));
   if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
-// ---------- polling ----------
+// ---------- config strip ----------
+
+// Light YAML highlighting: keys tinted, comments dimmed. Text inside block scalars
+// (`goal: |`) is literal, so a "#" there is not a comment.
+function highlightYaml(text) {
+  const nodes = [];
+  let blockIndent = null; // indentation of the key that opened a block scalar
+  for (const line of text.split('\n')) {
+    const indent = line.match(/^ */)[0].length;
+    if (blockIndent !== null && (line.trim() === '' || indent > blockIndent)) {
+      nodes.push(line + '\n');
+      continue;
+    }
+    blockIndent = null;
+    let comment = -1, quote = null;
+    for (let k = 0; k < line.length; k++) {
+      const ch = line[k];
+      if (quote) { if (ch === quote) quote = null; }
+      else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '#' && (k === 0 || /\s/.test(line[k - 1]))) { comment = k; break; }
+    }
+    const code = comment < 0 ? line : line.slice(0, comment);
+    const key = code.match(/^(\s*(?:-\s+)?)([\w.-]+)(:)(.*)$/);
+    if (key) {
+      nodes.push(key[1], el('span', { className: 'yaml-key', textContent: key[2] }), key[3] + key[4]);
+      if (/^\s*[|>][+-]?\s*$/.test(key[4])) blockIndent = indent;
+    } else {
+      nodes.push(code);
+    }
+    if (comment >= 0) nodes.push(el('span', { className: 'yaml-comment', textContent: line.slice(comment) }));
+    nodes.push('\n');
+  }
+  return nodes;
+}
+
+// "bench (speed ↑)", as the console header lists observe entries.
+function observeLabel(o) {
+  const metrics = Object.entries(o.metrics || {}).map(([k, dir]) => `${k} ${dir === 'lower' ? '↓' : '↑'}`);
+  return metrics.length ? `${o.name} (${metrics.join(', ')})` : o.name;
+}
+
+function renderConfig() {
+  const c = state.config;
+  show('config', !!(c?.text || c?.missing));
+  if (!c?.text && !c?.missing) return;
+  const summary = $('config-summary');
+  const pre = $('config-text');
+  if (c.missing) { // a run started by an older AutoHelix: never its source file instead
+    summary.title = '';
+    summary.replaceChildren(el('b', { textContent: 'Config' }),
+      el('span', { className: 'config-file', textContent: `${c.file}: not stored with this run` }));
+    pre.replaceChildren();
+    return;
+  }
+  // Budgets are not config: the latest segment's flags, as its status records them.
+  // Iterations and cost as run totals (spent before it plus its own cap); --time only
+  // while the segment runs, against its clock (a stop reason says when time ended it).
+  const s = state.status || {};
+  const elapsed = s.state === 'running' && typeof s.segment_started_at === 'number'
+    ? Math.max(0, Math.floor(Date.now() / 1000 - s.segment_started_at)) : null;
+  const budget = [
+    s.max_iterations && `to iteration ${s.max_iterations}`,
+    s.max_cost_usd && `${fmtCap(s.max_cost_usd)} total`,
+    s.max_time_seconds && elapsed !== null
+      && `${fmtLimit(elapsed)} of ${fmtLimit(s.max_time_seconds)} (this segment)${elapsed >= s.max_time_seconds ? ' (time up)' : ''}`,
+  ].filter(Boolean).join(' · ');
+  const parts = [
+    c.agent && ['Agent', c.agent],
+    c.gates?.length && ['Gates', c.gates.join(' · '), c.gates.join('\n')],
+    c.observe?.length && ['Observe', c.observe.map(observeLabel).join(' · ')],
+    c.scope?.length && ['Editable', c.scope.join(', ')],
+    budget && ['Budget', budget, `${budget}: the latest run/resume's -n/--until and --cost as run totals, its --time as its own`],
+  ].filter(Boolean);
+  summary.title = `Show the full ${c.file}`;
+  const key = JSON.stringify(parts);
+  if (summary.dataset.key !== key) {
+    summary.dataset.key = key;
+    summary.replaceChildren(el('b', { textContent: 'Config' }), el('span', { className: 'config-file', textContent: c.file }),
+      // One line; long values are cut with "…" (hover, or open the config, for the full text).
+      ...parts.map(([k, v, full]) => el('span', { className: 'chip', title: full || v }, el('b', { textContent: k + ' ' }), v)));
+  }
+  if (pre.dataset.text !== c.text) { pre.dataset.text = c.text; pre.replaceChildren(...highlightYaml(c.text)); }
+}
+
+// ---------- page ----------
 
 async function getJSON(url) {
   if (SNAPSHOT) {
@@ -1049,43 +878,32 @@ async function getJSON(url) {
   return res.json();
 }
 
-// "Why: … · continues from k3f9 · archived: …" from run.json's notes (shown as text).
-function runNotes(run) {
-  return [run.why && `Why: ${run.why}`, run.import?.run && `continues from ${run.import.run}`,
-    run.archive_why && `archived: ${run.archive_why}`].filter(Boolean).join(' · ');
-}
-
-// "20261114-2333-sorting-1q3w" -> name "sorting-1q3w", started "2026-11-14 23:33";
-// "20261114-2333-1q3w" -> "Run 1q3w".
-function splitRunId(id) {
-  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})-(.+)$/.exec(id || '');
-  if (!m) return { name: id || null, started: '' };
-  // A run of autohelix.yaml has no name, only the suffix: "Run 1q3w" rather than a bare code.
-  const name = m[6].includes('-') ? m[6] : `Run ${m[6]}`;
-  return { name, started: `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` };
+function renderHeading() {
+  // The page is about one run: its id heads it (name and suffix, as typed in `resume 1q3w`;
+  // the start time muted beside them), the goal below; the project above is the way back.
+  const project = state.project;
+  const { name, started } = splitRunId(state.run_id);
+  setText('title', name || project);
+  setText('title-date', started);
+  if (state.run_id) $('title').title = state.run_id;
+  document.title = `${name || project} · AutoHelix${SNAPSHOT ? ' report' : ''}`;
+  if (SNAPSHOT) {
+    show('kind', true);
+    setText('kind', [project, `run report · saved ${fmtClock(SNAPSHOT.saved_at)}`].filter(Boolean).join(' · '));
+  } else if (state.run_id) { show('crumbs', true); setText('crumb-project', project); }
+  const goal = (state.goal || '').trim();
+  setText('goal', goal);
+  show('goal-more', goal.includes('\n') || $('goal').scrollWidth > $('goal').clientWidth);
+  // Why the run exists (run --why), what it continues from (run --import), why it was archived.
+  const why = runNotes(state);
+  setText('why', why);
+  show('why', !!why);
 }
 
 function render() {
   const names = metricNames();
   if (!names.includes(metric)) metric = names[0] || null;
-  // The page is about one run: its id heads it (name and suffix, as typed in `resume 1q3w`;
-  // the start time muted beside them), the goal below; the project above is the way back.
-  const project = state.project;
-  const { name, started } = splitRunId(state.run_id);
-  const title = name || project;
-  setText('title', title);
-  setText('title-date', started);
-  if (state.run_id) $('title').title = state.run_id;
-  document.title = `${title} · AutoHelix${SNAPSHOT ? ' report' : ''}`;
-  if (SNAPSHOT) {
-    show('kind', true);
-    setText('kind', [project, `run report · saved ${fmtClock(SNAPSHOT.saved_at)}`].filter(Boolean).join(' · '));
-  } else if (state.run_id) { show('crumbs', true); setText('crumb-project', project); }
-  setText('goal', (state.goal || '').trim());
-  // Why the run exists (run --why), what it continues from (run --import), why it was archived.
-  const why = runNotes(state);
-  setText('why', why);
-  show('why', !!why);
+  renderHeading();
   renderStatus();
   renderConfig();
   renderReport();
@@ -1093,36 +911,24 @@ function render() {
   renderMetricSelect(names);
   renderChart();
   renderRows();
-  renderCards();
+  renderPanel();
+  renderSharedNotes();
 }
 
-async function pollState() {
+async function loop() {
   try {
     state = await getJSON('/api/state');
   } catch {
     $('status').textContent = 'Viewer disconnected — retrying';
     $('status').className = 'status crashed';
+    if (!SNAPSHOT) setTimeout(loop, POLL_MS);
     return;
   }
-  // Follow the run: open the running (or latest) iteration until the user picks another.
-  const target = liveIteration() ?? state.iterations.at(-1)?.iteration ?? null;
-  if (selected === null || (followLive && target !== null && target !== selected)) selected = target;
-  render(); // errors here are UI bugs, not a lost connection; loop() logs them
-  openOnlyOnce();
-}
-
-let openedFor = undefined;
-function openOnlyOnce() {
-  // Open the selected card when the selection changes, without fighting the user's own folds.
-  if (openedFor === selected) return;
-  openedFor = selected;
-  openOnly(selected);
-}
-
-async function loop() {
   try {
-    await pollState();
-    await refreshCards();
+    // Follow the run: the running (or latest) iteration until the user picks another.
+    const target = liveIteration() ?? state.iterations.at(-1)?.iteration ?? null;
+    if (target !== null && (selected === null || (followLive && target !== selected))) select(target, false);
+    else { render(); await loadDetail(); }
   } catch (err) {
     console.error(err); // a rendering bug; keep polling
   } finally {
@@ -1130,40 +936,19 @@ async function loop() {
   }
 }
 
-// Theme: Auto (follow the system) -> Light -> Dark, remembered in this browser if storage allows.
-const THEMES = { auto: '◐ Auto', light: '☀ Light', dark: '☾ Dark' };
-const systemDark = matchMedia('(prefers-color-scheme: dark)');
-let theme = 'auto';
-try { theme = localStorage.getItem('autohelix-theme') || 'auto'; } catch { /* storage blocked */ }
-if (!(theme in THEMES)) theme = 'auto';
-
-function applyTheme() {
-  if (theme === 'auto') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = theme;
-  const dark = theme === 'dark' || (theme === 'auto' && systemDark.matches);
-  const logos = SNAPSHOT?.logos || { light: '/logo-light.svg', dark: '/logo-dark.svg' };
-  $('logo').src = dark ? logos.dark : logos.light;
-  $('theme').textContent = THEMES[theme];
-}
-$('theme').addEventListener('click', () => {
-  const order = Object.keys(THEMES);
-  theme = order[(order.indexOf(theme) + 1) % order.length];
-  try { localStorage.setItem('autohelix-theme', theme); } catch { /* still applies to this page */ }
-  applyTheme();
-});
-systemDark.addEventListener('change', applyTheme);
-applyTheme();
-
+followTheme(SNAPSHOT?.logos);
 $('metric').addEventListener('change', (e) => { metric = e.target.value; render(); });
-$('goal').title = 'Click to show the full goal';
-$('goal').addEventListener('click', () => $('goal').classList.toggle('expanded'));
+$('goal-more').addEventListener('click', () => {
+  const open = $('goal').classList.toggle('expanded');
+  $('goal-more').textContent = open ? 'less' : 'more';
+});
+$('prev').addEventListener('click', () => step(-1));
+$('next').addEventListener('click', () => step(1));
 document.addEventListener('keydown', (e) => {
-  if (!state || e.target.tagName === 'SELECT') return;
-  const order = iterationOrder();
-  const i = order.indexOf(selected);
-  if (e.key === 'j') select(order[Math.min(order.length - 1, i + 1)]); // down (newer)
-  if (e.key === 'k') select(order[Math.max(0, i - 1)]); // up (older)
+  if (!state || ['SELECT', 'INPUT', 'TEXTAREA'].includes(e.target.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'j') step(1); // down (newer)
+  if (e.key === 'k') step(-1); // up (older)
 });
 const linked = location.hash.match(/^#iter-(\d+)$/);
-if (linked) { selected = Number(linked[1]); followLive = false; }
+if (linked) { selected = Number(linked[1]); followLive = false; panel = newPanel(selected); }
 loop();
