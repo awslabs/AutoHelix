@@ -39,6 +39,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from markdown_it import MarkdownIt
 
+from autohelix import run_table
 from autohelix.agents import AgentEventKind
 from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained, open_dir as _open_dir, open_file as _open_file, open_run_log
 from autohelix.config import ConfigNotFound, MetricGate, find_config, load_config
@@ -222,7 +223,7 @@ def _note_order(name: str):
 class RunData:
     """Reads one project's .autohelix/ directory for the viewer."""
 
-    def __init__(self, project: Path, run_id: str | None = None):
+    def __init__(self, project: Path, run_id: str | None = None, runs: "ProjectRuns | None" = None):
         self.project = project.resolve()
         self.run_id = run_id
         self.paths = RunPaths(self.project, run_id)
@@ -239,7 +240,7 @@ class RunData:
         self._subject_cache: dict[str, str | None] = {}
         self._repository = None
         self._configs: dict[Path, tuple[tuple, object, str | None]] = {}  # path -> (stat key, config, text)
-        self._runs = ProjectRuns(self.project)
+        self._runs = runs or ProjectRuns(self.project)  # the server's, shared with the run list
 
     def _refresh_current(self):
         if self.run_id in (None, "current"):
@@ -329,11 +330,15 @@ class RunData:
             })
         return rows
 
-    def _words(self, config, records, rows: list[dict]) -> None:
-        """Each row's `why` (a rejection in the console's words: `python3 check.py failed
-        (exit 1)`, `speed 6.5% worse than iter 3 (5% allowed)`, `agent timed out`) and
-        `notes` (the console's lines under it: a gate failing at the baseline, a failed
-        observe entry, discarded paths), each with `error` for the console's red."""
+    def _words(self, config, records, rows: list[dict]) -> dict:
+        """The console's Table over the history (`terminal.Table`; its rules are private,
+        so a rename there fails the viewer's tests). Each row gets `why` (a rejection in the
+        console's words: `python3 check.py failed (exit 1)`, `speed 6.5% worse than iter 3
+        (5% allowed)`, `agent timed out`), `notes` (the console's lines under it: a gate
+        failing at the baseline, a failed observe entry, discarded paths), each with `error`
+        for the console's red, and `tip`: whether it moved the tip, the latest accepted
+        measurement (as the run list, `ProjectRuns._metrics`). Returns the tip,
+        `{metric: {value, iteration}}`."""
         from autohelix.terminal import RED, Row, Table
 
         table = Table.of(config, 200) if config else Table({}, 200)
@@ -343,6 +348,9 @@ class RunData:
             row["why"] = {"text": why, "error": style == RED} if why else None
             row["notes"] = [{"text": text, "error": style == RED} for text, style in table._notes(line)]
             table._remember(line)
+            row["tip"] = bool(record.accepted and record.metrics)
+        latest = ProjectRuns._metrics(records, {})
+        return {m["name"]: {"value": m["value"], "iteration": latest["iteration"]} for m in latest["values"]} if latest else {}
 
     def _run_row(self, records) -> dict | None:
         """What the stats line says beside the metrics, as the run list does: the run's
@@ -354,7 +362,7 @@ class RunData:
             data = self.paths.read_identity()
         except RuntimeError:
             return None
-        return {"seconds": sum(record_seconds(r) for r in records),
+        return {"id": self.paths.run_id, "seconds": sum(record_seconds(r) for r in records),
                 "accepted": sum(1 for r in records if r.iteration > 0 and r.accepted),
                 **self._runs.landing_state(self.paths, data, self._runs._refs()), "land": data.get("land") or "auto"}
 
@@ -364,8 +372,8 @@ class RunData:
         records = self.records() if self.paths.run_id else []
         total_cost = summarize_costs([usage for row in records for usage in row.cost_usages])
         iterations = self.iterations(records)
-        self._words(config, records, iterations)
-        status = read_run_status(self.project, self.paths.run_id)
+        tip = self._words(config, records, iterations)
+        status = with_phase_word(read_run_status(self.project, self.paths.run_id))
         return {
             "project": self.project.name,
             "goal": config.goal if config else None,
@@ -377,6 +385,7 @@ class RunData:
             "config": self._config_summary(config, config_path),
             "notes_files": sorted(self._notes_files(), key=_note_order) if self.paths.run_id else [],
             "iterations": iterations,
+            "tip": tip,
             "cost": {
                 "cost_usd": total_cost.cost_usd,
                 "incomplete": total_cost.incomplete,
@@ -870,6 +879,8 @@ class RunData:
                         repo.git("read-tree", base, index=index, timeout=5)
                     # Nothing is staged: new files are only marked intent-to-add, and the
                     # diff reads the work tree, so no blob is written to the user's objects.
+                    # (`--pathspec-from-file`: git 2.25 or later; an older git leaves the
+                    # live diff empty, "failed".)
                     excludes = repo.unfrozen_excludes(copy, index, timeout=5)
                     new = repo.git("ls-files", "-z", "--others", "--exclude-standard", "--", ".", *excludes,
                                    work_tree=copy, index=index, timeout=5).stdout
@@ -899,6 +910,17 @@ class RunData:
 RUN_ID = r"[a-z0-9][a-z0-9-]{0,50}"
 # `dashboard --json` / `view --json` (and /api/runs): fields are only ever added.
 JSON_SCHEMA = 1
+
+
+def with_phase_word(status: dict | None) -> dict | None:
+    """The status with `phase_word`: its phase in the words `view` and the console's live
+    row use (`run_table.PHASES`: gates, observe, stop, ...; `baseline` at iteration 0). The
+    stored names stay as they are; this is where the pages get the words."""
+    if not status:
+        return status
+    phase = status.get("phase")
+    word = "baseline" if status.get("iteration") == 0 and phase != "report" else run_table.PHASES.get(phase, phase)
+    return {**status, "phase_word": word or ""}
 
 
 def run_notes(data: dict) -> dict:
@@ -1101,8 +1123,8 @@ def write_static(project: Path, *, run_id: str | None = None) -> Path:
 
 
 def make_server(project: Path, port: int = 8765, *, run_id: str | None = None) -> ThreadingHTTPServer:
-    data = RunData(project, run_id)
     dashboard = ProjectRuns(project)
+    data = RunData(project, run_id, dashboard)
     others: dict[str, RunData] = {}
     # RunData's caches and log tails are not thread-safe. Git diffs run outside the lock
     # (RunData guards their cache itself), so one big diff doesn't stall every page.
@@ -1116,7 +1138,7 @@ def make_server(project: Path, port: int = 8765, *, run_id: str | None = None) -
             if rid == data.paths.run_id:
                 return data  # the default run's, already reading
             if rid not in others:
-                others[rid] = RunData(project, rid)
+                others[rid] = RunData(project, rid, dashboard)
             return others[rid]
 
     def run_route(rd: RunData, path: str) -> tuple | None:
@@ -1179,7 +1201,11 @@ def make_server(project: Path, port: int = 8765, *, run_id: str | None = None) -
                     return 200, resources.joinpath("index.html").read_bytes(), "text/html; charset=utf-8"
             elif path == "/api/runs":
                 with lock:
-                    return 200, dashboard.runs()
+                    payload = dashboard.runs()
+                for row in payload["runs"]:
+                    if row.get("status"):
+                        row["status"] = with_phase_word(row["status"])
+                return 200, payload
             elif match := re.fullmatch(rf"/api/run/({RUN_ID})(/.+)", path):
                 if (rd := run_data(match[1])) and (response := run_route(rd, match[2])):
                     return response

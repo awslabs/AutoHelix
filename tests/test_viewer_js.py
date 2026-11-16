@@ -73,15 +73,34 @@ def test_durations_money_and_caps():
     assert js(("fmtMoney", 4.339), ("fmtMoney", 4.339, True), ("fmtMoney", None)) == ["$4.34", "$4.34+", ""]
 
 
-def test_phase_words():
-    phases = [{"phase": "agent", "iteration": 2}, {"phase": "checks", "iteration": 2},
-              {"phase": "preparing checks", "iteration": 2}, {"phase": "benchmark", "iteration": 2},
-              {"phase": "stop check", "iteration": 2}, {"phase": "checks", "iteration": 0},
-              {"phase": "report", "iteration": 0}]
-    assert js(*[("phaseWord", p) for p in phases]) == ["agent", "gates", "gates", "observe", "stop", "baseline", "report"]
+def test_time_left_against_the_segments_cap():
+    running = {"state": "running", "max_time_seconds": 3600, "segment_started_at": 1000}
+    assert js(("timeCap", running, False, 1725), ("timeCap", running, True, 1725), ("timeCap", running, True, 5000),
+              ("timeCap", {**running, "state": "finished"}, False, 1725), ("timeCap", None)) == [
+        "12m5s of 1h (this segment)", "12m5s/1h", "1h6m40s/1h (time up)", "", ""]
+
+
+@pytest.mark.parametrize("run, running, text, hint", [
+    ({"landing": {"commits": 0, "fast_forward": True}, "accepted": 2}, False, "landed", "on main"),
+    ({"landing": {"commits": 0, "fast_forward": True}, "accepted": 0}, False, "—", "Nothing accepted yet"),
+    ({"landing": {"commits": 3, "fast_forward": True}, "accepted": 3}, False, "3 to land", "3 commits: autohelix land 1q3w"),
+    ({"landing": {"commits": 1, "fast_forward": True}, "accepted": 1}, True, "1 to land", "1 commit, on main when the run ends"),
+    ({"landing": {"commits": 3, "fast_forward": True}, "accepted": 3, "land": "manual"}, True, "manual · 3 to land",
+     "3 commits: autohelix land 1q3w"),
+    ({"landing": {"commits": 3, "fast_forward": False}, "accepted": 3}, False, "3 diverged",
+     "main has moved on: git merge autohelix/20261114-2333-sorting-1q3w"),
+    ({"landing": None, "accepted": 3}, False, "—", "Branch main or the run's commits are not available"),
+    ({"target_branch": None, "landing": None, "accepted": 1}, False, "detached",
+     "Started on a detached HEAD: autohelix land 1q3w --into <branch>"),
+])
+def test_landing_words(run, running, text, hint):
+    run = {"id": "20261114-2333-sorting-1q3w", "target_branch": "main", **run}
+    words = js(("landingWords", run, running))[0]
+    assert (words["text"], words["hint"]) == (text, hint)
 
 
 def test_run_ids_and_notes():
+    assert js(("shortId", "20261114-2333-sorting-1q3w")) == ["1q3w"]
     assert js(("splitRunId", "20261114-2333-sorting-1q3w"), ("splitRunId", "20261114-2333-1q3w")) == [
         {"name": "sorting-1q3w", "started": "2026-11-14 23:33"}, {"name": "Run 1q3w", "started": "2026-11-14 23:33"}]
     # run.json's notes come back as the text they are (the pages set them as text).

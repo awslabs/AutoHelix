@@ -8,7 +8,6 @@ let metric = null; // the metric column's, from the menu in its header
 let showArchived = false;
 
 const live = (run) => run.status?.state === 'running';
-const shortId = (run) => run.id.split('-').at(-1);
 
 function fmtAgo(epochSeconds) {
   if (typeof epochSeconds !== 'number') return '';
@@ -35,17 +34,6 @@ function currentIteration(run) {
   return live(run) && s.iteration > p.iterations ? s.iteration : p.iterations;
 }
 
-// The running segment's --time against its clock: "12m5s of 1h (this segment)", short
-// "12m5s/1h"; past the cap "(time up)". '' when the run isn't running or the segment
-// has no --time (a stop reason says when time ended it).
-function timeCap(run, short = false) {
-  const s = run.status, cap = run.progress?.max_seconds;
-  if (!cap || !live(run) || typeof s.segment_started_at !== 'number') return '';
-  const elapsed = Math.max(0, Math.floor(Date.now() / 1000 - s.segment_started_at));
-  const text = short ? `${fmtLimit(elapsed)}/${fmtLimit(cap)}` : `${fmtLimit(elapsed)} of ${fmtLimit(cap)} (this segment)`;
-  return elapsed >= cap ? `${text} (time up)` : text;
-}
-
 // Line 1: the state and what a running run is doing (`agent 1m 12s`), else when it was
 // last active. Line 2: time (baseline included) and cost so far, and the --time left.
 // Stop reason, budgets and dates are in the tooltip.
@@ -57,7 +45,7 @@ function statusCell(run) {
   let word = WORDS[kind] || kind;
   let activity = '';
   if (kind === 'running') {
-    activity = `${phaseWord(s)} ${fmtDuration(Date.now() / 1000 - s.phase_started_at)}`;
+    activity = `${s.phase_word} ${fmtDuration(Date.now() / 1000 - s.phase_started_at)}`;
     const asked = run.stop_requested; // `autohelix stop`: it ends after this iteration
     if (asked) {
       word = 'running (stopping)';
@@ -69,16 +57,15 @@ function statusCell(run) {
     activity = fmtAgo(run.last_activity);
     if (s?.stop_reason?.detail) notes.push(`Stopped: ${s.stop_reason.detail}`);
   }
-  const when = (t) => new Date(t * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-  if (run.last_activity) notes.push(`Last active ${when(run.last_activity)}`);
-  if (run.created_at) notes.push(`Created ${when(run.created_at)}`);
+  if (run.last_activity) notes.push(`Last active ${fmtClock(run.last_activity)}`);
+  if (run.created_at) notes.push(`Created ${fmtClock(run.created_at)}`);
   let spent = '';
   if (p) {
     // A running iteration's time so far is included; its cost arrives when it ends.
     const seconds = p.seconds + (currentIteration(run) > p.iterations && s.iteration_started_at
       ? Date.now() / 1000 - s.iteration_started_at : 0);
-    spent = [fmtDuration(seconds), fmtMoney(p.cost_usd, p.cost_incomplete), timeCap(run, true)].filter(Boolean).join(' · ');
-    const cap = timeCap(run);
+    spent = [fmtDuration(seconds), fmtMoney(p.cost_usd, p.cost_incomplete), timeCap(s, true)].filter(Boolean).join(' · ');
+    const cap = timeCap(s);
     if (cap) notes.push(`Time budget: ${cap}`);
     if (p.max_cost_usd) notes.push(`Cost budget ${fmtCap(p.max_cost_usd)} (run total)`);
     if (p.cost_incomplete) notes.push('Some call costs are unknown');
@@ -116,25 +103,11 @@ function metricCell(run) {
   return el('td', { className: 'num', title }, fmtNumber(v.value));
 }
 
-// As the console: `landed`, `3 to land`, `3 diverged` (grey: normal for a manual run once
-// the branch moved on), with the mode when it lands by hand; what to type in the tooltip.
+// `landed`, `3 to land`, `3 diverged` (grey: normal for a manual run once the branch
+// moved on), what to type in the tooltip (common.js landingWords).
 function landingCell(run) {
-  const target = run.target_branch;
-  const manual = run.land === 'manual' ? 'manual · ' : '';
-  if (!target) return el('td', { className: 'muted', textContent: 'detached', title: `Started on a detached HEAD: autohelix land ${shortId(run)} --into <branch>` });
-  const l = run.landing;
-  if (!l) return el('td', { className: 'muted', textContent: '—', title: `Branch ${target} or the run's commits are not available` });
-  if (l.commits === 0) {
-    return el('td', { className: 'muted', textContent: run.accepted ? 'landed' : '—',
-      title: run.accepted ? `Everything accepted is on ${target}` : 'Nothing accepted yet' });
-  }
-  const n = plural(l.commits, 'commit');
-  if (l.fast_forward) {
-    return el('td', { textContent: `${manual}${l.commits} to land`,
-      title: `${n} not on ${target} yet: autohelix land ${shortId(run)}` });
-  }
-  return el('td', { className: 'muted', textContent: `${manual}${l.commits} diverged`,
-    title: `${target} has commits this run lacks, so it can't fast-forward. Merge by hand: git merge autohelix/${run.id}` });
+  const { text, hint, todo } = landingWords(run, live(run));
+  return el('td', { className: todo ? '' : 'muted', textContent: text, title: hint });
 }
 
 // The run: its name and start, the group and config, then the goal's first line and
@@ -164,11 +137,7 @@ function runRow(run) {
 function renderMetricMenu(names) {
   if (!names.includes(metric)) metric = names[0] || null;
   $('metric-head').hidden = !metric; // no run has metrics: no column
-  const menu = $('metric');
-  if (JSON.stringify(Array.from(menu.options, (o) => o.value)) !== JSON.stringify(names)) {
-    menu.replaceChildren(...names.map((n) => el('option', { value: n, textContent: n })));
-  }
-  menu.value = metric;
+  fillMenu($('metric'), names, metric);
 }
 
 // "5 runs · $2.95 spent · 1 archived (show)": the count toggles archived rows.

@@ -151,6 +151,10 @@ def test_rows_say_what_the_console_says(server):
     # The stats line's totals: the baseline's time included, and the landing state.
     assert state["run"]["seconds"] == sum(r["seconds"] or 0 for r in rows)
     assert state["run"]["accepted"] == 1 and state["run"]["land"] == "auto"
+    # The tip as the run list has it: the latest accepted measurement.
+    assert state["tip"] == {m["name"]: {"value": m["value"], "iteration": 1}
+                            for m in get_json(server + "/api/runs")["runs"][0]["metrics"]["values"]}
+    assert [r["tip"] for r in rows] == [True, True, False]
 
 
 def test_observe_sections_by_entry(server):
@@ -203,6 +207,20 @@ def test_gates_pending_while_running(project, server):
     assert [(g["text"], g["kind"], g["passed"]) for g in detail["gates"]] == [
         ("pytest -q", "command", None), ("speed regress 5%", "metric", None)]
     assert detail["attempt"] is None
+    # The phase in the console's words, on both pages; the stored name as it is.
+    status = get_json(server + "/api/state")["status"]
+    assert (status["phase"], status["phase_word"]) == ("checks", "gates")
+    assert get_json(server + "/api/runs")["runs"][0]["status"]["phase_word"] == "gates"
+
+
+def test_phase_words_are_the_consoles():
+    from autohelix.run_table import PHASES
+    from autohelix.viewer import with_phase_word
+
+    words = [with_phase_word({"phase": phase, "iteration": n})["phase_word"]
+             for phase, n in [("agent", 2), ("checks", 2), ("benchmark", 2), ("checks", 0), ("report", 0)]]
+    assert words == ["agent", PHASES["checks"], PHASES["benchmark"], "baseline", PHASES["report"]]
+    assert with_phase_word(None) is None
 
 
 def test_attempt_diff(project, server):

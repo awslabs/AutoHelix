@@ -81,13 +81,15 @@ function fmtClock(epochSeconds) {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-// status.json's phase in the words of the config and the console. The stored names
-// are left as they are (an open question); this is the one place the pages map them.
-const PHASES = { 'preparing checks': 'gates', checks: 'gates', benchmark: 'observe', 'stop check': 'stop' };
-function phaseWord(status) {
-  if (!status) return '';
-  if (status.iteration === 0 && status.phase !== 'report') return 'baseline';
-  return PHASES[status.phase] || status.phase || '';
+// The running segment's --time against its clock: "12m5s of 1h (this segment)", short
+// "12m5s/1h"; past the cap "(time up)". '' when the run isn't running or the segment has
+// no --time (a stop reason says when time ended it).
+function timeCap(status, short = false, now = Date.now() / 1000) {
+  const s = status || {}, cap = s.max_time_seconds;
+  if (s.state !== 'running' || !isNumber(cap) || cap <= 0 || !isNumber(s.segment_started_at)) return '';
+  const elapsed = Math.max(0, Math.floor(now - s.segment_started_at));
+  const text = short ? `${fmtLimit(elapsed)}/${fmtLimit(cap)}` : `${fmtLimit(elapsed)} of ${fmtLimit(cap)} (this segment)`;
+  return elapsed >= cap ? `${text} (time up)` : text;
 }
 
 // "20261114-2333-sorting-1q3w" -> name "sorting-1q3w", started "2026-11-14 23:33";
@@ -96,6 +98,36 @@ function splitRunId(id) {
   const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})-(.+)$/.exec(id || '');
   if (!m) return { name: id || null, started: '' };
   return { name: m[6].includes('-') ? m[6] : `Run ${m[6]}`, started: `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` };
+}
+
+// The suffix every command accepts: "20261114-2333-sorting-1q3w" -> "1q3w".
+const shortId = (id) => (id || '').split('-').at(-1);
+
+// Where the run's accepted code is, as the console's dashboard says it: `landed`,
+// `3 to land`, `3 diverged` (`manual · ` first for a run that lands by hand), `—` when
+// nothing is to say; `hint` says where, or what to type. `run`: a run list row, or the
+// run page's state.run (id, target_branch, landing, accepted, land).
+function landingWords(run, running = false) {
+  const { id, target_branch: target, landing, accepted } = run;
+  const none = { text: '—', hint: 'Nothing accepted yet' };
+  if (!target) return accepted ? { text: 'detached', hint: `Started on a detached HEAD: autohelix land ${shortId(id)} --into <branch>` } : none;
+  if (!landing) return { text: '—', hint: `Branch ${target} or the run's commits are not available` };
+  if (landing.commits === 0) return accepted ? { text: 'landed', hint: `on ${target}` } : none;
+  const manual = run.land === 'manual' ? 'manual · ' : '';
+  const n = plural(landing.commits, 'commit');
+  if (!landing.fast_forward) {
+    return { text: `${manual}${landing.commits} diverged`, hint: `${target} has moved on: git merge autohelix/${id}` };
+  }
+  return { text: `${manual}${landing.commits} to land`, todo: true,
+    hint: running && run.land !== 'manual' ? `${n}, on ${target} when the run ends` : `${n}: autohelix land ${shortId(id)}` };
+}
+
+// A <select> of metric names (the chart's, the run list's column), refilled only when they change.
+function fillMenu(menu, names, value) {
+  if (Array.from(menu.options, (o) => o.value).join('\n') !== names.join('\n')) {
+    menu.replaceChildren(...names.map((n) => el('option', { value: n, textContent: n })));
+  }
+  menu.value = value;
 }
 
 // run.json's notes (run --why, --import, archive --why), as the console's dashboard
@@ -114,6 +146,6 @@ function followTheme(logos = { light: '/logo-light.svg', dark: '/logo-dark.svg' 
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { fmtNumber, fmtChange, better, fmtDuration, fmtLimit, fmtMoney, fmtCap, plural, phaseWord,
-    splitRunId, runNotes };
+  module.exports = { fmtNumber, fmtChange, better, fmtDuration, fmtLimit, fmtMoney, fmtCap, plural, timeCap,
+    shortId, landingWords, splitRunId, runNotes };
 }
