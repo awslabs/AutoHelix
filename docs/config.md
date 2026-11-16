@@ -356,6 +356,7 @@ may be flakiness, not setup).
 ## Command environment
 
 Gate, observe and stop commands run with the copy as their working directory,
+with no input (stdin is `/dev/null`, also when `autohelix run` is in a terminal),
 in their own process group: when a command ends or times out, everything it
 started is killed. Each gets:
 

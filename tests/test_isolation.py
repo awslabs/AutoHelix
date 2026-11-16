@@ -23,12 +23,14 @@ LEAKY = [
 
 
 def test_each_test_starts_from_a_clean_environment(copies_dir, tmp_path_factory):
-    harness = {name for name in os.environ if name.startswith("AUTOHELIX_")}
+    harness = {name for name in os.environ if name.startswith("AUTOHELIX_")} - {"AUTOHELIX_UPDATE_SNAPSHOTS"}
     assert harness == {"AUTOHELIX_COPIES_ROOT", "AUTOHELIX_HOOK_AUDIT_LOG"}
     assert os.environ["AUTOHELIX_COPIES_ROOT"] == str(copies_dir)
     assert "CLAUDE_CODE_DISABLE_AUTO_MEMORY" not in os.environ
     assert os.environ["GIT_CONFIG_GLOBAL"].startswith(str(tmp_path_factory.getbasetemp()))
     assert os.environ["COLUMNS"] == "80"
+    config = subprocess.run(["git", "config", "--global", "--list"], capture_output=True, text=True).stdout
+    assert f"core.excludesfile={os.devnull}" in config  # not ~/.config/git/ignore
 
 
 def test_a_run_inside_a_harness_command_writes_nothing_outside_its_tmp_path(tmp_path):

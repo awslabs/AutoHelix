@@ -323,7 +323,7 @@ def test_the_view_rereads_the_run_only_when_it_changed(tmp_path, monkeypatch, ru
     clock = [time.monotonic()]
 
     def sleep(_):
-        clock[0] += 2  # 18 s in all: under REREAD_SECONDS
+        clock[0] += 0.5  # 4.5 s in all: under REREAD_SECONDS
         n = next(polls, None)
         if n is None:
             raise KeyboardInterrupt
@@ -341,10 +341,15 @@ def test_the_view_rereads_the_run_only_when_it_changed(tmp_path, monkeypatch, ru
     assert len(reads) == 3  # the first poll, the history, the status
 
 
-def test_the_views_live_row_names_the_observe_entry():
-    data = _run_data(3)
-    data["run"]["status"] = {"state": "running", "phase": "benchmark", "entry": "bench", "iteration": 3,
-                             "iteration_started_at": 928, "phase_started_at": 990}
-    data["run"]["progress"]["iterations"] = 2
-    row = W.run_table.format_run(data, W.run_table.Saved(), now=1000).splitlines()[-1]
-    assert row.split()[1:] == ["3", "1m", "12s", "observe", "·", "bench"]
+def test_the_views_live_row_names_the_observe_entry(tmp_path, run_paths):
+    """From the status the harness writes, through the `view --json` payload."""
+    from autohelix.viewer import ProjectRuns
+
+    status = RunStatus(tmp_path)
+    status.start()
+    status.phase("benchmark", 1)
+    status.note(entry="bench")
+    data = ProjectRuns(tmp_path).run("test")
+    assert data["run"]["status"]["entry"] == "bench"
+    row = W.run_table.format_run(data, W.run_table.Saved()).splitlines()[-1]
+    assert row.split()[1] == "1" and row.split()[-3:] == ["observe", "·", "bench"]

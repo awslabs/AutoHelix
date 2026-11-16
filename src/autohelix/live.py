@@ -30,7 +30,7 @@ from autohelix.viewer import ProjectRuns
 
 POLL_SECONDS = 0.3  # the log and the run's status
 TABLE_SECONDS = 5  # rereading the runs (history, config, git) for `dashboard`
-REREAD_SECONDS = 60  # `view`: rereading the run (~200 ms) when none of its files changed (git state)
+REREAD_SECONDS = 5  # `view`: rereading the run (~200 ms) when none of its files changed (git, reports)
 REFRESH_PER_SECOND = 10  # `view`: redrawing (the live row's spinner and clock are timed at draw time)
 MIN_LOG_LINES = 5  # the log panel at its smallest: borders, header lines, one line of output
 STOPPED = {"finished": "Finished", "interrupted": "Interrupted", "failed": "Failed",

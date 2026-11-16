@@ -308,10 +308,19 @@ def test_the_live_row_shows_the_phase_only_with_room_under_it(project):
 
 @pytest.mark.parametrize("width, spacing", [(80, terminal.COMPACT), (120, terminal.SPACED)])
 def test_columns_are_spaced_when_the_width_allows(width, spacing):
-    """Roomier columns where a reason still fits after the values; today's at 80. The
-    values stay right-aligned under their headings, the live row's phase in the cost column."""
+    """Roomier columns where a reason still fits after the values; today's at 80 (with no
+    metric too). The values stay right-aligned under their headings, the live row's phase
+    in the cost column, the summary step's row too."""
+    from rich.console import Console
+
+    from autohelix.display import LiveDisplay
+
+    assert (Table({}, 80).gap, Table({}, 80).sep) == terminal.COMPACT
+    assert (Table({"a": "higher"} | {f"m{i}": "lower" for i in range(4)}, 120).gap) == terminal.COMPACT[0]
     table = Table({"speed": "higher", "mem_mb": "lower"}, width)
     assert (table.gap, table.sep) == spacing
+    summary = LiveDisplay(Console(), "summary", gap=table.gap).render(72).plain
+    assert summary.index("summary") == table.live(1, 72, "agent").plain.index("agent")
     head = table.column_header().plain
     row = table.add(Row(0, True, {"speed": 46.9, "mem_mb": 120}))[-1].plain
     assert row.index("46.9") + len("46.9") == head.index("speed ↑") + len("speed ↑")

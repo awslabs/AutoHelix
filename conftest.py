@@ -8,7 +8,9 @@ from autohelix.runs import COPIES_ENV
 
 # Switches for the suite itself, kept when the rest of `AUTOHELIX_*` is removed.
 SUITE_SWITCHES = {"AUTOHELIX_UPDATE_SNAPSHOTS"}
-GIT_CONFIG = "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n"
+GIT_CONFIG = ("[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n"
+              # Not the user's global ignore and attributes files (~/.config/git/), read without a config.
+              f"[core]\n\texcludesFile = {os.devnull}\n\tattributesFile = {os.devnull}\n")
 
 
 @pytest.fixture(autouse=True)
@@ -41,4 +43,6 @@ def clean_env(copies_dir, tmp_path_factory, monkeypatch):
     git_config.write_text(GIT_CONFIG)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(git_config))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for name in ("LINES", "FORCE_COLOR", "NO_COLOR"):  # Rich's terminal size and colours
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("COLUMNS", "80")
