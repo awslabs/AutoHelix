@@ -9,12 +9,6 @@ not silently inherit another model's prices. Promotional gpt-5.6-sol rates are
 intentionally excluded because they expire on 2026-11-30.
 """
 
-import json
-import os
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from uuid import UUID
-
 
 # USD per million tokens: fresh input, cached input, output, 30m cache writes.
 _RATES = {
@@ -38,8 +32,6 @@ TOKEN_FIELDS = (
     "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
     "output_tokens", "reasoning_output_tokens",
 )
-_MAX_SESSION_BYTES = 32 * 1024 * 1024
-_MAX_RECORD_BYTES = 2 * 1024 * 1024
 
 
 def estimate_cost(usage: dict, model: str | None, *, output_includes_reasoning: bool = True) -> dict:
@@ -85,77 +77,3 @@ def estimate_cost(usage: dict, model: str | None, *, output_includes_reasoning: 
         },
         "output_includes_reasoning": output_includes_reasoning,
     }
-
-
-def session_metadata(thread_id: str | None, started_at: datetime) -> dict:
-    """Read only this thread's rollout, never user config or other threads.
-
-    UUIDv7 encodes the creation time. Try its UTC date and adjacent dates because
-    Codex stores rollouts by local date. Older UUIDs use the process start time.
-    Scan all records within fixed byte limits so model changes cannot hide
-    between sampled portions. Exceeding a limit makes the estimate unavailable.
-    Absence (including --ephemeral) is harmless.
-    """
-    try:
-        uid = UUID(thread_id) if isinstance(thread_id, str) else None
-        if uid is None:
-            return {}
-        created = (
-            datetime.fromtimestamp((uid.int >> 80) / 1000, timezone.utc)
-            if uid.version == 7 else started_at
-        )
-        home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-        matches = []
-        for offset in (-1, 0, 1):
-            directory = home / "sessions" / (created + timedelta(days=offset)).strftime("%Y/%m/%d")
-            matches.extend(directory.glob(f"rollout-*-{uid}.jsonl"))
-        if len(matches) != 1:
-            return {}
-        result: dict = {}
-        verified = False
-        models: set[str] = set()
-        conventions: set[bool] = set()
-        scanned = 0
-        with matches[0].open("rb") as log:
-            while line := log.readline(_MAX_RECORD_BYTES + 1):
-                scanned += len(line)
-                if len(line) > _MAX_RECORD_BYTES or scanned > _MAX_SESSION_BYTES:
-                    return {"cost_unavailable_reason": "Codex session metadata exceeds the bounded read limit."}
-                try:
-                    entry = json.loads(line)
-                except (ValueError, UnicodeDecodeError):
-                    return {"cost_unavailable_reason": "Codex session metadata is incomplete or invalid."}
-                if not isinstance(entry, dict):
-                    continue
-                payload = entry.get("payload")
-                if entry.get("type") == "turn_context" and (
-                    not isinstance(payload, dict)
-                    or not isinstance(payload.get("model"), str)
-                    or not payload["model"]
-                ):
-                    return {"cost_unavailable_reason": "Codex session has an invalid model context."}
-                if not isinstance(payload, dict):
-                    continue
-                if entry.get("type") == "session_meta":
-                    verified = payload.get("id") == str(uid)
-                    if isinstance(payload.get("model_provider"), str):
-                        result["provider"] = payload["model_provider"]
-                elif entry.get("type") == "turn_context" and isinstance(payload.get("model"), str):
-                    models.add(payload["model"])
-                elif entry.get("type") == "event_msg" and payload.get("type") == "token_count":
-                    info = payload.get("info")
-                    if isinstance(info, dict) and isinstance(info.get("last_usage_includes_reasoning"), bool):
-                        conventions.add(info["last_usage_includes_reasoning"])
-        if not verified:
-            return {}
-        if len(models) == 1:
-            result["model"] = models.pop()
-        elif models:
-            result["cost_unavailable_reason"] = "Codex used multiple models in this thread."
-        if len(conventions) == 1:
-            result["output_includes_reasoning"] = conventions.pop()
-        elif conventions:
-            result["cost_unavailable_reason"] = "Codex used mixed reasoning-token conventions."
-        return result
-    except (OSError, ValueError, OverflowError):
-        return {}

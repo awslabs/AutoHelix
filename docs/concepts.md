@@ -456,7 +456,9 @@ linked by `segment` (1, 2, … in the run) and told apart by `event`:
   commands; a failed or retried baseline too): `ended_at` and the fields of
   `wait`'s [`iteration` event](cli.md#events) (`iteration`, `accepted`,
   `reason`, `summary`, `metrics`, `commit`, `cost_usd`, `cost_incomplete`,
-  `agent_error`);
+  `agent_error`). A record whose process was killed before its line (or one
+  recovered from a published commit) gets it at the next `resume`, with the
+  previous segment's number, just before the new start;
 - `"event": "end"`: `ended_at`, `state` (`finished`, `interrupted` or
   `failed`), `stop_reason` (as in `status.json`: why the loop ended, kept when
   Ctrl-C or an error comes later, during landing or the report; `null` only when
@@ -590,7 +592,9 @@ Failed main-agent calls consume their iteration number and resume at the next on
 setup failures before a call do not. Baseline retry calls stay in iteration 0.
 `calls` is the sole persisted usage representation; log paths are relative to the
 run directory.
-Report generation has its own separately recorded cost.
+Every run summary's call is counted in the run's totals too, recorded in
+`.internal/usage/summary.jsonl` (one per call; one that never returned stays
+unknown).
 
 What's available depends on the backend:
 

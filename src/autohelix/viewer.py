@@ -317,7 +317,8 @@ class RunData:
     def state(self) -> dict:
         config, config_path = self._config()
         records = self.records()
-        total_cost = summarize_costs([usage for row in records for usage in row.cost_usages])
+        total_cost = summarize_costs([usage for row in records for usage in row.cost_usages]
+                                     + self.history.summary_usages())
         iterations = self.iterations(records)
         status = read_run_status(self.project, self.paths.run_id)
         return {
@@ -957,7 +958,7 @@ class ProjectRuns:
         config = self._config(paths, data.get("config_path"))
 
         attempts = [r for r in records if r.iteration > 0]
-        cost = summarize_costs([usage for r in records for usage in r.cost_usages])
+        cost = summarize_costs([usage for r in records for usage in r.cost_usages] + history.summary_usages())
         budget = status or {}
         tip = refs.get(paths.ref)
         target = data.get("target_branch")

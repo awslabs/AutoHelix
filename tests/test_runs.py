@@ -194,6 +194,34 @@ def test_recovery_after_ref_publication_and_torn_append(project, monkeypatch):
     resumed.close()
 
 
+def test_a_record_never_written_is_logged_once_recovered(project, monkeypatch):
+    """The history append failed: no line then (the history hasn't it); the resume's
+    recovered record gets its line, for the segment that wrote none, before its start."""
+    from autohelix.run_status import _segment_records
+
+    harness = Harness(project, land_mode="manual")
+    original = harness.history.append
+
+    def crash(result):
+        if result.iteration:
+            raise OSError("crash after publication")
+        original(result)
+
+    monkeypatch.setattr(harness.history, "append", crash)
+    with pytest.raises(AutoHelixRunError, match="crash after publication"):
+        harness.run(Budget(until=1), report=False)
+    harness.close()
+    assert [(r["segment"], r["event"], r.get("iteration")) for r in _segment_records(harness.paths.segments)] == [
+        (1, "start", None), (1, "iteration", 0), (1, "end", None)]
+    resumed = Harness(project, land_mode="manual")
+    resumed.run(Budget(until=2), report=False)
+    records = _segment_records(harness.paths.segments)
+    assert [(r["segment"], r["event"], r.get("iteration")) for r in records] == [
+        (1, "start", None), (1, "iteration", 0), (1, "end", None), (1, "iteration", 1),
+        (2, "start", None), (2, "iteration", 2), (2, "end", None)]
+    assert records[3]["reason"] == "recovered" and records[3]["accepted"]
+
+
 def test_ref_cas_failure_never_records_acceptance(project, monkeypatch):
     from autohelix.workspace import Repo
 

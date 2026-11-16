@@ -834,8 +834,8 @@ class Harness:
                     self._complete_record(result, attempt.started_at, attempt.monotonic, attempt.evaluation)
                     # Failures before the agent call don't consume the iteration.
                     if attempt.agent_attempted:
-                        workspace.record(result)
-                        self.segment_log.iteration(ended_at=result.ended_at, **iteration_fields(result))
+                        if workspace.record(result):
+                            self.segment_log.iteration(ended_at=result.ended_at, **iteration_fields(result))
             except BaseException as e:
                 if failure is None:
                     failure = e
@@ -1538,14 +1538,10 @@ class Harness:
                 self.run_state.expected_tip = tip
             self._land_attempted = False
             if self._run(budget or Budget()) and report:
-                from autohelix.report import write_report
-
-                self.run_status.phase("report")
-                if write_report(self.config, self.project_path, self.console, run_id=self.paths.run_id, _owned=True):
-                    self._files.append(("summary", terminal.shown_path(self.paths.report)))
+                self._summary()
         except KeyboardInterrupt:
             outcome = "interrupted"
-            self._note_interrupt_request()  # in the baseline or the report (the loop notes its own)
+            self._note_interrupt_request()  # in the baseline (the loop notes its own)
             raise
         except BaseException:
             outcome = "failed"
@@ -1574,6 +1570,26 @@ class Harness:
                     remove_copies(self.run_state.copies_root, self.log.warn)
                 finally:
                     self.close()
+
+    def _summary(self) -> None:
+        """The run summary, after the loop and its landing: how the segment ended stands
+        whatever happens here (a failure or Ctrl-C ends only the summary, said in a line).
+        None after the agent failed 3 times in a row: a fourth call would most likely fail
+        too, and there is nothing new to summarise."""
+        if (self.run_status.data.get("stop_reason") or {}).get("kind") == "agent":
+            return
+        from autohelix.report import write_report
+
+        self.run_status.phase("report")
+        later = "`autohelix report` writes it"
+        try:
+            if write_report(self.config, self.project_path, self.console, run_id=self.paths.run_id, _owned=True):
+                self._files.append(("summary", terminal.shown_path(self.paths.report)))
+        except KeyboardInterrupt:
+            self._warn(f"Summary interrupted; {later}.")
+        except Exception as e:  # noqa: BLE001 - the segment's outcome stands
+            self.log.warn(f"Summary failed: {e}")
+            self._warn(f"Summary failed: {clean(str(e), 300)}; {later}.")
 
     def _end_segment_log(self, error: BaseException | None) -> None:
         """This segment's end record in segments.jsonl: how it ended (the status's state
@@ -1698,6 +1714,9 @@ class Harness:
             max_iterations=max_iter, run_id=self.paths.run_id, segment=self._segment,
             max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
             max_time_seconds=budget.time_seconds, segment_started_at=segment_started_at)
+        # Records an earlier segment wrote but never logged (it died in between): theirs,
+        # before this start.
+        self.segment_log.catch_up(self.history.load())
         self.segment_log.start(segment=self._segment, started_at=segment_started_at,
                                start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
                                budget={**asdict(budget), "default": budget.default})
@@ -1763,11 +1782,14 @@ class Harness:
         spent = (summarize_costs(self.history.cost_usages).cost_usd or 0) - cost_before
 
         cost_unknown = False  # some of this segment's charges are unavailable
-        # With --cost the only bound, an unknown charge means it may never be reached.
+        priced = False  # some of this segment's charges are known
+        # With --cost the only bound, unknown charges and none known mean the backend
+        # can't price: --cost may never be reached. One unknown among priced ones (a
+        # timeout) only warns; three agent failures in a row stop the segment anyway.
         cost_only = budget.cost_usd is not None and max_iter is None and budget.time_seconds is None
 
         def out_of_budget() -> dict | None:
-            if cost_only and cost_unknown:
+            if cost_only and cost_unknown and not priced:
                 return {"kind": "budget", "budget": "cost",
                         "detail": "cost unknown: --cost can't bound this segment (add -n or --time)"}
             if budget.cost_usd is not None and spent >= budget.cost_usd:
@@ -1797,6 +1819,7 @@ class Harness:
             baseline = next((r for r in self.history.load() if r.iteration == 0 and r.accepted), None)
             if baseline is not None and baseline.cost.incomplete:
                 warn_unknown_cost()
+            priced = baseline is not None and baseline.cost.cost_usd is not None
 
         # Why the loop ended: stop conditions, then `autohelix stop`, then budgets.
         stop_reason: dict | None = None
@@ -1833,6 +1856,7 @@ class Harness:
                     break
                 if result.cost.incomplete:
                     warn_unknown_cost()
+                priced = priced or result.cost.cost_usd is not None
                 spent += result.cost.cost_usd or 0
             self.run_status.note(stop_reason=stop_reason)
             self.log.info(f"run stopped — {stop_reason['detail']}")

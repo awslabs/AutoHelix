@@ -563,7 +563,8 @@ read; a run warns while it exists.
 ## Report
 
 When a run finishes after at least one iteration (a stop condition is met, or
-the iteration, cost or time budget is reached), one more agent call reads the
+the iteration, cost or time budget is reached, but not after the agent failed 3
+times in a row), one more agent call reads the
 run's history, notes, logs and commits and writes a short summary
 to `.autohelix/runs/<id>/report.md`: what was achieved, which changes
 mattered, what didn't work, what to try next, and anything worth checking
@@ -571,11 +572,15 @@ before relying on the results. An interrupted run gets no summary; run
 [`autohelix report`](cli.md#autohelix-report) to write one. Pass `--no-report`
 to `run` or `resume` to skip it; it counts for that command only, not stored
 with the run like `--land`, so pass it to each `resume` too (a `report:` key
-is an error naming the flag). The call uses the same agent backend and model
-as the run, with a
+is an error naming the flag). The call uses the run's agent settings (backend,
+command, model, `reasoning_effort`, `settings`, `extra_args`), with a
 timeout of `agent.timeout` capped at 15 minutes. Its time and cost are shown
-next to the summary in `autohelix view` and `report.html`; the cost is not
-counted against `--cost`.
+next to the summary in `autohelix view` and `report.html`, and every summary's
+cost is counted in the run's total (the end block, `view`, `dashboard`, the run
+page) and in the segment's: it runs after the loop, so `--cost` doesn't stop
+it, but the next segment's `--cost` starts after it. A summary that fails says
+why (with its log, `logs/report.log`) and a Ctrl-C during it ends only the
+summary: the segment's outcome and exit code stay as they were.
 
 ## Old → new
 
@@ -776,7 +781,7 @@ Iteration costs include the optimization agent and model calls made by the
 commands the harness runs (`ask:` gates and `review:` entries, or
 `autohelix ask` and `autohelix review` anywhere in `gates:`, `observe:` or
 `stop:`). Run totals and `--cost` also include the baseline's commands;
-report generation remains separate. History's `calls` list records each
+run totals also count every summary call (see [Report](#report)). History's `calls` list records each
 attempted agent call and command model call with its role, usage and log path.
 Records from earlier versions may list `reviewer` calls; they count the same way.
 
@@ -804,7 +809,7 @@ For subscription and Bedrock users, these are API-equivalent amounts, not
 subscription charges or provider bills. The normal display uses the same
 **Cost** label for every backend; provenance is saved in history:
 
-- `cost_model` and, when available, `cost_provider` identify the model and provider.
+- `cost_model` identifies the model priced.
 - `cost_basis: openai_standard_api` identifies Standard pricing at ordinary
   context lengths, with 30-minute cache writes.
 - `cost_rates` saves the rates per million tokens, cache-write lifetime, and
@@ -814,9 +819,11 @@ subscription charges or provider bills. The normal display uses the same
 
 The snapshot was verified on November 6, 2026. It supports listed GPT-6 models
 and common GPT-5 Codex models; unknown names and expiring promotional prices are
-not guessed. The model normally comes from the matching Codex session metadata,
-so omitted `agent.model` works when that metadata is available. For ephemeral
-sessions, an unambiguous explicit `agent.model` can provide the model instead.
+not guessed. The model priced is the one Codex's JSON output names, else
+`agent.model`; with neither, the cost is unavailable ("set agent.model").
+AutoHelix doesn't read Codex's session files or guess from `extra_args`: a model
+chosen there (`-m`, a profile) is priced as `agent.model` says, so set
+`agent.model` to the model you run.
 
 Estimates exclude speed-tier and regional premiums, per-request long-context
 surcharges, separately billed tools, and usage outside the captured thread.

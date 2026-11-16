@@ -62,7 +62,8 @@ class MockAgent:
         if WRITE_TO in prompt:
             draft = prompt.rsplit(WRITE_TO, 1)[1].strip().removesuffix(".")
             Path(draft).write_text("Mock summary of the run.\n")
-            return AgentRunResult(success=True, exit_code=0)
+            usage = {"cost_usd": float(settings["cost_usd"])} if settings.get("cost_usd") is not None else {}
+            return AgentRunResult(success=True, exit_code=0, usage=usage)
 
         if self.config.read_only:  # a judge call (`autohelix ask` or `review`)
             return self._judge(settings, log_path, prompt, worktree_path)

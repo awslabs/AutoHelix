@@ -391,6 +391,28 @@ def test_cost_alone_with_an_unknown_cost_stops_before_the_next_iteration(project
     assert iterations(paths) == [0, 1, 2]
 
 
+def test_cost_alone_goes_on_past_an_unknown_cost_once_a_charge_was_priced(project, monkeypatch):
+    """A backend that prices (a timed-out call aside) is bounded by --cost: an unknown
+    charge only warns."""
+    from autohelix.agents.mock import MockAgent
+
+    real = MockAgent.run
+
+    def run(self, *args, **kwargs):
+        result = real(self, *args, **kwargs)
+        if kwargs.get("iteration") == 2:
+            result.usage.pop("cost_usd", None)  # as a killed call's
+        return result
+
+    monkeypatch.setattr(MockAgent, "run", run)
+    result = cli(project, "run", "--no-report", "--cost", "0.25")
+    assert result.exit_code == 0, result.output
+    assert "cost unknown; --cost counts known costs only" in result.output
+    paths = latest_run(project)
+    assert iterations(paths) == [0, 1, 2, 3, 4]  # $0.10 + unknown + $0.10 + $0.10
+    assert status(paths)["stop_reason"]["detail"] == "cost budget reached ($0.25 this segment)"
+
+
 def test_until_already_reached_runs_nothing(project):
     paths = begun(project, "-n", "2")
     before = paths.status.read_bytes(), sorted(p.name for p in paths.run_dir.rglob("*"))

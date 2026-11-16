@@ -45,7 +45,8 @@ Per event:
   lock, or a later segment started). `segment`, `last_iteration` (the last iteration
   reported before it crashed; null if none was). Reported once per segment. `time`:
   its last event (its start or its last iteration). An iteration whose process died
-  between its record and its event line is in the history but not reported. Only a
+  between its record and its event line is reported at the next resume, which logs
+  it for the dead segment before its start (`SegmentLog.catch_up`). Only a
   run on this host can be checked: one that crashed on another host looks running
   until it is resumed; only `--timeout` ends a wait on it.
 - `idle`: only for `wait` with run ids, without `--follow`: none of them is running
@@ -114,9 +115,10 @@ def iteration_fields(result) -> dict:
             "cost_usd": cost.cost_usd, "cost_incomplete": bool(cost.incomplete), "agent_error": result.agent_error}
 
 
-@dataclass(frozen=True, order=True)
+@dataclass(frozen=True)
 class Marks:
-    """What a cursor says was reported for one run (compared in this order)."""
+    """What a cursor says was reported for one run: an event at a line is reported
+    when `lines` is past it, a crash when `crashed` is its segment or later."""
 
     lines: int = 0  # lines of the log reported
     crashed: int = 0  # the last segment reported crashed (segments count from 1)
@@ -133,6 +135,8 @@ def encode_cursor(marks: dict[str, Marks]) -> str:
 def decode_cursor(cursor: str) -> dict[str, Marks]:
     """The marks a cursor holds; ValueError if it isn't one."""
     version, _, body = cursor.strip().partition(".")
+    if version == "1" and body:
+        raise ValueError("a cursor of an older AutoHelix: start again with `autohelix wait` (no --after)")
     if version != CURSOR_VERSION or not body:
         raise ValueError(_NOT_A_CURSOR)
     try:
@@ -178,7 +182,17 @@ class _Event:
     kind: str
     run: str
     fields: dict
-    marks: Marks  # the run's marks once this event is reported
+    line: int  # lines up to this event's own (for a crash: to the segment's last record)
+    segment: int = 0  # a crash's segment
+
+    def reported(self, marks: Marks) -> bool:
+        return self.segment <= marks.crashed if self.kind == "crashed" else self.line <= marks.lines
+
+    def past(self, marks: Marks) -> Marks:
+        """`marks` once this event is reported too."""
+        if self.kind == "crashed":
+            return Marks(marks.lines, max(marks.crashed, self.segment))
+        return Marks(max(marks.lines, self.line), marks.crashed)
 
     def key(self):
         return self.time, _RANK[self.kind], self.run
@@ -196,7 +210,9 @@ class RunSource:
         self._offset = 0  # bytes of complete lines read
         self.dead: int | None = None  # the last segment, open, its process seen gone
         self.events: list[_Event] = []
-        self._marks: list[Marks] = []  # each event's marks (sorted)
+        self._lines: list[int] = []  # the lines of the events other than crashes (sorted)
+        self._others: list[int] = []  # their indices in `events`
+        self._crashes: list[int] = []  # the crashes' indices in `events` (segments ascending)
 
     def _read(self) -> bool:
         """Read the lines appended since the last read; True if any were. A replaced or
@@ -248,19 +264,20 @@ class RunSource:
                 self.dead, changed = last["segment"], True
         if changed:
             self.events = self._derive()
-            self._marks = [event.marks for event in self.events]
+            self._others = [i for i, event in enumerate(self.events) if event.kind != "crashed"]
+            self._crashes = [i for i, event in enumerate(self.events) if event.kind == "crashed"]
+            self._lines = [self.events[i].line for i in self._others]
 
     def _derive(self) -> list[_Event]:
-        """Every event the log holds, in order, each with the marks past it."""
+        """Every event the log holds, in order."""
         events, run = [], self.run
-        crashed, last_iteration = 0, None
+        last_iteration = None
         lives: dict[int, float] = {}  # open segments: their last sign of life
+        seen = 0  # lines up to the last record
 
-        def crash(segment: int, lines: int) -> None:
-            nonlocal crashed
-            crashed = max(crashed, segment)
+        def crash(segment: int) -> None:
             events.append(_Event(lives.pop(segment), "crashed", run,
-                                 {"segment": segment, "last_iteration": last_iteration}, Marks(lines, crashed)))
+                                 {"segment": segment, "last_iteration": last_iteration}, seen, segment))
 
         for i, record in enumerate(self.lines):
             if record is None:
@@ -268,11 +285,11 @@ class RunSource:
             n, kind = record["segment"], record["event"]
             if kind == "start":
                 for open_segment in sorted(lives):  # never ended, and a later one started
-                    crash(open_segment, i)
+                    crash(open_segment)
                 lives[n] = _time(record.get("started_at"))
                 events.append(_Event(lives[n], "started", run, {
                     "segment": n, "start_iteration": record.get("start_iteration"), "resumed": n > 1,
-                }, Marks(i + 1, crashed)))
+                }, i + 1))
             elif kind == "iteration":
                 at = _time(record.get("ended_at"))
                 if n in lives:
@@ -280,13 +297,14 @@ class RunSource:
                 if type(record.get("iteration")) is int:
                     last_iteration = record["iteration"]
                 events.append(_Event(at, "iteration", run, {k: record.get(k) for k in ITERATION_FIELDS},
-                                     Marks(i + 1, crashed)))
+                                     i + 1))
             else:
                 lives.pop(n, None)
                 events.append(_Event(_time(record.get("ended_at")), "ended", run, {
-                    "segment": n, **{k: record.get(k) for k in _ENDED_FIELDS}}, Marks(i + 1, crashed)))
+                    "segment": n, **{k: record.get(k) for k in _ENDED_FIELDS}}, i + 1))
+            seen = i + 1
         if self.dead is not None and self.dead in lives:
-            crash(self.dead, len(self.lines))
+            crash(self.dead)
         return events
 
     def state(self) -> str:
@@ -299,13 +317,18 @@ class RunSource:
         return "new"
 
     def pending(self, marks: Marks) -> _Event | None:
-        """The first event past `marks`."""
-        i = bisect.bisect_right(self._marks, marks)
-        return self.events[i] if i < len(self.events) else None
+        """The first event `marks` doesn't say was reported. A crash can be pending
+        before events it precedes are: lines appended to a dead segment (`SegmentLog.
+        catch_up`'s) don't report its crash again."""
+        i = bisect.bisect_right(self._lines, marks.lines)
+        first = self._others[i] if i < len(self._others) else len(self.events)
+        crash = next((k for k in self._crashes if not self.events[k].reported(marks)), len(self.events))
+        k = min(first, crash)
+        return self.events[k] if k < len(self.events) else None
 
     def current(self) -> Marks:
         """Marks past everything reportable now (a fresh `wait`'s starting point)."""
-        return Marks(len(self.lines), self.events[-1].marks.crashed if self.events else 0)
+        return Marks(len(self.lines), max((self.events[k].segment for k in self._crashes), default=0))
 
 
 @dataclass
@@ -376,7 +399,7 @@ class Watcher:
         if not pending:
             return None
         event = min(pending, key=_Event.key)
-        self.marks[event.run] = event.marks
+        self.marks[event.run] = event.past(self.marks.get(event.run, Marks()))
         return self._event(event.kind, event.run, event.time, dict(event.fields))
 
     def idle(self) -> dict | None:

@@ -398,8 +398,16 @@ class History:
 
     @property
     def cost_usages(self) -> list[dict[str, Any]]:
-        """All recorded run calls."""
-        return [usage for result in self.load() for usage in result.cost_usages]
+        """All recorded run calls: the iterations', then every summary's (the run's
+        totals count both)."""
+        return [usage for result in self.load() for usage in result.cost_usages] + self.summary_usages()
+
+    def summary_usages(self) -> list[dict[str, Any]]:
+        """The summary calls (`report.write_report`), one per call: a call that never
+        returned keeps its unknown cost."""
+        from autohelix.usage_log import read_usage
+
+        return read_usage(self.paths.summary_usage)
 
     def load(self) -> list[IterationResult]:
         """Load all iteration results from history (cached by file mtime)."""

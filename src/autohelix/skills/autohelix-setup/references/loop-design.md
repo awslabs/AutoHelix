@@ -110,8 +110,8 @@ Explain that the dollar counter covers the optimization agent and the model
 calls of `ask` gates and reviews, including the baseline's, and is checked
 between iterations; it may overshoot. It counts one segment: a `resume`
 gets its own.
-Report generation, external calls, and supervising/setup-agent expenditure
-are separate. If reporting is unsupported, missing,
+The run summary (counted in the run's total, after the loop), external calls,
+and supervising/setup-agent expenditure are outside `--cost`. If reporting is unsupported, missing,
 or unreliable, say that a dollar budget cannot reliably bound spend. Do not
 invent a token price or interpret missing cost as free usage. Use iteration/time
 limits to bound attempts and duration, explain any unmet financial requirement,

@@ -349,7 +349,7 @@ Every budget counts **this segment**, whatever earlier ones spent:
 |---|---|
 | `-n N` | after N iterations (`resume -n N`: N more) |
 | `--until N` | after iteration N of the run: the one flag that counts a total, so a script can repeat it (`resume --until 20` twice runs nothing the second time) |
-| `--cost USD` | once this segment has charged USD: agent calls, reviews, asks, every model call a command reports, the baseline's too (the summary report excepted) |
+| `--cost USD` | once this segment has charged USD: agent calls, reviews, asks, every model call a command reports, the baseline's too (the summary, written after the loop, is counted but never stopped by it) |
 | `--time DURATION` | once DURATION of this segment's wall clock has passed, the baseline included |
 
 Whichever comes first ends the segment; a stop condition or [`autohelix stop`](#autohelix-stop) can end it sooner.
@@ -362,7 +362,9 @@ a hard limit on one iteration use [`agent.timeout`](config.md#agent). Costs that
 are unavailable don't count (`--cost` warns and tracks only the known ones): keep
 `-n` or `--time` alongside. With `--cost` the only bound, an unknown cost stops
 the segment before its next iteration ("cost unknown: --cost can't bound this
-segment (add -n or --time)").
+segment (add -n or --time)") only while none of the segment's charges was priced
+(a backend that can't price); once one was, an unknown one (a timed-out call)
+only warns.
 
 `--time` starts no new iteration once the time is up; what is under way then
 comes on top, so the worst case is `--time` plus one iteration, landing and the
@@ -771,8 +773,10 @@ Per event:
   the run's lock, or a later segment started). `segment`, `last_iteration` (the
   last iteration reported before it crashed; `null` if none was, e.g. during its
   first baseline). Reported once per segment. `time` is its last event (its
-  start or its last iteration). An iteration whose process was killed between
-  its record and its log line is in the history but not reported.
+  start or its last iteration). An iteration whose process was killed after its
+  record but before its log line (an accepted one in its stop commands, say) is
+  reported when the run is resumed: the resume logs it for the crashed segment
+  before its own start (after the crash, if that was already reported).
 - **`idle`**: only with run ids, without `--follow`: none of them is running
   and nothing is pending. `runs`: one `{run, short, state}` per run named,
   `state` being how its last segment ended (`finished`, `interrupted`,

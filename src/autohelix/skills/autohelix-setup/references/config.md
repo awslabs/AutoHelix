@@ -240,9 +240,10 @@ the harness's commands report (`ask` gates, reviews) cost, the baseline's
 included, with the dollar limit. History keeps each actual model call in the
 `calls` list, including its role, usage and relative log path. Claude Code and
 OpenCode can report dollar costs; Codex can provide calculated API-equivalent
-estimates. Only rely on `--cost` when usable dollar usage is recorded for the
+estimates (set `agent.model` for them: without it Codex's cost is unavailable). Only rely on `--cost` when usable dollar usage is recorded for the
 selected backend/configuration; missing cost is not evidence of free usage
-(`--cost` counts known costs only, and warns). Report generation, model calls
+(`--cost` counts known costs only, and warns). The run summary (written after
+the loop; its cost counts in the run's total), model calls
 made by external commands that don't record usage, and the user's
 supervising/setup agent are separate. These boundaries make it a run-control
 threshold, not an absolute all-inclusive financial cap.

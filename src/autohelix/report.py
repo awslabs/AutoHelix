@@ -7,6 +7,7 @@ The harness calls `write_report` when a run finishes; `autohelix report` calls i
 The agent writes only the narrative; the viewer shows the facts around it.
 """
 
+import dataclasses
 import json
 import time
 from pathlib import Path
@@ -112,11 +113,9 @@ def write_report(config: Config, project: Path, console, *, run_id: str, _owned:
     draft.unlink(missing_ok=True)
     last = History(project, paths.run_id).get_last_iteration()
 
-    agent = create_agent(AgentConfig(
-        backend=config.agent.backend,
-        command=config.agent.command,
-        model=config.agent.model,
-        timeout=min(config.agent.timeout or TIMEOUT_SECONDS, TIMEOUT_SECONDS),
+    # The run's agent settings (extra_args, settings, reasoning_effort too), within the cap.
+    agent = create_agent(dataclasses.replace(
+        config.agent, timeout=min(config.agent.timeout or TIMEOUT_SECONDS, TIMEOUT_SECONDS), require_notes=None,
     ), heartbeat_seconds=30)
     log_path = paths.logs / "report.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,6 +133,13 @@ def write_report(config: Config, project: Path, console, *, run_id: str, _owned:
     copy = Copy.create(Repo(project), ensure_copies(root) / "iter-report", files=tip, head=tip,
                        refs=(paths.ref,))  # the prompt names `autohelix/<id>`
     started = time.monotonic()
+    # Every summary call counts in the run's cost (`History.summary_usages`): recorded
+    # before it starts (cost unknown until it returns), then with its usage.
+    from autohelix.usage_log import append_usage, new_call_id
+    from autohelix.terminal import shown_path
+
+    call = {"id": new_call_id(), "role": "summary", "started_at": time.time(), "last_iteration": last}
+    append_usage({**call, "status": "started", "cost_usd": None}, paths.summary_usage)
     try:
         with Live(with_room(display), console=console, refresh_per_second=10, transient=True):
             result = agent.run(
@@ -142,6 +148,8 @@ def write_report(config: Config, project: Path, console, *, run_id: str, _owned:
                 iteration=0, log_path=log_path, event_callback=on_event,
             )
             display.flush()
+        append_usage({**call, **(result.usage or {}), "status": "ok" if result.success else "failed",
+                      "cost_usd": (result.usage or {}).get("cost_usd")}, paths.summary_usage)
         if touched := copy.changed():
             console.print("[red]Error: the summary agent changed accepted code files (discarded):[/red] "
                           + ", ".join(touched[:10]), highlight=False)
@@ -160,8 +168,14 @@ def write_report(config: Config, project: Path, console, *, run_id: str, _owned:
 
     if not draft.is_file() or not draft.read_text().strip():
         draft.unlink(missing_ok=True)
-        console.print("[yellow]The agent finished without writing a summary; "
-                      "the previous report (if any) is unchanged.[/yellow]")
+        from rich.text import Text
+
+        from autohelix.formatting import clean
+
+        why = (f"Summary failed: {clean(result.error or f'exit status {result.exit_code}', 300)}"
+               if not result.success else "The agent finished without writing a summary")
+        console.print(Text(f"{why}; the previous report (if any) is unchanged (log: {shown_path(log_path)}).",
+                           style="yellow"))
         return False
     draft.replace(paths.report)
     info = {"last_iteration": last, "written_at": time.time(), "seconds": seconds,

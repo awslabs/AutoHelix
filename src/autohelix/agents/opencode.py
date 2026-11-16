@@ -136,7 +136,16 @@ class OpenCodeAgent:
                 error=f"'{command}' not found. Set AUTOHELIX_OPENCODE_CMD or agent.command.",
             )
 
+        error = None
         if result.timed_out:
-            event_callback(AgentEvent(kind=AgentEventKind.WARNING, text=f"Agent {format_timeout_seconds(self.config.timeout)}"))
-        return AgentRunResult(success=result.exit_code == 0, exit_code=result.exit_code, usage=self._usage,
+            error = format_timeout_seconds(self.config.timeout)
+            event_callback(AgentEvent(kind=AgentEventKind.WARNING, text=f"Agent {error}"))
+            # Its finished steps' costs only: the call's cost is unknown (kept apart).
+            if "cost_usd" in self._usage:
+                self._usage["partial_cost_usd"] = self._usage.pop("cost_usd")
+                self._usage.pop("cost_source", None)
+            self._usage["cost_unavailable_reason"] = "OpenCode timed out before reporting its whole cost."
+        elif result.exit_code != 0:
+            error = f"OpenCode exited with status {result.exit_code}"
+        return AgentRunResult(success=error is None, exit_code=result.exit_code, error=error, usage=self._usage,
                               final_text=self._final_text)

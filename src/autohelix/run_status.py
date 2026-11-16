@@ -95,6 +95,25 @@ class SegmentLog:
         if self.segment is not None:
             self._append({"segment": self.segment, "event": "iteration", "ended_at": ended_at, **fields})
 
+    def catch_up(self, records: list) -> None:
+        """Before a segment's start: an iteration line, for the last segment, for each
+        history record no line reports (its process died between its record and its line,
+        e.g. in an accepted iteration's stop commands, or `runs.reconcile` recovered it).
+        Records are `history.IterationResult`s; nothing without a segment."""
+        from autohelix.events import iteration_fields
+
+        logged, last = set(), None
+        for record in _segment_records(self.path):
+            if record.get("event") == "iteration":
+                logged.add(record.get("iteration"))
+            last = record["segment"] if last is None else max(last, record["segment"])
+        if last is None:
+            return
+        for result in records:
+            if result.iteration not in logged:
+                self._append({"segment": last, "event": "iteration", "ended_at": result.ended_at,
+                              **iteration_fields(result)})
+
     def end(self, *, state: str | None, stop_reason: dict | None, last_iteration: int | None,
             iterations: int | None, error: str | None = None) -> None:
         """The end record for the segment `start` began (nothing without one)."""
@@ -119,17 +138,14 @@ class SegmentLog:
             pass  # never break a run over it
 
 
-def _segment_records(path: Path | None, data: bytes | None = None, terminated: bool = False) -> list[dict]:
-    """The log's records (objects with an int `segment`), damaged lines skipped: from
-    `data` if given, else read from `path`; with `terminated`, only newline-terminated
-    lines (an unterminated last line may still be being written)."""
-    if data is None:
-        try:
-            data = path.read_bytes()
-        except OSError:
-            return []
+def _segment_records(path: Path) -> list[dict]:
+    """The log's records (objects with an int `segment`), damaged lines skipped."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return []
     records = []
-    for line in data.split(b"\n")[:-1] if terminated else data.splitlines():
+    for line in data.splitlines():
         try:
             record = json.loads(line)
         except ValueError:  # UnicodeDecodeError included
@@ -139,15 +155,13 @@ def _segment_records(path: Path | None, data: bytes | None = None, terminated: b
     return records
 
 
-def read_segments(path: Path | None, *, data: bytes | None = None, terminated: bool = False) -> list[dict]:
+def read_segments(path: Path) -> list[dict]:
     """The segments in the log, oldest first (iteration records aside): each start
     record with its end record's fields merged in (`ended_at`, `state`, `stop_reason`, `last_iteration`,
     `iterations`, `error`), and `open` true when it has none (still running, or its
-    process died). Lines that aren't records (damaged, undecodable) are skipped. The
-    log is read from `path`, or given as `data`; `terminated` ignores an unterminated
-    last line (`autohelix wait`, which reads while the harness appends)."""
+    process died). Lines that aren't records (damaged, undecodable) are skipped."""
     segments: dict[int, dict] = {}
-    for record in _segment_records(path, data, terminated):
+    for record in _segment_records(path):
         n = record["segment"]
         fields = {k: v for k, v in record.items() if k != "event"}
         if record.get("event") == "start":

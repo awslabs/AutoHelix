@@ -144,8 +144,9 @@ agent to set up and manage the experiment from scratch.
 `--time` and `--cost` are checked between iterations; per-agent deadlines and
 check timeouts have their own boundaries. Dollar accounting depends on backend
 reporting and includes the optimization agent and the `ask` and `review` calls
-of gates and observe entries, including the baseline's. Report generation and
-supervisor calls are separate. Missing cost
+of gates and observe entries, including the baseline's. The run summary's cost
+counts in the run's total but runs after `--cost` is checked; supervisor calls
+are separate. Missing cost
 is unknown, not zero. See [CLI → Budgets](cli.md#budgets) before relying on a cap.
 The console, `autohelix view`, the run summary and run page (`report.md`,
 `report.html`), and saved records already support inspecting results.

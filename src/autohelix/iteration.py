@@ -460,13 +460,17 @@ class IterationWorkspace:
                 run.expected_tip = commit
         return commit
 
-    def record(self, result) -> None:
-        """Write the final record: update an accepted one, else append it once. A
-        failed append may have torn the history's tail; the next owner repairs it."""
+    def record(self, result) -> bool:
+        """Write the final record: update an accepted one, else append it once; True if
+        written. A failed append may have torn the history's tail; the next owner repairs
+        it."""
         if self.recorded:
             self._history.update(result)
         elif not self.record_write_attempted:
             self._history.append(result)
+        else:
+            return False
+        return True
 
     def remove(self, copy: Copy) -> None:
         """Delete a copy; a failure is logged and retried at the next segment."""

@@ -220,9 +220,11 @@ def test_cursors_round_trip_and_bad_ones_are_refused(tmp_path):
                                                    "20261114-1000-c-cccc": Marks(5, 0)}
     good = encode_cursor(marks)
     assert good.startswith("2.")
-    for bad in ["", "nonsense", "1." + good[2:], "2.", "2.!!!", good[:-3], "2." + "A" * 40]:
+    for bad in ["", "nonsense", "2.", "2.!!!", good[:-3], "2." + "A" * 40]:
         with pytest.raises(ValueError, match="not a cursor"):
             decode_cursor(bad)
+    with pytest.raises(ValueError, match="older AutoHelix.*no --after"):
+        decode_cursor("1." + good[2:])  # the previous format's: says so
     import base64
     import zlib
     for payload in [b"[]", b'{"r": []}', b'{"r": {"x/y": [1, 2]}}', b'{"r": {"a": [1, 2, 3]}}', b'{"r": {"a": [1]}}',
@@ -335,6 +337,37 @@ def test_a_crash_is_reported_once(tmp_path):
     start(paths, 2, T0 + 10, start_iteration=1)
     assert brief(drain(watcher)) == [("started", "aaaa", 2)]
     assert brief(drain(Watcher(tmp_path, after=events[-1]["cursor"]))) == [("started", "aaaa", 2)]
+
+
+def test_lines_after_a_reported_crash_dont_report_it_again(tmp_path):
+    """A record its process died before logging is appended to the dead segment at the
+    next start (`SegmentLog.catch_up`), like any line written after a confirmed crash:
+    reported late, the crash not again."""
+    paths = make_run(tmp_path, "20261114-1000-a-aaaa")
+    start(paths, 1, T0, pid=dead_pid())
+    record(paths, 0, T0 + 1)
+    watcher = Watcher(tmp_path, after=EMPTY)
+    events = drain(watcher)
+    assert brief(events)[-1] == ("crashed", "aaaa", 1)
+    with open(paths.segments, "a") as stream:
+        stream.write("not a record\n")
+    assert watcher.poll() is None
+    record(paths, 1, T0 + 3, commit="c1")  # the caught-up record
+    start(paths, 2, T0 + 10, start_iteration=2)
+    assert brief(drain(watcher)) == [("iteration", "aaaa", 1), ("started", "aaaa", 2)]
+    assert brief(drain(Watcher(tmp_path, after=events[-1]["cursor"]))) == [
+        ("iteration", "aaaa", 1), ("started", "aaaa", 2)]
+    # Read for the first time, the caught-up record comes before the crash.
+    assert brief(drain(Watcher(tmp_path, after=EMPTY))) == [
+        ("started", "aaaa", 1), ("iteration", "aaaa", 0), ("iteration", "aaaa", 1), ("crashed", "aaaa", 1),
+        ("started", "aaaa", 2)]
+
+
+def test_the_iteration_fields_are_the_logged_ones():
+    from autohelix.events import ITERATION_FIELDS, iteration_fields
+    from autohelix.history import IterationResult
+
+    assert tuple(iteration_fields(IterationResult(iteration=1, accepted=True))) == ITERATION_FIELDS
 
 
 def test_a_crashed_segment_is_probed_once_and_a_live_one_every_look(tmp_path, monkeypatch):
@@ -669,3 +702,29 @@ def test_wait_follows_a_live_run(project):
             final = json.loads(paths.record(event["iteration"]).read_text())
             assert event["accepted"]
             assert (event["time"], event["cost_usd"]) == (final["ended_at"], final["cost"]["cost_usd"])
+
+
+def test_an_iteration_killed_in_its_stop_commands_is_reported_at_the_resume(project):
+    """Accepted and published, then the process died before its line (in the stop
+    commands): the next segment logs it for the dead one, before its start."""
+    from tests.test_runs import configure
+
+    configure(project, stop=["exit 1"])
+    assert CliRunner().invoke(main, ["run", "-n", "1", "--no-report", "--land", "manual",
+                                     "-p", str(project)]).exit_code == 0
+    paths = latest_run(project)
+    lines = paths.segments.read_text().splitlines()
+    killed = [line for line in lines if not ('"iteration": 1' in line or '"end"' in line)]
+    paths.segments.write_text("\n".join(killed) + "\n")
+    result = CliRunner().invoke(main, ["resume", "-n", "1", "--no-report", "-p", str(project)])
+    assert result.exit_code == 0, result.output
+    records = [json.loads(line) for line in paths.segments.read_text().splitlines()]
+    assert [(r["segment"], r["event"], r.get("iteration")) for r in records] == [
+        (1, "start", None), (1, "iteration", 0), (1, "iteration", 1), (2, "start", None), (2, "iteration", 2),
+        (2, "end", None)]
+    assert records[2]["accepted"] and records[2]["commit"]
+    assert brief(drain(Watcher(project, after=EMPTY))) == [
+        ("started", short_id(paths.run_id), 1), ("iteration", short_id(paths.run_id), 0),
+        ("iteration", short_id(paths.run_id), 1), ("crashed", short_id(paths.run_id), 1),
+        ("started", short_id(paths.run_id), 2), ("iteration", short_id(paths.run_id), 2),
+        ("ended", short_id(paths.run_id), 2)]

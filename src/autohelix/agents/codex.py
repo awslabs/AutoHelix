@@ -8,11 +8,10 @@ import os
 import re
 import subprocess
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, command_path
-from autohelix.agents.codex_cost import TOKEN_FIELDS, estimate_cost, session_metadata
+from autohelix.agents.codex_cost import TOKEN_FIELDS, estimate_cost
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_worktree_env
 
@@ -28,7 +27,7 @@ class CodexAgent:
         self.heartbeat_seconds = heartbeat_seconds
         self._usage: dict[str, object] = {}
         self._turn_error: str | None = None
-        self._thread_id: str | None = None
+        self._model: str | None = None  # the model Codex's output names, if it does
         self._completed = False
         self._final_text: str | None = None
         self._schema_path: Path | None = None
@@ -139,9 +138,9 @@ class CodexAgent:
             return
 
         event_type = payload.get("type")
+        if isinstance(payload.get("model"), str) and payload["model"]:
+            self._model = payload["model"]  # unconfirmed: which events name it (if any) varies by version
         if event_type in {"thread.started", "turn.started"}:
-            if event_type == "thread.started":
-                self._thread_id = payload.get("thread_id")
             self._emit(event_callback, AgentEventKind.STATUS, event_type)
             return
         if event_type == "turn.failed":
@@ -220,14 +219,13 @@ class CodexAgent:
     ) -> AgentRunResult:
         self._usage = {}
         self._turn_error = None
-        self._thread_id = None
+        self._model = None
         self._completed = False
         self._final_text = None
         self._schema_path = None
         if self.config.read_only and self.config.output_schema:
             self._schema_path = log_path.with_suffix(".schema.json")
             self._schema_path.write_text(json.dumps(self.config.output_schema))
-        started_at = datetime.now(timezone.utc)
         started = time.monotonic()
 
         # Build env with remapped PYTHONPATH for worktree
@@ -267,31 +265,15 @@ class CodexAgent:
 
         self._usage["duration_ms"] = int((time.monotonic() - started) * 1000)
         self._usage["usage_complete"] = self._completed and error is None
-        metadata = session_metadata(self._thread_id, started_at)
-        if metadata.get("provider"):
-            self._usage["cost_provider"] = metadata["provider"]
+        # Priced from the model Codex's output names, else agent.model (an estimate needs one).
+        model = self._model or self.config.model
         if not self._usage["usage_complete"]:
             self._usage["cost_unavailable_reason"] = "Codex did not report complete successful usage."
-        elif metadata.get("cost_unavailable_reason"):
-            self._usage["cost_unavailable_reason"] = metadata["cost_unavailable_reason"]
-        elif "resume" in self.config.extra_args:
-            self._usage["cost_unavailable_reason"] = "Resumed Codex thread usage is not priced per invocation."
+        elif not model:
+            self._usage["cost_unavailable_reason"] = "set agent.model (Codex's output names no model)"
         else:
-            # Prefer the actual resolved model. Only fall back to explicit
-            # AutoHelix model settings when extra CLI overrides cannot change it.
-            explicit = self.config.model or self.config.settings.get("model")
-            overrides = any(
-                arg in {"-m", "--model", "-c", "--config", "-p", "--profile"}
-                or arg.startswith(("--model=", "--config=", "--profile="))
-                or (not arg.startswith("--") and arg.startswith(("-m", "-c", "-p")))
-                for arg in self.config.extra_args
-            )
-            model = metadata.get("model") or (explicit if not overrides else None)
-            output_includes_reasoning = self._usage.get(
-                "output_includes_reasoning", metadata.get("output_includes_reasoning", True)
-            )
             self._usage.update(estimate_cost(
-                self._usage, model, output_includes_reasoning=output_includes_reasoning,
+                self._usage, model, output_includes_reasoning=self._usage.get("output_includes_reasoning", True),
             ))
         if self._usage.get("cost_unavailable_reason") and error is None:
             self._emit(

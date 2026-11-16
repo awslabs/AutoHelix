@@ -139,7 +139,7 @@ class RunPaths:
     @property
     def status(self): return self.internal / "status.json"
     @property
-    def segments(self): return self.internal / "segments.jsonl"  # one line per segment (`run_status.SegmentLog`)
+    def segments(self): return self.internal / "segments.jsonl"  # the run's event log (`run_status.SegmentLog`)
     @property
     def stop_request(self): return self.internal / "stop.json"  # `autohelix stop`'s request (`run_status`)
     @property
@@ -156,6 +156,9 @@ class RunPaths:
     def report_draft(self): return self.internal / "report.draft.md"
     @property
     def attempts(self): return self.internal / "attempts"  # superseded iteration folders
+
+    @property
+    def summary_usage(self): return self.internal / "usage" / "summary.jsonl"  # every summary call's usage
 
     def usage(self, iteration: int) -> Path:
         """`$AUTOHELIX_USAGE_FILE` for the commands one iteration runs."""
