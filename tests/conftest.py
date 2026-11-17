@@ -24,6 +24,10 @@ def project(tmp_path):
     git(project, "init", "-q")
     git(project, "config", "user.email", "test@example.com")
     git(project, "config", "user.name", "Test")
+    # No background `git maintenance` after commits: it leaves lock files in .git
+    # that tests comparing the repository's files before and after would see.
+    git(project, "config", "maintenance.auto", "false")
+    git(project, "config", "gc.auto", "0")
     (project / "code.py").write_text("print('baseline')\n")
     (project / "autohelix.yaml").write_text(yaml.safe_dump({
         "goal": "Make a checked change",
