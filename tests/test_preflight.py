@@ -165,7 +165,7 @@ def _committed(folder: Path, files: dict[str, str], untracked: dict[str, str] | 
 
 
 def _scope_warnings(folder: Path, scope: str) -> list[str]:
-    (folder / "autohelix.yaml").write_text(f"goal: g\nagent: {{backend: mock}}\nscope:\n{scope}")
+    (folder / "autohelix.yaml").write_text(f"goal: g\nagent: {{cli: mock}}\nscope:\n{scope}")
     config = load_config(folder)
     return [i.message for i in preflight_check(config, folder) if "scope." in i.message]
 
@@ -201,8 +201,8 @@ def _agent_errors(folder: Path, monkeypatch, config: str, **env: str) -> list[st
     """Preflight's agent errors with nothing on PATH but `bin/` (empty unless a test adds to it)."""
     (folder / "bin").mkdir(exist_ok=True)
     monkeypatch.setenv("PATH", str(folder / "bin"))
-    for backend in ("CLAUDE", "CODEX", "OPENCODE"):
-        monkeypatch.delenv(f"AUTOHELIX_{backend}_CMD", raising=False)
+    for cli in ("CLAUDE_CODE", "CODEX", "OPENCODE"):
+        monkeypatch.delenv(f"AUTOHELIX_{cli}_CMD", raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     (folder / "autohelix.yaml").write_text(config)
@@ -217,66 +217,64 @@ def _executable(path: Path) -> str:
 
 
 def test_the_documented_command_override_is_honoured(tmp_path, monkeypatch):
-    """`AUTOHELIX_CLAUDE_CMD`, which the backend runs, used to fail preflight: it read
-    only `agent.command`, else `claude` on PATH."""
+    """`AUTOHELIX_CLAUDE_CODE_CMD`, which the backend runs, is what preflight checks."""
     wrapper = _executable(tmp_path / "my-claude")
-    assert _agent_errors(tmp_path, monkeypatch, "goal: g\n", AUTOHELIX_CLAUDE_CMD=wrapper) == []
+    assert _agent_errors(tmp_path, monkeypatch, "goal: g\n", AUTOHELIX_CLAUDE_CODE_CMD=wrapper) == []
     assert _agent_errors(tmp_path, monkeypatch, "goal: g\n") == [
-        "Agent command 'claude' not found in PATH; install claude, or set agent.command or AUTOHELIX_CLAUDE_CMD"]
+        "Agent command 'claude' not found in PATH; install Claude Code, or set AUTOHELIX_CLAUDE_CODE_CMD"]
     _executable(tmp_path / "bin" / "claude")
     assert _agent_errors(tmp_path, monkeypatch, "goal: g\n") == []
 
 
-def test_judge_backends_are_checked(tmp_path, monkeypatch):
-    """An `ask:` or `review:` judge whose backend isn't installed used to pass preflight
+def test_judge_clis_are_checked(tmp_path, monkeypatch):
+    """An `ask:` or `review:` judge whose CLI isn't installed used to pass preflight
     and then fail every iteration's check."""
     config = textwrap.dedent("""\
         goal: g
-        agent: {backend: mock}
+        agent: {cli: mock}
         gates:
           - ask: Keeps the API?
-            agent: {backend: codex}
+            agent: {cli: codex}
         observe:
           - name: notes
             review: Review it
-            agent: {backend: claude, command: /nowhere/claude}
+            agent: {cli: claude-code}
           - name: inherits
             review: Review it too
     """)
-    assert _agent_errors(tmp_path, monkeypatch, config) == [
-        "Agent command 'codex' not found in PATH (used by `ask: Keeps the API?`); install codex, or set "
-        "agent.command or AUTOHELIX_CODEX_CMD",
-        "Agent command '/nowhere/claude' not found in PATH (used by `observe notes`); install claude, or set "
-        "agent.command or AUTOHELIX_CLAUDE_CMD",
+    nowhere = {"AUTOHELIX_CLAUDE_CODE_CMD": "/nowhere/claude"}
+    assert _agent_errors(tmp_path, monkeypatch, config, **nowhere) == [
+        "Agent command 'codex' not found in PATH (used by `ask: Keeps the API?`); install Codex, or set "
+        "AUTOHELIX_CODEX_CMD",
+        "Agent command '/nowhere/claude' not found in PATH (used by `observe notes`); install Claude Code, or set "
+        "AUTOHELIX_CLAUDE_CODE_CMD",
     ]
-    assert _agent_errors(tmp_path, monkeypatch, config, AUTOHELIX_CODEX_CMD=_executable(tmp_path / "cx")) == [
-        "Agent command '/nowhere/claude' not found in PATH (used by `observe notes`); install claude, or set "
-        "agent.command or AUTOHELIX_CLAUDE_CMD"]
+    assert _agent_errors(tmp_path, monkeypatch, config, AUTOHELIX_CODEX_CMD=_executable(tmp_path / "cx"),
+                         **nowhere) == [
+        "Agent command '/nowhere/claude' not found in PATH (used by `observe notes`); install Claude Code, or set "
+        "AUTOHELIX_CLAUDE_CODE_CMD"]
 
 
-def test_a_judge_on_the_main_backend_shares_its_command(tmp_path, monkeypatch):
+def test_a_judge_on_the_main_cli_shares_its_executable(tmp_path, monkeypatch):
     main = _executable(tmp_path / "claude-main")
-    config = f"goal: g\nagent: {{command: {main}}}\ngates: [{{ask: 'Done?'}}]\n"
-    assert _agent_errors(tmp_path, monkeypatch, config) == []
-    # Another backend drops the top-level command (as `judge.judge_config` does).
-    config = f"goal: g\nagent: {{command: {main}}}\ngates: [{{ask: 'Done?', agent: {{backend: codex}}}}]\n"
-    assert _agent_errors(tmp_path, monkeypatch, config) == [
-        "Agent command 'codex' not found in PATH (used by `ask: Done?`); install codex, or set agent.command "
-        "or AUTOHELIX_CODEX_CMD"]
+    config = "goal: g\ngates: [{ask: 'Done?'}]\n"
+    assert _agent_errors(tmp_path, monkeypatch, config, AUTOHELIX_CLAUDE_CODE_CMD=main) == []
+    config = "goal: g\ngates: [{ask: 'Done?', agent: {cli: codex}}]\n"
+    assert _agent_errors(tmp_path, monkeypatch, config, AUTOHELIX_CLAUDE_CODE_CMD=main) == [
+        "Agent command 'codex' not found in PATH (used by `ask: Done?`); install Codex, or set AUTOHELIX_CODEX_CMD"]
 
 
-@pytest.mark.parametrize("backend, module, cls", [
-    ("claude", "claudecode", "ClaudeCodeAgent"), ("codex", "codex", "CodexAgent"),
+@pytest.mark.parametrize("cli, module, cls", [
+    ("claude-code", "claudecode", "ClaudeCodeAgent"), ("codex", "codex", "CodexAgent"),
     ("opencode", "opencode", "OpenCodeAgent")])
-def test_backends_resolve_their_command_as_preflight_does(tmp_path, monkeypatch, backend, module, cls):
+def test_backends_resolve_their_command_as_preflight_does(tmp_path, monkeypatch, cli, module, cls):
     import importlib
 
-    from autohelix.agents import AgentConfig, command_path
+    from autohelix.agents import EXECUTABLES, AgentConfig, command_path, command_variable
 
     agent_class = getattr(importlib.import_module(f"autohelix.agents.{module}"), cls)
     monkeypatch.setenv("PATH", str(tmp_path))
-    monkeypatch.setenv(f"AUTOHELIX_{backend.upper()}_CMD", "/opt/wrapper")
-    assert agent_class(AgentConfig(backend=backend))._command_path() == command_path(backend) == "/opt/wrapper"
-    assert agent_class(AgentConfig(backend=backend, command="/x"))._command_path() == "/x"
-    monkeypatch.delenv(f"AUTOHELIX_{backend.upper()}_CMD")
-    assert agent_class(AgentConfig(backend=backend))._command_path() == backend
+    monkeypatch.setenv(command_variable(cli), "/opt/wrapper")
+    assert agent_class(AgentConfig(cli=cli))._command_path() == command_path(cli) == "/opt/wrapper"
+    monkeypatch.delenv(command_variable(cli))
+    assert agent_class(AgentConfig(cli=cli))._command_path() == EXECUTABLES[cli]

@@ -33,7 +33,7 @@ class ClaudeCodeAgent:
         self._structured_output = None
 
     def _command_path(self) -> str:
-        return command_path("claude", self.config.command)
+        return command_path("claude-code")
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [
@@ -51,8 +51,8 @@ class ClaudeCodeAgent:
             cmd.append("--dangerously-skip-permissions")
         if self.config.model:
             cmd.extend(["--model", self.config.model])
-        if self.config.reasoning_effort:
-            cmd.extend(["--effort", self.config.reasoning_effort])
+        if self.config.effort:
+            cmd.extend(["--effort", self.config.effort])
         if self.config.system_prompt:
             cmd.extend(["--append-system-prompt", self.config.system_prompt])
         if self.config.output_schema:
@@ -310,7 +310,7 @@ class ClaudeCodeAgent:
             return AgentRunResult(
                 success=False,
                 exit_code=None,
-                error=f"'{command}' not found. Set AUTOHELIX_CLAUDE_CMD or agent.command.",
+                error=f"'{command}' not found. Set AUTOHELIX_CLAUDE_CODE_CMD.",
             )
 
         if result.timed_out:

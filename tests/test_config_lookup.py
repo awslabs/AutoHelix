@@ -169,7 +169,7 @@ def test_resume_id_keeps_its_config_beside_a_root_one(folder_project):
     result = cli(folder_project, "run", "-n", "1", "--no-report", "--land", "manual")
     assert result.exit_code == 0, result.output
     run_id = latest_run(folder_project).run_id
-    write(folder_project / "autohelix.yaml", "goal: ''\nagent: {backend: mock}\n")  # invalid if it were read
+    write(folder_project / "autohelix.yaml", "goal: ''\nagent: {cli: mock}\n")  # invalid if it were read
     commit(folder_project)
     result = cli(folder_project, "resume", short_id(run_id), "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
@@ -225,7 +225,7 @@ def test_a_run_without_a_stored_config_is_never_given_its_file(folder_project):
 
 
 def test_an_invalid_config_is_named(folder_project):
-    write(folder_project / "autohelix" / "perf.yaml", "goal: ''\nagent: {backend: mock}\n")
+    write(folder_project / "autohelix" / "perf.yaml", "goal: ''\nagent: {cli: mock}\n")
     commit(folder_project)
     result = cli(folder_project, "run", "perf")
     assert result.exit_code == 1
@@ -261,7 +261,7 @@ def test_a_subproject_with_its_own_config_runs(folder_project):
 def test_run_outside_git_refuses_and_leaves_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))  # tmp_path may sit in a repository
     project = tmp_path / "project"
-    write(project / "autohelix.yaml", "goal: x\nagent: {backend: mock}\n")
+    write(project / "autohelix.yaml", "goal: x\nagent: {cli: mock}\n")
     result = cli(project, "run")
     assert result.exit_code == 1
     assert "Not a git repository. AutoHelix requires git." in result.output
@@ -271,7 +271,7 @@ def test_run_outside_git_refuses_and_leaves_nothing(tmp_path, monkeypatch):
 def test_run_without_a_commit_refuses_and_leaves_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
     project = tmp_path / "project"
-    write(project / "autohelix.yaml", "goal: x\nagent: {backend: mock}\n")
+    write(project / "autohelix.yaml", "goal: x\nagent: {cli: mock}\n")
     git(project, "init", "-q")
     result = cli(project, "run")
     assert result.exit_code == 1
@@ -287,14 +287,14 @@ def test_run_without_a_commit_refuses_and_leaves_nothing(tmp_path, monkeypatch):
 
 def test_ask_and_review_read_the_only_config_in_the_folder(tmp_path, monkeypatch):
     monkeypatch.delenv(CONFIG_ENV, raising=False)
-    write(tmp_path / "autohelix" / "perf.yaml", yaml.safe_dump({"agent": {"backend": "codex", "model": "m"}}))
-    assert (load_base_config(tmp_path).backend, load_base_config(tmp_path).model) == ("codex", "m")
-    write(tmp_path / "autohelix" / "fast.yaml", yaml.safe_dump({"agent": {"backend": "codex"}}))
-    assert load_base_config(tmp_path).backend == "claude"  # ambiguous: the defaults, not an error
+    write(tmp_path / "autohelix" / "perf.yaml", yaml.safe_dump({"agent": {"cli": "codex", "model": "m"}}))
+    assert (load_base_config(tmp_path).cli, load_base_config(tmp_path).model) == ("codex", "m")
+    write(tmp_path / "autohelix" / "fast.yaml", yaml.safe_dump({"agent": {"cli": "codex"}}))
+    assert load_base_config(tmp_path).cli == "claude-code"  # ambiguous: the defaults, not an error
 
 
 def _answers(path, answer):
-    return write(path, yaml.safe_dump({"goal": "g", "agent": {"backend": "mock", "settings": {
+    return write(path, yaml.safe_dump({"goal": "g", "agent": {"cli": "mock", "mock": {
         "judge_answer": answer, "judge_reason": answer}}}))
 
 
@@ -346,7 +346,7 @@ def test_no_run_to_resume_is_refused_before_anything_is_written(folder_project):
     with pytest.raises(NoRunToResume, match="No run to resume for autohelix/perf.yaml"):
         Harness(folder_project, create=False)
     assert_untouched(folder_project)
-    write(folder_project / "autohelix" / "perf.yaml", "goal: ''\nagent: {backend: mock}\n")  # invalid too
+    write(folder_project / "autohelix" / "perf.yaml", "goal: ''\nagent: {cli: mock}\n")  # invalid too
     commit(folder_project)
     result = cli(folder_project, "resume")
     assert result.exit_code == 1 and "No run to resume for autohelix/perf.yaml" in result.output

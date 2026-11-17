@@ -4,8 +4,8 @@ macOS: `caffeinate -i -w <pid>`; Linux: `systemd-inhibit` holding an idle/sleep 
 for as long as `tail --pid=<pid>` waits. Both watch this process, so the block goes
 when it ends however it ends (killed included); `keep_awake` also releases it when
 the segment ends. A missing or refused tool (a container, no systemd, polkit over
-ssh) means no block and no message. This doesn't stop a closed lid from sleeping,
-and keeps no credentials or VPN alive.
+ssh; a `tail` without GNU `--pid`, as on busybox) means no block and no message.
+This doesn't stop a closed lid from sleeping, and keeps no credentials or VPN alive.
 """
 
 from __future__ import annotations

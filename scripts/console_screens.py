@@ -89,9 +89,9 @@ def config() -> str:
               speed: higher
               mem_mb: lower
         agent:
-          backend: mock
+          cli: mock
           timeout: 30m
-          settings:
+          mock:
             change_file: sort.py
             change_content: "ITER = {{iteration}}\\n"
             cost_usd: 0.31

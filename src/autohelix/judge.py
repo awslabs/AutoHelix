@@ -39,7 +39,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
-from autohelix.agents import AgentConfig, AgentEvent, create_agent
+from autohelix.agents import AgentConfig, AgentEvent, create_agent, variable_problem
 from autohelix.config import ASK_TIMEOUT, ConfigNotFound, find_config
 from autohelix.workspace import ITERATION_DIR, Copy, Fingerprint, Repo, diff_args, git_env
 from autohelix.usage_log import append_usage, new_call_id
@@ -100,27 +100,27 @@ class Answer:
     cost_usd: float | None
 
 
-def judge_config(base: AgentConfig, *, agent: str | None = None, model: str | None = None,
+def judge_config(base: AgentConfig, *, cli: str | None = None, model: str | None = None,
                  effort: str | None = None, timeout: int | None = None,
-                 command: str | None = None, schema: dict = ANSWER_SCHEMA,
-                 default_timeout: int = DEFAULT_TIMEOUT) -> AgentConfig:
-    """The judge's agent settings: backend, command, model and effort from the run's
-    config, never its settings or extra args. Another backend (`agent`) drops the
-    config's command, model and effort unless they are given too. `schema` is the
-    answer's JSON Schema (`autohelix review` passes its own)."""
-    overrides_backend = agent is not None and agent != base.backend
-    backend = agent or base.backend
-    if backend == "opencode":
+                 schema: dict = ANSWER_SCHEMA, default_timeout: int = DEFAULT_TIMEOUT) -> AgentConfig:
+    """The judge's agent settings: CLI, model and effort from the run's config, never
+    its extra args. Another CLI (`cli`) drops the config's model and effort unless they
+    are given too. `schema` is the answer's JSON Schema (`autohelix review` passes its
+    own). The executable comes from the environment, as the main agent's does."""
+    if problem := variable_problem():
+        raise JudgeError(problem)
+    overrides_cli = cli is not None and cli != base.cli
+    cli = cli or base.cli
+    if cli == "opencode":
         # OpenCode has no read-only mode, and project files (plugins, config) the
         # judged agent may have written would configure the judge.
-        raise JudgeError("OpenCode can't be used as a judge yet; use --agent claude or codex")
+        raise JudgeError("OpenCode can't be used as a judge yet; use --cli claude-code or codex")
     return AgentConfig(
-        backend=backend,
-        command=command or (None if overrides_backend else base.command),
-        model=model or (None if overrides_backend else base.model),
-        reasoning_effort=effort or (None if overrides_backend else base.reasoning_effort),
+        cli=cli,
+        model=model or (None if overrides_cli else base.model),
+        effort=effort or (None if overrides_cli else base.effort),
         timeout=timeout or default_timeout,
-        settings=base.settings if (base.backend == "mock" and not overrides_backend) else {},
+        mock=base.mock if (base.cli == "mock" and not overrides_cli) else {},
         read_only=True,
         output_schema=schema,
     )
@@ -166,7 +166,7 @@ def base_config(cwd: Path) -> tuple[AgentConfig, str]:
 
 def describe_agent(config: AgentConfig, source: str) -> str:
     """The agent a by-hand `ask`/`review` used, for its stderr line: `codex gpt-5 (autohelix/a.yaml)`."""
-    return " ".join(part for part in (config.backend, config.model) if part) + f" ({source})"
+    return " ".join(part for part in (config.cli, config.model) if part) + f" ({source})"
 
 
 def build_system_prompt(question: str, yes: str | None = None, no: str | None = None,
@@ -313,7 +313,7 @@ def call_judge(cwd: Path, config: AgentConfig, *, source: str, record: dict, pro
             "Reply with only the JSON object.")
         call_id = new_call_id()
         log_path = _log_path(source)
-        entry = {"id": call_id, "source": source, **record, "agent": config.backend,
+        entry = {"id": call_id, "source": source, **record, "agent": config.cli,
                  "model": config.model, **_log_fields(log_path)}
         append_usage({**entry, "status": "started", "cost_usd": None})
         started = time.monotonic()

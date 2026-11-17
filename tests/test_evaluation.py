@@ -41,7 +41,7 @@ def log(tmp_path):
 
 def _configure(project, **sections) -> None:
     config = {"goal": "Test evaluation",
-              "agent": {"backend": "mock", "settings": {"change_file": "hello.py",
+              "agent": {"cli": "mock", "mock": {"change_file": "hello.py",
                                                         "change_content": "# iteration {iteration}"}},
               **sections}
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
@@ -468,7 +468,7 @@ def test_an_accepted_no_op_counts_as_previous(project):
     # The agent's change is out of scope, discarded: every iteration is an accepted no-op.
     _configure(project, scope={"editable": ["hello.py"]}, observe=[{"name": "tracker", "command": TRACKER}])
     config = yaml.safe_load((project / "autohelix.yaml").read_text())
-    config["agent"]["settings"]["change_file"] = "elsewhere.txt"
+    config["agent"]["mock"]["change_file"] = "elsewhere.txt"
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     git(project, "commit", "-qam", "out-of-scope change")
     records = _run(project, 3)
@@ -543,7 +543,7 @@ def test_a_judge_writes_in_its_own_copy_not_the_checks_copy(project, log):
                                f'test ! -e planted.md && echo "$AUTOHELIX_ITERATION later" >> {log}'],
                observe=[{"name": "bench", "command": f'echo "$AUTOHELIX_ITERATION bench" >> {log}'}])
     config = yaml.safe_load((project / "autohelix.yaml").read_text())
-    config["agent"]["settings"]["judge_change_file"] = "planted.md"
+    config["agent"]["mock"]["judge_change_file"] = "planted.md"
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     git(project, "commit", "-qam", "judge edits")
     _, record = _run(project, 1)

@@ -215,16 +215,16 @@ def test_by_hand_ask_names_its_agent_and_where_the_settings_came_from(tmp_path, 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("AUTOHELIX_USAGE_FILE", raising=False)
     monkeypatch.delenv(CONFIG_ENV, raising=False)
-    config = {"goal": "g", "agent": {"backend": "mock", "model": "m1",
-                                     "settings": {"judge_answer": "yes", "judge_reason": "fine"}}}
+    config = {"goal": "g", "agent": {"cli": "mock", "model": "m1",
+                                     "mock": {"judge_answer": "yes", "judge_reason": "fine"}}}
     (tmp_path / "autohelix").mkdir()
     (tmp_path / "autohelix" / "a.yaml").write_text(yaml.safe_dump(config))
     result = CliRunner().invoke(main, ["ask", "Done?"])
     assert result.exit_code == 0, result.output
     assert "autohelix ask: yes · mock m1 (autohelix/a.yaml) · " in result.output
     (tmp_path / "autohelix" / "b.yaml").write_text(yaml.safe_dump(config))
-    result = CliRunner().invoke(main, ["ask", "--agent", "mock", "Done?"])
-    assert " · mock (--agent) · " in result.output
+    result = CliRunner().invoke(main, ["ask", "--cli", "mock", "Done?"])
+    assert " · mock (--cli) · " in result.output
     from autohelix.judge import base_config
 
     assert base_config(tmp_path)[1] == "defaults: several configs here"

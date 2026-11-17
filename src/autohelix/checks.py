@@ -58,19 +58,24 @@ def preflight_check(config: Config, project_path: Path) -> list[PreflightIssue]:
         issues.append(PreflightIssue(level=ci.level, message=ci.message))
 
     # 2. Every agent the config runs (main agent, `ask:` and `review:` judges) can start:
-    # its command resolved as the backend resolves it (mock is built in).
+    # its executable resolved as the backend resolves it (mock is built in).
+    from autohelix.agents import CLI_NAMES, command_variable, variable_problem
+
+    if problem := variable_problem():
+        issues.append(PreflightIssue(level="error", message=problem))
+        return issues
     missing: dict[str, list[str]] = {}
-    for who, backend, command in config.agent_commands():
-        if backend != "mock" and not shutil.which(path := command_path(backend, command)):
-            missing.setdefault(f"{backend}\0{path}", []).append(who)
+    for who, cli in config.agent_commands():
+        if cli in CLI_NAMES and not shutil.which(path := command_path(cli)):
+            missing.setdefault(f"{cli}\0{path}", []).append(who)
     for key, whos in missing.items():
-        backend, path = key.split("\0")
+        cli, path = key.split("\0")
         users = "" if whos == ["agent"] else " (used by " + ", ".join(
             "the agent" if who == "agent" else f"`{who}`" for who in whos) + ")"
         issues.append(PreflightIssue(
             level="error",
-            message=(f"Agent command '{path}' not found in PATH{users}; install {backend}, or set "
-                     f"agent.command or AUTOHELIX_{backend.upper()}_CMD"),
+            message=(f"Agent command '{path}' not found in PATH{users}; install {CLI_NAMES[cli]}, or set "
+                     f"{command_variable(cli)}"),
         ))
 
     # 3. Scope patterns that match no committed file, with the matcher the harness uses

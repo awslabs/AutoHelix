@@ -25,7 +25,7 @@ WIDTHS = (80, 120)
 
 CONFIG = Config.from_dict({
     "goal": "Make sort_list faster in sort.py.\nThe benchmark sorts 100k integers.",
-    "agent": {"backend": "claude", "model": "sonnet", "timeout": "30m"},
+    "agent": {"cli": "claude-code", "model": "sonnet", "timeout": "30m"},
     "gates": ["pytest -q test_sort.py", {"metric": "speed", "regress": "5%"}],
     "observe": [{"name": "bench", "command": "python bench.py", "metrics": {"speed": "higher", "mem_mb": "lower"}}],
     "scope": {"editable": ["sort.py"]},
@@ -215,26 +215,26 @@ def entry_screen(width: int) -> list:
             "status": {"state": "crashed", "iteration": 7}, "landing": {"commits": 2, "fast_forward": True}}
     old = {**_run_payload(False), "id": "20261110-0900-old-a1b2", "archived": True}
     data = {**PROJECT, "runs": [finished, perf, manual, stopped, gone, old]}
-    return _entry(data, width, ["claude"], ["autohelix/sorting.yaml", "autohelix/perf.yaml"])
+    return _entry(data, width, ["claude-code"], ["autohelix/sorting.yaml", "autohelix/perf.yaml"])
 
 
 def entry_archived_screen(width: int) -> list:
     """Bare `autohelix` where every run is archived, two agents: counted, not "no runs",
     and asked as with no runs (the config has a run: not "no runs yet")."""
     data = {**PROJECT, "runs": [{**_run_payload(False), "archived": True}]}
-    return _entry(data, width, ["claude", "codex"], ["autohelix/sorting.yaml"])
+    return _entry(data, width, ["claude-code", "codex"], ["autohelix/sorting.yaml"])
 
 
 def entry_config_screen(width: int) -> list:
     """Bare `autohelix` with a config and no runs, no commit yet: the Git field, then the
     question naming the config."""
     git = ("No commits yet; a run starts from a commit.", "yellow")
-    return _entry({**PROJECT, "runs": []}, width, ["claude"], ["autohelix.yaml"], git)
+    return _entry({**PROJECT, "runs": []}, width, ["claude-code"], ["autohelix.yaml"], git)
 
 
 def entry_new_screen(width: int) -> list:
     """Bare `autohelix` with no runs and no configs: one Enter/q question."""
-    return _entry({**PROJECT, "runs": []}, width, ["claude"], [])
+    return _entry({**PROJECT, "runs": []}, width, ["claude-code"], [])
 
 
 def entry_no_git_screen(width: int) -> list:

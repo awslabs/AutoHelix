@@ -33,7 +33,7 @@ class CodexAgent:
         self._schema_path: Path | None = None
 
     def _command_path(self) -> str:
-        return command_path("codex", self.config.command)
+        return command_path("codex")
 
     @staticmethod
     def _parse_version(text: str) -> tuple[int, int, int] | None:
@@ -75,7 +75,7 @@ class CodexAgent:
                 timeout=5,
             )
         except FileNotFoundError:
-            return f"'{command}' not found. Set AUTOHELIX_CODEX_CMD or agent.command."
+            return f"'{command}' not found. Set AUTOHELIX_CODEX_CMD."
         except subprocess.TimeoutExpired:
             return f"Could not verify Codex CLI version: '{command} --version' timed out."
 
@@ -103,8 +103,8 @@ class CodexAgent:
             cmd.append("--dangerously-bypass-approvals-and-sandbox")
         if self.config.model:
             cmd.extend(["--model", self.config.model])
-        if self.config.reasoning_effort:
-            cmd.extend(["-c", f'model_reasoning_effort="{self.config.reasoning_effort}"'])
+        if self.config.effort:
+            cmd.extend(["-c", f'model_reasoning_effort="{self.config.effort}"'])
         if self.config.read_only:
             # A judge's instructions are AutoHelix's only: no AGENTS.md from the judged files.
             cmd.extend(["-c", "project_doc_max_bytes=0"])
@@ -115,8 +115,6 @@ class CodexAgent:
             system = self.config.system_prompt
             cmd.append(f"{system}\n\n{prompt}" if system else prompt)
             return cmd
-        for key, value in self.config.settings.items():
-            cmd.extend(["-c", f"{key}={json.dumps(value)}"])
         time_left_hook = self._time_left_hook_path()
         if time_left_hook:
             cmd.extend(self._time_left_hook_args(time_left_hook))
@@ -248,7 +246,7 @@ class CodexAgent:
             return AgentRunResult(
                 success=False,
                 exit_code=None,
-                error=f"'{command}' not found. Set AUTOHELIX_CODEX_CMD or agent.command.",
+                error=f"'{command}' not found. Set AUTOHELIX_CODEX_CMD.",
             )
 
         if result.timed_out:

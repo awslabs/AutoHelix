@@ -42,10 +42,11 @@ scope:
 # stop:
 #   - jq -e '.throughput >= 5000' "$AUTOHELIX_METRICS"
 
-# agent:
-#   backend: claude       # claude, codex, opencode
-#   # model: claude-opus-4-8
-#   # timeout: 30m        # per iteration: the agent sees the time left, then is stopped
+agent:
+  cli: claude-code        # claude-code, codex or opencode
+  model: opus             # passed through unchanged; unset = the CLI's default
+  # effort: high
+  # timeout: 30m          # per iteration: the agent sees the time left, then is stopped
 
 # How long to run is not set here: `autohelix run -n 10 --cost 20 --time 2h`
 # (iterations, dollars, wall clock; each optional, 1 iteration by default).

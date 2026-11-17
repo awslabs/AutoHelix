@@ -83,14 +83,14 @@ def test_config_no_agent_timeout_defaults_none():
     assert cfg.agent.timeout is None
 
 
-@pytest.mark.parametrize("agent_type", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("agent_type", ["claude-code", "codex", "opencode"])
 def test_agent_timeout_allowed(agent_type):
     from autohelix.config import Config
 
     data = {
         "goal": "test",
         "gates": ["echo ok"],
-        "agent": {"backend": agent_type, "command": f"/usr/bin/{agent_type}", "timeout": "1h"},
+        "agent": {"cli": agent_type, "timeout": "1h"},
     }
     cfg = Config.from_dict(data)
     errors = [issue for issue in cfg.validate() if issue.level == "error"]
@@ -106,8 +106,7 @@ def test_codex_without_hook_support_warns_and_runs_without_hints(tmp_path, monke
     (project / "autohelix.yaml").write_text("""
 goal: test
 agent:
-  backend: codex
-  command: /usr/bin/codex
+  cli: codex
   timeout: 1h
 gates:
   - "true"
@@ -119,6 +118,7 @@ gates:
         subprocess.run(["git", *args], cwd=project, check=True, capture_output=True)
 
     # Preflight runs before the run is allocated; let it find the agent command.
+    monkeypatch.setenv("AUTOHELIX_CODEX_CMD", "/usr/bin/codex")
     monkeypatch.setattr("autohelix.checks.shutil.which", lambda command: command)
     monkeypatch.setattr(
         CodexAgent,

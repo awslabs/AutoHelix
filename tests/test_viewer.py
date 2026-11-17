@@ -376,9 +376,9 @@ def test_tampered_commit_is_never_passed_to_git(viewer, integration_project):  #
     assert not list(integration_project.rglob("PWNED*"))
 
 
-def test_preflight_failure_is_not_recorded_as_a_run(integration_project):  # noqa: F811
-    (integration_project / "autohelix.yaml").write_text(
-        (integration_project / "autohelix.yaml").read_text().replace("backend: mock", "backend: claude\n  command: /nonexistent/agent"))
+def test_preflight_failure_is_not_recorded_as_a_run(integration_project, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", "/nonexistent/agent")
+    (integration_project / "autohelix.yaml").write_text("goal: g\nagent:\n  cli: claude-code\ngates: ['true']\n")
     subprocess.run(["git", "commit", "-qam", "Use a missing agent"], cwd=integration_project, check=True)
     with pytest.raises(RuntimeError, match="Preflight checks failed"):
         Harness(integration_project)

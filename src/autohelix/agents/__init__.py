@@ -26,67 +26,38 @@ class AgentEventKind(StrEnum):
     RESULT = "result"
 
 
-@dataclass
-class RequireNotesConfig:
-    """Enforce that the agent writes iteration notes before finishing (claude only).
-
-    Implemented via a Stop hook that blocks the agent from ending its turn until
-    the iteration's notes file has at least `min_chars` non-whitespace characters,
-    re-prompting up to `max_retries` times before giving up.
-    """
-
-    min_chars: int = 50
-    max_retries: int = 3
-
-
-# The keys of `agent:`. Renamed keys are errors that name their replacement.
-AGENT_KEYS = ("backend", "model", "reasoning_effort", "timeout", "command", "settings", "extra_args",
-              "auto_memory", "require_notes")
+# The keys of `agent:`. Removed and renamed keys are errors that name their replacement.
+AGENT_KEYS = ("cli", "model", "effort", "timeout", "extra_args", "auto_memory")
 RENAMED_AGENT_KEYS = {
-    "type": "`agent.type` is now `agent.backend`",
+    "type": "`agent.type` is now `agent.cli` (claude-code, codex or opencode)",
+    "backend": "`agent.backend` is now `agent.cli` (claude-code, codex or opencode)",
+    "reasoning_effort": "`agent.reasoning_effort` is now `agent.effort`",
     "timeout_seconds": "`agent.timeout_seconds` is now `agent.timeout` (a duration such as 30m)",
+    "command": ("`agent.command` is gone: set AUTOHELIX_CLAUDE_CODE_CMD, AUTOHELIX_CODEX_CMD or "
+                "AUTOHELIX_OPENCODE_CMD to the executable (else the CLI's name on PATH)"),
+    "settings": "`agent.settings` is gone: pass the CLI's own options in `agent.extra_args`",
+    "require_notes": "`agent.require_notes` is gone: ask for notes in the goal or the prompt template",
 }
-
-
-def _require_notes(value: Any, errors: list[str]) -> RequireNotesConfig | None:
-    """`require_notes:`: true for the defaults, a mapping to override them, false or absent for off."""
-    if value is None or value is False:
-        return None
-    if value is True:
-        return RequireNotesConfig()
-    if not isinstance(value, dict):
-        errors.append(f"agent.require_notes must be true, false or a mapping, got {value!r}")
-        return None
-    config = RequireNotesConfig()
-    for key in value:
-        if key not in ("min_chars", "max_retries"):
-            errors.append(f"Unknown key agent.require_notes.{key} (known: min_chars, max_retries)")
-    for key in ("min_chars", "max_retries"):
-        if key in value:
-            if type(value[key]) is not int:
-                errors.append(f"agent.require_notes.{key} must be an integer, got {value[key]!r}")
-            else:
-                setattr(config, key, value[key])
-    return config
+# Old `cli:` values, errors naming the new one.
+RENAMED_CLIS = {"claude": "claude-code"}
 
 
 @dataclass
 class AgentConfig:
-    """Configuration for an agent backend."""
+    """Configuration for an agent CLI."""
 
-    backend: str = "claude"
-    command: str | None = None
-    model: str | None = None
-    reasoning_effort: str | None = None
+    cli: str = "claude-code"
+    model: str | None = None  # passed through unchanged; None: the CLI's own default
+    effort: str | None = None  # passed through (`CLI_EFFORT`)
     timeout: int | None = None  # seconds: the hard kill, and time-left hints where supported
-    settings: dict[str, Any] = field(default_factory=dict)
     extra_args: list[str] = field(default_factory=list)
     auto_memory: bool = False  # Disabled by default; set true to enable Claude Code's built-in memory
-    require_notes: RequireNotesConfig | None = None
+    # `cli: mock`'s test knobs (`agent.mock:`, accepted with that hidden CLI only).
+    mock: dict[str, Any] = field(default_factory=dict)
     # Judge mode (`autohelix ask`), set in code, never from YAML: no edit tools, no
-    # project settings/hooks/MCP, no extra_args or settings pass-through.
+    # project settings/hooks/MCP, no extra_args pass-through.
     read_only: bool = False
-    system_prompt: str | None = None  # appended to the backend's system prompt
+    system_prompt: str | None = None  # appended to the CLI's system prompt
     output_schema: dict[str, Any] | None = None  # JSON Schema for the final answer
 
     @classmethod
@@ -99,18 +70,17 @@ class AgentConfig:
             data = {}
         if not isinstance(data, dict):
             return cls(), ["`agent:` must be a mapping"]
+        cli = cli_value(data, "agent", errors) or "claude-code"
         for key in data:
             if key in RENAMED_AGENT_KEYS:
                 errors.append(RENAMED_AGENT_KEYS[key])
-            elif key not in AGENT_KEYS:
+            elif key not in AGENT_KEYS and not (key == "mock" and cli == "mock"):
                 errors.append(f"Unknown key agent.{key} (known: {', '.join(AGENT_KEYS)})")
 
-        settings = data.get("settings") or {}
-        if not isinstance(settings, dict):
-            errors.append("agent.settings must be a mapping")
-            settings = {}
-        if "model" in settings:
-            errors.append("`agent.settings.model` is now `agent.model`")
+        mock = data.get("mock") or {}
+        if not isinstance(mock, dict):
+            errors.append("agent.mock must be a mapping")
+            mock = {}
 
         extra_args = data.get("extra_args", [])
         if isinstance(extra_args, str):
@@ -126,22 +96,19 @@ class AgentConfig:
             except (ValueError, OverflowError) as e:
                 errors.append(f"agent.timeout: {data['timeout']!r} is not a valid duration ({e})")
 
-        backend = agent_string(data, "backend", "agent", errors) or "claude"
         auto_memory = data.get("auto_memory", False)
         if not isinstance(auto_memory, bool):  # `"false"` would be true
             errors.append(f"agent.auto_memory must be true or false, got {auto_memory!r}")
             auto_memory = False
 
         return cls(
-            backend=backend.lower(),
-            command=agent_string(data, "command", "agent", errors),
+            cli=cli,
             model=agent_string(data, "model", "agent", errors),
-            reasoning_effort=agent_string(data, "reasoning_effort", "agent", errors),
+            effort=agent_string(data, "effort", "agent", errors),
             timeout=timeout,
-            settings=settings,
             extra_args=[str(arg) for arg in extra_args],
             auto_memory=auto_memory,
-            require_notes=_require_notes(data.get("require_notes"), errors),
+            mock=mock if cli == "mock" else {},
         ), errors
 
     @classmethod
@@ -194,53 +161,88 @@ class AgentBackend(Protocol):
         """Execute the agent inside the given copy."""
 
 
-# Every `agent.backend` (`create_agent`), and those an `ask:`/`review:` judge can use
-# (a read-only mode; mock for tests).
-BACKENDS = ("claude", "codex", "opencode", "mock")
-JUDGE_BACKENDS = ("claude", "codex", "mock")
+# Every `agent.cli` (`create_agent`; `mock`, for tests, is never named to users), and
+# those an `ask:`/`review:` judge can use (a read-only mode).
+CLIS = ("claude-code", "codex", "opencode", "mock")
+JUDGE_CLIS = ("claude-code", "codex", "mock")
+CLI_NAMES = {"claude-code": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}
+# The executable each CLI is found as on PATH.
+EXECUTABLES = {"claude-code": "claude", "codex": "codex", "opencode": "opencode"}
+# Variables that are gone, with the one to set instead.
+RENAMED_VARIABLES = {"AUTOHELIX_CLAUDE_CMD": "AUTOHELIX_CLAUDE_CODE_CMD"}
 
 
-def command_path(backend: str, command: str | None = None) -> str:
-    """The executable a backend runs: `agent.command`, else `$AUTOHELIX_<BACKEND>_CMD`,
-    else the backend's name found on PATH, else the bare name (which then fails to start).
-    The backends and preflight both resolve it here."""
-    if command:
-        return command
-    if env_command := os.environ.get(f"AUTOHELIX_{backend.upper()}_CMD"):
-        return env_command
-    return shutil.which(backend) or backend
+def command_variable(cli: str) -> str:
+    """The variable naming a CLI's executable: AUTOHELIX_CLAUDE_CODE_CMD, ..."""
+    return f"AUTOHELIX_{cli.upper().replace('-', '_')}_CMD"
+
+
+def variable_problem() -> str | None:
+    """A set variable that is gone (AUTOHELIX_CLAUDE_CMD), as an error naming its replacement."""
+    for old, new in RENAMED_VARIABLES.items():
+        if os.environ.get(old):
+            return f"{old} is now {new}: set that instead (and unset {old})"
+    return None
+
+
+def command_path(cli: str) -> str:
+    """The executable a CLI runs: `$AUTOHELIX_<CLI>_CMD`, else the CLI's name found on
+    PATH, else the bare name (which then fails to start). The backends, preflight and
+    the entry screen all resolve it here. ValueError for a variable that is gone."""
+    name = executable(cli)
+    return name if os.environ.get(command_variable(cli)) else shutil.which(name) or name
+
+
+def executable(cli: str) -> str:
+    """What starts a CLI, unresolved: `$AUTOHELIX_<CLI>_CMD`, else its name (`claude`).
+    ValueError for a variable that is gone (`variable_problem`)."""
+    if problem := variable_problem():
+        raise ValueError(problem)
+    return os.environ.get(command_variable(cli)) or EXECUTABLES.get(cli, cli)
+
+
+def cli_value(data: dict, where: str, errors: list[str]) -> str | None:
+    """`data["cli"]`, lower-cased, None when absent; an old value (`claude`) is an error
+    naming the new one (the new one is then used, so later checks see a valid CLI)."""
+    value = agent_string(data, "cli", where, errors)
+    if value is None:
+        return None
+    value = value.lower()
+    if value in RENAMED_CLIS:
+        errors.append(f"`{where}.cli: {value}` is now `{RENAMED_CLIS[value]}`")
+        return RENAMED_CLIS[value]
+    return value
 
 
 def agent_string(data: dict, key: str, where: str, errors: list[str]) -> str | None:
     """`data[key]` when it is a non-empty string, None when absent; anything else is an
-    error (`where.key must be a string`): a list as `command` would crash the start."""
+    error (`where.key must be a string`)."""
     value = data.get(key)
     if value is None:
         return None
     if isinstance(value, str) and value.strip():
         return value
-    hint = " (put arguments in agent.extra_args)" if key == "command" and isinstance(value, list) else ""
-    errors.append(f"{where}.{key} must be a non-empty string, got {value!r}{hint}")
+    errors.append(f"{where}.{key} must be a non-empty string, got {value!r}")
     return None
 
 
 def create_agent(config: AgentConfig, heartbeat_seconds: int = 30) -> AgentBackend:
     """Create an agent backend from configuration."""
-    agent_type = config.backend.lower()
-    if agent_type == "claude":
+    cli = config.cli.lower()
+    if cli == "claude-code":
         from autohelix.agents.claudecode import ClaudeCodeAgent
 
         return ClaudeCodeAgent(config=config, heartbeat_seconds=heartbeat_seconds)
-    if agent_type == "codex":
+    if cli == "codex":
         from autohelix.agents.codex import CodexAgent
 
         return CodexAgent(config=config, heartbeat_seconds=heartbeat_seconds)
-    if agent_type == "opencode":
+    if cli == "opencode":
         from autohelix.agents.opencode import OpenCodeAgent
 
         return OpenCodeAgent(config=config, heartbeat_seconds=heartbeat_seconds)
-    if agent_type == "mock":
+    if cli == "mock":
         from autohelix.agents.mock import MockAgent
 
         return MockAgent(config=config, heartbeat_seconds=heartbeat_seconds)
-    raise ValueError(f"Unsupported agent backend: {config.backend}")
+    raise ValueError(f"Unsupported agent.cli: {config.cli}")

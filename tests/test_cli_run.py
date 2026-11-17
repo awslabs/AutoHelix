@@ -33,7 +33,7 @@ def test_run_refuses_a_project_that_does_not_ignore_autohelix(tmp_path):
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@e"]
     subprocess.run(git + ["init", "-q"], cwd=tmp_path, check=True)
     (tmp_path / ".gitignore").write_text("!.*\n")
-    (tmp_path / "autohelix.yaml").write_text("goal: x\nagent: {backend: mock}\n")
+    (tmp_path / "autohelix.yaml").write_text("goal: x\nagent: {cli: mock}\n")
     subprocess.run(git + ["add", "-A"], cwd=tmp_path, check=True)
     subprocess.run(git + ["commit", "-qm", "init"], cwd=tmp_path, check=True)
 

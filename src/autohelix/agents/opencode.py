@@ -23,7 +23,7 @@ class OpenCodeAgent:
         self._final_text: str | None = None
 
     def _command_path(self) -> str:
-        return command_path("opencode", self.config.command)
+        return command_path("opencode")
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [
@@ -33,8 +33,8 @@ class OpenCodeAgent:
         ]
         if self.config.model:
             cmd.extend(["--model", self.config.model])
-        if self.config.reasoning_effort:
-            cmd.extend(["--variant", self.config.reasoning_effort])
+        if self.config.effort:
+            cmd.extend(["--variant", self.config.effort])
         cmd.extend(self.config.extra_args)
         cmd.append(prompt)
         return cmd
@@ -127,7 +127,7 @@ class OpenCodeAgent:
             return AgentRunResult(
                 success=False,
                 exit_code=None,
-                error=f"'{command}' not found. Set AUTOHELIX_OPENCODE_CMD or agent.command.",
+                error=f"'{command}' not found. Set AUTOHELIX_OPENCODE_CMD.",
             )
 
         error = None

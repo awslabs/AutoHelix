@@ -373,7 +373,7 @@ def test_non_finite_budgets_are_usage_errors(project):
 
 def test_cost_alone_with_an_unknown_cost_stops_before_the_next_iteration(project):
     """With --cost the only bound, a charge it can't see could make it run forever."""
-    configure(project, agent={"backend": "mock", "settings": {
+    configure(project, agent={"cli": "mock", "mock": {
         "change_file": "code.py", "change_content": "# iteration {iteration}"}})  # no cost reported
     paths = begun(project, "--cost", "1")
     assert iterations(paths) == [0, 1]

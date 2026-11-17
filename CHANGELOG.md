@@ -12,11 +12,35 @@
   so the removal is never committed or reported as discarded. Hygiene, not a
   boundary: the agent can still find the project and runs as you.
 
+### The agent block: `cli`, `model`, `effort`
+
+- **`agent:` is `cli`, `model`, `effort`, `timeout`, `extra_args`,
+  `auto_memory`.** `backend` is now `cli`, and its value `claude` is now
+  `claude-code`; `reasoning_effort` is now `effort` (passed through: Claude
+  Code `--effort`, Codex `model_reasoning_effort`, OpenCode `--variant`);
+  `model` is passed through unchanged (unset: the CLI's own default).
+  AutoHelix keeps no list of model names.
+- **The executable comes only from the environment**: `AUTOHELIX_CLAUDE_CODE_CMD`,
+  `AUTOHELIX_CODEX_CMD`, `AUTOHELIX_OPENCODE_CMD`, else `claude`, `codex`,
+  `opencode` on PATH; `ask`, `review` and bare `autohelix` use the same
+  variables.
+- **Removed** `agent.command` (use the variables), `agent.settings` (use
+  `extra_args`) and `agent.require_notes` (with its Stop hook,
+  `check_notes.sh`). Every removed key or value is a config error naming its
+  replacement, and a set `AUTOHELIX_CLAUDE_CMD` is an error naming
+  `AUTOHELIX_CLAUDE_CODE_CMD`. Runs whose stored config uses the old keys
+  can't be resumed; start a new run.
+- **`ask:` and `review:` entries' `agent:` take `cli`, `model`, `effort`**;
+  `autohelix ask` / `review` take `--cli` (`claude-code` or `codex`) instead
+  of `--agent`, and `--command` is gone (both are errors naming the
+  replacement).
+- The packaged config template and the setup skill write `model:` explicitly.
+
 ### Runs keep the machine awake
 
 - **`run` and `resume` keep the machine from sleeping while their segment
-  runs**: `caffeinate -i -w <pid>` on macOS, `systemd-inhibit` on Linux, on by
-  default. The block is released when the segment ends, or when the process is
+  runs**: `caffeinate -i -w <pid>` on macOS, `systemd-inhibit` on Linux, with
+  no flag or setting. The block is released when the segment ends, or when the process is
   killed; a missing or refused tool means no block and no message. A closed
   lid still sleeps, and credentials or a VPN aren't kept alive.
 

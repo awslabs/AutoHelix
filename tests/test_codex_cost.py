@@ -29,7 +29,7 @@ def run_agent(tmp_path, monkeypatch, config=None, *, usage=USAGE, model=None, ti
 
     monkeypatch.setattr("autohelix.agents.codex.run_process", fake_run_process)
     events = []
-    agent = CodexAgent(config or AgentConfig(backend="codex", model="gpt-6.1-sol"))
+    agent = CodexAgent(config or AgentConfig(cli="codex", model="gpt-6.1-sol"))
     result = agent.run(tmp_path, "test", 1, tmp_path / "agent.log", events.append)
     return result, events
 
@@ -108,7 +108,7 @@ def test_zero_usage_is_a_known_zero_cost():
 
 
 def test_the_model_codex_output_names_is_priced_over_agent_model(tmp_path, monkeypatch):
-    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(backend="codex", model="gpt-6-luna"),
+    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(cli="codex", model="gpt-6-luna"),
                           usage={**USAGE, "output_includes_reasoning": False}, model="openai.gpt-6.1-sol")
     assert result.success
     assert result.usage["cost_usd"] == pytest.approx(2.27)
@@ -118,7 +118,7 @@ def test_the_model_codex_output_names_is_priced_over_agent_model(tmp_path, monke
 
 
 def test_without_a_reported_model_agent_model_prices_it(tmp_path, monkeypatch):
-    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(backend="codex", model="gpt-6.1-sol"))
+    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(cli="codex", model="gpt-6.1-sol"))
     assert result.usage["cost_usd"] == pytest.approx(1.77) and result.usage["cost_model"] == "gpt-6.1-sol"
 
 
@@ -126,12 +126,12 @@ def test_without_a_reported_model_agent_model_prices_it(tmp_path, monkeypatch):
 def test_extra_args_dont_change_the_pricing(tmp_path, monkeypatch, extra_args):
     """No guessing from arguments: the reported model, else agent.model."""
     result, _ = run_agent(tmp_path, monkeypatch,
-                          AgentConfig(backend="codex", model="gpt-6.1-sol", extra_args=extra_args))
+                          AgentConfig(cli="codex", model="gpt-6.1-sol", extra_args=extra_args))
     assert result.usage["cost_usd"] == pytest.approx(1.77)
 
 
-@pytest.mark.parametrize("config", [AgentConfig(backend="codex"),
-                                    AgentConfig(backend="codex", settings={"model": "gpt-6.1-sol"})])
+@pytest.mark.parametrize("config", [AgentConfig(cli="codex"),
+                                    AgentConfig(cli="codex", extra_args=["-c", "model=gpt-6.1-sol"])])
 def test_no_model_anywhere_says_set_agent_model(tmp_path, monkeypatch, config):
     result, events = run_agent(tmp_path, monkeypatch, config)
     assert "cost_usd" not in result.usage
@@ -145,7 +145,7 @@ def test_codex_session_files_are_never_read(tmp_path, monkeypatch):
     sessions.mkdir(parents=True)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
     monkeypatch.setattr("pathlib.Path.glob", lambda *a, **k: (_ for _ in ()).throw(AssertionError("read")))
-    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(backend="codex", model="gpt-6.1-sol"))
+    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(cli="codex", model="gpt-6.1-sol"))
     assert result.usage["cost_usd"] == pytest.approx(1.77)
 
 
@@ -168,7 +168,7 @@ def test_cumulative_completion_snapshot_replaces_previous_counts(tmp_path, monke
         return ProcessRunResult(exit_code=0)
 
     monkeypatch.setattr("autohelix.agents.codex.run_process", fake_run_process)
-    agent = CodexAgent(AgentConfig(backend="codex", model="gpt-6.1-sol"))
+    agent = CodexAgent(AgentConfig(cli="codex", model="gpt-6.1-sol"))
     result = agent.run(tmp_path, "test", 1, tmp_path / "agent.log", lambda event: None)
     assert result.usage["cost_usd"] == pytest.approx(0.004)
 

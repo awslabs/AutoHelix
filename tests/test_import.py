@@ -15,7 +15,7 @@ TRACKER = {"name": "tracker", "metrics": {"score": "higher"},
                       'if [ -n "$AUTOHELIX_PREVIOUS" ]; then echo "previous $(head -1 "$AUTOHELIX_PREVIOUS/stdout.txt")"; '
                       'else echo "previous none"; fi; echo "##autohelix[score=1]"'}
 OTHER = {"name": "other", "command": 'echo "previous ${AUTOHELIX_PREVIOUS:-none}"'}
-MOCK = {"backend": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
+MOCK = {"cli": "mock", "mock": {"change_file": "code.py", "change_content": "# {iteration}",
                                         "notes_content": "tried {iteration}"}}
 
 
@@ -189,7 +189,7 @@ def test_resume_refuses_when_the_target_moved_past_the_tip(project):
 
 
 def test_the_refusal_says_when_the_run_never_accepted_a_change(project):
-    configure(project, agent={"backend": "mock", "settings": {"change_file": ".autohelix-iteration/x"}})
+    configure(project, agent={"cli": "mock", "mock": {"change_file": ".autohelix-iteration/x"}})
     paths, _ = started(project)  # a no-op: the tip is still the base commit
     assert git(project, "rev-parse", paths.ref).stdout.strip() == identity(paths)["base_commit"]
     (project / "user.py").write_text("x = 1\n")

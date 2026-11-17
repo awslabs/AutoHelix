@@ -260,7 +260,7 @@ def run_fields(config, budget: str) -> list[tuple[str, str]]:
         scope.append("frozen: " + ", ".join(frozen))
     if config.agent.timeout is not None:
         budget = " · ".join(filter(None, [budget, f"{format_limit(config.agent.timeout)} each"]))
-    return [("Goal", config.title), ("Agent", config.agent.backend + (f" ({config.agent.model})" if config.agent.model else "")),
+    return [("Goal", config.title), ("Agent", config.agent.cli + (f" ({config.agent.model})" if config.agent.model else "")),
             ("Gates", " · ".join(gate.text for gate in config.gates)), ("Observe", " · ".join(observe)),
             ("Scope", " · ".join(scope)), ("Budget", budget)]
 

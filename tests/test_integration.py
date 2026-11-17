@@ -43,8 +43,8 @@ def integration_project(tmp_path):
 goal: Test the integration
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# Modified in iteration {iteration}"
 
@@ -134,7 +134,7 @@ class TestMockAgentIntegration:
 goal: Test baseline failure
 
 agent:
-  backend: mock
+  cli: mock
 
 observe:
   - name: bench
@@ -181,8 +181,8 @@ observe:
         self._commit_config(integration_project, """
 goal: Test metric gates
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# Modified in iteration {iteration}"
 gates:
@@ -202,8 +202,8 @@ observe:
         self._commit_config(integration_project, """
 goal: Test metric gates
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# Modified in iteration {iteration}"
 gates:
@@ -225,7 +225,7 @@ observe:
         self._commit_config(integration_project, f"""
 goal: Test review metrics
 agent:
-  backend: mock
+  cli: mock
 {gate}observe:
   - name: progress
     review: Count the missing items.
@@ -254,8 +254,8 @@ agent:
 goal: Test constraint failure
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: mock_change.txt
     change_content: "This will cause the constraint to fail"
 
@@ -289,8 +289,8 @@ gates:
 goal: Test failure output capture
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: mock_change.txt
     change_content: "This triggers the failure"
 
@@ -317,8 +317,8 @@ gates:
 goal: Test scope enforcement
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# Modified by agent"
 
@@ -356,8 +356,8 @@ scope:
 goal: Test frozen scope enforcement
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# Modified by agent"
 
@@ -391,8 +391,8 @@ scope:
 goal: Test agent failure
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     should_fail: true
 
 gates:
@@ -410,7 +410,7 @@ gates:
 
         # The run keeps its config: the agent recovers in-process instead.
         harness = Harness(integration_project, verbose=False)
-        harness.agent.config.settings.update(should_fail=False, change_file="hello.py",
+        harness.agent.config.mock.update(should_fail=False, change_file="hello.py",
                                              change_content="# recovered")
         harness.run(Budget(until=2))
         results = history.load()
@@ -452,7 +452,7 @@ goal: |
   This is a minimal test - make only this small change.
 
 agent:
-  backend: claude
+  cli: claude-code
   timeout: 60
 
 gates:
@@ -502,7 +502,7 @@ class TestBudgetEnforcement:
         (integration_project / "autohelix.yaml").write_text("""
 goal: Test calculated Codex cost
 agent:
-  backend: codex
+  cli: codex
   model: gpt-6.1-sol
 gates:
   - "true"
@@ -550,8 +550,8 @@ gates:
 goal: Test cost budget
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
@@ -587,8 +587,8 @@ gates:
 goal: Test time budget
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
@@ -636,8 +636,8 @@ gates:
 goal: Test multiple budgets
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
@@ -672,8 +672,8 @@ gates:
 goal: Test exact cost boundary
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
@@ -706,8 +706,8 @@ gates:
 goal: Test zero cost iterations
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
@@ -748,8 +748,8 @@ gates:
 goal: Test cost resume
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
@@ -864,8 +864,8 @@ gates:
         (integration_project / "autohelix.yaml").write_text("""
 goal: Test no budget
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 gates:
@@ -888,8 +888,8 @@ gates:
 goal: Test float accumulation
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
@@ -925,8 +925,8 @@ gates:
 goal: Test zero wall_clock resume
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# iteration {iteration}"
 
@@ -976,8 +976,8 @@ gates:
 goal: Test cost with rejections
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: mock_change.txt
     change_content: "fail"
 
