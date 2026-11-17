@@ -6,6 +6,7 @@
   <title>AutoHelix dashboard</title>
   <link rel="icon" href="/logo-light.svg">
   <link rel="stylesheet" href="/viewer.css">
+  <script src="/common.js" defer></script>
   <script src="/dashboard.js" defer></script>
 </head>
 <body>
@@ -26,13 +27,13 @@
     <table class="iterations runs">
       <thead><tr>
         <th>Run</th>
-        <th title="Below the state: time (baseline included) and cost so far">Status</th>
-        <th title="Iterations so far, of the latest run/resume's cap (-n, --until)">Iterations</th>
-        <th id="metric-head" class="value" hidden title="The latest accepted iteration: the code a land would deliver">
+        <th title="What it is doing; below: time (baseline included) and cost so far">Status</th>
+        <th class="num" title="Iterations so far, of the latest run/resume's cap (-n, --until)">Iterations</th>
+        <th id="metric-head" class="num" hidden title="The latest accepted iteration: the code a land would deliver">
           <select id="metric" aria-label="Metric"></select></th>
         <th title="Accepted commits that the run's target branch does not have yet">Landing</th>
-        <th>Last active</th>
-        <th>Goal</th>
+        <th class="wide">Last active</th>
+        <th class="wide">Goal</th>
       </tr></thead>
       <tbody id="runs"></tbody>
     </table>
