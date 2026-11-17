@@ -2,8 +2,10 @@
 
 A loop's configuration lives in `autohelix.yaml` at the project root, or in
 `autohelix/<name>.yaml` when a project has several (`autohelix run <name>`; see
-[CLI → Config files](cli.md#config-files)). `autohelix setup [NAME]` writes a
-commented template there.
+[CLI → Config files](cli.md#config-files)). Bare `autohelix` in a terminal
+starts a coding agent that drafts one with you; to write one by hand, start from
+the examples below or the commented template shipped in the package
+(`autohelix/templates/config_template.yaml`).
 
 **Paths are relative to the project root.** Every command (in `gates:`,
 `observe:` and `stop:`) runs inside a per-iteration copy of the code, not the main
@@ -618,7 +620,7 @@ replacement; there are no aliases and no migration.
 | `-c/--config FILE` on `run`, `resume`, `view`, `report` | the config at `autohelix/<name>.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
 | `name:` | the config file's name: `autohelix/<name>.yaml` (and `autohelix run <name>`) | `` `name:` is gone: runs are named after the config file; use autohelix/<name>.yaml `` |
 | `run --name NAME` | the config file's name, as for `name:` | `No such option '--name'.` |
-| `autohelix init [PATH]` | `autohelix setup [NAME] [-p PATH]` (`init` remains another name for it) | a NAME that is a folder is refused, pointing at `-p` |
+| the `setup [NAME]` and `init [PATH]` commands | bare `autohelix` in a terminal (an agent drafts the config; by hand: the examples and template above) | `No such command 'setup'.` |
 
 ## Example Configs
 

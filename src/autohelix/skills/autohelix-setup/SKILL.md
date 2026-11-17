@@ -32,7 +32,8 @@ Use the Python and `autohelix` CLI the session's first prompt names, else the
 `autohelix` on `PATH` (a plain `python` may lack the package: pipx, `uv tool`,
 a venv that isn't active). Check `autohelix --help` and relevant subcommand
 help against the installed version. The harness and the target project may use
-different environments.
+different environments. The user docs are at the path the session's first
+prompt gives; read them when needed.
 
 Recommend, don't interview. From the user's answer and the project (its
 tests, benchmarks, instructions), choose scope, gates, observe entries, backend,
@@ -140,8 +141,7 @@ and these actions, proceed without asking again.
 
 ## Save, verify, and commit the agreed setup
 
-Write the agreed config yourself at its intended path; never run
-`autohelix setup` or `autohelix init`. Implement only the agreed helpers,
+Write the agreed config yourself at its intended path. Implement only the agreed helpers,
 templates, and evaluators. Resolve routine validation errors within the agreed
 design; return to the proposal if a fix would materially change the experiment.
 

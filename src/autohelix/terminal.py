@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""What `run`, `resume` and `setup` print: the header (the mark beside a title and
+"""What `run`, `resume` and bare `autohelix` print: the header (the mark beside a title and
 labelled fields), one row per iteration under a column header, the live row of the
 iteration under way, and the end block. Pure functions of their inputs, so the tests
 render fixed fake runs (tests/snapshots/).
@@ -723,47 +723,6 @@ class LiveRow:
 
     def __rich_console__(self, console, options):
         yield self.line()
-
-
-# --- setup -------------------------------------------------------------------------
-
-
-def setup_fields(project: str, config: str, exists: bool, agents: list[str], git: tuple) -> list[tuple]:
-    """`setup`'s header fields: the project folder, the config it writes (new, or there
-    to complete), the agents found, and `git` (a field's value and style: the branch
-    and its state, or why a run would refuse the folder, in yellow)."""
-    found = " · ".join(agents) + " (found on PATH)" if agents else "none found (claude, codex or opencode on PATH)"
-    return [("Project", project, None), ("Config", f"{config} ({'exists' if exists else 'new'})", None),
-            ("Agents", found), ("Git", *git)]
-
-
-def setup_steps(run_command: str, git_fix: str | None = None) -> list[str]:
-    """What to do after `setup` wrote the template: make the folder a git checkout
-    first when it isn't one (`git_fix`), edit, commit, run."""
-    return [*([git_fix] if git_fix else []), "edit it: the goal, scope, gates and observe entries",
-            "commit it, with any scripts its commands use", run_command]
-
-
-def setup_also(setup_command: str, agent: str | None) -> list[tuple[str, str]]:
-    """The commands that do more than the template (none without an agent found)."""
-    if not agent:
-        return []
-    return [(f"{setup_command} --agent {agent}", "an agent drafts it with you"),
-            (f"autohelix skill install --agent {agent}", "for your own agent sessions")]
-
-
-def setup_written(shown: str, steps: list[str], also: list[tuple[str, str]], width: int) -> list[Text]:
-    """After `setup` wrote the template: `Wrote <file>`, the steps to take next (the last
-    one, the command, in the accent colour) and the commands that do more (command,
-    what it does: left out when it doesn't fit). Paths and commands are never cut."""
-    def line(label: str, text: str, style: str | None, note: str = "", label_style: str = "dim") -> Text:
-        note = f"  {note}" if note and 2 + FIELD + len(text) + 2 + len(note) <= width else ""
-        return _parts(("  ", None), (f"{label:<{FIELD}}", label_style), (clean(text), style), (note, "dim"))
-
-    lines = [Text(), line("Wrote", shown, None, "the commented template", label_style="bold")]
-    lines += [line("" if i else "next", step, TEAL if i == len(steps) - 1 else None) for i, step in enumerate(steps)]
-    lines += [line("" if i else "or", command, TEAL, does) for i, (command, does) in enumerate(also)]
-    return lines
 
 
 def clock(now: datetime | None = None) -> str:

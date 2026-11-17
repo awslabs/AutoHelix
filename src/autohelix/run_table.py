@@ -302,8 +302,7 @@ def dashboard_lines(data: dict, width: int = 100, metric: str | None = None, now
     now = time.time() if now is None else now
     runs = data["runs"]
     archived = [r for r in runs if r.get("archived")]
-    shown = sorted((r for r in runs if not r.get("archived")),
-                   key=lambda r: (not _live(r), -(r.get("last_activity") or 0)))
+    shown = current_runs(runs)
     progress = [r["progress"] for r in runs if "progress" in r]  # not on unreadable runs
     costs = [p["cost_usd"] for p in progress if p["cost_usd"] is not None]
     summary = [f"{len(shown)} run{'' if len(shown) == 1 else 's'}"]
@@ -316,7 +315,22 @@ def dashboard_lines(data: dict, width: int = 100, metric: str | None = None, now
                             fields, width, show_mark=False)
     if not shown:
         return lines + [Text("  " + ("No runs yet." if not runs else "All runs are archived."))]
+    return lines + table_lines(shown, width, metric, now)
 
+
+def current_runs(runs: list[dict]) -> list[dict]:
+    """The runs the dashboard lists, in its order: not archived, live runs first, then
+    by last activity."""
+    return sorted((r for r in runs if not r.get("archived")),
+                  key=lambda r: (not _live(r), -(r.get("last_activity") or 0)))
+
+
+def table_lines(shown: list[dict], width: int = 100, metric: str | None = None, now: float | None = None
+                ) -> list[Text]:
+    """The dashboard's table of `shown` runs (`current_runs`): a column header, then each
+    run's row with the lines under it."""
+    now = time.time() if now is None else now
+    lines: list[Text] = []
     directions = _directions(shown)
     metric = metric or next(iter(directions), None)
     arrow = f" {'↓' if directions.get(metric) == 'lower' else '↑'}" if metric in directions else ""
@@ -369,3 +383,70 @@ def dashboard_lines(data: dict, width: int = 100, metric: str | None = None, now
 def format_runs(data: dict, metric: str | None = None, now: float | None = None, width: int = 100) -> str:
     """`dashboard --once` as plain text."""
     return _plain(dashboard_lines(data, width, metric, now))
+
+
+# --- bare `autohelix`: the entry screen ---------------------------------------------
+
+
+def suggestion(run: dict) -> tuple[str, str] | None:
+    """What the entry screen says under the table about a run: its state in the
+    dashboard's words with where it is, and the one command that applies (`view` a live
+    run, `land` waiting commits, `resume` a run that stopped before its end), or None."""
+    if run.get("error"):
+        return None
+    short = short_id(run["id"])
+    landing = run.get("landing") or {}
+    where = (f"{landing['commits']} commit{'s' * (landing['commits'] != 1)} to land" if _can_land(run)
+             else f"iteration {_under_way(run) or run['progress']['iterations']}")
+    state = f"{_word(run)} · {where}"
+    if _live(run):
+        return state, f"autohelix view {short}"
+    if _can_land(run):
+        return state, f"autohelix land {short}"
+    if (run.get("status") or {}).get("state") in ("interrupted", "crashed", "failed", "idle", None):
+        return state, f"autohelix resume {short}"
+    return None
+
+
+def entry_lines(data: dict, folder: str, width: int = 100, git: tuple | None = None, version: str | None = None,
+                now: float | None = None) -> list[Text]:
+    """The entry screen above its question: `AutoHelix  v0.x · <folder>` (with a Git field
+    when a run would refuse the checkout or needs a commit: `git`, a field's value and
+    style), the dashboard's table of the project's current runs, one line per run with
+    the command that applies (`suggestion`), the archived count, and the `--help` footer."""
+    runs = data.get("runs") or []
+    shown = current_runs(runs)
+    archived = len(runs) - len(shown)
+    fields = [("Git", *git)] if git else []
+    lines = terminal.header(terminal.title(folder, version=version or terminal.version()), fields, width,
+                            show_mark=False)
+    if shown:
+        lines += table_lines(shown, width, now=now)
+        found = [(short_id(r["id"]), *s) for r in shown if (s := suggestion(r))]
+        if found:
+            lines.append(Text())
+            ids = max(len(short) for short, *_ in found)
+            states = max(len(state) for _, state, _ in found)
+            for short, state, command in found:
+                text = Text(f"  {short:<{ids}}  {clean(state):<{states}}  ")
+                text.append("next: ", style="dim").append(command, style=terminal.TEAL)
+                lines.append(terminal.cut(text, width))
+    footer = [f"{archived} archived" if shown else f"no current runs, {archived} archived"] if archived else []
+    return lines + [Text()] + _footer(footer, width)
+
+
+def outside_lines(folder: str, problem: str, fix: str | None, width: int = 100, version: str | None = None
+                  ) -> list[Text]:
+    """The entry screen outside a git checkout: the header, why a run refuses the folder
+    (`cli._git_problem`) with the command that makes it a checkout, and the footer;
+    nothing to start."""
+    lines = terminal.header(terminal.title(folder, version=version or terminal.version()), [], width,
+                            show_mark=False)
+    lines += terminal.warning(f"{problem} A run refuses this folder, so there is nothing to start here.", width)
+    if fix:  # whole, never broken at its spaces
+        lines.append(Text("    to make it a checkout: ", style="dim").append(fix, style=terminal.TEAL))
+    return lines + [Text()] + _footer([], width)
+
+
+def _footer(parts: list[str], width: int) -> list[Text]:
+    return terminal.hanging("  ", " · ".join(parts + ["autohelix --help: all commands"]), width, "dim")

@@ -1,0 +1,8 @@
+  AutoHelix  v0.3.0 · ~/code/sorting
+  ────────────────────────────────────────────────────────────────────────────
+
+  no current runs, 1 archived · autohelix --help: all commands
+
+  ❯ Ask an agent about these runs           it summarizes them, then answers q…
+    Set up a new experiment with an agent   it drafts a config with you
+  (q: quit)

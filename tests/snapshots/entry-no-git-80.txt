@@ -1,0 +1,7 @@
+  AutoHelix  v0.3.0 · ~/notes
+  ────────────────────────────────────────────────────────────────────────────
+  ! Not a git repository. AutoHelix requires git. A run refuses this folder, so
+    there is nothing to start here.
+    to make it a checkout: git init && git add -A && git commit -m 'init'
+
+  autohelix --help: all commands

@@ -154,7 +154,7 @@ def test_bare_resume_without_runs_creates_nothing(folder_project):
     assert_untouched(folder_project)
     (folder_project / "autohelix" / "perf.yaml").unlink()
     result = cli(folder_project, "resume")
-    assert result.exit_code == 1 and "Write one with `autohelix setup`." in result.output
+    assert result.exit_code == 1 and "Write autohelix.yaml: run `autohelix` in a terminal" in result.output
     assert_untouched(folder_project)
 
 

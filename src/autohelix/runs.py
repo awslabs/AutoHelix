@@ -790,7 +790,7 @@ def how_to_start(project: Path) -> str:
     """How to start a first run here, by the configs there are (lowercase, a sentence end)."""
     configs = project_configs(project)
     if not configs:
-        return "write a config with `autohelix setup`, then `autohelix run`."
+        return "set one up with `autohelix` (in a terminal), then `autohelix run`."
     if len(configs) == 1:
         return f"start one with `{run_command(configs[0])}`."
     return f"start one with `autohelix run [CONFIG]` (configs: {', '.join(configs)})."

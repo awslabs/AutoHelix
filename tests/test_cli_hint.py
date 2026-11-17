@@ -67,7 +67,7 @@ def test_without_runs_no_hint_is_written(runner, tmp_path):
     (tmp_path / ".autohelix").mkdir()
     result = runner.invoke(main, ["hint", "--path", str(tmp_path), "nope"])
     assert result.exit_code == 1
-    assert f"No runs in {tmp_path.resolve()}; write a config with `autohelix setup`" in result.output
+    assert f"No runs in {tmp_path.resolve()}; set one up with `autohelix` (in a terminal)" in result.output
     assert not list((tmp_path / ".autohelix").rglob("hints.md"))
 
 

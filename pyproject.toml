@@ -52,16 +52,25 @@ autohelix = "autohelix.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/autohelix"]
 
+# The user docs ship inside the package (autohelix/docs), for the agent sessions bare
+# `autohelix` starts (`cli.docs_dir`). The repo's docs/ stays where it is; editable
+# installs don't get this, and read the checkout's docs/ instead.
+[tool.hatch.build.targets.wheel.force-include]
+"docs" = "autohelix/docs"
+
 # Scope the source distribution to the package + packaging metadata only, so it
 # doesn't sweep in the whole working tree (docs, examples, assets, CI config, or
 # local-only files). only-include replaces hatchling's default include patterns
 # (which would otherwise grab every README.md and .gitignore in the tree), so the
 # sdist stays as clean as the wheel. The PyPI readme/LICENSE/NOTICE are added
-# via force-include since they live outside the only-included paths.
+# via force-include since they live outside the only-included paths, and so is
+# docs/, where it is in the repo: the wheel built from the sdist (`uv build`, pip)
+# force-includes it from there as autohelix/docs.
 [tool.hatch.build.targets.sdist]
 only-include = ["src/autohelix"]
 
 [tool.hatch.build.targets.sdist.force-include]
+"docs" = "docs"
 "assets/README-pypi.md" = "assets/README-pypi.md"
 "LICENSE" = "LICENSE"
 "NOTICE" = "NOTICE"

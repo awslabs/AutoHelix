@@ -133,20 +133,23 @@ Or start from the project itself:
 
 ```bash
 cd my-project
-autohelix setup
+autohelix
 ```
 
-In a terminal it offers to start Claude Code, Codex or OpenCode with the
-bundled setup skill (nothing is installed), or writes the commented template
-`autohelix.yaml`. With an agent, review the proposal before it saves and commits
-the agreed setup. With the template, edit it using the
-[configuration reference](#configuration) and commit the intended setup changes.
+In a terminal, `autohelix` shows the project's runs and offers to start Claude
+Code, Codex or OpenCode with the bundled setup skill (nothing is installed):
+to set up a new experiment, or, once there are runs, to ask about them (the
+agent summarizes what was accepted and rejected, then answers questions).
+Nothing starts without a key press; q quits. For a new experiment, review the
+proposal before the agent saves and commits it: `autohelix.yaml` for the first
+config, `autohelix/<name>.yaml` (run with `autohelix run <name>`) for later ones.
+To write a config by hand instead, start from an [example](examples/), the
+[configuration reference](#configuration), or the commented template shipped in
+the package.
 Then launch with `autohelix run -n 3` (a bare `autohelix run` is one iteration): one
 row per iteration (✓ accepted with each metric against the baseline, ✗ rejected and why),
 then what landed and what to type next ([what it prints](docs/cli.md#what-it-prints)).
-For several loops in one project, `autohelix setup perf` writes
-`autohelix/perf.yaml`, which `autohelix run perf` runs. Other commands are
-described in the [CLI reference](docs/cli.md).
+Other commands are described in the [CLI reference](docs/cli.md).
 
 ## Examples
 

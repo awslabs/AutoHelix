@@ -126,7 +126,7 @@ def test_live_view_exits_with_hints_instead_of_waiting(tmp_path):
         assert result.exit_code == 1
         return " ".join(result.output.split())
 
-    assert "No runs in" in hint() and "write a config with `autohelix setup`, then `autohelix run`." in hint()
+    assert "No runs in" in hint() and "set one up with `autohelix` (in a terminal), then `autohelix run`." in hint()
     (tmp_path / "autohelix").mkdir()
     (tmp_path / "autohelix" / "perf.yaml").write_text("goal: x\n")
     assert "start one with `autohelix run perf`." in hint()

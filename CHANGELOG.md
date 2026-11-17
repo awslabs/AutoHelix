@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### One entry point: bare `autohelix`
+
+- **Bare `autohelix` in a terminal** shows the project's runs (the dashboard's
+  table, the command that applies to each: `resume`, `land`, `view`; how many
+  are archived) and offers to start Claude Code, Codex or OpenCode with the
+  bundled skill: "Ask … about these runs" (it summarizes them, then answers
+  questions) or "Set up a new experiment" (it proposes a name and saves
+  `autohelix/<name>.yaml`, or `autohelix.yaml` for the first config). A config
+  without runs is offered to check and finish. Nothing starts without a key
+  press; q quits. Without a terminal it prints the help and exits 2.
+- **Removed `autohelix setup` and `autohelix init`** (no alias), with their
+  NAME, `--agent` and `-p` and the template they wrote. `autohelix run`
+  without a config names an example, the docs' configs and the packaged
+  template; `autohelix skill install` stays.
+- **The user docs ship in the package** (`autohelix/docs` in the wheel); the
+  agent session's first prompt names them, and Claude Code gets `--add-dir`
+  for them.
+
 ### Config v2
 
 A new config format: `gates:` say what can reject an iteration, `observe:`

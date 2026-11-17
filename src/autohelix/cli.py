@@ -14,7 +14,6 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 
 import click
-from click.core import ParameterSource
 
 from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFound, find_config,
                               project_configs, run_command)
@@ -25,7 +24,7 @@ from autohelix.run_status import read_run_status
 from autohelix.runs import (RunPaths, planned_run, RunLock, archive as archive_run, check_group, check_why,
                             default_run, delete as delete_run, find_project, is_live,
                             load_run_config, land as land_run, project_runs, resolve_run, resolve_runs,
-                            config_relative, run_tip, set_options, short_id, valid_name)
+                            config_relative, run_tip, set_options, short_id)
 from autohelix import run_table
 from autohelix.skill import SKILL_NAME, skill
 from autohelix.workspace import SCRUBBED_GIT_ENV, run_git
@@ -38,14 +37,30 @@ def _get_version() -> str:
     return version()
 
 
-@click.group()
+START_HINT = "Run `autohelix` in a terminal to start."
+
+
+@click.group(invoke_without_command=True)
 @click.version_option(version=_get_version(), prog_name="autohelix")
-def main():
-    """AutoHelix - Autonomous code improvement harness."""
+@click.pass_context
+def main(ctx: click.Context):
+    """AutoHelix - Autonomous code improvement harness.
+
+    Bare `autohelix` in a terminal shows the project's runs and offers to start a
+    coding agent session (Claude Code, Codex or OpenCode) with the bundled skill:
+    to ask about the runs, or to set up a new experiment.
+    """
     # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send every
     # git call (ours, and those of the agents and commands we start) to another repository.
     for key in SCRUBBED_GIT_ENV:
         os.environ.pop(key, None)
+    if ctx.invoked_subcommand is not None:
+        return
+    if not _interactive():  # a script, a pipe, an agent's shell tool: the help, as without a subcommand
+        click.echo(ctx.get_help())
+        click.echo(f"\n{START_HINT}")
+        ctx.exit(2)
+    _entry(ctx)
 
 
 main.add_command(skill)
@@ -56,7 +71,7 @@ PROJECT_HELP = "Project directory (default: the current folder, or the nearest o
 
 def _path_option(help: str = PROJECT_HELP):
     """The one `--path/-p` (a folder, as a Path). Commands that read runs pass it to
-    `_project`; `setup` and `run` take the folder as given."""
+    `_project`; `run` takes the folder as given."""
     return click.option("--path", "-p", type=click.Path(exists=True, file_okay=False, path_type=Path),
                         default=".", help=help)
 
@@ -99,30 +114,31 @@ def _chosen_run(project: Path, value: str | None) -> RunPaths:
     return paths
 
 
-CONFIG_TEMPLATE = (
-    pkg_files("autohelix.templates").joinpath("config_template.yaml").read_text()
-)
+TEMPLATE = pkg_files("autohelix.templates") / "config_template.yaml"
+EXAMPLES = "https://github.com/awslabs/AutoHelix/tree/main/examples"
 
-# The agents `setup` offers, in the order it looks for them: executable -> name.
-SETUP_AGENTS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}
-
-
-SETUP_QUESTION = "How do you want to write it?"
-
-
-def setup_options(found: list[str]) -> list[tuple[str, str]]:
-    """The menu `setup` asks SETUP_QUESTION with, given the agents found."""
-    drafts = "it asks what you want, then drafts the config"
-    with_agent = f"With {SETUP_AGENTS[found[0]]}" if len(found) == 1 else "With an agent"
-    return [(with_agent, drafts), ("From the template", "the commented template, to edit by hand")]
+# The agents bare `autohelix` offers, in the order it looks for them: executable -> name.
+# (`mock`, a backend for tests, is never offered.)
+AGENTS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}
 
 
 def _found_agents() -> list[str]:
-    return [agent for agent in SETUP_AGENTS if shutil.which(agent)]
+    return [agent for agent in AGENTS if shutil.which(agent)]
 
 
 def _interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def docs_dir() -> Path | None:
+    """The user docs: autohelix/docs in an installed package (the wheel ships the repo's
+    docs/ there), else the checkout's docs/ (an editable install has no copy); None
+    without either."""
+    packaged = pkg_files("autohelix") / "docs"
+    if isinstance(packaged, Path) and packaged.is_dir():
+        return packaged.resolve()
+    checkout = Path(__file__).resolve().parent.parent.parent / "docs"
+    return checkout if (checkout / "concepts.md").is_file() else None
 
 
 def _skill_dir() -> Path:
@@ -143,27 +159,13 @@ def _launcher() -> Path | None:
     return Path(found).resolve() if found else None
 
 
-def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[str]:
-    """The interactive session `setup` starts: the agent's own CLI with a first prompt
-    that points at the bundled skill (nothing is installed or written). The prompt names
-    AutoHelix's own launcher for `run --check`, which the agent's shell may not find
-    (pipx, `uv tool`, a venv that isn't activated); its PATH is left alone for the
-    project's own commands."""
-    skill_dir = _skill_dir()
-    where = (f"The config is `{target}`, already there (perhaps still the commented template): "
-             "propose completing it there"
-             if exists else f"Propose the config for `{target}`")
-    launcher = _launcher()
-    check = run_command(target).replace("autohelix", shlex.quote(str(launcher)) if launcher else "autohelix", 1)
-    tools = f"run `{check} --check` from the project root"
-    prompt = (f"Read `{skill_dir / 'SKILL.md'}` and follow it to help me set up AutoHelix for this "
-              f"project. {where}, with `agent.backend: {agent}` unless we decide otherwise. Show the complete "
-              f"proposal and explain its sections, choices, and effective defaults before changing project "
-              f"files; discuss revisions, then write, validate, and commit "
-              f"the setup when we agree. Don't start a run unless I ask. Write the agreed file directly "
-              f"(don't run `autohelix setup`). To check it, {tools}.")
-    if agent == "claude":  # --add-dir lets it read the skill; it takes several folders, hence --
-        return ["claude", "--add-dir", str(skill_dir), "--", prompt]
+def _agent_argv(agent: str, project: Path, prompt: str) -> list[str]:
+    """The interactive session bare `autohelix` starts: the agent's own CLI with the
+    first prompt (`first_prompt`: it points at the bundled skill and the docs; nothing is
+    installed or written)."""
+    if agent == "claude":  # --add-dir lets it read the skill and the docs; it takes several folders, hence --
+        docs = docs_dir()
+        return ["claude", "--add-dir", str(_skill_dir()), *([str(docs)] if docs else []), "--", prompt]
     if agent == "codex":  # reads outside the workspace without a flag (its --add-dir grants writes)
         return ["codex", prompt]
     return ["opencode", str(project), "--prompt", prompt]
@@ -172,8 +174,8 @@ def _agent_argv(agent: str, project: Path, target: str, exists: bool) -> list[st
 def _git_problem(project: Path) -> tuple[str, str | None] | None:
     """Why `run` refuses this folder (not a git checkout with a commit to start from) and
     the git command that fixes it, when there is one; None when a run can start here.
-    `run` raises it, `setup` (which needs no git) shows it. (`main` has dropped inherited
-    GIT_* variables, so this is the checkout's own repository.)"""
+    `run` raises it, bare `autohelix` shows it. (`main` has dropped inherited GIT_*
+    variables, so this is the checkout's own repository.)"""
     def git(*args: str):
         return run_git(["git", *args], cwd=project, capture_output=True, text=True)  # English messages
 
@@ -196,131 +198,187 @@ def _git_problem(project: Path) -> tuple[str, str | None] | None:
     return None
 
 
-def _kind(path: Path) -> str:
-    return ("a file" if path.is_file() else "a folder" if path.is_dir() else
-            "a broken link" if path.is_symlink() else "a special file")
+def _checkout_top(folder: Path) -> Path | None:
+    """The top of the git checkout `folder` is in; None outside one (no git, a bare
+    repository, inside .git/)."""
+    try:
+        top = run_git(["git", "rev-parse", "--show-toplevel"], cwd=folder, capture_output=True, text=True)
+    except OSError:
+        return None
+    return Path(top.stdout.strip()).resolve() if top.returncode == 0 and top.stdout.strip() else None
 
 
-@click.command(short_help="Write a loop's config, with an agent or from the template.")
-@click.argument("name", required=False)
-@_path_option("Project directory (default: the current folder).")
-@click.option("--agent", type=click.Choice(list(SETUP_AGENTS)),
-              help="Draft the config with this agent, skipping the selection menu.")
-def setup(name: str | None, path: Path, agent: str | None):
-    """Write a loop's config: autohelix.yaml, or autohelix/NAME.yaml for NAME.
+def entry_project(folder: Path) -> Path | None:
+    """The project bare `autohelix` shows: the folder `runs.find_project` picks when it
+    finds runs (`folder` or the nearest one above it with runs, within the checkout),
+    else the top of the git checkout; None outside a checkout."""
+    top = _checkout_top(folder)
+    if top is None:
+        return None
+    found = find_project(folder)
+    return found if RunPaths(found).runs.is_dir() else top
 
-    In a terminal, offers to draft it with a coding agent (Claude Code, Codex or
-    OpenCode; it asks which when several are installed) in a session that follows the
-    bundled setup skill: propose, discuss, then save and commit when agreed.
-    Otherwise writes the commented template. `autohelix run [NAME]` then starts
-    runs of the loop.
 
-    setup itself never overwrites a file: with --agent on an existing config, the agent
-    edits it with you.
-    """
-    if name is not None:
-        if name == CONFIG_DIR:
-            why = f"is reserved: runs of {CONFIG_DIR}/{CONFIG_DIR}.yaml would get no name; choose another."
-        elif (name and Path(name).is_dir()  # `init PATH`, by habit; with -p, NAME is a name
-              and click.get_current_context().get_parameter_source("path") == ParameterSource.DEFAULT):
-            why = f"is a folder; to set up there, use `-p {shlex.quote(name)}`."
-        elif not valid_name(name):
-            why = ("must start with a lowercase letter or digit and use only lowercase letters, digits or "
-                   "hyphens, at most 32 characters (runs of this config are named after it).")
+def _home(path: Path) -> str:
+    home = Path.home()
+    return f"~/{path.relative_to(home)}" if path.is_relative_to(home) and path != home else str(path)
+
+
+def _unrun(configs: list[str], runs: list[dict]) -> list[str]:
+    """The configs no run was started from."""
+    used = {run.get("config_file") for run in runs}
+    return [config for config in configs if config not in used]
+
+
+def entry_options(agents: list[str], has_runs: bool, unrun: list[str]) -> list[tuple[str, str, str]]:
+    """The entry screen's options, (pick, label, detail): with runs, ask about them or set
+    up a new experiment; with configs but no runs, check and finish them or set up a new
+    one; else none (`entry_question` asks instead). With several agents the labels say
+    "an agent" (`Which agent?` follows)."""
+    who = AGENTS[agents[0]] if len(agents) == 1 else "an agent"
+    new = ("new", f"Set up a new experiment with {who}", "it drafts a config with you")
+    if has_runs:
+        return [("ask", f"Ask {who} about these runs", "it summarizes them, then answers questions"), new]
+    if unrun:
+        them = "it" if len(unrun) == 1 else "them"
+        return [("finish", f"{', '.join(unrun)}, no runs yet: check and finish {them} with {who}", ""), new]
+    return []
+
+
+def entry_question(agents: list[str]) -> str:
+    """The one question without runs or configs."""
+    return f"Set up an experiment with {AGENTS[agents[0]] if len(agents) == 1 else 'an agent'}?"
+
+
+def _run_line(run: dict) -> str:
+    """A run as the first prompt lists it: id, config, state, last iteration."""
+    if run.get("error"):
+        return f"- {run['id']}: unreadable ({run['error']})"
+    config = f", {run['config_file']}" if run.get("config_file") else ""
+    landing = run.get("landing") or {}
+    to_land = (f", {landing['commits']} commit{'s' * (landing['commits'] != 1)} not landed"
+               if landing.get("commits") else "")
+    return (f"- {short_id(run['id'])} ({run['id']}{config}): {run_table._word(run)}, "
+            f"last iteration {run['progress']['iterations']}{to_land}")
+
+
+def first_prompt(agent: str, project: Path, pick: str, runs: list[dict], configs: list[str],
+                 git: tuple[str, str | None] | None = None) -> str:
+    """The session's first prompt: the bundled skill, AutoHelix's own CLI, Python and
+    docs, any git problem, the project's runs and configs, which option was picked (the
+    user may switch), then the request it stands for."""
+    skill_dir = _skill_dir()
+    launcher = _launcher()
+    cli = shlex.quote(str(launcher)) if launcher else "autohelix"
+    docs = docs_dir()
+    current = run_table.current_runs(runs)
+    archived = len(runs) - len(current)
+    unrun = _unrun(configs, runs)
+    options = {p: label for p, label, _ in entry_options([agent], bool(runs), unrun)} or \
+        {"new": entry_question([agent]).rstrip("?")}
+    other = next((label for p, label in options.items() if p != pick), "")
+    parts = [f"Read `{skill_dir / 'SKILL.md'}` and follow it: you are helping me with AutoHelix in this "
+             f"project ({project}).",
+             f"AutoHelix's CLI is `{cli}` and its Python `{shlex.quote(sys.executable)}` (use them where "
+             "`autohelix` or a plain `python` would find another install or none)"
+             + (f"; its user docs are in `{docs}`: read them when needed." if docs else ".")]
+    if git:
+        problem, fix = git
+        parts.append(f"Git: {problem}" + (f" (`{fix}` fixes it)" if fix else "")
+                     + " `autohelix run` refuses until that is fixed.")
+    if current:
+        listed = "\n".join(_run_line(run) for run in current)
+        parts.append(f"The project's runs (most recent first; `{cli} view ID --json` and "
+                     f".autohelix/runs/ID/ have their records):\n{listed}"
+                     + (f"\n({archived} archived, not listed: `{cli} dashboard --json` has them.)" if archived else ""))
+    elif archived:
+        parts.append(f"The project has no current runs, {archived} archived (`{cli} dashboard --json` lists them).")
+    else:
+        parts.append("The project has no runs yet.")
+    if configs:
+        parts.append("Its configs: " + ", ".join(f"{c} (no runs yet)" if c in unrun else c for c in configs) + ".")
+    else:
+        parts.append("It has no AutoHelix config yet.")
+    parts.append(f"On AutoHelix's start screen I picked \"{options[pick]}\""
+                 + (f"; I may switch to the other option (\"{other}\") or ask anything else at any point."
+                    if other else "; I may ask anything else at any point."))
+    finish = ("End with the config checked by `{check}` from the project root, committed, and the "
+              "`{run}` command (with its budget flags) for me to run. Don't start a run unless I ask.")
+    agreed = (f"with `agent.backend: {agent}` unless we decide otherwise. Show the complete proposal and "
+              "explain its sections, choices and effective defaults before changing project files; discuss "
+              "revisions, then write, validate and commit it when we agree.")
+    if pick == "ask":
+        parts.append("My first request: tell me about these runs. Open with a short summary of the live runs plus "
+                     "the most recent one: what was accepted, what was rejected and why, anything odd. Take it from "
+                     "the records, then answer my questions from them. Send `autohelix hint` or `autohelix stop` "
+                     "(or anything else that changes a run) only when I ask.")
+    elif pick == "finish":
+        command = run_command(unrun[0]) if len(unrun) == 1 else "autohelix run NAME"
+        parts.append(f"My first request: check and finish {', '.join(f'`{c}`' for c in unrun)} (perhaps still the "
+                     f"commented template, or half-finished): propose what to complete or change, {agreed} "
+                     + finish.format(check=command.replace("autohelix", cli, 1) + " --check", run=command))
+    else:
+        if configs:
+            where = ("Propose a short name for this goal (lowercase letters, digits and hyphens) and save the "
+                     "config as `autohelix/<name>.yaml`")
+            command = "autohelix run NAME"
         else:
-            why = None
-        if why:
-            raise click.BadParameter(f"{name!r} {why}", param_hint="NAME")
-    project = Path(path).resolve()
-    cwd = Path.cwd().resolve()
-    relative = f"{CONFIG_DIR}/{name}.yaml" if name else CONFIG_FILE
-    target = project / relative
-    shown = str(target.relative_to(cwd) if target.is_relative_to(cwd) else target)  # openable from here
-    if name and (target.parent.exists() or target.parent.is_symlink()) and not target.parent.is_dir():
-        raise click.ClickException(f"{shown.removesuffix('/' + target.name)} is {_kind(target.parent)}, not a "
-                                   "folder of configs; move it away first.")
-    exists = target.exists() or target.is_symlink()
-    if exists and not target.is_file():
-        raise click.ClickException(f"{shown} is {_kind(target)}, not a config file; move it away first.")
-    found = _found_agents()
-    named = f" {name}" if name else ""
-    elsewhere = "" if project == cwd else f" -p {shlex.quote(str(path))}"
-    if exists and agent is None:
-        hint = f", or complete it with an agent: `autohelix setup{named}{elsewhere} --agent {found[0]}`" if found else ""
-        raise click.ClickException(f"{shown} already exists; setup never overwrites a config. Edit it{hint}.")
-    if name is None and not exists and (others := project_configs(project)):
-        raise click.ClickException(f"{CONFIG_DIR}/ already has {', '.join(Path(c).name for c in others)}, which "
-                                   f"{CONFIG_FILE} would shadow for a bare `autohelix run`. "
-                                   f"Name this one: `autohelix setup <name>{elsewhere}`.")
+            where = "This is the project's first config: save it as `autohelix.yaml`"
+            command = "autohelix run"
+        parts.append(f"My first request: set up a new experiment. {where}, {agreed} "
+                     + finish.format(check=command.replace("autohelix", cli, 1) + " --check", run=command))
+    return "\n\n".join(parts)
+
+
+def _entry(ctx: click.Context) -> None:
+    """Bare `autohelix` in a terminal: the project's runs and one question; an agent
+    session starts only on a keypress (q quits)."""
     from rich.console import Console
 
-    from autohelix import terminal
+    from autohelix import menu, terminal
+    from autohelix.viewer import ProjectRuns
 
     console = Console()
-    if agent is not None and agent not in found:
-        raise click.ClickException(f"--agent {agent}: {SETUP_AGENTS[agent]} (`{agent}`) is not on PATH."
-                                   + (f" Found: {', '.join(found)}." if found else ""))
-    home = Path.home()
-    folder = f"~/{project.relative_to(home)}" if project.is_relative_to(home) and project != home else str(project)
-    git_field, git_fix = _git_field(project)
-    fields = terminal.setup_fields(folder, relative, exists, [SETUP_AGENTS[a] for a in found], git_field)
+    folder = Path.cwd().resolve()
+    project = entry_project(folder)
+    if project is None:  # outside a checkout: nothing to start here
+        problem, fix = _git_problem(folder) or (f"{folder} is not in a git checkout.", None)
+        console.print()
+        terminal.print_lines(console, run_table.outside_lines(_home(folder), problem, fix, console.width))
+        ctx.exit(1)
+    data = ProjectRuns(project).runs()
+    runs = data["runs"]
+    configs = project_configs(project)
+    git = _git_problem(project)
     console.print()
-    terminal.print_lines(console, terminal.header(terminal.title("setup", version=terminal.version()), fields,
-                                                  console.width, terminal.shows_mark(console)))
-    if agent is None and found and _interactive():
-        from autohelix.menu import choose
-
-        if choose(SETUP_QUESTION, setup_options(found)) == 0:
-            agent = found[0] if len(found) == 1 else found[
-                choose("Which agent?", [(SETUP_AGENTS[a], "") for a in found])]
-
-    if agent is not None:
-        argv = _agent_argv(agent, project, relative, exists)
-        console.print(f"\n  Starting {SETUP_AGENTS[agent]} with the AutoHelix setup skill…", style="dim",
-                      highlight=False)
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os.chdir(project)
-        try:
-            os.execvp(argv[0], argv)  # the agent's session replaces this process
-        except OSError as e:
-            raise click.ClickException(f"Could not start {agent}: {e}") from e
-        return
-
+    terminal.print_lines(console, run_table.entry_lines(data, _home(project), console.width,
+                                                        git and (git[0], "yellow")))
+    found = _found_agents()
+    if not found:
+        terminal.warn(console, "No coding agent found to start: install Claude Code (`claude`), Codex (`codex`) "
+                      "or OpenCode (`opencode`). To write a config by hand, start from the packaged template "
+                      f"({TEMPLATE}) or getting-started.md" + (f" in {docs_dir()}" if docs_dir() else "") + ".")
+        ctx.exit(1)
+    options = entry_options(found, bool(runs), _unrun(configs, runs))
+    console.print()
     try:
-        target.parent.mkdir(exist_ok=True)
-        with open(target, "x") as f:
-            f.write(CONFIG_TEMPLATE)
+        if options:
+            pick = options[menu.choose("", [(label, detail) for _, label, detail in options])][0]
+        else:
+            menu.confirm(entry_question(found))
+            pick = "new"
+        agent = found[0] if len(found) == 1 else found[menu.choose("Which agent?", [(AGENTS[a], "") for a in found])]
+    except menu.Quit:
+        ctx.exit(0)
+    argv = _agent_argv(agent, project, first_prompt(agent, project, pick, runs, configs, git))
+    console.print(f"\n  Starting {AGENTS[agent]} with the AutoHelix skill…", style="dim", highlight=False)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.chdir(project)
+    try:
+        os.execvp(argv[0], argv)  # the agent's session replaces this process
     except OSError as e:
-        raise click.ClickException(f"Could not write {shown}: {e}") from e
-    steps = terminal.setup_steps(f"autohelix run{named}{elsewhere}", git_fix)
-    also = terminal.setup_also(f"autohelix setup{named}{elsewhere}", found[0] if found else None)
-    terminal.print_lines(console, terminal.setup_written(shown, steps, also, console.width))
-
-
-def _git_field(project: Path) -> tuple[tuple, str | None]:
-    """setup's Git field (`main · clean`, or what a run would refuse, in yellow: no git
-    checkout with a commit, or uncommitted changes to tracked files), and the git
-    command that makes the folder runnable, when the problem has one (a next step)."""
-    if found := _git_problem(project):
-        problem, fix = found
-        return (problem, "yellow"), fix
-
-    def git(*args: str) -> str:
-        return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True).stdout.strip()
-
-    branch = git("symbolic-ref", "--short", "-q", "HEAD") or f"detached at {git('rev-parse', '--short', 'HEAD')}"
-    changed = len(git("status", "--porcelain", "--untracked-files=no").splitlines())
-    if changed:
-        return (f"{branch} · {changed} uncommitted change{'s' * (changed != 1)} (a run needs them committed)",
-                "yellow"), None
-    return (f"{branch} · clean",), None
-
-
-main.add_command(setup)
-# `init` by reflex: the same command, not listed.
-main.add_command(click.Command("init", callback=setup.callback, params=setup.params, help=setup.help,
-                               hidden=True))
+        raise click.ClickException(f"Could not start {agent}: {e}") from e
 
 
 def _run_id(project: Path, value: str | None) -> str | None:
@@ -386,6 +444,17 @@ def _ancestor_configs(project: Path) -> str:
     return ""
 
 
+def _how_to_write(name: str | None = None) -> str:
+    """Where to look for writing a config (`run` without one): bare `autohelix` with an
+    agent, an example, the docs' configs, the packaged template."""
+    file = f"{CONFIG_DIR}/{name}.yaml" if name else CONFIG_FILE
+    docs = docs_dir()
+    where = f" (in {docs})" if docs else ""
+    return (f"Write {file}: run `autohelix` in a terminal to set it up with an agent, or start from an example "
+            f"({EXAMPLES}), the config in getting-started.md or config.md{where}, or the packaged template "
+            f"({TEMPLATE}).")
+
+
 def _segment_config(project: Path, name: str | None, command: str) -> Path:
     """The config a segment uses (`find_config`), its errors with this command's advice
     (`resume`'s only when there are runs to name; else, as `run`'s, how to start one)."""
@@ -397,10 +466,7 @@ def _segment_config(project: Path, name: str | None, command: str) -> Path:
     except ValueError as e:
         raise click.BadParameter(str(e), param_hint="CONFIG") from e
     except ConfigNotFound as e:
-        if name is None:
-            write = " Write one with `autohelix setup`."
-        else:  # `setup` takes run names only
-            write = f" Write it with `autohelix setup {name}`." if valid_name(name) else ""
+        write = f" {_how_to_write(name)}"
         if e.configs:
             advice = " " + pick if name is None else write
         else:
