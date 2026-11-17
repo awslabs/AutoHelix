@@ -1,6 +1,5 @@
-/* The console's calm colours, light or dark (the system's, or the theme button's): ✓ green,
-   ✗ muted red, teal the one accent (what is live, links). Red text only for real errors,
-   yellow for an interrupted run; a finished one plain, as in the console. */
+/* Colors follow the system theme; the header button can force light or dark (data-theme).
+   Teal is the accent (what is live, links), green accepted/finished, red rejected/errors. */
 :root {
   color-scheme: light dark;
   --bg: light-dark(#ffffff, #111618);
@@ -8,10 +7,9 @@
   --line: light-dark(#e2e7ea, #2a3438);
   --text: light-dark(#1c2529, #e3e9eb);
   --muted: light-dark(#66747b, #8d9ba1);
-  --accent: light-dark(#0891b2, #06b6d4);
-  --good: light-dark(#0a8a60, #10b981);
-  --bad: light-dark(#b85454, #d77a7a);
-  --warn: light-dark(#9a6b00, #d4b04a);
+  --accent: light-dark(#058ea1, #2fb7c9);
+  --good: light-dark(#1f8a4c, #4cc27d);
+  --bad: light-dark(#c2412d, #ef7a64);
   --code: light-dark(#f1f4f5, #1d2629);
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
@@ -40,11 +38,13 @@ summary { cursor: pointer; }
 .crumbs a { text-decoration: none; }
 h1 { margin: 0; font-size: 22px; font-weight: 650; }
 .title-date { font-size: 13px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
-.goal-line { margin: 4px 0 0; display: flex; gap: 8px; align-items: baseline; color: var(--muted); max-width: 90ch; }
-.goal { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.goal.expanded { white-space: pre-wrap; }
+.goal {
+  margin: 4px 0 0; color: var(--muted); max-width: 80ch; cursor: pointer;
+  white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
+}
+.goal.expanded { -webkit-line-clamp: unset; }
 .run-why, .where, .subtitle { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
-.run-why { max-width: 90ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-why { max-width: 80ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .where { font-family: var(--mono); }
 .top-right { display: flex; align-items: center; gap: 18px; flex-shrink: 0; }
 .theme { border-radius: 999px; padding: 3px 10px; }
@@ -52,8 +52,8 @@ h1 { margin: 0; font-size: 22px; font-weight: 650; }
 .status { padding: 4px 12px; border-radius: 999px; font-weight: 550; font-size: 13px; background: var(--panel); border: 1px solid var(--line); }
 .status.running { color: var(--accent); border-color: var(--accent); }
 .status.running::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
-.status.error, .state.error { color: var(--bad); }
-.status.warning, .state.warning { color: var(--warn); }
+.status.finished { color: var(--good); }
+.status.failed, .status.crashed { color: var(--bad); }
 @keyframes pulse { 50% { opacity: 0.3; } }
 /* Narrow: the status under the title, not squeezing it. */
 @media (max-width: 900px) {
@@ -64,7 +64,10 @@ h1 { margin: 0; font-size: 22px; font-weight: 650; }
 
 /* config strip */
 .config { padding: 8px 28px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.config > summary { display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: baseline; color: var(--muted); font-size: 13px; }
+.config > summary { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; color: var(--muted); font-size: 13px; list-style: none; }
+.config > summary::-webkit-details-marker, .card > summary::-webkit-details-marker { display: none; }
+.config > summary::before, .card > summary::before { content: "▶"; font-size: 10px; width: 10px; color: var(--text); }
+.config[open] > summary::before, .card[open] > summary::before { content: "▼"; }
 .config-file { font-family: var(--mono); color: var(--text); }
 .chip { max-width: 48ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chip b, .config > summary > b { font-weight: 550; color: var(--text); }
@@ -82,18 +85,17 @@ h1 { margin: 0; font-size: 22px; font-weight: 650; }
 
 .stats { display: flex; flex-wrap: wrap; gap: 8px 28px; margin-bottom: 12px; }
 .stat { display: flex; flex-direction: column; min-width: 0; }
-.stat-label, .stat-sub { color: var(--muted); font-size: 12px; }
+.stat-label { color: var(--muted); font-size: 12px; }
 .stat-value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.stat-value .change { font-size: 14px; margin-left: 6px; }
-.change { font-size: 0.85em; color: var(--muted); margin-left: 4px; }
-.change.better { color: var(--good); }
-.change.worse { color: var(--bad); }
+.delta { font-size: 0.85em; color: var(--muted); }
+.delta.better { color: var(--good); }
+.delta.worse { color: var(--bad); }
 
 .chart-head { display: flex; justify-content: flex-end; align-items: center; gap: 12px; font-size: 12px; min-height: 26px; }
 .chart { width: 100%; height: auto; margin: 4px 0 16px; overflow: visible; }
 .chart .grid { stroke: var(--line); }
 .chart .axis { fill: var(--muted); font-size: 11px; }
-.tip-line { fill: none; stroke: var(--accent); stroke-width: 2; }
+.best-line { fill: none; stroke: var(--accent); stroke-width: 2; }
 .dot { cursor: pointer; stroke: var(--bg); stroke-width: 1.5; }
 .dot.accepted { fill: var(--accent); }
 .dot.rejected { fill: var(--bg); stroke: var(--muted); }
@@ -108,41 +110,37 @@ h1 { margin: 0; font-size: 22px; font-weight: 650; }
 .iterations tbody tr:hover { background: var(--panel); }
 .iterations tbody tr.selected { background: var(--panel); box-shadow: inset 3px 0 var(--accent); }
 .iterations .num { text-align: right; white-space: nowrap; }
-.iterations .value { text-align: right; white-space: nowrap; }
-.iterations .dim { color: var(--muted); }
-/* the summary takes the room that is left, on one line (the full text in the panel) */
-.iterations td.summary { width: 100%; max-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.iterations td.summary.why { color: var(--muted); }
-.iterations td.summary.error { color: var(--bad); }
-.iterations td.summary.live { color: var(--accent); }
-.mark { white-space: nowrap; }
-.mark.accepted { color: var(--good); }
-.mark.rejected { color: var(--bad); }
-.mark.baseline { color: var(--muted); font-size: 12px; }
-.mark.running { color: var(--accent); }
-.flag { font-size: 12px; }
+.iterations td.value { white-space: nowrap; }
+.summary { color: var(--muted); }
+.iterations td.summary .why { color: var(--bad); }
+.iterations td.summary .flag { color: var(--bad); font-size: 12px; }
+.pill { font-size: 12px; font-weight: 550; }
+.pill.accepted, .pill.finished { color: var(--good); }
+.pill.rejected, .pill.failed, .pill.crashed, .pill.error { color: var(--bad); }
+.pill.running { color: var(--accent); }
+.pill.baseline, .pill.summary, .pill.interrupted, .pill.archived, .pill.idle { color: var(--muted); }
 
-/* the detail panel and the bars above and below it */
-.bar, .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
-.bar > summary { padding: 6px 12px; font-size: 13px; }
-.bar[open] > summary { border-bottom: 1px solid var(--line); }
-.bar > .prose { padding: 12px 16px; }
-.bar > .note-list { padding: 8px 12px; }
-.panel { padding: 10px 14px 12px; box-shadow: inset 3px 0 var(--accent); }
-.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.panel-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
-.panel-head .mark, .panel-head .why { font-weight: 500; }
-.panel-head .why { color: var(--muted); }
-.panel-head .why.error { color: var(--bad); }
+/* the detail panel (an iteration, or the summary), shaped like an open card; shared notes below */
+.box { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.box > summary { padding: 8px 12px; cursor: pointer; font-weight: 550; }
+.box[open] > summary { border-bottom: 1px solid var(--line); }
+.card > summary { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; list-style: none; }
+.card-title { font-weight: 600; }
+.card-body { padding: 4px 12px 10px; }
+.panel { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); box-shadow: inset 3px 0 var(--accent); padding-bottom: 10px; }
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.panel-head h2 { margin: 0; font-size: 14px; font-weight: 600; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.panel-head h2 .muted { font-weight: 400; }
 .panel-nav { display: flex; gap: 6px; flex-shrink: 0; }
-.facts { margin: 4px 0 0; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
-.facts:empty { display: none; }
-.agent-summary { margin: 6px 0 4px; white-space: pre-wrap; }
-.reason p { margin: 6px 0; }
-.reason pre, .gate > pre, .output, .file-body pre { margin: 4px 0 8px; padding: 6px 8px; background: var(--code); border-radius: 6px; max-height: 360px; overflow: auto; }
-.sec { border-top: 1px solid var(--line); }
-#sections { margin-top: 8px; }
-.sec > summary { padding: 6px 0; font-size: 13px; }
+#panel-summary, #sections { margin: 0 12px; }
+.agent-summary { margin: 8px 0; color: var(--muted); white-space: pre-wrap; }
+.report-body { padding: 16px 18px 8px; }
+.report-body p, .report-body ul, .report-body ol { margin: 10px 0; }
+.reason { margin: 2px 0 8px; }
+.sec-body > pre, .gate > pre, .output, .file-body pre { margin: 4px 0 8px; padding: 6px 8px; background: var(--code); border-radius: 6px; max-height: 360px; overflow: auto; }
+.sec + .sec { border-top: 1px solid var(--line); }
+.sec > summary { padding: 7px 0; font-size: 13px; }
+.sec.failed > summary .muted { color: var(--bad); }
 .sec > summary b { font-weight: 550; }
 .sec-body { padding: 0 0 10px 14px; max-height: 640px; overflow: auto; }
 .sec-body h4 { margin: 8px 0 4px; font-size: 12px; color: var(--muted); font-weight: 500; }
@@ -159,7 +157,7 @@ h1 { margin: 0; font-size: 22px; font-weight: 650; }
 .file-body { padding: 4px 0 4px 14px; }
 .file-body img { max-width: 100%; display: block; margin-bottom: 6px; border: 1px solid var(--line); }
 .file-body a, a.raw { font-size: 12px; }
-.note-list { display: flex; flex-direction: column; gap: 4px; }
+.note-list { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; }
 .note > summary { font-family: var(--mono); font-size: 12px; }
 .note > .prose { padding: 6px 0 10px 14px; max-height: 480px; overflow: auto; }
 
@@ -202,25 +200,27 @@ pre.diff { margin: 4px 0 8px; white-space: pre; overflow-x: auto; border: 1px so
 .ev.think { color: var(--muted); font-style: italic; }
 .ev.error { color: var(--bad); }
 
-/* run list: Goal and Last active are columns; narrow, the goal goes under the run's
-   name and when it was last active beside its state. */
+/* run list (dashboard). Narrow, the Goal and Last active columns are hidden and the
+   goal goes under the run's name. */
 .runs-page { padding: 16px 28px 40px; }
+.runs td { vertical-align: top; }
 .run-id { font-family: var(--mono); font-weight: 600; color: var(--text); text-decoration: none; }
 .run-id:hover { color: var(--accent); }
-.run-date { margin-left: 8px; font-size: 12px; color: var(--muted); }
-.run-config { font-family: var(--mono); }
-.sub { margin-top: 2px; font-size: 12px; color: var(--muted); }
-.runs td { white-space: nowrap; }
-.runs td.goal { width: 100%; max-width: 0; }
-.run-title, .runs .sub { overflow: hidden; text-overflow: ellipsis; }
+.run-date { margin-left: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.run-config { font-family: var(--mono); font-size: 12px; }
+.runs tr.archived { opacity: 0.55; }
+.runs .warn { color: var(--bad); }
+.runs th select { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.runs td.counts, .runs td.value { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: left; }
+.status-sub { margin-top: 2px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.runs .run-title { color: var(--text); max-width: 60ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.runs .run-why { max-width: 80ch; }
 .runs .narrow { display: none; }
 @media (max-width: 900px) {
   .runs .wide { display: none; }
-  .runs span.narrow { display: inline; }
   .runs div.narrow { display: block; }
-  .runs td:first-child { width: 100%; max-width: 0; }
+  .runs td:first-child { max-width: 36vw; }
+  .runs td:not(:first-child):not(.landing) { white-space: nowrap; }
+  .runs .run-title, .runs .run-why { max-width: 100%; }
 }
-.runs tr.archived { opacity: 0.55; }
-.runs th select { font-size: 12px; color: var(--muted); padding: 0 4px; }
-.state.running { color: var(--accent); }
 .empty { padding: 24px 8px; }

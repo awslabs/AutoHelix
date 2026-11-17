@@ -197,8 +197,8 @@ def test_iteration_detail_has_notes_and_diff(viewer):
     detail = json.loads(get(viewer.api + "/iteration/2")[1])
     assert "<strong>the obvious</strong>" in detail["notes"]
     assert "<script>" not in detail["notes"]  # Raw HTML is escaped, not rendered.
-    assert detail["diff"] is None  # a finished iteration's change is its own route
-    assert "Modified in iteration 2" in json.loads(get(viewer.api + "/iteration/2/diff")[1])["diff"]
+    assert "Modified in iteration 2" in detail["diff"]  # vs baseline
+    assert "Modified in iteration 2" in json.loads(get(viewer.api + "/iteration/2/diff")[1])["diff"]  # its own
     assert [(g["text"], g["passed"]) for g in detail["gates"]] == [("true", True)]
     assert detail["observe"] == [] and detail["discarded"] == []
     assert isinstance(detail["agent"], list)

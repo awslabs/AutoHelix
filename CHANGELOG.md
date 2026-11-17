@@ -260,11 +260,12 @@ Added:
 
 ### Viewer
 
-- The run page shows one detail panel for the selected iteration (gates,
-  changes, observe entries, agent note, activity) beside the iteration table,
-  and its headline metric is the latest accepted value, as on the run list,
-  the dashboard and `view` (was the best ever accepted).
-- Both pages use the console's words for statuses and rejections.
+- The run page shows one detail panel beside the iteration table instead of a
+  card per iteration: the selected iteration (its arrows, `j`/`k`, a row or a
+  chart point pick another), or after the last one the run summary, which is
+  also the table's last row. A finished run opens on its summary.
+- Diffs fold per file, with each file's +/− counts.
+- The status badge says when a run finished; why it ended is on hover.
 - Fixed: watching a running iteration wrote the agent's files into your
   repository's objects on every poll; metric changes from a negative
   baseline showed the wrong arrow.

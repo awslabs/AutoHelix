@@ -139,22 +139,6 @@ def test_goal_and_config_in_state(server):
     assert [g["passed"] for g in two["gates"]] == [False, None]
 
 
-def test_rows_say_what_the_console_says(server):
-    state = get_json(server + "/api/run/test/state")
-    rows = state["iterations"]
-    assert [r["why"] for r in rows] == [None, None, {"text": "pytest -q failed (exit 1)", "error": False}]
-    assert [n["text"] for n in rows[1]["notes"]] == ["observe review failed: exited 2",
-                                                     "discarded, outside the scope: tests/test_sort.py"]
-    # The stats line's totals: the baseline's time included, and the landing state.
-    assert state["run"]["seconds"] == sum(r["seconds"] or 0 for r in rows)
-    assert state["run"]["accepted"] == 1 and state["run"]["land"] == "auto"
-    assert (state["run"]["iterations"], state["run"]["time_left"]) == ("2", "")
-    # The tip as the run list has it: the latest accepted measurement.
-    assert state["tip"] == {m["name"]: {"value": m["value"], "iteration": 1}
-                            for m in get_json(server + "/api/runs")["runs"][0]["metrics"]["values"]}
-    assert [r["tip"] for r in rows] == [True, True, False]
-
-
 def test_observe_sections_by_entry(server):
     detail = get_json(server + "/api/run/test/iteration/1")
     bench, review = detail["observe"]
@@ -210,7 +194,7 @@ def test_gates_pending_while_running(project, server):
     assert (status["phase"], status["phase_word"]) == ("checks", "gates")
     assert status["line"].startswith("Running · iteration 3 · gates · ")
     row = get_json(server + "/api/runs")["runs"][0]
-    assert (row["status"]["phase_word"], row["words"]["state"], row["words"]["iterations"]) == ("gates", "running", "3")
+    assert row["status"]["phase_word"] == "gates"
 
 
 def test_status_words_are_the_consoles(monkeypatch):
@@ -218,8 +202,8 @@ def test_status_words_are_the_consoles(monkeypatch):
 
     monkeypatch.setattr(time, "time", lambda: 112.0)
 
-    def running(phase, n, stop=None, **extra):
-        words = with_words({"state": "running", "phase": phase, "iteration": n, "phase_started_at": 100, **extra}, stop)
+    def running(phase, n, **extra):
+        words = with_words({"state": "running", "phase": phase, "iteration": n, "phase_started_at": 100, **extra})
         return words["line"], words["phase_word"]
 
     # `view`'s status line, and the live row's words (an observe entry named).
@@ -228,39 +212,9 @@ def test_status_words_are_the_consoles(monkeypatch):
     assert running("observe", 2, entry="bench") == ("Running · iteration 2 · observe · 12s", "observe · bench")
     assert running("checks", 0) == ("Running · baseline · gates · 12s", "baseline")
     assert running("report", 14) == ("Running · writing the summary · 12s", "summary")
-    assert running("agent", 2, stop={"now": False}) == ("Running · iteration 2 · agent · 12s",
-                                                        "agent · stopping")
-    assert "outcome" not in with_words({"state": "running", "phase": "agent", "iteration": 2})
-    # A run that isn't running: the end block's first line, red or yellow where the console's is.
-    outcome = [with_words(status)["outcome"] for status in (
-        {"state": "finished", "stop_reason": {"kind": "budget", "detail": "iteration budget reached (14)"}},
-        {"state": "crashed"}, {"state": "interrupted"}, {"state": "failed"})]
-    assert outcome == [
-        {"word": "Done", "detail": "iteration budget reached (14)", "tone": None},
-        {"word": "Stopped", "detail": "unexpectedly (its process is gone) · progress saved", "tone": "error"},
-        {"word": "Interrupted", "detail": "progress saved", "tone": "warning"},
-        {"word": "Error", "detail": "the run failed", "tone": "error"}]
+    # A run that isn't running: the stored status as it is.
+    assert with_words({"state": "finished"}) == {"state": "finished"}
     assert with_words(None) is None
-
-
-def test_run_list_cells_are_the_consoles():
-    from autohelix.viewer import run_words
-
-    progress = {"iterations": 2, "max_iterations": 14, "seconds": 30, "cost_usd": 1.5, "cost_incomplete": False}
-    live = {"status": {"state": "running", "phase": "checks", "iteration": 3, "phase_started_at": 1000,
-                       "iteration_started_at": 990, "max_time_seconds": 3600, "segment_started_at": 400},
-            "stop_requested": None, "progress": progress, "last_activity": 1000}
-    assert run_words(live, 1072) == {
-        "state": "running", "tone": "running", "iterations": "3/14", "activity": "gates 1m 12s",
-        "spent": "spent 1m 52s · $1.50", "time_left": "48m 48s left (--time 1h)"}
-    assert run_words({**live, "stop_requested": {"now": False}}, 1072)["state"] == "running (stopping)"
-    crashed = {"status": {"state": "crashed"}, "progress": {**progress, "iterations": 14}, "last_activity": 772}
-    assert run_words(crashed, 1072) == {
-        "state": "stopped unexpectedly", "tone": "error", "iterations": "14/14", "activity": "5m ago",
-        "spent": "spent 30s · $1.50", "time_left": ""}
-    assert run_words({**crashed, "status": {"state": "interrupted"}}, 1072)["tone"] == "warning"
-    assert run_words({**crashed, "status": {"state": "finished"}}, 1072)["tone"] is None
-    assert run_words({"id": "x", "error": "boom"}, 1072) == {"state": "unreadable", "tone": "error"}
 
 
 def test_attempt_diff(project, server):
