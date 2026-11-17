@@ -153,7 +153,7 @@ def view_screen(width: int, running: bool = False, readable: bool = True) -> lis
 
 
 def dashboard_screen(width: int) -> list:
-    """`autohelix dashboard --once`: the run above, a second one running, one archived."""
+    """`autohelix view --once`: the run above, a second one running, one archived."""
     from autohelix.run_table import dashboard_lines
 
     perf = _run_payload(True)

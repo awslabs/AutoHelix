@@ -280,9 +280,9 @@ def test_no_current_observers_ignore_old_top_level_files(tmp_path):
     from autohelix.cli import main
     from autohelix.viewer import ProjectRuns
 
-    # No run reads them: the run list is empty, and a view without a run id has none to show.
+    # No run reads them: the run list is empty, and a view without a run id has none to follow.
     assert ProjectRuns(tmp_path).runs()["runs"] == []
-    result = CliRunner().invoke(main, ["view", "--json", "-p", str(tmp_path)])
+    result = CliRunner().invoke(main, ["view", "--terminal", "-p", str(tmp_path)])
     assert result.exit_code == 1 and "No runs in" in result.output
     with pytest.raises(ValueError):
         RunData(tmp_path, None)  # the viewer reads named runs only

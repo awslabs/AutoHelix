@@ -238,8 +238,9 @@ iteration as it ends, with a live row for the one under way:
 the segment ends, the end block says why, how each metric moved, what landed on your
 branch and what to type next (see [CLI → What it prints](cli.md#what-it-prints)).
 
-Use `autohelix view` in a second terminal to follow the run: the same screen `run` prints
-(header, iterations so far, the live row), and the agent's live output below it (`autohelix view --web` for the same in a browser).
+Use `autohelix view` in a second terminal to follow the run on a live page in your browser
+(every run of the project, each with its own page), or `autohelix view --terminal` for the
+same screen `run` prints (header, iterations so far, the live row) with the agent's live output below it.
 `autohelix stop <id>` ends it after the current iteration (`--now`, or Ctrl-C in its
 terminal, at once); scripts can block on `autohelix wait`, which prints each iteration
 and the run's end as JSON.
@@ -254,7 +255,7 @@ autohelix resume -n 5                # five more iterations of this config's lat
 autohelix resume k3f9 --cost 5       # a specific run (its id, or its last part), up to $5 more
 ```
 
-Runs you're done with stay listed in `autohelix dashboard`; archive them to hide
+Runs you're done with stay listed in `autohelix view`; archive them to hide
 them, or delete them for good. Your **code stays as is** either way:
 
 ```bash
@@ -301,7 +302,7 @@ autohelix run a --land manual     # autohelix/a.yaml
 autohelix run b --land manual     # autohelix/b.yaml
 ```
 
-Compare them with `autohelix dashboard`, then land the winner and archive the
+Compare them with `autohelix view`, then land the winner and archive the
 rest:
 
 ```bash

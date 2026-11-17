@@ -196,7 +196,7 @@ def test_a_run_whose_config_is_gone_continues_with_its_stored_copy(folder_projec
     assert History(folder_project, run_id).get_last_iteration() == 2
     config = RunData(folder_project, latest_run(folder_project).run_id).state()["config"]  # the web page's payload
     assert config["file"] == "autohelix/perf.yaml" and "missing" not in config and config["text"]
-    listed = json.loads(cli(folder_project, "view", "--json").stdout)["run"]
+    listed = json.loads(cli(folder_project, "view", short_id(run_id), "--json").stdout)["run"]
     assert (listed["config_file"], listed["config_invalid"], listed["goal"]) == (
         "autohelix/perf.yaml", False, "Make a checked change")
     assert "config_missing" not in listed
@@ -216,10 +216,10 @@ def test_a_run_without_a_stored_config_is_never_given_its_file(folder_project):
     assert result.exit_code == 1 and refused in flat(result.output), result.output
     config = RunData(folder_project, latest_run(folder_project).run_id).state()["config"]
     assert config["file"] == "autohelix/perf.yaml" and "missing" not in config and "agent" not in config
-    listed = json.loads(cli(folder_project, "view", "--json").stdout)["run"]
+    listed = json.loads(cli(folder_project, "view", short, "--json").stdout)["run"]
     assert (listed["config_file"], listed["config_invalid"], listed["goal"]) == ("autohelix/perf.yaml", True, None)
-    assert "autohelix/perf.yaml (invalid)" in cli(folder_project, "view", "--once").output
-    (row,) = json.loads(cli(folder_project, "dashboard", "--json").output)["runs"]
+    assert "autohelix/perf.yaml (invalid)" in cli(folder_project, "view", short, "--once").output
+    (row,) = json.loads(cli(folder_project, "view", "--json").output)["runs"]
     assert row["config_invalid"] and "config_missing" not in row
 
 
@@ -381,7 +381,7 @@ def test_a_config_that_is_not_yaml_is_named(folder_project):
         assert "Traceback" not in result.output and result.exception is None or isinstance(
             result.exception, SystemExit), args
     assert cli(folder_project, "view", run_id, "--json").exit_code == 0
-    assert cli(folder_project, "dashboard", "--json").exit_code == 0
+    assert cli(folder_project, "view", "--json").exit_code == 0
 
 
 def test_report_without_runs_creates_nothing(folder_project):
@@ -421,4 +421,4 @@ def test_inherited_git_variables_are_dropped(folder_project, tmp_path, monkeypat
     assert ".autohelix/" in (folder_project / ".git" / "info" / "exclude").read_text().splitlines()
     monkeypatch.setenv("GIT_DIR", str(other / ".git"))  # dropped by the run above: set again
     monkeypatch.setenv("GIT_WORK_TREE", str(other))
-    assert json.loads(cli(folder_project, "dashboard", "--json").output)["branch"] == branch
+    assert json.loads(cli(folder_project, "view", "--json").output)["branch"] == branch

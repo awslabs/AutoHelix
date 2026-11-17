@@ -8,7 +8,7 @@
 
 Runs the CLI of the checkout this script is in (its `src/` first on PYTHONPATH),
 with the interpreter given by --python, under a pseudo-terminal of each width:
-`run` (live and final frames), `resume`, `view --once`, `dashboard --once` and
+`run` (live and final frames), `resume`, `view ID --once`, `view --once` and
 bare `autohelix` (the entry screen: with runs, with a config and no runs, with
 nothing, with two agents, outside git), plus `run` and bare `autohelix` piped (no
 TTY). A fake `claude` (and `codex`) prints the session it was started with. The projects are
@@ -347,9 +347,10 @@ def main() -> int:
 
                 final, _, code = run_in_pty([*cli, "resume", "-n", "1"], project, env, width)
                 record(f"resume-{width}", final, width, f"autohelix resume -n 1 · {width} cols", code)
-                for command in (["view", "--once"], ["dashboard", "--once"]):
+                short = max((project / ".autohelix" / "runs").iterdir()).name.rsplit("-", 1)[-1]  # the run above
+                for name, command in (("view", ["view", short, "--once"]), ("dashboard", ["view", "--once"])):
                     final, _, code = run_in_pty([*cli, *command], project, env, width)
-                    record(f"{command[0]}-{width}", final, width, f"autohelix {' '.join(command)} · {width} cols", code)
+                    record(f"{name}-{width}", final, width, f"autohelix {' '.join(command)} · {width} cols", code)
 
                 # Bare `autohelix`: the entry screen. A second run, interrupted in its first iteration.
                 run_in_pty([*cli, "run", "-n", "3", "--no-report"], project, env, width,

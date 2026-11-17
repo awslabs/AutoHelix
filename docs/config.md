@@ -447,8 +447,8 @@ iteration is. A stop pauses the run: `autohelix resume` continues it (and it
 stops again after the next accepted iteration if the condition still holds);
 raise the target or remove the condition first.
 
-Why a run ended is shown at the end of the run, in `autohelix view` (terminal
-and `--web`), the run summary, and `.autohelix/runs/<id>/.internal/status.json`
+Why a run ended is shown at the end of the run, in `autohelix view` (the web page
+and `--terminal`), the run summary, and `.autohelix/runs/<id>/.internal/status.json`
 (`stop_reason`, `kind: condition`; the other kinds are `budget`, `agent` and
 `request`, from [`autohelix stop`](cli.md#autohelix-stop); see
 [Concepts → Runs and run state](concepts.md#runs-and-run-state)).
@@ -586,7 +586,7 @@ is an error naming the flag). The call uses the run's agent settings (backend,
 command, model, `reasoning_effort`, `settings`, `extra_args`), with a
 timeout of `agent.timeout` capped at 15 minutes. Its time and cost are shown
 next to the summary in `autohelix view` and `report.html`, and every summary's
-cost is counted in the run's total (the end block, `view`, `dashboard`, the run
+cost is counted in the run's total (the end block, `view`, the run
 page) and in the segment's: it runs after the loop, so `--cost` doesn't stop
 it, but the next segment's `--cost` starts after it. A summary that fails says
 why (with its log, `logs/report.log`) and a Ctrl-C during it ends only the

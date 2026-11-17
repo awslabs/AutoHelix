@@ -1,10 +1,9 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The live terminal views: `autohelix dashboard` and `autohelix view`.
+"""The live terminal view: `autohelix view --terminal`.
 
-`dashboard` redraws the run table (run_table.dashboard_lines). `view` shows one
-run's screen (run_table.view_parts) above the log being written for what the
+It shows one run's screen (run_table.view_parts) above the log being written for what the
 run is doing, which its status (runs/<id>/.internal/status.json) says: the
 agent's during an iteration, an `ask`/`review` call's transcript while gate,
 observe or stop commands make one (live from its call folder, then stored), the
@@ -29,7 +28,6 @@ from autohelix.runs import RunPaths
 from autohelix.viewer import ProjectRuns
 
 POLL_SECONDS = 0.3  # the log and the run's status
-TABLE_SECONDS = 5  # rereading the runs (history, config, git) for `dashboard`
 REREAD_SECONDS = 5  # `view`: rereading the run (~200 ms) when none of its files changed (git, reports)
 REFRESH_PER_SECOND = 10  # `view`: redrawing (the live row's spinner and clock are timed at draw time)
 MIN_LOG_LINES = 5  # the log panel at its smallest: borders, header lines, one line of output
@@ -262,15 +260,3 @@ def view(project: Path, backend: str | None = None, console: Console | None = No
                 data, read_at, seen = _read_run(runs, project, run_id), time.monotonic(), state
             live.update(view_screen(data, log, status, console.size.height, console.width))
             time.sleep(POLL_SECONDS)
-
-
-def dashboard(project: Path, console: Console | None = None, *, metric: str | None = None) -> None:
-    """Redraw the project's run table every TABLE_SECONDS until interrupted."""
-    console = console or Console()
-    runs = ProjectRuns(project)
-    with Live(console=console, auto_refresh=False) as live:
-        while True:
-            lines = run_table.dashboard_lines(runs.runs(), console.width, metric=metric)
-            footer = Text(f"  updated {time.strftime('%H:%M:%S')} · Ctrl-C to stop", style="dim")
-            live.update(Group(*lines, Text(""), footer), refresh=True)
-            time.sleep(TABLE_SECONDS)

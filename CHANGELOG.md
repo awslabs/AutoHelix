@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### One `view` command: the web page first
+
+- **`autohelix view` serves the web page** (the run list at `/`; with a run id,
+  that run's page), with `--port` and `--open`. `view --terminal [ID]` follows a
+  run live in the terminal (without an id, the running or latest run, as
+  before). `view --once` / `--json` print the project's runs (the dashboard
+  table, `--metric` picks its column); with an id, that run.
+- **Removed `autohelix dashboard`** (no alias) and `view --web`; the live
+  terminal runs table goes with it (bare `autohelix` and `view --once` show the
+  table).
+- **The runs table is one line per run**: run, state, iterations, the metric,
+  landing, cost, activity and the goal (left out when there is no room). Group,
+  notes, the config file and time spent are in `view ID` and `--json`; what is
+  left of `--time` is in `view`'s Budget field.
+
 ### One entry point: bare `autohelix`
 
 - **Bare `autohelix` in a terminal** shows the project's runs (the folder with

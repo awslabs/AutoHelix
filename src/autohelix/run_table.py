@@ -1,12 +1,13 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The terminal `view` and `dashboard` (live, or `--once`): the `--json` payloads
-drawn with the pieces `run` prints (`terminal`), so a run looks the same everywhere.
+"""`view`'s terminal text (`--terminal`, or `--once`): the `--json` payloads drawn
+with the pieces `run` prints (`terminal`), so a run looks the same everywhere.
 
-`view` is the run's own screen: its header, one row per iteration, the live row of
-the iteration under way, or, once it stopped, the end block. `dashboard` is the
-project's runs, one row each. Both return lines cut to the width (`rich.text.Text`:
+A run's own screen: its header, one row per iteration, the live row of the
+iteration under way, or, once it stopped, the end block. The dashboard (`view
+--once` without a run id, and the entry screen's table): the project's runs, one
+line each. Both return lines cut to the width (`rich.text.Text`:
 colours on a terminal, plain when piped); `format_run` / `format_runs` are the same
 as plain text.
 """
@@ -279,7 +280,7 @@ def format_run(data: dict, saved: Saved, now: float | None = None, width: int = 
     return _plain(view_lines(data, saved, width, now))
 
 
-# --- the project's runs (`dashboard`) -------------------------------------------------
+# --- the project's runs (the dashboard: `view --once`) ---------------------------------
 
 
 def dashboard_lines(data: dict, width: int = 100, metric: str | None = None, now: float | None = None) -> list[Text]:
@@ -352,7 +353,7 @@ def table_lines(shown: list[dict], width: int = 100, metric: str | None = None, 
 
 
 def format_runs(data: dict, metric: str | None = None, now: float | None = None, width: int = 100) -> str:
-    """`dashboard --once` as plain text."""
+    """`view --once` (no run id) as plain text."""
     return _plain(dashboard_lines(data, width, metric, now))
 
 

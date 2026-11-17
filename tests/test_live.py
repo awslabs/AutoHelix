@@ -1,4 +1,4 @@
-"""The live terminal views: `view` follows the log the run status points at; `dashboard` redraws."""
+"""The live terminal view: `view --terminal` follows the log the run status points at."""
 
 import io
 import json
@@ -123,7 +123,7 @@ def _cli(*args):
 
 def test_live_view_exits_with_hints_instead_of_waiting(tmp_path):
     def hint():
-        result = _cli("view", "-p", tmp_path)
+        result = _cli("view", "--terminal", "-p", tmp_path)
         assert result.exit_code == 1
         return " ".join(result.output.split())
 
@@ -136,35 +136,22 @@ def test_live_view_exits_with_hints_instead_of_waiting(tmp_path):
             in hint())
 
 
-@pytest.mark.parametrize("command", ["view", "dashboard"])
-@pytest.mark.parametrize("flags", [["--json", "--once"], ["--json", "--web"], ["--once", "--web"],
-                                   ["--port", "9000"], ["--open"], ["--once", "--port", "0"], ["--json", "--open"]])
-def test_one_mode_at_a_time(tmp_path, command, flags):
-    result = _cli(command, "-p", tmp_path, *flags)
-    assert result.exit_code == 2, result.output
-    assert "--port and --open apply to --web" in result.output or "Use one of --json, --once and --web" in result.output
+@pytest.mark.parametrize("flags", [["--json", "--once"], ["--terminal", "--json"], ["--once", "--terminal"]])
+def test_one_mode_at_a_time(tmp_path, flags):
+    result = _cli("view", "-p", tmp_path, *flags)
+    assert result.exit_code == 2 and "Use one of --terminal, --once and --json" in result.output, result.output
 
 
-@pytest.mark.parametrize("flags", [["--json"], ["--web"]])
-def test_dashboard_metric_goes_with_the_table(tmp_path, flags):
-    result = _cli("dashboard", "-p", tmp_path, "--metric", "speed", *flags)
-    assert result.exit_code == 2 and "--metric applies to the table" in result.output
+@pytest.mark.parametrize("flags", [["--port", "9000", "--once"], ["--open", "--terminal"], ["--json", "--open"]])
+def test_port_and_open_go_with_the_web_page(tmp_path, flags):
+    result = _cli("view", "-p", tmp_path, *flags)
+    assert result.exit_code == 2 and "--port and --open apply to the web page" in result.output, result.output
 
 
-def test_live_dashboard_draws_the_table_until_ctrl_c(tmp_path, monkeypatch, run_paths):
-    _stop_after(monkeypatch, polls=2)
-    reads = []
-    real = W.run_table.dashboard_lines
-    monkeypatch.setattr(W.run_table, "dashboard_lines", lambda data, *a, **k: reads.append(k) or real(data, *a, **k))
-    out = io.StringIO()
-    with pytest.raises(KeyboardInterrupt):
-        W.dashboard(tmp_path, Console(file=out, width=100, force_terminal=False))
-    assert len(reads) == 2  # redrawn after the first sleep
-    assert "Runs       1 run" in out.getvalue() and "Ctrl-C to stop" in out.getvalue()
-    # Through the CLI, Ctrl-C ends it quietly.
-    _stop_after(monkeypatch)
-    result = _cli("dashboard", "-p", tmp_path)
-    assert result.exit_code == 0 and "dashboard" in result.output, result.output
+@pytest.mark.parametrize("flags", [["--json"], [], ["r1", "--once"]])
+def test_metric_goes_with_the_runs_table(tmp_path, flags):
+    result = _cli("view", "-p", tmp_path, "--metric", "speed", *flags)
+    assert result.exit_code == 2 and "--metric applies to the runs table" in result.output, result.output
 
 
 def _run_data(iterations: int) -> dict:

@@ -246,7 +246,7 @@ def test_why_is_stored_kept_and_shown(project):
     assert cli(project, "archive", short).exit_code == 0
     assert identity(other)["archive_why"] == "merged by hand"
 
-    rows = {row["id"]: row for row in json.loads(cli(project, "dashboard", "--json").output)["runs"]}
+    rows = {row["id"]: row for row in json.loads(cli(project, "view", "--json").output)["runs"]}
     assert rows[paths.run_id]["why"] == "try the heap approach" and rows[paths.run_id]["import"] is None
     assert rows[other.run_id]["archive_why"] == "merged by hand"
     assert rows[other.run_id]["import"] == {"run": paths.run_id} and rows[other.run_id]["why"] is None

@@ -525,7 +525,7 @@ A run is a line of work: `autohelix run` starts one, `autohelix resume` continue
 one (by default the config's most recently active), `autohelix stop` ends a
 running one after its current iteration, `archive` sets one aside and `delete`
 removes it. **A run keeps its config**: it stores it as `config.yaml`
-(and its prompt template as `prompt_template.md`) when it starts, and every segment, `view`, `dashboard`, `report` and the judges
+(and its prompt template as `prompt_template.md`) when it starts, and every segment, `view`, `report` and the judges
 (`$AUTOHELIX_CONFIG`) use that copy. `resume` refuses before spending anything
 when the config file's parsed config differs from it (comments, formatting and
 other spellings of the same value don't count; the prompt template's text does): `autohelix run <config> --import
@@ -619,4 +619,4 @@ the pricing assumptions and accounting limits.
 
 ## Run page
 
-To follow a run live, use [`autohelix view`](cli.md#autohelix-view) in a terminal, or `autohelix view --web` for this page in a browser. When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/runs/<id>/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's gates, notes and observe entries (status and metrics; a review's text), the changes from the baseline to the final code, and the run summary when there is one (see [Configuration → Report](config.md#report)). It leaves out agent activity, per-iteration diffs, and stdout, stderr and captured files; use `autohelix view --web` for those. `autohelix report` also rewrites it.
+To follow a run live, open this page with [`autohelix view <id>`](cli.md#autohelix-view), or use `autohelix view --terminal` in a terminal. When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/runs/<id>/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's gates, notes and observe entries (status and metrics; a review's text), the changes from the baseline to the final code, and the run summary when there is one (see [Configuration → Report](config.md#report)). It leaves out agent activity, per-iteration diffs, and stdout, stderr and captured files; use `autohelix view --web` for those. `autohelix report` also rewrites it.

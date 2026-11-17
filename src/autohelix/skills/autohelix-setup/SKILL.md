@@ -211,9 +211,10 @@ the loop runs.
 For a requested launch, use given/existing bounds and resolve material budget
 ambiguity as described in the loop-design reference.
 
-Use `autohelix view` (live in a terminal; `--once` or `--json` print a snapshot and
-exit) to inspect a run and its live agent output, and `autohelix hint` to steer
-the next iteration. History, observations (reviews included), notes, the run summary
+Use `autohelix view ID --once` or `--json` (a snapshot; they exit) to inspect a run, and
+`autohelix view --once` / `--json` for all of the project's runs; a bare `autohelix view`
+serves a web page and `view --terminal` follows a run live, for people (neither exits).
+Use `autohelix hint` to steer the next iteration. History, observations (reviews included), notes, the run summary
 (`report.md`), and the run page (`report.html`) are stored under `.autohelix/runs/<id>/`.
 
 ## Manage a requested run

@@ -98,9 +98,9 @@ def test_resuming_an_archived_run_by_id_brings_it_back(project):
     paths = started(project)
     assert cli(project, "archive", short_id(paths.run_id)).exit_code == 0
     assert paths.read_identity()["archived"] is True
-    listed = json.loads(cli(project, "dashboard", "--json").output)["runs"]
+    listed = json.loads(cli(project, "view", "--json").output)["runs"]
     assert [r["archived"] for r in listed] == [True]
-    assert "1 archived (not listed" in cli(project, "dashboard", "--once").output
+    assert "1 archived (not listed" in cli(project, "view", "--once").output
     result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     assert "archived" not in paths.read_identity()
@@ -121,10 +121,10 @@ def test_only_the_archived_flag_archives_a_run(project):
     data = paths.read_identity()
     data["lifecycle"] = "abandoned"  # a development build's key: no meaning
     paths.identity.write_text(json.dumps(data))
-    assert json.loads(cli(project, "dashboard", "--json").output)["runs"][0]["archived"] is False
+    assert json.loads(cli(project, "view", "--json").output)["runs"][0]["archived"] is False
     assert cli(project, "archive", short_id(paths.run_id)).exit_code == 0
     assert paths.read_identity()["lifecycle"] == "abandoned"  # left alone
-    assert json.loads(cli(project, "dashboard", "--json").output)["runs"][0]["archived"] is True
+    assert json.loads(cli(project, "view", "--json").output)["runs"][0]["archived"] is True
 
 
 def test_delete_refuses_unlanded_commits_unless_forced(project):
@@ -139,8 +139,8 @@ def test_delete_refuses_unlanded_commits_unless_forced(project):
     assert not second.run_dir.exists()
     assert git(project, "rev-parse", "--verify", second.ref, check=False).returncode != 0
     assert [p.run_id for p, _ in project_runs(project)] == [first.run_id]
-    view = cli(project, "view", "--json")  # the run without an id is now the remaining one
-    assert json.loads(view.stdout)["run"]["id"] == first.run_id
+    view = cli(project, "view", "--json")  # the runs: only the remaining one
+    assert [r["id"] for r in json.loads(view.stdout)["runs"]] == [first.run_id]
     assert cli(project, "delete", short_id(first.run_id)).exit_code == 0  # landed: no --force needed
     assert project_runs(project) == []
     assert not (RunPaths(project).project_internal / "current").exists()

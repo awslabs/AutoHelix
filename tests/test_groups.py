@@ -149,7 +149,7 @@ def test_group_and_manual_runs_dont_warn_about_a_live_run(project):
 def test_the_group_is_in_the_json_and_the_runs_view(project):
     grouped, _ = started(project, "--group", "perf")
     plain, _ = started(project, "--land", "manual")
-    rows = {row["id"]: row for row in json.loads(cli(project, "dashboard", "--json").output)["runs"]}
+    rows = {row["id"]: row for row in json.loads(cli(project, "view", "--json").output)["runs"]}
     assert rows[grouped.run_id]["group"] == "perf" and rows[grouped.run_id]["land"] == "manual"
     assert rows[plain.run_id]["group"] is None and rows[plain.run_id]["land"] == "manual"
     view = cli(project, "view", short_id(grouped.run_id), "--once")

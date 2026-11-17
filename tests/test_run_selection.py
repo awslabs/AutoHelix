@@ -135,9 +135,12 @@ def test_unknown_ids_refuse_the_whole_command(folder_project):
     assert result.exit_code == 0 and all(p.read_identity()["archived"] for p in (one, two))
 
 
-def test_land_view_and_report_name_the_run_they_chose(folder_project):
+def test_land_view_and_report_name_the_run_they_chose(folder_project, monkeypatch):
+    from tests.test_live import _stop_after
+
     perf, docs = started(folder_project, "perf"), started(folder_project, "docs")
-    result = cli(folder_project, "view", "--json")
+    _stop_after(monkeypatch)
+    result = cli(folder_project, "view", "--terminal")
     assert result.exit_code == 0, result.output
     assert f"Run {short_id(docs.run_id)} (the most recently active run" in result.output
     cli(folder_project, "archive", short_id(docs.run_id))
@@ -155,7 +158,7 @@ def test_commands_from_a_subfolder_find_the_project(folder_project, monkeypatch)
     (folder_project / "src").mkdir()
     monkeypatch.chdir(folder_project / "src")
     runner = CliRunner()
-    result = runner.invoke(main, ["dashboard", "--json"])
+    result = runner.invoke(main, ["view", "--json"])
     assert result.exit_code == 0, result.output
     assert "Using project .." in result.output
     assert perf.run_id in result.output
