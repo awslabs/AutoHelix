@@ -4,7 +4,7 @@
 
 AutoHelix runs AI agents in a loop — each iteration is isolated in private copies of the code, validated by its gates, and only accepted when they pass. What doesn't pass gets discarded; what the agent learns persists.
 
-See the [main README](../README.md) for an overview, quick start, and the config reference.
+See the [main README](https://github.com/awslabs/AutoHelix/blob/main/README.md) for an overview, quick start, and the config reference.
 
 ## Guides
 

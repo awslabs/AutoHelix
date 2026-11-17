@@ -49,14 +49,14 @@ A useful loop answers five questions:
   (`src/autohelix/templates/default_prompt.md`). See [Prompt](#prompt).
 - AutoHelix already retains iteration evidence and agent memory. When findings
   should also be user-facing and revisable, keep them in an editable,
-  version-controlled file. The [research example](../examples/research/) uses
+  version-controlled file. The [research example](https://github.com/awslabs/AutoHelix/tree/main/examples/research) uses
   `REPORT.md` for this purpose.
 - The editable content and evaluated result need not be the same. In the
-  [post-training example](../examples/posttrain/), the agent writes training
+  [post-training example](https://github.com/awslabs/AutoHelix/tree/main/examples/posttrain), the agent writes training
   code while the evaluator scores the resulting model. AutoHelix cannot
   restore artifacts outside git when an iteration is rejected.
 
-See the [examples](../examples/) for concrete loops that can be adapted or
+See the [examples](https://github.com/awslabs/AutoHelix/tree/main/examples) for concrete loops that can be adapted or
 combined.
 
 ## Candidate Copies

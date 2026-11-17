@@ -53,8 +53,10 @@ autohelix = "autohelix.cli:main"
 packages = ["src/autohelix"]
 
 # The user docs ship inside the package (autohelix/docs), for the agent sessions bare
-# `autohelix` starts (`cli.docs_dir`). The repo's docs/ stays where it is; editable
-# installs don't get this, and read the checkout's docs/ instead.
+# `autohelix` starts (`cli.docs_dir`). The repo's docs/ stays where it is. An editable
+# install gets a copy too (site-packages/autohelix/docs, as of the install), unused:
+# `autohelix` imports from src/autohelix, which has no docs/, so `cli.docs_dir` reads
+# the checkout's docs/. (Hatchling has no setting to leave it out of editable builds.)
 [tool.hatch.build.targets.wheel.force-include]
 "docs" = "autohelix/docs"
 

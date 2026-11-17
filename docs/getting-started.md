@@ -82,9 +82,9 @@ with Claude Code? Enter/q" (or names the agent you have: Codex or OpenCode; it
 asks which when there are several). Enter starts your coding agent with the
 setup skill bundled with AutoHelix, and the agent starts by asking what you
 want to achieve. The skill helps design the experiment from your existing code,
-checks, and evidence. The agent proposes a short name for the goal and saves the
-config as `autohelix.yaml` (the project's first config; later ones go in
-`autohelix/<name>.yaml`), checks it with `autohelix run --check`, commits it, and
+checks, and evidence. The agent saves the config as `autohelix.yaml` (the
+project's first config; for later ones it proposes a short name for the goal
+and saves them as `autohelix/<name>.yaml`), checks it with `autohelix run --check`, commits it, and
 gives the `autohelix run` command to start. The agent you choose becomes
 `agent.backend`, the loop's backend, unless you decide otherwise.
 
@@ -165,7 +165,7 @@ The following steps prepare the same kind of experiment without the skill.
 
 Write `autohelix.yaml` at the project root (or `autohelix/perf.yaml`, one of
 [several configs](#5-several-configs)). Start from the config below, an
-[example](../examples/), or the commented template shipped in the package:
+[example](https://github.com/awslabs/AutoHelix/tree/main/examples), or the commented template shipped in the package:
 
 ```bash
 cd my-project
