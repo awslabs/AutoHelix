@@ -805,7 +805,7 @@ def no_run(project: Path) -> str:
 
 
 def default_run(project: Path) -> tuple[RunPaths, dict, str]:
-    """The run a command given no run id acts on (`land`, `hint`, `view`, `report`): the
+    """The run a command given no run id acts on (`land`, `hint`, `view --terminal`, `report`): the
     one running run, else the most recently active run that isn't archived. Returns it
     with why it was chosen ("running", "most recently active") for the caller to say.
     RuntimeError when several runs are running (name one), NoRun when there is none."""

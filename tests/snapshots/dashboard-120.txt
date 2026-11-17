@@ -1,4 +1,4 @@
-  AutoHelix  v0.3.0 · dashboard · sorting
+  AutoHelix  v0.3.0 · runs · sorting
   Project    ~/code/sorting · main @ 4d05f32
   Runs       2 runs · $6.25 spent · 1 archived (not listed; see --json)
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

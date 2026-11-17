@@ -557,7 +557,7 @@ def test_runs_json_and_once(measured_project):
     result = _cli("view", "-p", project, "--once")
     assert result.exit_code == 0, result.output
     lines = [line.rstrip() for line in result.output.splitlines()]
-    assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(" · dashboard · test_project")
+    assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(" · runs · test_project")
     assert lines[1].startswith("  Project    ") and lines[1].endswith(" @ " + subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip())
     assert lines[2].startswith("  Runs       2 runs") and lines[2].endswith("1 archived (not listed; see --json)")
@@ -637,6 +637,13 @@ def test_table_shows_the_iteration_under_way():
     assert listing[1] == "  Project    /x · detached @ abc1234"
     assert listing[5].split() == ["r1", "running", "3/5", "—", "$1.50+", "gates", "30s"]  # activity: what it is doing
     assert len(listing) == 6  # one line per run
+    unreadable = {"id": "20261101-0000-x-dddd", "error": "run.json: Expecting value"}
+    for width in (60, 100):  # its why, whatever the width
+        listing = format_runs({**header, "runs": [run, unreadable]}, now=1000, width=width).splitlines()
+        assert listing[-1].split() == ["dddd", "unreadable:", "run.json:", "Expecting", "value"]
+    narrow = format_runs({**header, "runs": [run]}, now=1000, width=44).splitlines()
+    assert narrow[4].split() == ["run", "state", "iter", "landing", "activity"]  # the cost goes first
+    assert narrow[5].split() == ["r1", "running", "3/5", "—", "gates", "30s"]
     one = format_run({**header, "run": run}, Saved(), now=1000).splitlines()
     assert one[0].endswith(" · run r1 · p · running")
     assert one[-1].split() == ["⠋", "3", "1m", "40s", "gates"]  # the iteration's own time so far

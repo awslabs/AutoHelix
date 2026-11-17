@@ -241,7 +241,7 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
         table = Table.of(config, width)
     else:
         fields = [("Goal", run.get("title") or (run.get("goal") or "").split("\n")[0]),
-                  ("Config", _config_file(run))]
+                  ("Config", _config_file(run)), ("Budget", time_cap(run, now))]
         table = Table(_directions([run]) or {name: "higher" for r in run["iterations"] for name in r["metrics"] or {}},
                       width)
     fields += [("Group", run.get("group") or ""), ("Notes", _notes(run))]
@@ -261,12 +261,11 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
     elif saved.rows is None:
         tail = [Text(), terminal.rule(width), *table.outcome_lines(_outcome(run))]
     else:
-        landed = [r for r in table.rows if r.accepted and r.iteration > 0]
+        accepted = sum(1 for r in table.rows if r.accepted and r.iteration > 0 and r.commit)
         commands = terminal.next_commands(short, view=False, land=_can_land(run))
         tail = table.ending(_outcome(run), spent=terminal.money(run["progress"]["cost_usd"],
                                                                  run["progress"]["cost_incomplete"]),
-                            landing=_landed(run, sum(1 for r in landed if r.commit)), landed=landed,
-                            commands=commands, files=list(saved.files))
+                            landing=_landed(run, accepted), commands=commands, files=list(saved.files))
     return head, rows, tail
 
 
@@ -298,7 +297,7 @@ def dashboard_lines(data: dict, width: int = 100, metric: str | None = None, now
     if archived:
         summary.append(f"{len(archived)} archived (not listed; see --json)")
     fields = [("Project", _where(data), None), ("Runs", " · ".join(summary))]
-    lines = terminal.header(terminal.title("dashboard", data.get("project"), version=terminal.version()),
+    lines = terminal.header(terminal.title("runs", data.get("project"), version=terminal.version()),
                             fields, width, show_mark=False)
     if not shown:
         return lines + [Text("  " + ("No runs yet." if not runs else "All runs are archived."))]
@@ -315,17 +314,20 @@ def current_runs(runs: list[dict]) -> list[dict]:
 def table_lines(shown: list[dict], width: int = 100, metric: str | None = None, now: float | None = None
                 ) -> list[Text]:
     """The dashboard's table of `shown` runs (`current_runs`): a column header, then one
-    line per run, its goal last, cut to the width."""
+    line per run, its goal last, cut to the width. Too narrow for every column, the cost
+    goes first (as in `run`'s table), so the activity stays whole; the goal column needs
+    `MIN_GOAL` characters. An unreadable run's line is its id and why, in red."""
     now = time.time() if now is None else now
     directions = _directions(shown)
     metric = metric or next(iter(directions), None)
     arrow = f" {'↓' if directions.get(metric) == 'lower' else '↑'}" if metric in directions else ""
     head = ["run", "state", "iter"] + ([metric + arrow] if metric else []) + ["landing", "cost", "activity", "goal"]
-    right = {2, 3, 5} if metric else {2, 4}
-    rows: list[tuple[list[str], str | None]] = []  # cells, the state's style
+    cost, goal = len(head) - 3, len(head) - 1
+    right = {2, cost} | ({3} if metric else set())
+    rows: list[tuple[list[str], str | None] | dict] = []  # cells and the state's style, or an unreadable run
     for run in shown:
         if run.get("error"):
-            rows.append(([short_id(run["id"]), "unreadable"] + [""] * (len(head) - 3) + [run["error"]], terminal.RED))
+            rows.append(run)
             continue
         value = next((v["value"] for v in (run["metrics"] or {}).get("values", []) if v["name"] == metric), None)
         p = run["progress"]
@@ -334,19 +336,32 @@ def table_lines(shown: list[dict], width: int = 100, metric: str | None = None, 
             ([terminal.number(value)] if metric else []) + \
             [_landing(run), terminal.money(p["cost_usd"], p["cost_incomplete"]) or "—",
              _phase(run, now) if _live(run) else _ago(run["last_activity"], now), run.get("title") or ""]
-        rows.append((cells, terminal.TEAL if _live(run) else STATE_STYLES.get(_word(run))))
-    cells = [[clean(cell) for cell in row] for row in [head] + [cells for cells, _ in rows]]
-    widths = [max(len(row[i]) for row in cells) for i in range(len(head) - 1)] + [0]
-    # The goal fills what is left of the line; with too little left, no goal column.
-    if 2 + sum(widths) + 2 * (len(widths) - 1) + MIN_GOAL > width:
-        cells, widths = [row[:-1] for row in cells], widths[:-1]
+        rows.append(([clean(cell) for cell in cells], terminal.TEAL if _live(run) else STATE_STYLES.get(_word(run))))
+    table = [head] + [cells for cells, _ in (r for r in rows if isinstance(r, tuple))]
+    widths = [max(len(row[i]) for row in table) for i in range(goal)] + [0]
+    widths[0] = max([widths[0]] + [len(short_id(r["id"])) for r in rows if isinstance(r, dict)])
+    columns = list(range(len(head)))
+
+    def used() -> int:
+        return 2 + sum(widths[i] for i in columns) + 2 * (len(columns) - 1)
+
+    if used() - 2 > width:  # too wide even without the goal: no cost column, the activity stays whole
+        columns.remove(cost)
+    if used() + MIN_GOAL > width:
+        columns.remove(goal)
 
     def line(row: list[str]) -> str:
-        return "  ".join(c.rjust(w) if i in right else c.ljust(w) for i, (c, w) in enumerate(zip(row, widths))).rstrip()
+        return "  ".join(row[i].rjust(widths[i]) if i in right else row[i].ljust(widths[i]) for i in columns).rstrip()
 
-    lines = [terminal.cut(Text("  " + line(cells[0]), style="dim"), width)]
-    for row, (_, style) in zip(cells[1:], rows):
-        text = Text("  " + line(row))
+    lines = [terminal.cut(Text("  " + line(head), style="dim"), width)]
+    for row in rows:
+        if isinstance(row, dict):  # unreadable: its id and why
+            text = Text("  " + short_id(row["id"]).ljust(widths[0]) + "  ")
+            text.append(f"unreadable: {clean(row['error'])}", style=terminal.RED)
+            lines.append(terminal.cut(text, width))
+            continue
+        cells, style = row
+        text = Text("  " + line(cells))
         text.stylize(style or "", 2 + widths[0] + 2, 2 + widths[0] + 2 + widths[1])
         lines.append(terminal.cut(text, width))
     return lines

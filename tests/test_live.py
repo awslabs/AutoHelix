@@ -148,6 +148,19 @@ def test_port_and_open_go_with_the_web_page(tmp_path, flags):
     assert result.exit_code == 2 and "--port and --open apply to the web page" in result.output, result.output
 
 
+@pytest.mark.parametrize(("args", "page"), [([], "/"), (["r1"], "/run/r1/")])
+def test_view_serves_the_web_page_by_default(tmp_path, monkeypatch, args, page):
+    """A bare `view` serves the run list, `view ID` that run's page (`_serve`)."""
+    import autohelix.cli as cli
+
+    served = []
+    monkeypatch.setattr(cli, "_serve", lambda project, port, open_browser, path: served.append((port, open_browser, path)))
+    monkeypatch.setattr(cli, "_chosen_run", lambda project, run_id: type("Chosen", (), {"run_id": run_id})())
+    result = _cli("view", *args, "-p", tmp_path, "--port", "9000", "--open")
+    assert result.exit_code == 0, result.output
+    assert served == [(9000, True, page)]
+
+
 @pytest.mark.parametrize("flags", [["--json"], [], ["r1", "--once"]])
 def test_metric_goes_with_the_runs_table(tmp_path, flags):
     result = _cli("view", "-p", tmp_path, "--metric", "speed", *flags)
@@ -225,8 +238,8 @@ def test_on_a_short_terminal_the_log_shrinks_first(tmp_path):
     assert not any(map(row(1), tiny))  # the oldest rows went
     assert any("step 29" in line for line in tiny) and tiny[-1].startswith("Finished")
 
-    cramped = _screen_lines(_run_data(40), log, 21)  # no room for the log: the table keeps the screen
-    assert len(cramped) <= 20 and cramped[0].endswith("finished") and cramped[-1].startswith("Finished")
+    cramped = _screen_lines(_run_data(40), log, 16)  # no room for the log: the table keeps the screen
+    assert len(cramped) <= 15 and cramped[0].endswith("finished") and cramped[-1].startswith("Finished")
     assert not any("step" in line for line in cramped) and any(map(row(39), cramped))
 
 
@@ -332,7 +345,8 @@ def test_a_live_view_keeps_a_blank_line_at_the_bottom(tmp_path):
     log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()), "test")
     data = (_running(_run_data(3), time.time()), W.run_table.Saved())
     running = W.view_screen(data, log, {"state": "running", "phase": "agent", "iteration": 3}, 40).renderables
-    assert [line.plain for line in running[-2:]] == ["", ""] and running[-3].plain.startswith("Running")
+    assert [line.plain for line in running[-2:]] == ["", ""] and running[-4].plain.startswith("Running")
+    assert running[-3].plain == 'Ctrl-C quits this view · autohelix stop test stops the run · hint --run test "…"'
     stopped = W.view_screen((_run_data(3), W.run_table.Saved()), log, {"state": "finished"}, 40).renderables
     assert stopped[-1].plain.startswith("Finished")
 

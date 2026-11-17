@@ -59,8 +59,11 @@ ROWS = [
 
 
 def _header(width: int, budget: Budget, done: int = 0, show_mark: bool = True) -> list:
+    """`Harness._print_header`: piped (no mark), with the Steer field (no live row to show it under)."""
     title = terminal.title("run krp3", "sorting", terminal.clock(NOW), version="0.3.0")
-    return terminal.header(title, terminal.run_fields(CONFIG, terminal.budget_text(budget, done)), width, show_mark)
+    fields = terminal.run_fields(CONFIG, terminal.budget_text(budget, done))
+    fields += [] if show_mark else [("Steer", terminal.steer_text("krp3", interrupt=False))]
+    return terminal.header(title, fields, width, show_mark)
 
 
 def _ending(table: Table, stop: dict, first: int = 1) -> list:
@@ -68,8 +71,8 @@ def _ending(table: Table, stop: dict, first: int = 1) -> list:
     of this segment's commits, the run's cost so far."""
     landed = [row for row in table.rows if row.iteration >= first and row.accepted and row.commit]
     return table.ending(terminal.outcome(stop, None, None), spent=terminal.money(sum(r.cost or 0 for r in table.rows)),
-                        landing=terminal.landed(len(landed), "main"), landed=landed,
-                        commands=terminal.next_commands("krp3"), files=FILES)
+                        landing=terminal.landed(len(landed), "main"), commands=terminal.next_commands("krp3"),
+                        files=FILES)
 
 
 FILES = [("page", ".autohelix/runs/20261115-1402-sorting-krp3/report.html"),
@@ -91,7 +94,7 @@ def live_screen(width: int) -> list:
     lines = _header(width, Budget(iterations=7, cost_usd=10))
     for row in ROWS[:4]:
         lines += table.add(row)
-    return lines + [table.live(4, 72, "agent")]
+    return lines + [table.live(4, 72, "agent"), terminal.steer_line("krp3", width)]
 
 
 def resume_screen(width: int) -> list:

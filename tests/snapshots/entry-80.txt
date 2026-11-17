@@ -1,11 +1,11 @@
   AutoHelix  v0.3.0 · ~/code/sorting
   ────────────────────────────────────────────────────────────────────────────
-  run           state                 iter   speed ↑  landing     cost  activity
-  m2xq perf     running                4/7  35,310.7  landed     $0.95  agent 1…
-  krp3 sorting  finished               7/7  57,520.8  landed     $2.65  just now
-  xax8 sorting  finished               7/7  57,520.8  1 to land  $2.65  2h ago
-  0mws sorting  interrupted            7/7  57,520.8  landed     $2.65  Nov 13
-  c9d1 sorting  stopped unexpectedly   7/7  57,520.8  2 to land  $2.65  Nov 12
+  run           state                 iter   speed ↑  landing    activity
+  m2xq perf     running                4/7  35,310.7  landed     agent 1m 12s
+  krp3 sorting  finished               7/7  57,520.8  landed     just now
+  xax8 sorting  finished               7/7  57,520.8  1 to land  2h ago
+  0mws sorting  interrupted            7/7  57,520.8  landed     Nov 13
+  c9d1 sorting  stopped unexpectedly   7/7  57,520.8  2 to land  Nov 12
 
   m2xq  running · iteration 4               next: autohelix view m2xq
   xax8  finished · 1 commit to land         next: autohelix land xax8

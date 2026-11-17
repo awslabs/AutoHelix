@@ -18,7 +18,7 @@ cd my-project
 docker/run.sh --env ~/autohelix-env.sh run -n 10        # or: run perf -n 10 for autohelix/perf.yaml
 ```
 
-All autohelix commands work: `run`, `resume`, `report`, `view` (in the terminal).
+All autohelix commands work: `run`, `resume`, `report`, `view --terminal`.
 
 Tip: set up an alias to avoid repeating the env path:
 ```bash
