@@ -77,6 +77,8 @@ def field_line(label: str, *parts: tuple[str, str | None], width: int, label_wid
 
 # --- wrapping and warnings: the same on every screen ------------------------------
 
+MIN_TEXT = 20  # the fewest columns `hanging` wraps text into beside its prefix
+
 
 def wrap(text, width: int) -> list[str]:
     """`text` in lines of at most `width` columns, broken at spaces only (its own line
@@ -96,14 +98,44 @@ def wrap(text, width: int) -> list[str]:
     return lines
 
 
-def hanging(prefix: Text | str, text, width: int, style: str | None = None) -> list[Text]:
+def hanging(prefix: Text | str, text, width: int, style: str | None = None, most: int | None = None) -> list[Text]:
     """`prefix` (a label, a mark: styled as given) then `text` in `style`, wrapped
-    (`wrap`) to the rest of `width` (at least 20 columns), the continuation lines under
-    the text's start. Not cut: print with `print_lines`."""
+    (`wrap`) to the rest of `width`, the continuation lines under the text's start. A
+    prefix leaving under `MIN_TEXT` columns stands on its own line, the text under the
+    prefix's start. With `most`, at most that many lines of text, the last ending in
+    ` …` (words dropped, never split). Not cut: print with `print_lines`."""
     prefix = Text(prefix) if isinstance(prefix, str) else prefix
+    lines = []
+    if width - prefix.cell_len < MIN_TEXT and prefix.plain.strip():
+        lines.append(Text().append_text(prefix))
+        prefix = Text(" " * (len(prefix.plain) - len(prefix.plain.lstrip())))
+    room = max(width - prefix.cell_len, MIN_TEXT)
+    parts = wrap(text, room)
+    if most and len(parts) > most:
+        words = parts[most - 1].split(" ")
+        while len(words) > 1 and cell_len(" ".join(words) + " …") > room:
+            words.pop()
+        parts = parts[:most - 1] + [" ".join(words) + " …"]
     blank = " " * prefix.cell_len
-    return [(Text().append_text(prefix) if i == 0 else Text(blank)).append(part, style=style)
-            for i, part in enumerate(wrap(text, max(width - prefix.cell_len, 20)))]
+    first = not lines
+    return lines + [(Text().append_text(prefix) if first and i == 0 else Text(blank)).append(part, style=style)
+                    for i, part in enumerate(parts)]
+
+
+def fold(line: Text, width: int) -> list[Text]:
+    """`line` in pieces of at most `width` columns (a word wider than the screen split
+    where the terminal would fold it): for screens that count their lines (`live`).
+    Anything but a `Text` (a live row) is returned as it is."""
+    if not isinstance(line, Text) or line.cell_len <= width or width < 1:
+        return [line]
+    offsets, used = [], 0
+    for i, char in enumerate(line.plain):
+        size = cell_len(char)
+        if used + size > width:
+            offsets.append(i)
+            used = 0
+        used += size
+    return list(line.divide(offsets))
 
 
 def warning(message, width: int, indent: int = 2) -> list[Text]:
@@ -299,6 +331,7 @@ WIDE, SPACED, COMPACT = (6, 2), (4, 2), (2, 1)
 REASON_ROOM = 45  # wider only if a typical reason (a metric gate's, ~43) still fits on the row after the values
 SPACED_FROM = 100  # and never narrower (80 columns: always compact)
 ROOM = 2  # blank lines under a live row
+REASON_LINES = 3  # a row's reason or note, wrapped: at most this many lines (an agent's whole error is long)
 
 
 class Table:
@@ -398,9 +431,9 @@ class Table:
             reason = None
         lines.append(cut(line, self.width))
         if reason:
-            lines += hanging(" " * INDENT, reason, self.width, style)
+            lines += hanging(" " * INDENT, reason, self.width, style, most=REASON_LINES)
         for note, style in self._notes(row):
-            lines += hanging(" " * INDENT, note, self.width, style)
+            lines += hanging(" " * INDENT, note, self.width, style, most=REASON_LINES)
         self._remember(row)
         return lines
 

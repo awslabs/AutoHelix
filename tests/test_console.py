@@ -163,6 +163,35 @@ def test_hanging_keeps_the_prefix_style_and_indents_under_the_text():
     assert lines[0].spans[0].style == "red" and all(line.spans[-1].style == "bold" for line in lines)
 
 
+def test_a_prefix_leaving_too_little_room_stands_on_its_own_line():
+    """Under 20 columns beside the prefix: the text goes under the prefix's start,
+    so no line is wider than the screen."""
+    from rich.text import Text
+
+    prefix = Text("  Error: the summary agent could not be run:", style="red")
+    lines = terminal.hanging(prefix, "its command exited 2 after the copy was made", 50)
+    assert [line.plain for line in lines] == [prefix.plain, "  its command exited 2 after the copy was made"]
+    assert lines[0].spans[0].style == "red" and all(line.cell_len <= 50 for line in lines)
+
+
+def test_a_reason_under_a_row_takes_at_most_three_lines():
+    """An agent's whole error (a backend's stack trace) under its row: three lines,
+    the last ending in ` …`, words dropped, not split."""
+    error = " ".join(f"word{i}" for i in range(200))
+    lines = _rows(60).add(Row(1, False, {}, agent_error=error))
+    under = [line.plain for line in lines[1:]]
+    assert len(under) == terminal.REASON_LINES and under[-1].endswith(" …")
+    assert all(word.startswith("word") or word in ("failed:", "…") for line in under for word in line.split()[1:])
+    assert all(len(line) <= 60 for line in under)
+
+
+def test_a_warning_keeps_its_own_line_breaks():
+    """A message with git's multi-line stderr: one line each, under the message."""
+    lines = terminal.warning("Could not land: git failed:\nfatal: bad ref\n\nhint: retry", 80)
+    assert [line.plain for line in lines] == ["  ! Could not land: git failed:", "    fatal: bad ref", "    ",
+                                              "    hint: retry"]
+
+
 def test_a_wrapped_header_field_keeps_a_long_path_whole():
     """A field read whole (a path, a problem) wraps at spaces; a path wider than the
     room is neither cut nor split."""

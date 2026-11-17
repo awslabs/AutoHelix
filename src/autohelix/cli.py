@@ -28,7 +28,7 @@ from autohelix.runs import (RunPaths, planned_run, RunLock, archive as archive_r
                             config_relative, run_tip, set_options, short_id, valid_name)
 from autohelix import run_table
 from autohelix.skill import SKILL_NAME, skill
-from autohelix.workspace import SCRUBBED_GIT_ENV
+from autohelix.workspace import SCRUBBED_GIT_ENV, run_git
 
 
 def _get_version() -> str:
@@ -175,7 +175,7 @@ def _git_problem(project: Path) -> tuple[str, str | None] | None:
     `run` raises it, `setup` (which needs no git) shows it. (`main` has dropped inherited
     GIT_* variables, so this is the checkout's own repository.)"""
     def git(*args: str):
-        return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True)
+        return run_git(["git", *args], cwd=project, capture_output=True, text=True)  # English messages
 
     try:
         inside = git("rev-parse", "--is-inside-work-tree")
@@ -1136,7 +1136,7 @@ def _view_live(project_path: Path, run_id: str) -> None:
     try:
         live_view(project_path, backend, console, run_id=run_id)
     except KeyboardInterrupt:
-        console.print("[dim]Stopped watching. The run is unaffected.[/dim]")
+        console.print("Stopped watching. The run is unaffected.", style="dim")
 
 
 @main.command()

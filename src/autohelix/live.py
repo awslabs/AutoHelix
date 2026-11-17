@@ -22,7 +22,7 @@ from autohelix import run_table
 from autohelix.display import LiveDisplay
 from autohelix.formatting import clean, format_duration
 from autohelix.replay import LogTail
-from autohelix.terminal import ROOM, earlier_line
+from autohelix.terminal import ROOM, earlier_line, fold
 from autohelix.safe_open import open_run_log
 from autohelix.run_status import read_run_status, running_iteration
 from autohelix.runs import RunPaths
@@ -228,7 +228,11 @@ def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollowe
         parts = ([Text(clean(data))], [], [])
     else:
         run, saved = data
-        parts = run_table.view_parts(run, saved, width, live=True)
+        head, rows, tail = run_table.view_parts(run, saved, width, live=True)
+        # `fit` counts one terminal line per item: a word wider than the screen (a path,
+        # a branch name, left whole by `terminal.wrap`) is folded here, where Rich would.
+        folded = lambda lines: [piece for line in lines for piece in fold(line, width)]  # noqa: E731
+        parts = (folded(head), [folded(row) for row in rows], folded(tail))
     running = bool(status) and status.get("state") == "running"
     # The status line, a spare line so the terminal doesn't scroll, the blank lines under a live run.
     room = height - 2 - ROOM * running

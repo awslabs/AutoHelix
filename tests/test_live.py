@@ -242,6 +242,40 @@ def test_on_a_short_terminal_the_log_shrinks_first(tmp_path):
     assert not any("step" in line for line in cramped) and any(map(row(39), cramped))
 
 
+def test_a_word_wider_than_the_screen_still_fits_the_height(tmp_path):
+    """`terminal.wrap` leaves a path wider than the screen whole; the live screen folds
+    it, as the terminal would, so it counts the lines it takes: the end block still shows."""
+    from autohelix.terminal import Row
+
+    log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()), "test")
+    data = _run_data(12)
+    path = "/Users/someone/" + "deep/" * 60 + "file.py"
+    rows = [Row(r["iteration"], r["accepted"] or not r["iteration"], r["metrics"], r["seconds"], r["cost"],
+                commit=f"c{r['iteration']}", summary=r["summary"],
+                reason=None if not r["iteration"] else f"tests fail in {path} after the change")
+            for r in data["run"]["iterations"]]
+    for row in rows[1:]:
+        row.accepted = False
+    out = io.StringIO()
+    Console(file=out, width=100, height=30, force_terminal=False).print(
+        W.view_screen((data, W.run_table.Saved(rows=rows)), log, {"state": "finished"}, 30))
+    lines = out.getvalue().splitlines()
+    assert len(lines) <= 29 and lines[0].endswith("finished") and lines[-1].startswith("Finished")
+    assert any("earlier" in line for line in lines)  # older rows made room for the folded paths
+
+
+def test_fold_splits_only_lines_wider_than_the_width():
+    from rich.text import Text
+    from autohelix.terminal import fold
+
+    short = Text("fits")
+    assert fold(short, 10)[0] is short
+    pieces = fold(Text("ab" * 12, style="red"), 10)
+    assert [piece.plain for piece in pieces] == ["ababababab", "ababababab", "abab"]
+    assert all(piece.style == "red" for piece in pieces)
+    assert [piece.plain for piece in fold(Text("日本語のパス"), 5)] == ["日本", "語の", "パス"]  # by cells
+
+
 def test_rerun_of_the_same_iteration_gets_a_fresh_panel(tmp_path, monkeypatch, run_paths):
     """Resuming reruns an unfinished iteration: same log path, new start time."""
     status = RunStatus(tmp_path, latest_run(tmp_path).run_id)

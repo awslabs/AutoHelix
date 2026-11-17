@@ -474,8 +474,9 @@ def test_a_nested_repository_is_rejected_with_what_to_do(repo_dir, copies, commi
 
 def test_git_speaks_english_whatever_the_users_locale(monkeypatch, repo_dir):
     """The harness reads git's messages (a held lock, a nested repository without
-    commits): every call on the user's repository runs with `LC_ALL=C` and no
-    `LANGUAGE`, the caller's own variables kept."""
+    commits): every `run_git` call runs with `LC_MESSAGES=C` and no `LANGUAGE`, the
+    caller's own variables kept. Only messages: an `LC_ALL` becomes `LC_CTYPE`, so
+    filters and hooks keep the user's encoding."""
     from autohelix import workspace
 
     seen = []
@@ -491,8 +492,40 @@ def test_git_speaks_english_whatever_the_users_locale(monkeypatch, repo_dir):
     workspace.run_git(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True)
     workspace.run_git(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True,
                       env=workspace.git_env({"MARK": "1"}))
-    assert [env["LC_ALL"] for env in seen] == ["C", "C"] and not any("LANGUAGE" in env for env in seen)
-    assert seen[1]["MARK"] == "1" and "LANGUAGE" in os.environ
+    assert [env["LC_MESSAGES"] for env in seen] == ["C", "C"]
+    assert [env["LC_CTYPE"] for env in seen] == ["de_DE.UTF-8"] * 2
+    assert not any("LANGUAGE" in env or "LC_ALL" in env for env in seen)
+    assert seen[1]["MARK"] == "1" and os.environ["LC_ALL"] == "de_DE.UTF-8" and "LANGUAGE" in os.environ
+
+
+def test_english_messages_keeps_an_own_lc_ctype_without_lc_all():
+    from autohelix.workspace import english_messages
+
+    env = english_messages({"LANG": "fr_FR.UTF-8", "LC_CTYPE": "fr_FR.UTF-8", "LC_MESSAGES": "fr_FR"})
+    assert env == {"LANG": "fr_FR.UTF-8", "LC_CTYPE": "fr_FR.UTF-8", "LC_MESSAGES": "C"}
+
+
+def test_not_a_repository_is_recognised_in_any_locale(monkeypatch, tmp_path):
+    """`run`/`setup` match git's "not a git repository": its git runs with English
+    messages too, so a translated git still gets the `git init` fix."""
+    from autohelix import cli, workspace
+
+    seen = []
+    real = subprocess.run
+
+    def run(argv, **kwargs):
+        seen.append(kwargs.get("env"))
+        return real(argv, **kwargs)
+
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "de")
+    monkeypatch.setattr(workspace.subprocess, "run", run)
+    assert cli._git_problem(folder) == ("Not a git repository. AutoHelix requires git.",
+                                        "git init && git add -A && git commit -m 'init'")
+    assert seen and all(env["LC_MESSAGES"] == "C" and "LANGUAGE" not in env for env in seen)
 
 
 def test_swapped_copies_root_is_refused_without_touching_outside(repo_dir, copies, tmp_path):

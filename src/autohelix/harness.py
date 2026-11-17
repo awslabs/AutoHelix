@@ -43,7 +43,7 @@ from autohelix.checks import (metric_gate_failure, metric_reference, preflight_c
 from autohelix.events import iteration_fields
 from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, append_usage, read_usage, superseded_marker
-from autohelix.formatting import format_cap, format_cost, format_duration, format_total_cost
+from autohelix.formatting import clean_block, format_cap, format_cost, format_duration, format_total_cost
 from autohelix.iteration_time import format_limit
 from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
                                        uses_old_layout)
@@ -845,7 +845,7 @@ class Harness:
                                    head=workspace.base)
         workspace.write_prompt(prompt)
         if self.verbose:
-            self.console.print(Panel(prompt.strip(), title="[bold]Agent Prompt[/bold]", border_style="dim"))
+            self.console.print(Panel(Text(clean_block(prompt.strip())), title="[bold]Agent Prompt[/bold]", border_style="dim"))
             self.console.print()
             self._status("Running agent...")
         with self._watch_checkout():
@@ -876,7 +876,7 @@ class Harness:
         metrics = evaluation.metrics
         if self.verbose:
             for name, value in metrics.items():
-                self.console.print(f"  {self._metric_label(name)} [cyan]{value}[/cyan]")
+                self.console.print(Text(f"  {clean(self._metric_label(name))} ").append(clean(value), style="cyan"))
         if evaluation.rejection:
             return self._rejected(iteration, attempt, evaluation.rejection, metrics=metrics,
                                   failure_output=evaluation.failure_output)
@@ -1038,7 +1038,7 @@ class Harness:
                     mark = Text("  ").append("✓ " if r.passed else "✗ ", style="green" if r.passed else "red")
                     terminal.show(self.console, self._gate_text(r.command), mark)
                     if not r.passed:
-                        self.console.print(Panel(r.output[:2000], title="Gate output", border_style="red"))
+                        self.console.print(Panel(Text(clean_block(r.output[:2000])), title="Gate output", border_style="red"))
             if self.verbose:
                 terminal.print_lines(self.console, notes)
         workspace.remove(checks)

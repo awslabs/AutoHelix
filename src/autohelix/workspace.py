@@ -80,6 +80,19 @@ def git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def english_messages(env) -> dict[str, str]:
+    """`env` with git's messages in English whatever the user's locale (`LC_MESSAGES=C`,
+    no `LANGUAGE`): the harness reads some of them (`_LOCK_ERRORS`, a nested repository
+    without commits, "not a git repository"). Only messages: an `LC_ALL` becomes the
+    `LC_CTYPE` it implied, so filters and hooks git starts keep the user's encoding."""
+    env = dict(env)
+    if every := env.pop("LC_ALL", None):
+        env["LC_CTYPE"] = every
+    env["LC_MESSAGES"] = "C"
+    env.pop("LANGUAGE", None)
+    return env
+
+
 def is_lock_error(stderr) -> bool:
     text = stderr if isinstance(stderr, str) else os.fsdecode(stderr or b"")
     return any(marker in text for marker in _LOCK_ERRORS)
@@ -87,13 +100,8 @@ def is_lock_error(stderr) -> bool:
 
 def run_git(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     """`subprocess.run` for git on the user's repository, retried briefly while
-    another git process (a concurrent run) holds one of its lock files. Git speaks
-    English here (`LC_ALL=C`, no `LANGUAGE`) whatever the user's locale: the harness
-    reads some of its messages (`_LOCK_ERRORS`, a nested repository without commits)."""
-    env = dict(kwargs.pop("env", None) or os.environ)
-    env["LC_ALL"] = "C"
-    env.pop("LANGUAGE", None)
-    kwargs["env"] = env
+    another git process (a concurrent run) holds one of its lock files."""
+    kwargs["env"] = english_messages(kwargs.pop("env", None) or os.environ)
     for delay in (*_LOCK_RETRIES, None):
         result = subprocess.run(argv, **kwargs)
         if not result.returncode or delay is None or not is_lock_error(result.stderr):

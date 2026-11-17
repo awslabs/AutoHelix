@@ -498,6 +498,22 @@ def test_harness_warnings_use_the_one_warning_form(repo, capsys):
         "  ! Branch", f"    {long}", "    has moved on; see the run's notes"]
 
 
+def test_verbose_output_prints_gate_output_and_goal_as_text(repo, capsys):
+    """`--verbose` shows the prompt, the gate's output and the metrics in panels and
+    lines: text there is never read as Rich markup (`[/red]` would raise) and its escape
+    sequences are removed."""
+    project = _project(repo)
+    _configure(project, repo, gates=['[ "$AUTOHELIX_ITERATION" = 0 ] || { printf "[/red] \\033[2Jboom [bold]x"; exit 1; }'],
+               observe=[{"name": "bench", "command": "echo '##autohelix[speed=3]'", "metrics": {"speed": "higher"}}])
+    config = project / "autohelix.yaml"
+    config.write_text(config.read_text().replace("goal: Harden", "goal: Harden [/bold] it"))
+    git(repo, "commit", "-qam", "goal")
+    Harness(project, verbose=True, land_mode="manual").run(Budget(until=1), report=False)
+    out = capsys.readouterr().out
+    assert "[/red] boom [bold]x" in out and "\x1b[2J" not in out
+    assert "Harden [/bold] it" in out and "speed" in out
+
+
 # --- agent failures continue the loop ---------------------------------------------------
 
 
