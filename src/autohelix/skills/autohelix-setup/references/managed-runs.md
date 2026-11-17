@@ -29,7 +29,8 @@ Then read `.autohelix/runs/<id>/history.jsonl`, the current backend log
 `.autohelix/runs/<id>/iterations/NNN/agent.log` (NNN: the iteration, three digits), observations under
 `.autohelix/runs/<id>/iterations/NNN/observe/<name>/` (one folder per observe entry, reviews
 included), gate and stop command output under `iterations/NNN/gates/<k>/` and `stop/<k>/` (k: the
-entry's 1-based position in `gates:` / `stop:`), and persistent `.autohelix/runs/<id>/notes/iter-N.md`.
+entry's 1-based position in `gates:` / `stop:`), and persistent `.autohelix/runs/<id>/notes/iter-N.md`
+([reading runs](reading-runs.md) has the fields and how to explain them).
 `autohelix view ID --json` (or `--once`) prints the run's state and iterations once
 (without ID, every run's row: state, progress, metrics, no iterations); a bare `autohelix view` (a web page) and `view --terminal` (a live
 terminal view) do not exit, for people; `view ID --json` has the run's state
