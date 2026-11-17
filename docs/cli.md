@@ -114,10 +114,13 @@ archived, and a pointer to `autohelix --help`:
 
   1 archived · autohelix --help: all commands
 
-  ❯ Ask Claude Code about these runs           it summarizes them, then answers questions
+  ❯ Ask Claude Code about these runs
     Set up a new experiment with Claude Code   it drafts a config with you
   (q: quit)
 ```
+
+(At 80 columns the first option's note, "it summarizes them, then answers
+questions", doesn't fit whole, so it is left out.)
 
 Choose with ↑/↓ and Enter, or an option's number; Enter alone takes the first,
 q or Esc quits (exit 0), Ctrl-C interrupts (exit 130). Keys typed before the
