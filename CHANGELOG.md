@@ -238,6 +238,17 @@ Added:
   as given, first iteration) and an end record (time, how it ended, the stop
   reason, iterations recorded, the last one, the error of a failed one).
 
+### Viewer
+
+- The run page shows one detail panel for the selected iteration (gates,
+  changes, observe entries, agent note, activity) beside the iteration table,
+  and its headline metric is the latest accepted value, as on the run list,
+  the dashboard and `view` (was the best ever accepted).
+- Both pages use the console's words for statuses and rejections.
+- Fixed: watching a running iteration wrote the agent's files into your
+  repository's objects on every poll; metric changes from a negative
+  baseline showed the wrong arrow.
+
 ### Design-review fixes
 
 A review of everything since 0.1.1, then its agreed fixes.
