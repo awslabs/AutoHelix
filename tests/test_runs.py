@@ -812,7 +812,9 @@ def test_refused_first_start_creates_no_identity(project, problem, capsys, monke
     assert not git(project, "for-each-ref", "--format=%(refname)", "refs/autohelix/").stdout.strip()
 
 
-def test_manual_mode_warns_when_target_moves_during_segment(project, monkeypatch, capsys):
+def test_manual_mode_says_diverged_when_target_moves_during_segment(project, monkeypatch, capsys):
+    """A commit on the target during the segment: the ending says the run diverged and
+    offers `git merge`, not `autohelix land` (which only fast-forwards)."""
     harness = Harness(project, land_mode="manual")
     target = harness.run_info["target_branch"]
     real = harness.run_agent
@@ -823,7 +825,11 @@ def test_manual_mode_warns_when_target_moves_during_segment(project, monkeypatch
 
     monkeypatch.setattr(harness, "run_agent", agent)
     harness.run(Budget(until=1), report=False)
-    assert f"! Target {target} changed during this segment" in " ".join(capsys.readouterr().out.split())
+    out = " ".join(capsys.readouterr().out.replace(" · ", " ").split())  # the next line wraps
+    run_id, short = harness.paths.run_id, short_id(harness.paths.run_id)
+    assert f"unlanded 1 commit on autohelix/{run_id} (diverged from {target})" in out
+    assert f"next autohelix view {short} autohelix resume {short} git merge autohelix/{run_id} page" in out
+    assert "changed during this segment" not in out and f"autohelix land {short}" not in out
 
 
 def test_ask_from_an_agent_without_log_dir_records_absolute_log(tmp_path, monkeypatch):

@@ -449,13 +449,13 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
                 two["progress"]["max_seconds"]) == (1, 5, 3600)
         assert (two["status"]["max_cost_usd"], two["status"]["max_time_seconds"]) == (5, 3600)
         assert two["status"]["segment_started_at"] <= two["status"]["stopped_at"]
-        drop = lambda landing: {k: v for k, v in landing.items() if k != "text"}  # noqa: E731
-        assert drop(one["landing"]) == {"relation": "same", "commits": 0, "behind": 0,
+        assert one["landing"] == {"relation": "same", "commits": 0, "behind": 0,
                                         "fast_forward": True}  # auto-landed at the end of its segment
-        assert drop(two["landing"]) == {"relation": "ahead", "commits": 1, "behind": 0,
+        assert two["landing"] == {"relation": "ahead", "commits": 1, "behind": 0,
                                         "fast_forward": True}  # manual: ready to land
         short = two["id"].rsplit("-", 1)[1]
-        assert two["landing"]["text"].endswith(f"main can fast-forward: `autohelix land {short}`.")
+        assert two["landing_words"]["cell"] == "1 to land" and one["landing_words"]["cell"] == "landed"
+        assert two["landing_words"]["text"].endswith(f"main can fast-forward: `autohelix land {short}`.")
         assert two["accepted"] == 1 and two["metrics"] is None
         assert two["config_file"] == "autohelix.yaml" and two["goal"] == "Test the integration"
         assert listing["schema"] == 1 and listing["path"] == str(integration_project.resolve())
@@ -466,9 +466,11 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
         subprocess.run(["git", "commit", "-qm", "user work"], cwd=integration_project, check=True)
         runs = {r["id"]: r for r in json.loads(get(base + "/api/runs")[1])["runs"]}
         diverged = runs[second.paths.run_id]["landing"]
-        assert drop(diverged) == {"relation": "diverged", "commits": 1, "behind": 1, "fast_forward": False}
-        assert diverged["text"].endswith(f"Merge by hand: `git merge autohelix/{second.paths.run_id}`.")
-        assert drop(runs[first.paths.run_id]["landing"]) == {
+        assert diverged == {"relation": "diverged", "commits": 1, "behind": 1, "fast_forward": False}
+        words = runs[second.paths.run_id]["landing_words"]  # the runs table's words: manual, no --land advice
+        assert words["cell"] == "1 diverged"
+        assert words["text"].endswith(f"Merge it by hand: `git merge autohelix/{second.paths.run_id}`.")
+        assert runs[first.paths.run_id]["landing"] == {
             "relation": "behind", "commits": 0, "behind": 1, "fast_forward": False}  # landed; main moved on
 
         # Each run has its own page and routes.
@@ -497,6 +499,8 @@ def test_dashboard_tolerates_an_unreadable_run(tmp_path, run_paths):
     rows = {r["id"]: r for r in ProjectRuns(tmp_path).runs()["runs"]}
     assert "error" in rows["bad-aaaa"]
     assert "error" not in rows["test"] and rows["test"]["landing"] is None  # no target branch
+    assert rows["test"]["landing_words"] == {
+        "cell": "—", "text": "Started on a detached HEAD: land with `autohelix land --into <branch>`."}
 
 
 def test_dashboard_metrics_are_the_latest_accepted_not_the_best():

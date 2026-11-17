@@ -88,9 +88,26 @@
   in one: resume's refusal and warnings, `land`, `delete`, the notices at `run`,
   the runs table, `view --terminal` and the web run list all read it, so they
   agree (the web list counted commits of the run's base the target lacked).
-- `view --json`'s `landing` gains `relation`, `behind` and `text` (what it
-  means and what works; the web run list's tooltip). `land`'s refusal for a
-  diverged branch names the counts each way and `git merge autohelix/<id>`.
+- `view --json`'s `landing` gains `relation` and `behind`, and each run gets
+  `landing_words`: the runs table's `cell` and `text` (what it means and what
+  works; the web run list's tooltip). The web run list's landing cell now has
+  the runs table's words (`2 to land`, `2 diverged`, `landed`, `—`; was
+  `2 commits to land`, `nothing yet`, `detached`, `unavailable`).
+- **One word, "diverged", and the command that works**: a target that can't
+  fast-forward reads `diverged` everywhere (`view --terminal`'s
+  `(main has moved on)` is now `(diverged from main)`); `land`'s refusal,
+  auto landing's and `resume`'s warning name the counts each way and
+  `git merge autohelix/<id>` (and, for a run that lands automatically,
+  `autohelix resume <id> --land manual` to stop trying). `autohelix land <id>`
+  is offered (`run`'s and `view --terminal`'s `next`, the entry screen's
+  suggestion, `delete`'s refusal) only when the target can fast-forward;
+  for a diverged run they offer `git merge autohelix/<id>`.
+- Auto landing no longer refuses on its own when the target moved during the
+  segment ("Target main changed during this segment"; a manual run's warning
+  too): `land` decides, and fast-forwards a target that is still behind the
+  tip.
+- A run with no commits of its own to land is never `diverged` (it read
+  `0 diverged`): its target past its base reads `behind`.
 
 ### Runs keep the machine awake
 

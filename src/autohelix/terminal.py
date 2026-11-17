@@ -689,16 +689,12 @@ def not_landed(error) -> tuple[str, str, str | None]:
     return "landing", f"failed: {clean(error)}", "yellow"
 
 
-def next_commands(short: str, view: bool = True, land: bool = False) -> list[str]:
+def next_commands(short: str, view: bool = True, also=()) -> list[str]:
     """What to type after a run: look at it (`view`: not from the view itself), continue
-    it, and land it when commits wait for a manual landing."""
-    commands = []
-    if view:
-        commands.append(f"autohelix view {short}")
-    commands.append(f"autohelix resume {short}")
-    if land:
-        commands.append(f"autohelix land {short}")
-    return commands
+    it, then `also`: what lands commits that wait (`runs.LandingWords.commands`:
+    `autohelix land <id>` when the target can fast-forward, `git merge autohelix/<id>`
+    when it diverged)."""
+    return ([f"autohelix view {short}"] if view else []) + [f"autohelix resume {short}", *also]
 
 
 def shown_path(path) -> str:

@@ -337,6 +337,18 @@ def test_one_suggested_command_per_run(state, commits, expected):
     assert found == (expected and (expected[0], f"autohelix {expected[1]} krp3"))
 
 
+@pytest.mark.parametrize("state", ["finished", "failed"])
+def test_a_diverged_run_suggests_git_merge(state):
+    """`autohelix land` can't fast-forward a diverged target: the merge that works."""
+    from autohelix import run_table
+
+    run = {"id": "20261115-1402-sorting-krp3", "progress": {"iterations": 3}, "status": {"state": state},
+           "target_branch": "main", "landing": {"relation": "diverged", "commits": 2, "behind": 1,
+                                                "fast_forward": False}}
+    assert run_table.suggestion(run) == (f"{state} · 2 commits diverged from main",
+                                         "git merge autohelix/20261115-1402-sorting-krp3")
+
+
 def test_archived_runs_are_counted(project, monkeypatch, execs, tty):
     agents(["claude"])(monkeypatch)
     mock_config(project)

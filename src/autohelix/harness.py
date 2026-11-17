@@ -33,7 +33,7 @@ from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunState, select_run, reconcile, land, git,
                             claim_copies, config_relative, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, landing,
-                            WHY_LIMIT,
+                            Landing, LandingWords, landing_words, WHY_LIMIT,
                             imported_run, is_live, has_baseline, target_ahead_refusal,
                             write_json)
 from autohelix.iteration import IterationWorkspace
@@ -303,7 +303,6 @@ class Harness:
             self._land_attempted = False
             self._segment_started = False
             self._segment: int | None = None  # this segment's number (segments.jsonl, status, stop requests)
-            self._segment_target_tip: str | None = None
             self._agent_logs = {}
             if warning:
                 self._warn(warning)
@@ -1500,7 +1499,7 @@ class Harness:
                    check=False).stdout.strip() if target else None
 
     def _land(self) -> None:
-        """Auto-land at segment end; in every mode, refuse/warn if the target moved.
+        """Auto-land at segment end (`runs.land` refuses a target that can't fast-forward).
         Keeps what landed for the ending (`_landing`: `N commits on <branch>`, `N
         commits on autohelix/<id> (manual landing)`, `failed: …`; `_landed_count`)."""
         if not self._segment_checked or self._land_attempted:
@@ -1511,23 +1510,15 @@ class Harness:
         # attempted, the finally does not retry it.
         with critical_section():
             try:
-                if target and self._segment_target_tip is not None and self._target_tip() != self._segment_target_tip:
-                    if self.land_mode == "auto":
-                        raise AutoHelixRunError(
-                            f"Target {target} changed during this segment; leaving user commits untouched. "
-                            f"Review them, then use autohelix land {short_id(self.paths.run_id)} explicitly.")
-                    message = (f"Target {target} changed during this segment. Review those commits "
-                               f"before autohelix land {short_id(self.paths.run_id)}.")
-                    self._warn(message)
-                    self.log.warn(message)
                 if self.land_mode == "auto":
                     before = self._target_tip()
                     land(self.paths, self.run_info, self.run_state.expected_tip)
                     self._landed_count = self._commits_between(before, self.run_state.expected_tip)
                     self._landing = terminal.landed(self._landed_count, target)
                 else:
-                    self._landing = terminal.unlanded(self._unlanded(), f"autohelix/{self.paths.run_id}",
-                                                      "manual landing")
+                    found, words = self._relation()
+                    self._landing = terminal.unlanded(found.ahead, f"autohelix/{self.paths.run_id}", words.note,
+                                                      "yellow" if found.relation == "diverged" else None)
             except Exception as e:
                 self._landing = terminal.not_landed(e)
                 self._land_error = e
@@ -1584,7 +1575,6 @@ class Harness:
         self.segment_log.start(segment=self._segment, started_at=segment_started_at,
                                start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
                                budget={**asdict(budget), "default": budget.default}, executable=executable)
-        self._segment_target_tip = self._target_tip()
 
         # Again at each segment: the ignore rules may have changed since this Harness was
         # created (a long-lived programmatic one).
@@ -1791,8 +1781,9 @@ class Harness:
         try:
             table = self._rows()
             short = short_id(self.paths.run_id)
-            # `autohelix land` whenever commits wait: a manual run, or an auto landing that failed.
-            commands = terminal.next_commands(short, land=self._landed_count is None and bool(self._unlanded()))
+            # What lands the commits that wait (a manual run, an auto landing that failed):
+            # `autohelix land` when the target can fast-forward, else `git merge`.
+            commands = terminal.next_commands(short, also=self._relation()[1].commands)
             lines = table.ending(outcome, spent=format_total_cost(self.history.cost_usages), landing=self._landing,
                                  commands=commands, files=self._files)
         except Exception as e:  # noqa: BLE001 - the outcome line still shows
@@ -1800,8 +1791,11 @@ class Harness:
             lines = [Text(f"  {outcome[0]}  {outcome[1]}")]
         self._print_lines(lines)
 
-    def _unlanded(self) -> int:
+    def _relation(self) -> tuple[Landing, LandingWords]:
+        """The run's relation to its target now (`runs.landing`) and its words."""
+        target = self.run_info.get("target_branch")
         try:
-            return landing(self.paths, self.run_info).ahead
+            found = landing(self.paths, self.run_info)
         except Exception:  # noqa: BLE001 - display only
-            return 0
+            found = Landing(None, target, None, None)
+        return found, landing_words(found.payload(), self.paths.run_id, target, land_mode=self.land_mode)

@@ -94,7 +94,8 @@ there would use), else the top of the git checkout, whichever subfolder you
 are in. The screen has a header (the version and the project), the project's
 current runs as [`view --once`](#printed-once) draws them, under them
 the command that applies to each run (`view` a live run, `resume` one that
-stopped before its end, `land` waiting commits; an interrupted run or one that
+stopped before its end, `land` waiting commits, `git merge autohelix/<id>`
+for a run whose branch diverged from its target; an interrupted run or one that
 stopped unexpectedly gets `resume` even with commits to land, which an
 auto-landing resume lands), how many runs are
 archived, and a pointer to `autohelix --help`:
@@ -627,11 +628,14 @@ autohelix land [RUN_ID] [-p PATH] [--into BRANCH]
 ```
 
 Fast-forward the run's starting branch to its accepted tip, preserving unrelated
-checkout edits. Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on). For a divergent target, use the
-printed git merge command after reviewing the changes. A run created from a
-detached checkout requires `--into BRANCH`. Landing also refuses branches that
-are being rebased. If the target moved during a segment, review it and land
-explicitly; AutoHelix never rewinds user commits.
+checkout edits. Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on). It only fast-forwards: when the
+target diverged (a commit on it after the run's base, during a segment or
+since), it refuses, says so, and gives what works: `git merge autohelix/<id>`
+after reviewing the changes, or, for a run that lands automatically,
+`autohelix resume <id> --land manual` to stop trying to land it. Auto landing
+at a segment's end refuses the same way; AutoHelix never rewinds user commits.
+A run created from a detached checkout requires `--into BRANCH`. Landing also
+refuses branches that are being rebased.
 
 ## `autohelix archive`
 
@@ -689,7 +693,7 @@ A run's page (`/run/<id>/`) shows its `.autohelix/` state. The header shows the 
 
 ### In the terminal
 
-`--terminal` follows one run (run it in a second terminal while a run goes). The terminal shows, on top, the run's own screen as `autohelix run` prints it: the header (goal, agent, gates, observe entries, scope, budget, the group and the run's notes, and the run's state in the title line), one row per iteration under the column header (outcome, time, cost, each metric with its change from the baseline, why a rejection was rejected), then the live row of the iteration under way (its time so far, ticking and with a spinner, and phase: agent, gates, `observe · <entry>`, stop) or, once the run stopped, its end block (how it ended, each metric's baseline → latest accepted value, totals, what landed, what to type next, and the run's report.html and report.md once written), refreshed as the run goes (the run is reread when its files change). The rows come from the run's history, so they read as `run` printed them; if the history can't be read, a yellow `!` line says so and the end block has only how the run ended. Commits waiting on the run's branch read `unlanded  3 commits on autohelix/<id> (manual landing)` (or `(main has moved on)`) with `autohelix land` among the next commands, as in `run`'s end block. Below that is the live output of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (in the live row's words: agent, gates, observe, stop) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`. While the run goes, the last line says what Ctrl-C does there: `Ctrl-C quits this view · autohelix stop krp3 stops the run · hint --run krp3 "…"`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out (the baseline stays). When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/` (and, for a judge or review call still running, its transcript in the run's copies folder).
+`--terminal` follows one run (run it in a second terminal while a run goes). The terminal shows, on top, the run's own screen as `autohelix run` prints it: the header (goal, agent, gates, observe entries, scope, budget, the group and the run's notes, and the run's state in the title line), one row per iteration under the column header (outcome, time, cost, each metric with its change from the baseline, why a rejection was rejected), then the live row of the iteration under way (its time so far, ticking and with a spinner, and phase: agent, gates, `observe · <entry>`, stop) or, once the run stopped, its end block (how it ended, each metric's baseline → latest accepted value, totals, what landed, what to type next, and the run's report.html and report.md once written), refreshed as the run goes (the run is reread when its files change). The rows come from the run's history, so they read as `run` printed them; if the history can't be read, a yellow `!` line says so and the end block has only how the run ended. Commits waiting on the run's branch read `unlanded  3 commits on autohelix/<id> (manual landing)` with `autohelix land` among the next commands, as in `run`'s end block; on a branch that diverged from its target, `(diverged from main)` with `git merge autohelix/<id>` instead (`autohelix land` only fast-forwards). Below that is the live output of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (in the live row's words: agent, gates, observe, stop) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`. While the run goes, the last line says what Ctrl-C does there: `Ctrl-C quits this view · autohelix stop krp3 stops the run · hint --run krp3 "…"`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out (the baseline stays). When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/` (and, for a judge or review call still running, its transcript in the run's copies folder).
 
 ### Printed once
 
@@ -712,7 +716,7 @@ With `RUN_ID`, `--once` prints the top part of `--terminal`'s screen once and ex
   - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
   - `progress`: `iterations` attempted, `cost_usd` and `cost_incomplete` (the whole run's), `seconds` (the recorded iterations' wall clock, the baseline's included), and the latest segment's [budget](#budgets), `null` where it had none: `max_iterations` (the last iteration it may run: the previous last iteration + `-n`, or `--until`) and `max_cost_usd` (the run's cost before it + `--cost`) as run totals, "spent before it + its own cap"; `max_seconds`, that segment's own `--time` (not a run total: compare it with the time since `status.segment_started_at`, not with `seconds`). They come from the run's status, never from the config;
   - `agent`: the latest main-agent call's `model` (the one the CLI reported, `null` if none) and `executable`, `{}` before any call;
-  - `target_branch` and `landing`: how the run's tip stands against its target, `relation` (`same`, `ahead`: the target can fast-forward onto it, `behind`: the target has commits past it, or `diverged`), `commits` (the run's accepted commits the target lacks), `behind` (the target's commits the run lacks), whether the target can `fast_forward` (`same` or `ahead`) and `text` (what it means and what works, as the run list's tooltip says it), or `null` when either side is unavailable;
+  - `target_branch` and `landing`: how the run's tip stands against its target, `relation` (`same`, `ahead`: the target can fast-forward onto it, `behind`: the target has commits past it, or `diverged`), `commits` (the run's accepted commits the target lacks), `behind` (the target's commits the run lacks), whether the target can `fast_forward` (`same` or `ahead`), or `null` when either side is unavailable; `landing_words`: the runs table's `cell` (`landed`, `2 to land`, `2 diverged`, `—`) and `text`, what it means and what works (the run list's tooltip);
   - `why` (`run --why`), `archive_why` (`archive --why`) and `import` (`{"run": <id>}` for a run started with `run --import`), each `null` when absent.
   - A run that can't be read has only `id` and `error`.
 

@@ -313,3 +313,16 @@ def test_view_says_what_waits_for_a_manual_landing():
     text = _text(view_lines({**PROJECT, "run": run}, Saved(CONFIG, ROWS, []), 120, now=T))
     assert "  unlanded   3 commits on autohelix/20261115-1402-sorting-krp3 (manual landing)\n" in text
     assert "  next       autohelix resume krp3 · autohelix land krp3\n" in text
+
+
+def test_view_offers_git_merge_for_a_diverged_run():
+    """A target that can't fast-forward: `diverged` (the one word), and `next` offers the
+    merge that works instead of `autohelix land`, which would refuse."""
+    from autohelix.run_table import Saved, view_lines
+
+    run = {**_run_payload(False), "landing": {"relation": "diverged", "commits": 2, "behind": 1,
+                                             "fast_forward": False}}
+    text = _text(view_lines({**PROJECT, "run": run}, Saved(CONFIG, ROWS, []), 140, now=T))
+    assert "  unlanded   2 commits on autohelix/20261115-1402-sorting-krp3 (diverged from main)\n" in text
+    assert "  next       autohelix resume krp3 · git merge autohelix/20261115-1402-sorting-krp3\n" in text
+    assert "moved on" not in text and "autohelix land" not in text

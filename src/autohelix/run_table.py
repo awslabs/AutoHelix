@@ -23,7 +23,7 @@ from rich.text import Text
 from autohelix import terminal
 from autohelix.formatting import clean, format_cap, format_duration
 from autohelix.iteration_time import format_limit
-from autohelix.runs import landing_words, short_id
+from autohelix.runs import LandingWords, landing_words, plural, short_id
 from autohelix.terminal import Row, Table
 
 WORDS = {"crashed": "stopped unexpectedly", "idle": "not started"}  # others as they are (dashboard.js)
@@ -112,9 +112,15 @@ def _notes(run: dict) -> str:
                                     run.get("archive_why") and f"archived: {run['archive_why']}"]))
 
 
+def _words(run: dict) -> LandingWords:
+    """`runs.landing_words` for a run payload (`view --json`'s `landing`)."""
+    return landing_words(run.get("landing"), run["id"], run.get("target_branch"), bool(run.get("accepted")),
+                         run.get("land"))
+
+
 def _landing(run: dict) -> str:
     """The dashboard's landing cell: `landed`, `2 to land`, `2 diverged` (`runs.landing_words`)."""
-    return landing_words(run["landing"], run["id"], run.get("target_branch"), bool(run["accepted"]))[0]
+    return _words(run).cell
 
 
 def _directions(runs: list[dict]) -> dict[str, str]:
@@ -193,16 +199,9 @@ def _landed(run: dict, made: int) -> tuple[str, str, str | None] | None:
     if not landing or not target:
         return None
     if n := landing["commits"]:
-        if landing["relation"] == "diverged":
-            return terminal.unlanded(n, f"autohelix/{run['id']}", f"{target} has moved on", "yellow")
-        return terminal.unlanded(n, f"autohelix/{run['id']}", "manual landing" if run.get("land") == "manual" else "")
+        return terminal.unlanded(n, f"autohelix/{run['id']}", _words(run).note,
+                                 "yellow" if landing["relation"] == "diverged" else None)
     return terminal.landed(made, target)
-
-
-def _can_land(run: dict) -> bool:
-    """Whether `autohelix land` would fast-forward the target onto the run's commits."""
-    landing = run.get("landing") or {}
-    return bool(run.get("target_branch") and landing.get("commits") and landing.get("relation") == "ahead")
 
 
 def _live_what(run: dict) -> str:
@@ -260,7 +259,7 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
         tail = [Text(), terminal.rule(width), *table.outcome_lines(_outcome(run))]
     else:
         accepted = sum(1 for r in table.rows if r.accepted and r.iteration > 0 and r.commit)
-        commands = terminal.next_commands(short, view=False, land=_can_land(run))
+        commands = terminal.next_commands(short, view=False, also=_words(run).commands)
         tail = table.ending(_outcome(run), spent=terminal.money(run["progress"]["cost_usd"],
                                                                  run["progress"]["cost_incomplete"]),
                             landing=_landed(run, accepted), commands=commands, files=list(saved.files))
@@ -378,26 +377,29 @@ def suggestion(run: dict) -> tuple[str, str] | None:
     """What the entry screen says under the table about a run: its state in the
     dashboard's words with where it is, and the one command that applies, or None:
     `view` a live run; `resume` an interrupted or crashed one, also with commits to land
-    (resuming is the point, and an auto-landing resume lands them); else `land` waiting
-    commits; else `resume` one that failed or never started."""
+    (resuming is the point, and an auto-landing resume lands them); else what lands
+    waiting commits (`runs.LandingWords.commands`: `land` when the target can
+    fast-forward, `git merge autohelix/<id>` when it diverged); else `resume` one that
+    failed or never started."""
     if run.get("error"):
         return None
     short = short_id(run["id"])
     state = (run.get("status") or {}).get("state")
+    landing, lands = run.get("landing") or {}, _words(run).commands
+    where = f"iteration {_under_way(run) or run['progress']['iterations']}"
     if _live(run):
-        verb = "view"
+        command = f"autohelix view {short}"
     elif state in ("interrupted", "crashed"):
-        verb = "resume"
-    elif _can_land(run):
-        verb = "land"
+        command = f"autohelix resume {short}"
+    elif lands:
+        command = lands[0]
+        where = plural(landing["commits"], "commit") + (
+            f" diverged from {run['target_branch']}" if landing["relation"] == "diverged" else " to land")
     elif state in ("failed", "idle", None):
-        verb = "resume"
+        command = f"autohelix resume {short}"
     else:
         return None
-    landing = run.get("landing") or {}
-    where = (f"{landing['commits']} commit{'s' * (landing['commits'] != 1)} to land" if verb == "land"
-             else f"iteration {_under_way(run) or run['progress']['iterations']}")
-    return f"{_word(run)} · {where}", f"autohelix {verb} {short}"
+    return f"{_word(run)} · {where}", command
 
 
 def entry_header(folder: str, width: int = 100, git: tuple | None = None, version: str | None = None
