@@ -82,15 +82,6 @@ function renderStatus() {
 
 // ---------- summary (report.md), shared notes ----------
 
-function reportMeta(r) {
-  return [
-    r.last_iteration && `iterations 1–${r.last_iteration}`,
-    r.written_at && `written ${fmtClock(r.written_at)}`,
-    r.seconds && fmtDuration(r.seconds),
-    isNumber(r.cost_usd) && fmtMoney(r.cost_usd),
-  ].filter(Boolean).join(' · ');
-}
-
 // The summary, in the panel when it is selected.
 function renderReport() {
   const r = state.report;
@@ -516,8 +507,9 @@ function renderPanel() {
   renderReport();
   if (n === REPORT) {
     const r = state.report;
+    // As an iteration's title: its name and one qualifier (when it was written, time and cost are in its row).
     $('panel-title').replaceChildren(el('span', { textContent: 'Summary' }),
-      r ? el('span', { className: 'muted', textContent: ` ${reportMeta(r)}` }) : null);
+      r?.last_iteration ? el('span', { className: 'muted', textContent: `iterations 1–${r.last_iteration}` }) : null);
     $('panel-title').title = `.autohelix/runs/${state.run_id}/report.md`;
     show('panel-summary', false);
     $('sections').replaceChildren();
