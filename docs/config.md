@@ -389,6 +389,15 @@ started is killed. Each gets:
 | `AUTOHELIX_PREVIOUS` | Observe commands only: see [Previous output](#previous-output) |
 | `AUTOHELIX_METRICS`, `AUTOHELIX_OBSERVATIONS` | Stop commands only: see [Stop](#stop) |
 
+The main agent gets fewer: `AUTOHELIX_RUN_ID`, `AUTOHELIX_ITERATION` and, with
+`agent.timeout`, the time-left hint's variables (`AUTOHELIX_TIME_LEFT_SCRIPT`);
+not `AUTOHELIX_PROJECT`, `AUTOHELIX_RUN_DIR` or the others above. Its copy has no
+config file and no `prompt_template:` file (both frozen, so the removal is never
+committed; commands read `$AUTOHELIX_CONFIG`). This is hygiene, not a boundary:
+the agent can still find the project (its copy's `.git` borrows the project's
+objects through alternates, and the copies folder records the checkout) and runs
+as you.
+
 `PYTHONPATH` is remapped so the project's own sources import from the copy.
 That would let candidate code replace modules inside `autohelix ask` or
 `autohelix review`, so `PATH` starts with a private folder holding an

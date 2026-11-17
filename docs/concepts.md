@@ -132,6 +132,14 @@ for a cooperative agent, and for candidate code that misbehaves by accident:
   not modules from the candidate's `PYTHONPATH`;
 - a command's background processes are killed when it ends.
 
+The main agent's copy has no config file or prompt template (commands read the
+run's stored config, `$AUTOHELIX_CONFIG`), and its environment doesn't name the
+project or the run folder: `AUTOHELIX_PROJECT` and `AUTOHELIX_RUN_DIR` are for
+gate, observe and stop commands; the agent gets `AUTOHELIX_RUN_ID` and
+`AUTOHELIX_ITERATION`. That is hygiene, so the agent doesn't work in the checkout
+by accident, not a boundary: its copy's `.git` alternates and the copies folder
+still lead to the project.
+
 They are not a security boundary. The agent and candidate code run as you:
 they can still reach the project, its `.git`, other runs and your home folder
 by absolute path, and write run state there (`.autohelix/runs/<id>/`, including

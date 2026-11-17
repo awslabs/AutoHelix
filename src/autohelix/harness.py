@@ -641,10 +641,13 @@ class Harness:
             print(f"  Log: {log_path}")
             print(f"  Heartbeat: {self.heartbeat_seconds}s")
 
+        # The agent is told its run and iteration, not where the project or the run's
+        # state is (hygiene, not a boundary: gate, observe and stop commands get those).
         deadline_env = {
-            "AUTOHELIX_PROJECT": str(self.project_path),
+            "AUTOHELIX_PROJECT": None,
+            "AUTOHELIX_RUN_DIR": None,
             "AUTOHELIX_RUN_ID": self.paths.run_id,
-            "AUTOHELIX_RUN_DIR": str(self.paths.run_dir),
+            "AUTOHELIX_ITERATION": str(iteration),
             "AUTOHELIX_ITERATION_START": str(int(time.time())),
             "AUTOHELIX_ITERATION_BUDGET": (
                 str(self.config.agent.timeout)
@@ -836,7 +839,7 @@ class Harness:
         the first rejection."""
         if self.verbose:
             self._status("Creating agent copy...")
-        agent_copy = workspace.agent_copy()
+        agent_copy = workspace.agent_copy(hidden=self.config.protected)
         if self.verbose:
             terminal.show(self.console, str(agent_copy.working_dir), "  Working dir: ")
         self.run_status.note(copy=str(agent_copy.working_dir))

@@ -75,7 +75,8 @@ class Agent:
 
 def _apply_in_probe(copy_dir, patch):
     """Apply rejected.patch with `git apply` in a copy of the agent's copy; returns the
-    tree the probe's files hash to (the harness's material left out), or the error."""
+    tree the probe's files hash to (the harness's material left out, the removed config
+    file back), or the error."""
     copy_root = copy_dir
     while not (copy_root / ".git").exists():
         copy_root = copy_root.parent
@@ -91,6 +92,9 @@ def _apply_in_probe(copy_dir, patch):
         state = (copy_dir.relative_to(copy_root) / ITERATION_DIR).as_posix()
         git(probe, "add", "-A", "--", ".", env=index)
         git(probe, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", state, env=index)
+        # The agent copy has no config file (`agent_copy(hidden=...)`); T has it, as the snapshot resets it.
+        config = (copy_dir.relative_to(copy_root) / "autohelix.yaml").as_posix()
+        git(probe, "reset", "-q", "HEAD", "--", config, env=index)
         return git(probe, "write-tree", env=index)
     finally:
         subprocess.run(["rm", "-rf", str(probe)], check=True)

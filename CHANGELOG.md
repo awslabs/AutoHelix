@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### What the main agent is given
+
+- **The main agent's environment no longer has `AUTOHELIX_PROJECT` or
+  `AUTOHELIX_RUN_DIR`** (gate, observe and stop commands keep them); it gets
+  `AUTOHELIX_ITERATION`, as commands do.
+- **Agent copies have no config file and no `prompt_template:` file**:
+  commands read the run's stored copy (`$AUTOHELIX_CONFIG`). Both are frozen,
+  so the removal is never committed or reported as discarded. Hygiene, not a
+  boundary: the agent can still find the project and runs as you.
+
 ### One entry point: bare `autohelix`
 
 - **Bare `autohelix` in a terminal** shows the project's runs (the folder with
