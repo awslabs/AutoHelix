@@ -471,6 +471,33 @@ def test_run_start_warnings_wrap_under_their_label(repo, capsys):
     assert all(not line.strip() or line.startswith("  ") for line in out.splitlines()[:12])
 
 
+def test_a_preflight_failure_keeps_a_long_path_whole(repo, capsys):
+    """The FAIL line wraps at spaces (`terminal.show`): an agent command's path wider
+    than the screen is printed whole, never split across lines."""
+    project = _project(repo)
+    command = "/opt/" + "a-very-long-folder-name/" * 5 + "claude"
+    _configure(project, repo, agent={"backend": "claude", "command": command})
+    with pytest.raises(RuntimeError, match="Preflight checks failed"):
+        Harness(project, verbose=False).run(Budget(until=1), report=False)
+    out = capsys.readouterr().out
+    [line] = [line for line in out.splitlines() if "FAIL" in line]
+    assert line.startswith("  FAIL Agent command") and f"'{command}'" in out.split()
+    assert all(not part.strip() or part.startswith("       ") for part in out.split(line, 1)[1].splitlines()[:2])
+
+
+def test_harness_warnings_use_the_one_warning_form(repo, capsys):
+    """`Harness._warn` is `terminal.warning`: `  ! ` then the message wrapped under
+    itself, a word never broken."""
+    project = _project(repo)
+    _configure(project, repo)
+    harness = Harness(project, verbose=False)
+    capsys.readouterr()
+    long = "autohelix/" + "x" * 100
+    harness._warn(f"Branch {long} has moved on; see the run's notes")
+    assert capsys.readouterr().out.splitlines() == [
+        "  ! Branch", f"    {long}", "    has moved on; see the run's notes"]
+
+
 # --- agent failures continue the loop ---------------------------------------------------
 
 

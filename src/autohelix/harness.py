@@ -21,7 +21,6 @@ from pathlib import Path
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
-from rich.table import Table
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
@@ -224,8 +223,7 @@ class Harness:
             if not isinstance(source, str):
                 raise RuntimeError(f"Run {short_id(import_run)}'s run.json names no config file; it can't be imported.")
             if source != (used := config_relative(self.project_path, config_file)):
-                self.console.print(f"[yellow]Run {short_id(import_run)} used {source}; this run uses {used}.[/yellow]",
-                                   highlight=False)
+                self._warn(f"Run {short_id(import_run)} used {source}; this run uses {used}.")
         if creating:
             self.config = load_config(self.project_path, config_file=config_file)
         else:
@@ -233,7 +231,7 @@ class Harness:
         errors = [issue for issue in self.config.validate() if issue.level == "error"]
         if errors:
             for error in errors:
-                self.console.print(f"[red]Error:[/red] {error.message}")
+                terminal.show(self.console, error.message, Text("Error: ", style="red"))
             if creating:
                 raise SystemExit(f"Config validation failed. Edit {config_relative(self.project_path, config_file)} "
                                  "and try again.")
@@ -289,7 +287,10 @@ class Harness:
                             else f"{short} leaves group {self.run_info['group']}."))
         self.land_mode = land_mode or self.run_info.get("land") or "auto"
         for level, text in notices:
-            self.console.print(f"[yellow]{text}[/yellow]" if level == "warn" else f"[dim]{text}[/dim]", highlight=False)
+            if level == "warn":
+                self._warn(text)
+            else:
+                terminal.show(self.console, text, style="dim")
         try:
             self.history = History(self.project_path, self.paths.run_id)
             tip, warning = reconcile(self.paths, self.run_info, self.history, self.land_mode)
@@ -305,7 +306,7 @@ class Harness:
             self._segment_target_tip: str | None = None
             self._agent_logs = {}
             if warning:
-                self.console.print(f"[yellow]{warning}[/yellow]")
+                self._warn(warning)
 
             self._time_left_script: Path | None = None
             self._claude_settings_path: Path | None = None
@@ -339,16 +340,16 @@ class Harness:
         if not check:
             return config
         if not source.is_file():
-            self.console.print(f"[dim]{data['config_path']} is gone; run {short} continues "
-                               "with the config it stored when it started.[/dim]", highlight=False)
+            terminal.show(self.console, f"{data['config_path']} is gone; run {short} continues "
+                          "with the config it stored when it started.", style="dim")
             return config
         try:
             current = load_config(self.project_path, source)
             if (current.prompt_template is not None and current.prompt_template == config.prompt_template
                     and not current.prompt_template.exists()):
-                self.console.print(f"[dim]{config_relative(self.project_path, current.prompt_template)} is gone; "
-                                   f"run {short} continues with the prompt template it stored when it started."
-                                   "[/dim]", highlight=False)
+                terminal.show(self.console, f"{config_relative(self.project_path, current.prompt_template)} is gone; "
+                              f"run {short} continues with the prompt template it stored when it started.",
+                              style="dim")
                 current.prompt_template_text = config.prompt_template_text
             if current._parse_errors and current._parse_errors != config._parse_errors:
                 changed = f"it no longer reads: {current._parse_errors[0]}"
@@ -481,16 +482,12 @@ class Harness:
                 self._live_display = None
 
     def _warn(self, message: str) -> None:
-        """A `!` line whose continuation lines stay indented under the message."""
-        grid = Table.grid(padding=(0, 1))
-        grid.add_column(no_wrap=True)
-        grid.add_column()
-        grid.add_row(Text("  !", style="yellow"), Text(clean(message)))
-        self.console.print(grid)
+        """A warning (`terminal.warning`: `  ! message`, wrapped under itself)."""
+        terminal.warn(self.console, message)
 
     def _status(self, message: str) -> None:
         """Print a status message."""
-        self.console.print(f"[dim]{message}[/dim]")
+        terminal.show(self.console, message, style="dim")
 
     def _copy_bin(self, name: str) -> Path | None:
         """Copy a helper script from the package bin/ into .autohelix/.internal/bin/.
@@ -738,7 +735,7 @@ class Harness:
                 display.flush()
 
             if result.error and self.verbose:  # otherwise the run's error says it, once
-                self.console.print(Text(f"Agent error: {clean(result.error)}", style="red"), highlight=False)
+                terminal.show(self.console, result.error, Text("Agent error: ", style="red"), style="red")
             if self.verbose:
                 self.console.print()
             return result
@@ -841,7 +838,7 @@ class Harness:
             self._status("Creating agent copy...")
         agent_copy = workspace.agent_copy()
         if self.verbose:
-            self.console.print(f"  Working dir: {agent_copy.working_dir}")
+            terminal.show(self.console, str(agent_copy.working_dir), "  Working dir: ")
         self.run_status.note(copy=str(agent_copy.working_dir))
         prompt = self.build_prompt(iteration, agent_copy.working_dir, workspace.members,
                                    rejected_diff=workspace.rejected_diff, imported=workspace.imported,
@@ -913,11 +910,11 @@ class Harness:
         self.run_status.note(copy=None)
         reverted = self._discarded(workspace)
         if reverted and self.verbose:
-            self.console.print(f"  [yellow]![/yellow] Discarded {len(reverted)} change(s) outside editable scope:")
+            self._warn(f"Discarded {len(reverted)} change(s) outside editable scope:")
             for f in reverted[:5]:
-                self.console.print(f"    [dim]{f}[/dim]")
+                terminal.show(self.console, f, "    ", style="dim")
             if len(reverted) > 5:
-                self.console.print(f"    [dim]... and {len(reverted) - 5} more[/dim]")
+                terminal.show(self.console, f"... and {len(reverted) - 5} more", "    ", style="dim")
 
     def _discarded(self, workspace: IterationWorkspace) -> list[str]:
         """The out-of-scope paths dropped at freeze, relative to the project."""
@@ -963,7 +960,7 @@ class Harness:
                        "AUTOHELIX_OBSERVATIONS": None, "AUTOHELIX_METRICS": None}
         records = self.history.load()  # the reference for metric gates: the last accepted iteration
         where = "baseline" if baseline else f"iter {iteration}"
-        notes: list[str] = []  # printed once the live display is gone, whatever happens
+        notes: list[Text] = []  # printed once the live display is gone, whatever happens
 
         def verify(command: str) -> None:
             # Checks are read-only: one command must not alter what a later one validates.
@@ -1038,20 +1035,19 @@ class Harness:
             # The row shows the outcome (`_print_row`); details with --verbose.
             if self.verbose and not baseline:
                 for r in evaluation.constraints:
-                    mark = "[green]✓[/green]" if r.passed else "[red]✗[/red]"
-                    self.console.print(f"  {mark} {self._gate_text(r.command)}", highlight=False)
+                    mark = Text("  ").append("✓ " if r.passed else "✗ ", style="green" if r.passed else "red")
+                    terminal.show(self.console, self._gate_text(r.command), mark)
                     if not r.passed:
                         self.console.print(Panel(r.output[:2000], title="Gate output", border_style="red"))
             if self.verbose:
-                for note in notes:
-                    self.console.print(note, highlight=False)
+                terminal.print_lines(self.console, notes)
         workspace.remove(checks)
         if evaluation.metrics and not baseline:
             self.log.info(f"iter {iteration} observe: "
                           + ", ".join(f"{k}={v:g}" for k, v in evaluation.metrics.items()))
 
     def _observe(self, workspace: IterationWorkspace, iteration: int, checks, evaluation: _Evaluation,
-                 command_env: dict, records, *, verify, notes: list[str]) -> None:
+                 command_env: dict, records, *, verify, notes: list[Text]) -> None:
         """Observe entries in order (see `_evaluate`), each with its own call folder and,
         as `$AUTOHELIX_PREVIOUS`, a copy of its output from the last accepted iteration
         in which it succeeded; in a run that imports another (`run --import`), until the
@@ -1107,8 +1103,8 @@ class Harness:
                 for name, error in result.errors.items():
                     self.log.info(f"{where} observe {entry.name}: metric '{name}' missing — {error}")
             else:
-                notes.append(f"  [yellow]![/yellow] observe {entry.name} failed ({result.error}); "
-                             "its metrics are missing")
+                notes += terminal.warning(f"observe {entry.name} failed ({result.error}); its metrics are missing",
+                                          self.console.width)
                 self.log.info(f"{where} observe {entry.name} failed — {result.error}")
             try:
                 verify(entry.command)
@@ -1123,7 +1119,7 @@ class Harness:
                 if gate.metric not in entry.metrics:
                     continue
                 if failure := self._check_metric_gate(gate, evaluation.gates[index], evaluation.metrics, records):
-                    notes.append(f"  [red]✗[/red] {failure}")
+                    notes += terminal.hanging(Text("  ").append("✗ ", style="red"), failure, self.console.width)
                     self.log.info(f"iter {iteration} {failure}")
                     evaluation.rejection = failure
                     return
@@ -1526,7 +1522,7 @@ class Harness:
             self._warn(w.message)
         errors = [i for i in issues if i.level == "error"]
         for e in errors:
-            self.console.print(f"  [red]FAIL[/red] {e.message}")
+            terminal.show(self.console, e.message, Text("  ").append("FAIL ", style="red"))
         return not errors
 
     def _target_tip(self) -> str | None:
@@ -1709,8 +1705,7 @@ class Harness:
             nonlocal cost_warning_shown, cost_unknown
             cost_unknown = True
             if budget.cost_usd is not None and not cost_warning_shown:
-                self.console.print("           [yellow]! cost unknown; --cost counts known costs only[/yellow]",
-                                   highlight=False)
+                terminal.warn(self.console, "cost unknown; --cost counts known costs only", indent=terminal.INDENT)
                 cost_warning_shown = True
 
         if start_iter == 1 and needs_baseline:

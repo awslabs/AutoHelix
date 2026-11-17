@@ -118,11 +118,66 @@ def test_a_row_without_values_says_why_in_their_place():
     assert row.plain.rstrip().endswith("pytest -q failed (exit 1)") and row.plain.index("pytest") < 40
 
 
-def test_a_long_reason_goes_under_the_row_and_is_cut_to_the_width():
+def test_a_long_reason_goes_under_the_row_wrapped_at_spaces_only():
+    """Not cut with an ellipsis: wrapped under the time column, a word wider than the
+    room (a path) on a line of its own, whole."""
+    path = "src/" + "x" * 200 + ".py"
     lines = _rows(60, {"goal": "g", "observe": [{"name": "b", "command": "c", "metrics": {"speed": "higher"}}]}).add(
-        Row(1, False, {"speed": 3.0}, reason="metric gate: " + "x" * 200))
-    assert len(lines) == 2 and all(len(line.plain) <= 60 for line in lines)
-    assert lines[1].plain.startswith(" " * terminal.INDENT + "xxx") and lines[1].plain.endswith("…")
+        Row(1, False, {"speed": 3.0}, reason=f"metric gate: speed fell after the change to {path} and more"))
+    under = [line.plain for line in lines[1:]]
+    assert all(line.startswith(" " * terminal.INDENT) and not line[terminal.INDENT].isspace() for line in under)
+    assert " ".join(line.strip() for line in under) == f"speed fell after the change to {path} and more"
+    assert [line.strip() for line in under if len(line) > 60] == [path]
+    assert "…" not in "".join(under)
+
+
+@pytest.mark.parametrize("text, width, lines", [
+    ("one two three", 7, ["one two", "three"]),
+    ("see autohelix/20261116-0905-fixes-j294 now", 12, ["see", "autohelix/20261116-0905-fixes-j294", "now"]),
+    ("a-long-hyphenated-branch-name", 5, ["a-long-hyphenated-branch-name"]),
+    ("first\nsecond line", 80, ["first", "second line"]),
+    ("tabs\tand   spaces \x1b[31mred", 80, ["tabs and spaces red"]),
+    ("", 10, [""]),
+    (None, 10, [""]),
+])
+def test_wrap_breaks_lines_at_spaces_only(text, width, lines):
+    """The one wrap helper: never inside a word (a branch name, a path), not even at a
+    hyphen; a word wider than the width has its own line; line breaks kept, text cleaned."""
+    assert terminal.wrap(text, width) == lines
+
+
+def test_a_warning_is_the_same_on_every_screen():
+    """`  ! message`: the `!` yellow, the message wrapped under itself, never cut."""
+    path = "/very/long/" + "p" * 90 + "/notes"
+    lines = terminal.warning(f"Could not remove {path}: busy", 40)
+    assert [line.plain for line in lines] == ["  ! Could not remove", f"    {path}:", "    busy"]
+    assert [(span.start, span.end, span.style) for span in lines[0].spans] == [(2, 4, "yellow")]
+    assert [line.plain for line in terminal.warning("x", 40, indent=10)] == [" " * 10 + "! x"]
+
+
+def test_hanging_keeps_the_prefix_style_and_indents_under_the_text():
+    from rich.text import Text
+
+    lines = terminal.hanging(Text("Error: ", style="red"), "the config names a-missing-file and more", 28, "bold")
+    assert [line.plain for line in lines] == ["Error: the config names", "       a-missing-file and", "       more"]
+    assert lines[0].spans[0].style == "red" and all(line.spans[-1].style == "bold" for line in lines)
+
+
+def test_a_wrapped_header_field_keeps_a_long_path_whole():
+    """A field read whole (a path, a problem) wraps at spaces; a path wider than the
+    room is neither cut nor split."""
+    path = "/Users/someone/" + "deep/" * 20 + "autohelix.yaml"
+    lines = terminal.header([("t", None)], [("Config", f"{path} (exists)", None)], 60, show_mark=False)
+    shown = [line.plain for line in lines[1:-1]]
+    assert shown == [f"  Config     {path}", "             (exists)"]
+
+
+def test_the_end_block_wraps_an_error_without_breaking_a_branch_name():
+    table = _rows(50)
+    branch = "autohelix/20261116-0905-fixes-j294"
+    lines = table.outcome_lines(("Error", f"landing failed: {branch} is not an ancestor of main", terminal.RED))
+    words = [word for line in lines for word in line.plain.split()]
+    assert branch in words and "…" not in "".join(line.plain for line in lines)
 
 
 def test_metric_gate_rejection_names_the_iteration_it_compares_with():

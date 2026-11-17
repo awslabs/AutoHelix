@@ -12,6 +12,9 @@ import json
 import time
 from pathlib import Path
 
+from rich.text import Text
+
+from autohelix import terminal
 from autohelix.config import Config
 from autohelix.history import History
 from autohelix.runs import RunPaths, RunLock, claim_copies, ensure_copies, remove_copies, run_tip, git
@@ -129,7 +132,7 @@ def write_report(config: Config, project: Path, console, *, run_id: str, _owned:
     # The summary agent reads accepted code in a copy of the run's tip; it can't change it.
     before = git(project, "rev-parse", "--verify", paths.ref, check=False).stdout.strip()
     tip = before or run_tip(paths)
-    root = claim_copies(paths, lambda message: console.print(f"[yellow]{message}[/yellow]"))
+    root = claim_copies(paths, lambda message: terminal.warn(console, message))
     copy = Copy.create(Repo(project), ensure_copies(root) / "iter-report", files=tip, head=tip,
                        refs=(paths.ref,), watched=True)  # the prompt names `autohelix/<id>`
     started = time.monotonic()
@@ -151,31 +154,28 @@ def write_report(config: Config, project: Path, console, *, run_id: str, _owned:
         append_usage({**call, **(result.usage or {}), "status": "ok" if result.success else "failed",
                       "cost_usd": (result.usage or {}).get("cost_usd")}, paths.summary_usage)
         if touched := copy.changed():
-            console.print("[red]Error: the summary agent changed accepted code files (discarded):[/red] "
-                          + ", ".join(touched[:10]), highlight=False)
+            terminal.show(console, ", ".join(touched[:10]),
+                          Text("Error: the summary agent changed accepted code files (discarded): ", style="red"))
     finally:
         # The agent can still reach the user's repository by absolute path.
         after = git(project, "rev-parse", "--verify", paths.ref, check=False).stdout.strip()
         if before and after != before:
             git(project, "update-ref", "--no-deref", paths.ref, before, after or "0" * len(before))
-            console.print(f"[red]Error: the summary agent moved {paths.ref}; restored it.[/red]", highlight=False)
+            terminal.show(console, f"Error: the summary agent moved {paths.ref}; restored it.", style="red")
         try:
             copy.remove()
             remove_copies(root)
         except Exception as e:  # noqa: BLE001 - keep the agent's outcome
-            console.print(f"[yellow]Could not remove {copy.path}: {e}[/yellow]")
+            terminal.warn(console, f"Could not remove {copy.path}: {e}")
     seconds = round(time.monotonic() - started, 1)
 
     if not draft.is_file() or not draft.read_text().strip():
         draft.unlink(missing_ok=True)
-        from rich.text import Text
-
         from autohelix.formatting import clean
 
         why = (f"Summary failed: {clean(result.error or f'exit status {result.exit_code}', 300)}"
                if not result.success else "The agent finished without writing a summary")
-        console.print(Text(f"{why}; the previous report (if any) is unchanged (log: {shown_path(log_path)}).",
-                           style="yellow"))
+        terminal.warn(console, f"{why}; the previous report (if any) is unchanged (log: {shown_path(log_path)}).")
         return False
     draft.replace(paths.report)
     info = {"last_iteration": last, "written_at": time.time(), "seconds": seconds,

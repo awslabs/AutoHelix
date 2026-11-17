@@ -472,6 +472,29 @@ def test_a_nested_repository_is_rejected_with_what_to_do(repo_dir, copies, commi
                                    "remove its .git or clone outside the project")
 
 
+def test_git_speaks_english_whatever_the_users_locale(monkeypatch, repo_dir):
+    """The harness reads git's messages (a held lock, a nested repository without
+    commits): every call on the user's repository runs with `LC_ALL=C` and no
+    `LANGUAGE`, the caller's own variables kept."""
+    from autohelix import workspace
+
+    seen = []
+    real = subprocess.run
+
+    def run(argv, **kwargs):
+        seen.append(kwargs.get("env"))
+        return real(argv, **kwargs)
+
+    monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "de")
+    monkeypatch.setattr(workspace.subprocess, "run", run)
+    workspace.run_git(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True)
+    workspace.run_git(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True,
+                      env=workspace.git_env({"MARK": "1"}))
+    assert [env["LC_ALL"] for env in seen] == ["C", "C"] and not any("LANGUAGE" in env for env in seen)
+    assert seen[1]["MARK"] == "1" and "LANGUAGE" in os.environ
+
+
 def test_swapped_copies_root_is_refused_without_touching_outside(repo_dir, copies, tmp_path):
     _, _, copy = agent_copy(repo_dir, copies)
     outside = tmp_path / "outside"

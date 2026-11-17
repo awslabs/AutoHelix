@@ -259,7 +259,7 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
     fields += [("Group", run.get("group") or ""), ("Notes", _notes(run))]
     head = terminal.header(title, fields, width, show_mark=False)
     if saved.rows is None:  # no column header over no rows
-        head.append(Text("  ! The run's history can't be read: no iterations to show.", style="yellow"))
+        head += terminal.warning("The run's history can't be read: no iterations to show.", width)
     else:
         head += table.heading()
     rows = [table.add(row) for row in saved.rows or []]

@@ -34,6 +34,7 @@ uv pip install -e ".[dev]"
 - `src/autohelix/runs.py` - run identity/paths and selection, ownership locks, ref recovery, landing, archive/delete, copies sweep
 - `src/autohelix/workspace.py` - candidate copies (`Repo`, `Copy`, `Fingerprint`), tree snapshots, write scope and judge guard
 - `src/autohelix/display.py` - live Rich display
+- `src/autohelix/terminal.py` - what `run`/`resume`/`setup` print (header, rows, end block), and every screen's one warning form (`warning`/`warn`: `  ! message`) and one wrap helper (`wrap`/`hanging`/`show`: breaks at spaces only, never inside a word such as a path or branch name)
 - `src/autohelix/run_status.py` - live run status (`.autohelix/runs/<id>/.internal/status.json`)
 - `src/autohelix/live.py` - live terminal `view` (run table + the log the run status points at, or the running iteration's latest ask/review transcript) and `dashboard`
 - `src/autohelix/viewer.py` + `viewer_resources/` - `autohelix view --web` / `dashboard --web` app (`/` run list, `/run/<id>/` one run)
@@ -69,7 +70,7 @@ autohelix wait         # Block until a run event (iteration, start, end, crash),
 ## Testing
 
 ```bash
-pytest -n auto            # run all fast tests in parallel (~3 min; plain `pytest` is ~11 min)
+pytest -n auto            # run all fast tests in parallel (~3 min; plain `pytest` is ~11 min); CI runs this on Linux and macOS, Python 3.11, 3.12 and the newest
 pytest -m slow            # run slow tests (requires real agent)
 bash scripts/run_dev_test.sh              # manual test with real agent (sorting, 1 iteration)
 ```

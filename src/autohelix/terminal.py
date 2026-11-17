@@ -13,11 +13,11 @@ for real errors (an agent failure, a gate failing at the baseline, a run error).
 from __future__ import annotations
 
 import math
-import textwrap
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from rich.cells import cell_len
 from rich.console import Group
 from rich.text import Text
 
@@ -75,6 +75,54 @@ def field_line(label: str, *parts: tuple[str, str | None], width: int, label_wid
     return cut(_parts(("  ", None), (f"{label:<{label_width or FIELD}}", label_style), *parts), width)
 
 
+# --- wrapping and warnings: the same on every screen ------------------------------
+
+
+def wrap(text, width: int) -> list[str]:
+    """`text` in lines of at most `width` columns, broken at spaces only (its own line
+    breaks kept, each line `clean`ed): a word (a path, a branch name, a command) is never
+    split or cut; one wider than `width` has a line of its own, left whole for the
+    terminal to wrap (`print_lines`)."""
+    lines = []
+    for paragraph in str(text if text is not None else "").splitlines() or [""]:
+        line = ""
+        for word in clean(paragraph).split(" "):
+            if line and cell_len(line) + 1 + cell_len(word) > width:
+                lines.append(line)
+                line = word
+            else:
+                line = f"{line} {word}" if line else word
+        lines.append(line)
+    return lines
+
+
+def hanging(prefix: Text | str, text, width: int, style: str | None = None) -> list[Text]:
+    """`prefix` (a label, a mark: styled as given) then `text` in `style`, wrapped
+    (`wrap`) to the rest of `width` (at least 20 columns), the continuation lines under
+    the text's start. Not cut: print with `print_lines`."""
+    prefix = Text(prefix) if isinstance(prefix, str) else prefix
+    blank = " " * prefix.cell_len
+    return [(Text().append_text(prefix) if i == 0 else Text(blank)).append(part, style=style)
+            for i, part in enumerate(wrap(text, max(width - prefix.cell_len, 20)))]
+
+
+def warning(message, width: int, indent: int = 2) -> list[Text]:
+    """A warning, the one form on every screen: `  ! message`, the `!` yellow, the
+    message wrapped under itself (`hanging`)."""
+    return hanging(Text(" " * indent).append("! ", style="yellow"), message, width)
+
+
+def warn(console, message, indent: int = 2) -> None:
+    """Print `warning(message)` at the console's width."""
+    print_lines(console, warning(message, console.width, indent))
+
+
+def show(console, text, prefix: Text | str = "", style: str | None = None) -> None:
+    """Print `text` after `prefix`, wrapped at the console's width (`hanging`): what
+    isn't a warning (an error line, a dim note)."""
+    print_lines(console, hanging(prefix, text, console.width, style))
+
+
 def rule(width: int) -> Text:
     return Text("  " + "─" * max(width - 4, 1), style="dim")
 
@@ -127,15 +175,17 @@ def header(title: list[tuple[str, str | None]], fields: list[tuple], width: int,
     to the width, or (label, value, style) to read whole (a path, a problem: style may
     be None), wrapped, the lines under the first unlabelled."""
     lines = [_parts(*title)]
+    whole: set[int] = set()  # the wrapped lines: never cut (a word wider than the room stays whole)
+    room = width - 2 - (MARK_WIDTH + 3) * show_mark
     for label, value, *style in fields:
         if not value:
             continue
         if not style:
             lines.append(_parts((f"{label:<{FIELD}}", "dim"), (clean(value), None)))
             continue
-        room = max(width - 2 - (MARK_WIDTH + 3) * show_mark - FIELD, 20)
-        parts = [part for line in str(value).splitlines() for part in textwrap.wrap(clean(line), room, break_on_hyphens=False) or [""]]
-        lines += [_parts((f"{label if i == 0 else '':<{FIELD}}", "dim"), (part, style[0])) for i, part in enumerate(parts)]
+        wrapped = hanging(Text(f"{label:<{FIELD}}", style="dim"), value, room, style[0])
+        whole.update(range(len(lines), len(lines) + len(wrapped)))
+        lines += wrapped
     if show_mark:
         logo = mark()
         lines += [Text()] * max(len(logo) - len(lines), 0)
@@ -143,7 +193,7 @@ def header(title: list[tuple[str, str | None]], fields: list[tuple], width: int,
                  .append("   ").append_text(line) for i, line in enumerate(lines)]
     else:
         lines = [Text("  ").append_text(line) for line in lines]
-    return [cut(line, width) for line in lines] + [rule(width)]
+    return [line if i in whole else cut(line, width) for i, line in enumerate(lines)] + [rule(width)]
 
 
 def shows_mark(console) -> bool:
@@ -348,8 +398,9 @@ class Table:
             reason = None
         lines.append(cut(line, self.width))
         if reason:
-            lines.append(cut(_parts((" " * INDENT, None), (reason, style)), self.width))
-        lines += [cut(_parts((" " * INDENT, None), (note, style)), self.width) for note, style in self._notes(row)]
+            lines += hanging(" " * INDENT, reason, self.width, style)
+        for note, style in self._notes(row):
+            lines += hanging(" " * INDENT, note, self.width, style)
         self._remember(row)
         return lines
 
@@ -428,9 +479,7 @@ class Table:
 
     def _wrapped(self, label: str, text: str, style: str | None, label_style: str, width: int) -> list[Text]:
         """A labelled end-block line wrapped, never cut: an error must be readable whole."""
-        parts = textwrap.wrap(clean(text), max(self.width - 2 - width, 20)) or [""]
-        return [field_line(label if i == 0 else "", (part, style), width=self.width, label_width=width,
-                           label_style=label_style) for i, part in enumerate(parts)]
+        return hanging(_parts(("  ", None), (f"{label:<{width}}", label_style)), text, self.width, style)
 
     def outcome_lines(self, outcome: tuple[str, str, str | None], width: int = 0) -> list[Text]:
         """The end block's first line (`Done`, `Stopped`, `Interrupted`, `Error`: word,

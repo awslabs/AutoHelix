@@ -823,7 +823,7 @@ The run is `--run RUN_ID`, else the [running or latest run](#which-run-a-command
 
 ## `autohelix ask`
 
-Ask an agent a yes/no question about the current directory.
+Ask an agent a yes/no question about the candidate (in a run: a fresh copy of it, with `candidate.diff`), or by hand about the current directory (the change: its working tree against HEAD).
 
 ```bash
 autohelix ask [--yes TEXT] [--no TEXT] [--rubric FILE] [--agent BACKEND] [--model MODEL] [--effort LEVEL] [--timeout DURATION] [--command PATH] -- "QUESTION"

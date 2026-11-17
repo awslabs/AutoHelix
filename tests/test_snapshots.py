@@ -243,10 +243,11 @@ def test_screens_fit_their_width(name):
 
 def test_an_unreadable_history_shows_the_outcome_only():
     """Totals and landing would be counted from no rows, so the end block stops after
-    the outcome; the warning is yellow, like every warning."""
+    the outcome; the warning is `terminal.warning`'s, like every warning."""
     lines = view_screen(80, readable=False)
     [warning] = [line for line in lines if "history can't be read" in line.plain]
-    assert warning.style == "yellow"
+    assert warning.plain.startswith("  ! ") and [span.style for span in warning.spans] == ["yellow"]
+    assert warning.spans[0].start == 2 and warning.spans[0].end == 4
     assert lines[-1].plain.split() == ["Done", "iteration", "budget", "reached", "(7)"]
 
 

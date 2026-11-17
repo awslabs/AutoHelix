@@ -87,7 +87,13 @@ def is_lock_error(stderr) -> bool:
 
 def run_git(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     """`subprocess.run` for git on the user's repository, retried briefly while
-    another git process (a concurrent run) holds one of its lock files."""
+    another git process (a concurrent run) holds one of its lock files. Git speaks
+    English here (`LC_ALL=C`, no `LANGUAGE`) whatever the user's locale: the harness
+    reads some of its messages (`_LOCK_ERRORS`, a nested repository without commits)."""
+    env = dict(kwargs.pop("env", None) or os.environ)
+    env["LC_ALL"] = "C"
+    env.pop("LANGUAGE", None)
+    kwargs["env"] = env
     for delay in (*_LOCK_RETRIES, None):
         result = subprocess.run(argv, **kwargs)
         if not result.returncode or delay is None or not is_lock_error(result.stderr):

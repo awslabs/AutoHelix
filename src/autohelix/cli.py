@@ -76,6 +76,15 @@ def _project(path: Path) -> Path:
     return project
 
 
+def _warn(message: str, err: bool = False) -> None:
+    """A warning on the command's own screen (`terminal.warning`), on stderr with `err`."""
+    from rich.console import Console
+
+    from autohelix import terminal
+
+    terminal.warn(Console(stderr=err), message)
+
+
 def _chosen_run(project: Path, value: str | None) -> RunPaths:
     """The run a command acts on: `value` (an id or its last part), else `runs.default_run`'s
     (the running run, else the most recently active one that isn't archived), named."""
@@ -666,9 +675,9 @@ def resume(target: str | None, path: Path, verbose: bool, no_report: bool, land_
     harness = _start(project, config, verbose=verbose, run_id=selected, create=False, land_mode=land_mode,
                      group=group)
     if budget.default and (note := _interrupted_note(harness)):
-        click.echo(click.style(note, fg="yellow"))
+        _warn(note)
     if note := _stopped_note(harness):
-        click.echo(click.style(note, fg="yellow"))
+        _warn(note)
     _segment(harness, budget, not no_report)
 
 
@@ -750,7 +759,7 @@ def delete(run_ids: tuple[str, ...], path: Path, force: bool):
     any run could not be deleted.
     """
     def act(paths: RunPaths) -> str:
-        delete_run(paths, force=force, warn=lambda message: click.echo(f"  ! {message}", err=True))
+        delete_run(paths, force=force, warn=lambda message: _warn(message, err=True))
         return f"Deleted {short_id(paths.run_id)}."
 
     _, failed = _each_run(_project(path), run_ids, act)
@@ -775,7 +784,11 @@ def delete(run_ids: tuple[str, ...], path: Path, force: bool):
 def ask(question: str, yes_means: str | None, no_means: str | None, rubric: str | None,
         agent_type: str | None, model: str | None, effort: str | None, timeout: int | None,
         agent_command: str | None):
-    """Ask an agent a yes/no question about the current directory.
+    """Ask an agent a yes/no question about the candidate, or by hand the current directory.
+
+    In a run (a gate's `ask:`, a stop command), it judges a fresh copy of the
+    candidate with candidate.diff, the complete change. By hand, it judges the
+    current directory; the change is the working tree (new files included) against HEAD.
 
     Exits 0 for yes, 1 for no, 2 if no valid answer was produced; prints the
     reason. Use it in gates: (or as an `ask:` entry there), stop:, or any script. The agent gets
@@ -1215,13 +1228,16 @@ def report(run_id: str | None, path: Path):
     paths = _chosen_run(project_path, run_id)
     run_id = paths.run_id
     if History(project_path, run_id).get_last_iteration() == 0:
-        console.print(f"[yellow]Run {short_id(run_id)} has no iterations yet. Nothing to report.[/yellow]",
-                      highlight=False)
+        _warn(f"Run {short_id(run_id)} has no iterations yet. Nothing to report.")
         raise SystemExit(1)
     try:
         config = load_run_config(paths)
     except (RuntimeError, ConfigError) as e:
-        console.print(f"[red]Error:[/red] {e}", highlight=False)
+        from rich.text import Text
+
+        from autohelix import terminal
+
+        terminal.show(console, str(e), Text("Error: ", style="red"))
         raise SystemExit(1)
 
     if not write_report(config, project_path, console, run_id=run_id):
