@@ -60,10 +60,14 @@ that gates (commands or `ask:`) can check (`-n 1` is also what no flag means). A
 Landing and the run summary are flags too, never config keys (`land:` and
 `report:` are errors): a run lands automatically (fast-forwards the branch it
 started on when the command ends) unless the launch command says `--land
-manual`. Add `--land manual` when the user wants to review the code before it
-reaches their branch, will keep committing on that branch while the run goes,
-or is comparing approaches in separate runs; `--group` runs land manually
-already. Add `--no-report` only when the user asks to skip the summary (it isn't stored:
+manual`. Recommend `--land manual` for complex work: several iterations,
+changes across many files, design or refactoring work, anything the user would
+review as a pull request (the gates can't be the whole review), and when the
+user wants to review the code before it reaches their branch, will keep
+committing on that branch while the run goes, or is comparing approaches in
+separate runs; `--group` runs land manually already. Automatic landing suits
+simple tasks the gates fully check (a fix with a reproducer, a measured
+speedup with tests). Add `--no-report` only when the user asks to skip the summary (it isn't stored:
 hand it over on every `resume` command too). Defaults
 otherwise: no cost or time limit, and no timeouts (no `timeout:` on gates or observe entries, no `agent.timeout`):
 the built-in defaults apply. No metric gates (`- metric: … regress:/improve:`)
@@ -192,13 +196,13 @@ to make the setup ready to run.
 Keep the final handoff brief: saved config and helper paths, the setup commit
 (or why no commit was made), the `autohelix run NAME --check` result after
 the commit, other validation and execution results, and what remains
-unverified. End with the complete launch command, budget included, and one
-line on why that budget: e.g. `autohelix run perf -n 3` for a first look at an
-open-ended goal, or `autohelix run fix -n 1` for one task the gates check.
-Always write the flags out, `-n 1` included. Add `--cost` or `--time` only
-for a reason (expensive evaluations, a deadline), and `--land manual` when
-the code should be reviewed before it lands (say so: `autohelix land <id>`
-lands it then); `autohelix resume <id> -n N` gives more later. The complete YAML and rationale
+unverified. End with the complete launch command, budget and landing
+included, and one line on why: e.g. `autohelix run perf -n 3 --land manual`
+("a first look at an open-ended goal; review the code before it lands, then
+`autohelix land <id>`"), or `autohelix run fix -n 1` ("one task the gates
+fully check: it lands when the command ends"). Always write the flags out,
+`-n 1` included. Add `--cost` or `--time` only for a reason (expensive
+evaluations, a deadline); `autohelix resume <id> -n N` gives more later. The complete YAML and rationale
 were shown in the proposal; repeat them only if requested or needed to explain
 a revision.
 
