@@ -146,16 +146,9 @@ def test_group_and_manual_runs_dont_warn_about_a_live_run(project):
     assert f"{short_id(auto.run_id)} is also running for this config" in result.output
 
 
-def test_dashboard_shows_the_group_after_the_id(project):
+def test_the_group_is_in_the_json_and_the_runs_view(project):
     grouped, _ = started(project, "--group", "perf")
     plain, _ = started(project, "--land", "manual")
-    result = cli(project, "dashboard", "--once")
-    assert result.exit_code == 0, result.output
-    lines = result.output.splitlines()
-    under = {line.split()[0]: lines[i + 1] for i, line in enumerate(lines[:-1])
-             if line.split()[:1] in ([short_id(grouped.run_id)], [short_id(plain.run_id)])}
-    assert "group perf" in under[short_id(grouped.run_id)]  # on the dim line under the run's row
-    assert "group" not in under[short_id(plain.run_id)]
     rows = {row["id"]: row for row in json.loads(cli(project, "dashboard", "--json").output)["runs"]}
     assert rows[grouped.run_id]["group"] == "perf" and rows[grouped.run_id]["land"] == "manual"
     assert rows[plain.run_id]["group"] is None and rows[plain.run_id]["land"] == "manual"

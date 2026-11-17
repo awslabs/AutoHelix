@@ -221,7 +221,6 @@ def test_a_run_without_a_stored_config_is_never_given_its_file(folder_project):
     assert "autohelix/perf.yaml (invalid)" in cli(folder_project, "view", "--once").output
     (row,) = json.loads(cli(folder_project, "dashboard", "--json").output)["runs"]
     assert row["config_invalid"] and "config_missing" not in row
-    assert "autohelix/perf.yaml (invalid)" in cli(folder_project, "dashboard", "--once").output
 
 
 def test_an_invalid_config_is_named(folder_project):

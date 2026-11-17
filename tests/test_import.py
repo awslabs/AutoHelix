@@ -232,9 +232,7 @@ def test_why_is_stored_kept_and_shown(project):
     paths, _ = started(project, "--why", "  try the\nheap approach  ")
     assert identity(paths)["why"] == "try the heap approach"
     other, _ = started(project, "--import", short_id(paths.run_id), "--land", "manual")
-    once = cli(project, "dashboard", "--once").output
-    assert "why: try the heap approach" in once
-    assert f"continues from {paths.run_id}" in once
+    assert f"continues from {paths.run_id}" in cli(project, "view", short_id(other.run_id), "--once").output
     view = cli(project, "view", short_id(paths.run_id), "--once").output
     assert "  Notes      why: try the heap approach" in view
 

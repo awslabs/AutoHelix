@@ -8,6 +8,7 @@ import pytest
 from rich.console import Console
 
 import autohelix.live as W
+from autohelix.config import Config
 from autohelix.run_status import RunStatus
 from autohelix.runs import RunLock
 from tests.helpers import latest_run
@@ -190,13 +191,13 @@ def test_the_time_cap_is_the_running_segments_own():
     assert "left" not in W.run_table.format_run(data, W.run_table.Saved(), now=1000)  # the view's live row has the iteration's time
     run["status"].update(segment_started_at=1000 - 6000, max_time_seconds=5400)
     assert W.run_table.time_cap(run, 1000) == "time up (--time 1h30m)"
-    listing = W.run_table.format_runs({**data, "runs": [run]}, now=1000)
-    assert "spent 1m 00s · $1.50 · time up (--time 1h30m)" in listing
+    config = Config.from_dict({"goal": "Go faster", "gates": ["true"]})
+    assert "Budget     time up (--time 1h30m)" in W.run_table.format_run(data, W.run_table.Saved(config), now=1000)
     run["status"]["segment_started_at"] = 1000 + 5  # clock skew
     assert W.run_table.time_cap(run, 1000) == "1h 30m left (--time 1h30m)"
     run["status"].update(state="finished")
     assert W.run_table.time_cap(run, 1000) == ""
-    assert "1h30m" not in W.run_table.format_runs({**data, "runs": [run]}, now=1000)
+    assert "1h30m" not in W.run_table.format_run(data, W.run_table.Saved(config), now=1000)
 
 
 def _screen_lines(data, log, height) -> list[str]:
