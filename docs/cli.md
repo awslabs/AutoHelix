@@ -5,7 +5,9 @@ Commands that read runs (`resume`, `stop`, `land`, `archive`, `delete`, `hint`,
 `view`, `dashboard`, `report`, `wait`) also work from a subfolder: when the
 folder has no runs (`.autohelix/runs/`), they use the nearest folder above it,
 up to the top of its git checkout, that has, and say so ("Using project
-../.."). `setup` and `run` take the folder as given.
+../.."). `run` takes the folder as given; bare [`autohelix`](#autohelix) uses
+the folder with runs, else the nearest one with a config, else the top of the
+git checkout.
 
 ### Which run a command acts on
 
@@ -59,8 +61,8 @@ front matter), and tells the agent to point out a different `autohelix
 it was when AutoHelix is upgraded.
 
 After installation, ask your agent to use `autohelix-setup` to prepare your
-experiment (or let [`autohelix setup`](#autohelix-setup) start the agent with
-the bundled skill, without installing anything). It will inspect the project
+experiment (or run bare [`autohelix`](#autohelix) in a terminal: it starts the
+agent with the bundled skill, without installing anything). It will inspect the project
 and propose scope, gates, observe entries (commands and reviews) and
 optional metric gates. Review the complete YAML and its
 section-by-section explanation before project files change; agreement to save
@@ -75,80 +77,103 @@ termination and use hints when useful for later iterations. See the
 
 Installing the Python package does not register skills automatically.
 
-## `autohelix setup`
+## `autohelix`
 
-Write a loop's config: `autohelix.yaml`, or `autohelix/NAME.yaml` with a name.
+Bare `autohelix` in a terminal is the entry point: the project's runs, then one
+question that starts a coding agent session (Claude Code, Codex or OpenCode)
+with the skill bundled with AutoHelix.
 
 ```bash
-autohelix setup [NAME] [-p PATH] [--agent claude|codex|opencode]
+autohelix
 ```
 
-| Option | Description |
-|--------|-------------|
-| `NAME` | Write `autohelix/NAME.yaml` (lowercase letters, digits, hyphens, up to 32 characters, starting with a letter or digit; not `autohelix`); runs of it are named after it |
-| `--path`, `-p` | Project directory (default: current dir) |
-| `--agent` | Draft the config with this agent, skipping the selection menu |
-
-`setup` first prints a header: the project folder, the config it writes (new,
-or there to complete), the coding agents found on `PATH`, and the git branch and
-whether it is clean (in yellow when a run would refuse the folder: no git checkout,
-no commit yet, or uncommitted changes to tracked files):
+The project is the folder with runs (the current folder or the nearest one
+above it with `.autohelix/runs/`, within the git checkout, as for `view` and
+`dashboard`), else the current folder or the nearest one above it with a
+config (`autohelix.yaml` or `autohelix/*.yaml`, the folder `autohelix run`
+there would use), else the top of the git checkout, whichever subfolder you
+are in. The screen has a header (the version and the project), the project's
+current runs as the [dashboard](#autohelix-dashboard) draws them, under them
+the command that applies to each run (`view` a live run, `resume` one that
+stopped before its end, `land` waiting commits; an interrupted run or one that
+stopped unexpectedly gets `resume` even with commits to land, which an
+auto-landing resume lands), how many runs are
+archived, and a pointer to `autohelix --help`:
 
 ```
-  AutoHelix  v0.3.0 · setup
-  Project  ~/code/sorting
-  Config   autohelix.yaml (new)
-  Agents   Claude Code · Codex (found on PATH)
-  Git      main · clean
+  AutoHelix  v0.3.0 · ~/code/sorting
   ────────────────────────────────────────────────────────────────────────────
-  How do you want to write it?
-  ❯ With an agent       it asks what you want, then drafts the config
-    From the template   the commented template, to edit by hand
+  run           state                 iter   speed ↑  landing    activity
+  m2xq perf     running                4/7  35,310.7  landed     agent 1m 12s
+    Cut the memory use of sort_list.
+  0mws sorting  interrupted            7/7  57,520.8  landed     Nov 13
+    Make sort_list faster in sort.py.
+
+  m2xq  running · iteration 4      next: autohelix view m2xq
+  0mws  interrupted · iteration 7  next: autohelix resume 0mws
+
+  1 archived · autohelix --help: all commands
+
+  ❯ Ask Claude Code about these runs
+    Set up a new experiment with Claude Code   it drafts a config with you
+  (q: quit)
 ```
 
-(In a colour terminal 80 or more columns wide, the AutoHelix mark is beside the
-header.) In a terminal, `setup` then asks whether to set up the loop with an agent or
-write the commented template. When several agents are installed (looked for in the
-order `claude`, `codex`, `opencode`), it then asks which one. Choose with ↑/↓
-and Enter, or an option's number; Enter alone takes the first, Esc or Ctrl-C
-cancels. With an agent, `setup` is replaced by that agent's usual interactive
-session, started in the project with a first prompt to follow the setup skill
-bundled with AutoHelix: it asks what you want to achieve, then shows the complete
-proposed config and walks through each section before changing project files:
-what it controls, why it was chosen, and how to adjust it, including effective
-defaults. Discuss revisions; when you agree to save and commit, it writes,
-validates, and commits the setup.
-`agent.backend` is set to that agent unless you decide otherwise. Nothing is
-installed into the agent's settings, and the skill always matches the installed
-AutoHelix. Setup gives the launch command; it starts a run only when requested.
+(At 80 columns the first option's note, "it summarizes them, then answers
+questions", doesn't fit whole, so it is left out.)
 
-From the template, `setup` writes the commented template, then lists what to do next:
+Choose with ↑/↓ and Enter, or an option's number; Enter alone takes the first,
+q or Esc quits (exit 0), Ctrl-C interrupts (exit 130). Keys typed before the
+screen is drawn are dropped. Nothing starts without a key
+press, so `autohelix` is also a quick look at a project. The question depends
+on what the project has:
 
-```
-  Wrote    autohelix.yaml  the commented template
-  next     edit it: the goal, scope, gates and observe entries
-           commit it, with any scripts its commands use
-           autohelix run
-  or       autohelix setup --agent claude  an agent drafts it with you
-           autohelix skill install --agent claude  for your own agent sessions
-```
+| The project has | The question |
+|---|---|
+| runs that aren't archived | Ask *agent* about these runs / Set up a new experiment with *agent* |
+| configs, no runs (a hand-written or half-finished `autohelix.yaml`) | autohelix.yaml, no runs yet: check and finish it with *agent* / Set up a new experiment with *agent* |
+| neither (archived runs aside: "no current runs, 2 archived") | Set up an experiment with *agent*? Enter/q |
 
-Outside a git checkout, or in one without a commit, the first step is the git
-command that fixes it (`git init && git add -A && git commit -m 'init'`). Without a
-terminal (a script), `setup` writes the
-template unless `--agent` is given. Without an agent on `PATH` it writes the
-template too.
+With several agents installed (looked for in the order `claude`, `codex`,
+`opencode`), the labels say "an agent" and "Which agent?" follows, every
+time. Without any, the screen says what to install and exits 1. Outside a git
+checkout the screen says so (a run refuses the folder) and offers nothing to
+start (exit 1); other git problems, such as no commit yet, are in the header's
+Git line and in the agent's first prompt.
 
-`setup` never overwrites a file. With `--agent`, an existing config (such as a
-template written earlier) can be revised after reviewing and agreeing on the
-agent's proposal; without it, an existing config is an error. A bare `setup`
-is refused when `autohelix/` already has configs: `autohelix.yaml` would take
-over a bare `autohelix run`, so name the
-new one. `setup` doesn't need git and creates no `.autohelix/`; its Git line
-says when `run` would refuse the folder (no git repository, or no commit yet).
-All screens are drawn in [tests/snapshots/](../tests/snapshots/) (`setup-*.txt`).
+Every option starts the same session: `autohelix` is replaced by the agent's
+usual interactive CLI, started in the project with a first prompt that points
+at the bundled skill, names AutoHelix's own CLI and Python and the user docs
+shipped in the package, lists the project's runs (id, state, last iteration)
+and configs, and says which option you picked; you can switch at any point.
 
-`autohelix init` is another name for `setup`; its old PATH argument is now `-p PATH`.
+- **Ask about these runs**: the agent opens with a summary of the live runs
+  plus the latest one (what was accepted, what was rejected and why, anything
+  odd), then answers your questions from the run records. It sends `hint` or
+  `stop` only when you ask.
+- **Set up a new experiment**: the agent asks what you want to achieve, then
+  shows the complete proposed config and walks through each section before
+  changing project files: what it controls, why it was chosen, and how to
+  adjust it, including effective defaults. It proposes a short name for the
+  goal and saves the config as `autohelix/<name>.yaml` (`autohelix.yaml` for
+  the project's first config), with `agent.backend` set to that agent unless
+  you decide otherwise. When you agree, it writes the config, checks it with
+  `autohelix run NAME --check`, commits it, and gives the `autohelix run NAME`
+  command (with a budget) for you to run; it starts a run only when asked.
+- **Check and finish** an existing config works the same way on that file.
+
+Nothing is installed into the agent's settings, and the skill always matches
+the installed AutoHelix (`autohelix skill install` puts a copy where your own
+agent sessions find it). Without a terminal (a script, a pipe, an agent's
+shell tool), `autohelix` prints the help, adds "Run `autohelix` in a terminal
+to start.", and exits 2. All screens are drawn in
+[tests/snapshots/](https://github.com/awslabs/AutoHelix/tree/main/tests/snapshots) (`entry-*.txt`).
+
+To write a config by hand instead, start from an
+[example](https://github.com/awslabs/AutoHelix/tree/main/examples), the configs in [Getting Started](getting-started.md)
+and [Configuration](config.md), or the commented template shipped in the
+package (`autohelix/templates/config_template.yaml`); `autohelix run` without a
+config names all three.
 
 ### Config files
 
@@ -262,7 +287,7 @@ type next and the files written. `resume` shows the baseline and the last 5 rows
 Wide terminals (where a reason still fits after the values) space the columns out;
 at 80 columns they are as above. Narrower terminals drop the cost column, then the changes. Without a terminal (a
 pipe, a log file) or colours there is no mark and no live row. The renders at 80 and
-120 columns are in [`tests/snapshots/`](../tests/snapshots/).
+120 columns are in [`tests/snapshots/`](https://github.com/awslabs/AutoHelix/tree/main/tests/snapshots).
 
 ### Options
 

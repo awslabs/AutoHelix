@@ -9,7 +9,9 @@
 Runs the CLI of the checkout this script is in (its `src/` first on PYTHONPATH),
 with the interpreter given by --python, under a pseudo-terminal of each width:
 `run` (live and final frames), `resume`, `view --once`, `dashboard --once` and
-`setup` (choosing the template), plus `run` piped (no TTY). The projects are
+bare `autohelix` (the entry screen: with runs, with a config and no runs, with
+nothing, with two agents, outside git), plus `run` and bare `autohelix` piped (no
+TTY). A fake `claude` (and `codex`) prints the session it was started with. The projects are
 throwaway folders with the mock agent: no model calls. Each screen is saved as
 <name>-<width>.txt and .png (`rsvg-convert` from the SVG; skipped without it);
 README.md lists them and any scenario that failed. Always exits 0.
@@ -116,15 +118,18 @@ def make_project(root: Path, name: str, scenario: bool) -> Path:
     return project
 
 
-def environment(root: Path, width: int) -> dict:
+def environment(root: Path, width: int, agents=("claude",)) -> dict:
     """A clean environment: none of an enclosing run's AUTOHELIX_*/GIT_* variables,
-    a fake `claude` on PATH (setup lists it; picking it starts nothing), our own copies."""
+    fake `agents` on PATH (bare `autohelix` offers them; one started prints its
+    arguments: the first prompt), our own copies."""
     env = {k: v for k, v in os.environ.items() if not k.startswith(("AUTOHELIX_", "GIT_"))}
-    fake = root / "bin"
+    fake = root / ("bin-" + "-".join(agents))
     if not fake.exists():
         fake.mkdir()
-        (fake / "claude").write_text("#!/bin/sh\necho '(a fake claude: setup would start the agent here)'\n")
-        (fake / "claude").chmod(0o755)
+        for agent in agents:
+            (fake / agent).write_text(f"#!/bin/sh\necho '(a fake {agent}, started with:)'\n"
+                                      "for a in \"$@\"; do printf '[%s]\\n' \"$a\"; done\n")
+            (fake / agent).chmod(0o755)
     env.update(
         PATH=f"{fake}:/usr/bin:/bin:/usr/sbin:/sbin",
         PYTHONPATH=os.pathsep.join([str(REPO / "src"), *filter(None, [env.get("PYTHONPATH")])]),
@@ -162,8 +167,11 @@ class Screen(pyte.Screen):
 def run_in_pty(argv, cwd, env, width, *, keys=(), frame_when=None, timeout=180):
     """Run argv under a pty of `width` columns; return (final screen, live frame, exit code).
 
-    keys: (delay seconds, bytes) sent after the process starts. frame_when: a function
-    returning True when the live frame should be taken (checked between reads)."""
+    keys: (when, bytes), sent in order: `when` is a delay in seconds after the previous
+    key (the first: after the start), or text to wait for on the screen (the entry
+    screen drops keys typed before its menu is drawn). frame_when: a function of the
+    screen's text returning True when the live frame should be taken (checked between
+    reads)."""
     screen = Screen(width, ROWS)
     stream = pyte.ByteStream(screen)
     pid, fd = pty.fork()
@@ -172,11 +180,13 @@ def run_in_pty(argv, cwd, env, width, *, keys=(), frame_when=None, timeout=180):
         os.execve(argv[0], argv, env)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, width, 0, 0))
     start, live, pending = time.monotonic(), None, list(keys)
-    code = None
+    code, last_key = None, start
     while True:
         elapsed = time.monotonic() - start
-        while pending and elapsed >= pending[0][0]:
+        while pending and (pending[0][0] in plain(snapshot(screen)) if isinstance(pending[0][0], str)
+                           else time.monotonic() - last_key >= pending[0][0]):
             os.write(fd, pending.pop(0)[1])
+            last_key = time.monotonic()
         if elapsed > timeout:
             os.kill(pid, 9)
         ready, _, _ = select.select([fd], [], [], 0.05)
@@ -188,7 +198,7 @@ def run_in_pty(argv, cwd, env, width, *, keys=(), frame_when=None, timeout=180):
             if not data:
                 break
             stream.feed(data)
-        if live is None and frame_when and frame_when():
+        if live is None and frame_when and frame_when(plain(snapshot(screen))):
             live = snapshot(screen)
         done, status = os.waitpid(pid, os.WNOHANG)
         if done:
@@ -206,6 +216,14 @@ def run_in_pty(argv, cwd, env, width, *, keys=(), frame_when=None, timeout=180):
     if code is None:
         code = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
     return snapshot(screen), live, code
+
+
+MENU = "(q: quit)"  # the last line the entry screen's menu draws
+
+
+def showing(*texts: str):
+    """A `frame_when` that is true once the screen shows all of `texts`."""
+    return lambda text: all(t in text for t in texts)
 
 
 def snapshot(screen: pyte.Screen) -> list[list]:
@@ -297,11 +315,11 @@ def main() -> int:
     cli = [python, "-c", "import sys; from autohelix.cli import main; sys.argv[0] = 'autohelix'; main()"]
     done, failed = [], []
 
-    def record(name, lines, width, title, code):
+    def record(name, lines, width, title, code, expected=0):
         save(out, name, lines, width, title)
         done.append(f"- `{name}`: {title} (exit {code})")
-        if code not in (0,):
-            failed.append(f"- `{name}`: exit {code}")
+        if code != expected:
+            failed.append(f"- `{name}`: exit {code}, expected {expected}")
 
     for width in [int(w) for w in args.widths.split(",")]:
         with tempfile.TemporaryDirectory(prefix="autohelix-screens-") as tmp:
@@ -312,7 +330,7 @@ def main() -> int:
                 mark = root / "mark"
                 env["SCREENS_MARK"] = str(mark)
 
-                def mid_iteration_3():
+                def mid_iteration_3(text):
                     # iteration 2's gate has run: iteration 3's agent is now working (2.5s)
                     if not mark.exists() or "2" not in mark.read_text().split():
                         return False
@@ -333,11 +351,41 @@ def main() -> int:
                     final, _, code = run_in_pty([*cli, *command], project, env, width)
                     record(f"{command[0]}-{width}", final, width, f"autohelix {' '.join(command)} · {width} cols", code)
 
+                # Bare `autohelix`: the entry screen. A second run, interrupted in its first iteration.
+                run_in_pty([*cli, "run", "-n", "3", "--no-report"], project, env, width,
+                           keys=[(4.0, b"\x03")], timeout=60)
+                # With runs, as drawn while choosing; q quits (exit 0).
+                _, live, code = run_in_pty([*cli], project, env, width, keys=[(MENU, b"q")],
+                                           frame_when=showing(MENU), timeout=30)
+                record(f"entry-runs-{width}", live or [], width, f"autohelix · runs (then q) · {width} cols", code)
+                # The same, Enter: the first option starts the (fake) agent with its first prompt.
+                final, _, code = run_in_pty([*cli], project, env, width, keys=[(MENU, b"\r")], timeout=30)
+                record(f"entry-ask-{width}", final, width, f"autohelix · runs, Enter · {width} cols", code)
+                # Two agents: the labels say "an agent", then "Which agent?"; q there quits.
+                two = environment(root, width, ("claude", "codex"))
+                _, live, code = run_in_pty([*cli], project, two, width,
+                                           keys=[(MENU, b"\x1b[B"), (0.5, b"\r"), ("Which agent?", b"q")],
+                                           frame_when=showing("Which agent?", MENU), timeout=30)
+                record(f"entry-agents-{width}", live or [], width,
+                       f"autohelix · two agents, ↓ Enter (then q) · {width} cols", code)
+
+                configs = make_project(root, "half-done", True)  # autohelix.yaml, no runs yet
+                _, live, code = run_in_pty([*cli], configs, env, width, keys=[(MENU, b"q")],
+                                           frame_when=showing(MENU), timeout=30)
+                record(f"entry-config-{width}", live or [], width,
+                       f"autohelix · a config, no runs (then q) · {width} cols", code)
+
                 empty = make_project(root, "new-project", False)
-                # The menu's second entry is the template; a wrong pick starts only the fake claude.
-                final, _, code = run_in_pty([*cli, "setup"], empty, env, width,
-                                            keys=[(2.0, b"\x1b[B"), (2.5, b"\r")], timeout=30)
-                record(f"setup-{width}", final, width, f"autohelix setup (template) · {width} cols", code)
+                (empty / "src").mkdir()  # started below the top: the project is the checkout's top
+                final, _, code = run_in_pty([*cli], empty / "src", env, width, keys=[("Enter/q", b"\r")],
+                                            timeout=30)
+                record(f"entry-new-{width}", final, width, f"autohelix · nothing yet, Enter · {width} cols", code)
+
+                outside = root / "not-git"
+                outside.mkdir()
+                no_git = {**env, "GIT_CEILING_DIRECTORIES": str(root)}
+                final, _, code = run_in_pty([*cli], outside, no_git, width, timeout=30)
+                record(f"entry-no-git-{width}", final, width, f"autohelix · outside git · {width} cols", code, 1)
             except Exception as e:  # keep what was rendered; say what broke
                 failed.append(f"- width {width}: {type(e).__name__}: {e}")
 
@@ -352,6 +400,12 @@ def main() -> int:
             done.append(f"- `run-piped`: autohelix run -n 3 with output to a pipe (exit {result.returncode})")
             if result.returncode:
                 failed.append(f"- `run-piped`: exit {result.returncode}")
+            result = subprocess.run(cli, cwd=project, env=env, text=True, stdin=subprocess.DEVNULL,
+                                    capture_output=True, timeout=60)
+            (out / "entry-piped.txt").write_text(result.stdout + result.stderr)
+            done.append(f"- `entry-piped`: bare autohelix with output to a pipe (exit {result.returncode})")
+            if result.returncode != 2:
+                failed.append(f"- `entry-piped`: exit {result.returncode}, expected 2")
         except Exception as e:
             failed.append(f"- run-piped: {type(e).__name__}: {e}")
 

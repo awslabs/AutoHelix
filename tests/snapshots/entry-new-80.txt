@@ -1,0 +1,6 @@
+  AutoHelix  v0.3.0 · ~/code/sorting
+  ────────────────────────────────────────────────────────────────────────────
+
+  autohelix --help: all commands
+
+  Set up an experiment with Claude Code? Enter/q

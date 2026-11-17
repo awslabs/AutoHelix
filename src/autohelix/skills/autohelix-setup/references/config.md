@@ -2,7 +2,7 @@
 
 These fields are supported by the version shipping this skill. If versions
 differ, check the installed CLI and the packaged template, read with
-AutoHelix's own Python (never by running `autohelix setup`):
+AutoHelix's own Python:
 `files('autohelix.templates').joinpath('config_template.yaml').read_text()`
 (`from importlib.resources import files`).
 All paths and commands below are examples; adapt them to implemented commands

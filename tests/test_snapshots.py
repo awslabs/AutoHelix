@@ -105,41 +105,6 @@ def resume_screen(width: int) -> list:
                            first=8)
 
 
-def setup_screen(width: int, picked: int | None = None) -> list:
-    """`autohelix setup` in a terminal with two agents: the header and the menu as drawn
-    while choosing; with `picked`, the menu folded into its answer instead, then what
-    the template choice prints."""
-    import click
-    from rich.text import Text
-
-    from autohelix.cli import SETUP_QUESTION, setup_options
-    from autohelix.menu import option_line
-
-    fields = terminal.setup_fields("~/code/sorting", "autohelix.yaml", False, ["Claude Code", "Codex"],
-                                   ("main · clean",))
-    lines = terminal.header(terminal.title("setup", version="0.3.0"), fields, width, show_mark=True)
-    options = setup_options(["claude", "codex"])
-    if picked is None:
-        return lines + [Text("  " + SETUP_QUESTION)] + [Text(click.unstyle(option_line(options, i, 0, width - 1)))
-                                                        for i in range(len(options))]
-    lines.append(Text(f"  {SETUP_QUESTION} {options[picked][0]}"))
-    steps = terminal.setup_steps("autohelix run")
-    return lines + terminal.setup_written("autohelix.yaml", steps, terminal.setup_also("autohelix setup", "claude"), width)
-
-
-def setup_problem_screen(width: int) -> list:
-    """`autohelix setup perf` outside git (a real empty folder), no agent found, piped:
-    the Git field says why a run would refuse, and the first step fixes it."""
-    from autohelix.cli import _git_field
-
-    with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, GIT_CEILING_DIRECTORIES=folder):
-        git, fix = _git_field(Path(folder))
-    fields = terminal.setup_fields("~/code/sorting", "autohelix/perf.yaml", False, [], git)
-    lines = terminal.header(terminal.title("setup", version="0.3.0"), fields, width, show_mark=False)
-    steps = terminal.setup_steps("autohelix run perf", fix)
-    return lines + terminal.setup_written("autohelix/perf.yaml", steps, terminal.setup_also("", None), width)
-
-
 # --- view and dashboard: the `--json` payloads of the run above ---
 
 T = NOW.timestamp()
@@ -200,6 +165,88 @@ def dashboard_screen(width: int) -> list:
     return dashboard_lines({**PROJECT, "runs": [_run_payload(False), perf, old]}, width, now=T)
 
 
+def _menu(options: list[tuple[str, str]], width: int) -> list:
+    """The arrow-key menu as drawn while choosing (`menu.choose`, no title): the options,
+    the first one current, then `(q: quit)`."""
+    import click
+    from rich.text import Text
+
+    from autohelix.menu import QUIT_HINT, option_line
+
+    return [Text()] + [Text(click.unstyle(option_line(options, i, 0, width - 1))) for i in range(len(options))] + \
+        [Text("  " + QUIT_HINT)]
+
+
+def _question(data: dict, agents: list[str], configs: list[str], width: int) -> list:
+    """The entry screen's question as `cli._entry` picks it: the menu of `entry_options`
+    (drawn while choosing), else the one Enter/q question."""
+    from rich.text import Text
+
+    from autohelix.cli import _unrun, entry_options, entry_question
+    from autohelix.run_table import current_runs
+
+    runs = data["runs"]
+    options = entry_options(agents, bool(current_runs(runs)), _unrun(configs, runs))
+    if not options:
+        return [Text(), Text(f"  {entry_question(agents)} Enter/q")]
+    return _menu([o[1:] for o in options], width)
+
+
+def _entry(data: dict, width: int, agents: list[str], configs: list[str], git: tuple | None = None) -> list:
+    """Bare `autohelix`'s screen: the header, the runs, the question."""
+    from autohelix.run_table import entry_header, entry_lines
+
+    return entry_header("~/code/sorting", width, git) + entry_lines(data, width, now=T) + \
+        _question(data, agents, configs, width)
+
+
+def entry_screen(width: int) -> list:
+    """Bare `autohelix` with runs and one agent: the dashboard's runs (the one running,
+    one waiting to land, one interrupted, one whose process is gone with commits to land,
+    the finished one; one archived), the command for each, and the two options."""
+    finished = _run_payload(False)
+    perf = {**_run_payload(True), "id": "20261115-1530-perf-m2xq", "name": "perf", "config_file": "autohelix/perf.yaml",
+            "title": "Cut the memory use of sort_list."}
+    manual = {**finished, "id": "20261114-1000-sorting-xax8", "last_activity": T - 7200, "land": "manual",
+              "landing": {"commits": 1, "fast_forward": True}}
+    stopped = {**_run_payload(False), "id": "20261113-1000-sorting-0mws", "last_activity": T - 86400 * 2,
+               "status": {"state": "interrupted", "iteration": 7}}
+    gone = {**_run_payload(False), "id": "20261112-1000-sorting-c9d1", "last_activity": T - 86400 * 3,
+            "status": {"state": "crashed", "iteration": 7}, "landing": {"commits": 2, "fast_forward": True}}
+    old = {**_run_payload(False), "id": "20261110-0900-old-a1b2", "archived": True}
+    data = {**PROJECT, "runs": [finished, perf, manual, stopped, gone, old]}
+    return _entry(data, width, ["claude"], ["autohelix/sorting.yaml", "autohelix/perf.yaml"])
+
+
+def entry_archived_screen(width: int) -> list:
+    """Bare `autohelix` where every run is archived, two agents: counted, not "no runs",
+    and asked as with no runs (the config has a run: not "no runs yet")."""
+    data = {**PROJECT, "runs": [{**_run_payload(False), "archived": True}]}
+    return _entry(data, width, ["claude", "codex"], ["autohelix/sorting.yaml"])
+
+
+def entry_config_screen(width: int) -> list:
+    """Bare `autohelix` with a config and no runs, no commit yet: the Git field, then the
+    question naming the config."""
+    git = ("No commits yet; a run starts from a commit.", "yellow")
+    return _entry({**PROJECT, "runs": []}, width, ["claude"], ["autohelix.yaml"], git)
+
+
+def entry_new_screen(width: int) -> list:
+    """Bare `autohelix` with no runs and no configs: one Enter/q question."""
+    return _entry({**PROJECT, "runs": []}, width, ["claude"], [])
+
+
+def entry_no_git_screen(width: int) -> list:
+    """Bare `autohelix` outside a git checkout (a real empty folder): nothing to start."""
+    from autohelix.cli import _git_problem
+    from autohelix.run_table import outside_lines
+
+    with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, GIT_CEILING_DIRECTORIES=folder):
+        problem, fix = _git_problem(Path(folder))
+    return outside_lines("~/notes", problem, fix, width)
+
+
 @pytest.fixture(autouse=True)
 def _version(monkeypatch):
     monkeypatch.setattr(terminal, "version", lambda: "0.3.0")
@@ -210,9 +257,11 @@ SCREENS = {
     **{f"view-live-{w}": (lambda w=w: view_screen(w, running=True)) for w in WIDTHS},
     "view-unreadable-80": lambda: view_screen(80, readable=False),
     **{f"dashboard-{w}": (lambda w=w: dashboard_screen(w)) for w in WIDTHS},
-    **{f"setup-{w}": (lambda w=w: setup_screen(w)) for w in WIDTHS},
-    **{f"setup-template-{w}": (lambda w=w: setup_screen(w, picked=1)) for w in WIDTHS},
-    "setup-no-git-80": lambda: setup_problem_screen(80),
+    **{f"entry-{w}": (lambda w=w: entry_screen(w)) for w in WIDTHS},
+    "entry-archived-80": lambda: entry_archived_screen(80),
+    "entry-config-80": lambda: entry_config_screen(80),
+    "entry-new-80": lambda: entry_new_screen(80),
+    "entry-no-git-80": lambda: entry_no_git_screen(80),
     **{f"run-{w}": (lambda w=w: run_screen(w)) for w in WIDTHS},
     **{f"run-live-{w}": (lambda w=w: live_screen(w)) for w in WIDTHS},
     **{f"resume-{w}": (lambda w=w: resume_screen(w)) for w in WIDTHS},

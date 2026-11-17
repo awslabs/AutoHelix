@@ -17,9 +17,9 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-To design a run with your coding agent, run `autohelix setup` in your project
-and choose the agent (see [With your coding agent](#with-your-coding-agent)), or
-explicitly install the portable skill into your target project:
+To design a run with your coding agent, run `autohelix` in your project, in a
+terminal (see [With your coding agent](#with-your-coding-agent)), or explicitly
+install the portable skill into your target project:
 
 ```bash
 autohelix skill install --agent codex --scope project --path /path/to/my-project
@@ -74,18 +74,24 @@ agent:
 In your project, run:
 
 ```bash
-autohelix setup          # prepare autohelix.yaml
-autohelix setup perf     # or autohelix/perf.yaml, one of several loops
+autohelix
 ```
 
-`setup` first shows what it found (the project, the config it writes, the coding
-agents on `PATH`, the git branch and whether it is clean), then asks how to write
-the config. Choose "With an agent": `setup` starts your coding agent (Claude Code, Codex or
-OpenCode, whichever is installed; it asks which when there are several) with
-the setup skill bundled with AutoHelix, and the agent starts by asking what you
+`autohelix` shows the project's runs (none yet), then asks "Set up an experiment
+with Claude Code? Enter/q" (or names the agent you have: Codex or OpenCode; it
+asks which when there are several). Enter starts your coding agent with the
+setup skill bundled with AutoHelix, and the agent starts by asking what you
 want to achieve. The skill helps design the experiment from your existing code,
-checks, and evidence. The agent you choose becomes `agent.backend`, the loop's
-backend, unless you decide otherwise.
+checks, and evidence. The agent saves the config as `autohelix.yaml` (the
+project's first config; for later ones it proposes a short name for the goal
+and saves them as `autohelix/<name>.yaml`), checks it with `autohelix run --check`, commits it, and
+gives the `autohelix run` command to start. The agent you choose becomes
+`agent.backend`, the loop's backend, unless you decide otherwise.
+
+Later, `autohelix` lists the project's runs with the command that applies to
+each (`resume`, `land`, `view`), and offers to ask the agent about them (it
+summarizes what was accepted and rejected, then answers questions) or to set up
+another experiment. See [CLI → autohelix](cli.md#autohelix).
 
 With the skill installed as described above, you can also start from an
 ordinary agent session. The installation's `--agent` selects the agent that
@@ -157,15 +163,18 @@ The following steps prepare the same kind of experiment without the skill.
 
 ### 1. Write the config
 
+Write `autohelix.yaml` at the project root (or `autohelix/perf.yaml`, one of
+[several configs](#5-several-configs)). Start from the config below, an
+[example](https://github.com/awslabs/AutoHelix/tree/main/examples), or the commented template shipped in the package:
+
 ```bash
 cd my-project
-autohelix setup          # answer `empty`
+python -c "from importlib.resources import files; print(files('autohelix.templates').joinpath('config_template.yaml').read_text())" > autohelix.yaml
 ```
 
-This writes `autohelix.yaml`, a commented config template, at the project root
-(`autohelix setup perf` writes `autohelix/perf.yaml` instead; see
-[Several configs](#5-several-configs)). There is nothing else to initialize: the
-first run creates `.autohelix/`, its runtime directory, kept out of git.
+(use the Python AutoHelix is installed in). There is nothing else to
+initialize: the first run creates `.autohelix/`, its runtime directory, kept
+out of git.
 
 ### 2. Configure
 
@@ -271,7 +280,7 @@ scripts their commands use: iteration copies are made from the commit.
 
 ```
 autohelix/
-  perf.yaml              # autohelix setup perf; autohelix run perf
+  perf.yaml              # autohelix run perf
   docs.yaml              # autohelix run docs
   prompts/perf.md        # prompt_template: prompts/perf.md, in perf.yaml
 ```

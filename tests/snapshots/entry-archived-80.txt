@@ -1,0 +1,6 @@
+  AutoHelix  v0.3.0 · ~/code/sorting
+  ────────────────────────────────────────────────────────────────────────────
+
+  no current runs, 1 archived · autohelix --help: all commands
+
+  Set up an experiment with an agent? Enter/q

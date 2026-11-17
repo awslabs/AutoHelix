@@ -1,0 +1,9 @@
+  AutoHelix  v0.3.0 · ~/code/sorting
+  Git        No commits yet; a run starts from a commit.
+  ────────────────────────────────────────────────────────────────────────────
+
+  autohelix --help: all commands
+
+  ❯ autohelix.yaml, no runs yet: check and finish it with Claude Code
+    Set up a new experiment with Claude Code
+  (q: quit)
