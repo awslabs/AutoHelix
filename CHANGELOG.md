@@ -12,6 +12,14 @@
   so the removal is never committed or reported as discarded. Hygiene, not a
   boundary: the agent can still find the project and runs as you.
 
+### Runs keep the machine awake
+
+- **`run` and `resume` keep the machine from sleeping while their segment
+  runs**: `caffeinate -i -w <pid>` on macOS, `systemd-inhibit` on Linux, on by
+  default. The block is released when the segment ends, or when the process is
+  killed; a missing or refused tool means no block and no message. A closed
+  lid still sleeps, and credentials or a VPN aren't kept alive.
+
 ### One entry point: bare `autohelix`
 
 - **Bare `autohelix` in a terminal** shows the project's runs (the folder with

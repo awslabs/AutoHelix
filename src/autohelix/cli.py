@@ -18,6 +18,7 @@ import click
 from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFound, find_config,
                               project_configs, run_command)
 from autohelix.agents import JUDGE_BACKENDS
+from autohelix.awake import keep_awake
 from autohelix.harness import DEFAULT_ITERATIONS, Budget, Harness
 from autohelix.history import History
 from autohelix.run_status import read_run_status
@@ -605,9 +606,10 @@ def _segment(harness: Harness, budget: Budget, report: bool) -> None:
     """Run a segment; exit 0 when it ended politely (a budget, a stop condition,
     `autohelix stop`), 1 on an error (the agent kept failing, landing failed),
     130 when interrupted (Ctrl-C, SIGTERM, `autohelix stop --now`; see
-    `_interruptible`)."""
+    `_interruptible`). The machine stays awake meanwhile (`keep_awake`)."""
     try:
-        ended = harness.run(budget, report=report)
+        with keep_awake():
+            ended = harness.run(budget, report=report)
     except RuntimeError as e:
         if getattr(e, "autohelix_reported", False):  # printed first, above landing and the run page
             raise SystemExit(1) from e

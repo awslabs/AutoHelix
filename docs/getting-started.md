@@ -154,6 +154,11 @@ of gates and observe entries, including the baseline's. The run summary's cost
 counts in the run's total but runs after `--cost` is checked; supervisor calls
 are separate. Missing cost
 is unknown, not zero. See [CLI → Budgets](cli.md#budgets) before relying on a cap.
+For a long run, `run` and `resume` keep the machine from sleeping until the
+segment ends (macOS `caffeinate`, Linux `systemd-inhibit`; nothing where the tool
+is missing or refused). A closed laptop lid still sleeps, and expiring
+credentials or a dropped VPN still stop the agent: keep the lid open (or use a
+server) and check how long your login lasts.
 The console, `autohelix view`, the run summary and run page (`report.md`,
 `report.html`), and saved records already support inspecting results.
 

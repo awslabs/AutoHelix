@@ -25,6 +25,7 @@ uv pip install -e ".[dev]"
 - `src/autohelix/config.py` - configuration dataclasses and parsing
 - `src/autohelix/agents/` - agent backends (claudecode, codex, opencode, mock)
 - `src/autohelix/iteration.py` - one iteration's copies: agent copy, freeze to a tree, evaluation copies, accept, notes/cleanup
+- `src/autohelix/awake.py` - keeps the machine awake during a `run`/`resume` segment (`caffeinate -i -w <pid>`, `systemd-inhibit` + `tail --pid`; silent when missing; the root conftest.py replaces `awake._start` and puts stand-ins first on PATH)
 - `src/autohelix/sandbox.py` - child-process environments (PYTHONPATH remap)
 - `src/autohelix/checks.py` - gate, observe and stop command execution; metric gate comparison
 - `src/autohelix/judge.py` / `review.py` - `autohelix ask` (yes/no) and `autohelix review` (feedback), read-only agent calls

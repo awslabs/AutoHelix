@@ -232,6 +232,14 @@ commands use: iteration copies are made from the commit. Do it before the first
 `run`: with auto landing, a later commit on the branch makes `resume` refuse
 (see [`resume`](#autohelix-resume)), leaving `run --import` or `--land manual`.
 
+While the segment runs, `run` (and `resume`) keeps the machine from sleeping:
+`caffeinate -i -w <pid>` on macOS, `systemd-inhibit` (idle and sleep) on Linux.
+The block watches the AutoHelix process, so it goes when the segment ends or
+the process is killed. Where the tool is missing or refuses (a container, no
+systemd, polkit over ssh) there is no block and no message. It doesn't keep a
+closed laptop lid from sleeping, and it keeps no credentials, SSO session or
+VPN alive.
+
 ### What it prints
 
 ```text
@@ -510,7 +518,7 @@ process, a reboot, three agent failures), a stop condition or `autohelix stop`, 
 | `--land auto\|manual` | Change the run's landing mode (stored; default: keep it) |
 | `--group NAME` | Put the run in group NAME from its next iteration (stored); `--group ''` takes it out of its group |
 
-Other options as for `run`. A run always uses the config it stored when it
+Other options as for `run`, and it keeps the machine awake the same way. A run always uses the config it stored when it
 started ([Config files](#config-files)). Before spending anything, `resume`
 compares it with the config file: when the file's parsed config differs (a
 setting, or the prompt template's text), it refuses, names the settings, and
