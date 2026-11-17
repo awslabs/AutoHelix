@@ -16,7 +16,7 @@ as "Use AutoHelix for improving this API guide." The user need not specify a
 skill name or draft YAML first. More explicit examples make the launch intent
 clear:
 
-- "Use AutoHelix to make the solver faster. Prepare a config template for review."
+- "Use AutoHelix to make the solver faster. Prepare a config for me to review."
 - "Use AutoHelix to improve this API guide. Prepare the loop and start a pilot
   using my configured backend."
 - "Use AutoHelix to make the solver faster. Prepare, run, and supervise three
@@ -36,9 +36,10 @@ unlimited work.
 The third request includes ongoing management; read
 [managed runs](managed-runs.md) for monitoring, hints, and completion handoff.
 
-The installer's `--agent` selects which coding agent discovers the skill.
-The config's `agent.backend` selects the backend that performs loop iterations;
-these choices can differ.
+The coding agent in this session (picked on bare `autohelix`'s screen, or
+the one `autohelix skill install --agent` installed the skill for) need not be
+the backend that performs loop iterations: that is the config's
+`agent.backend`.
 
 ## Performance optimization
 
@@ -149,11 +150,9 @@ observe:
       Assess experimental validity, whether claims follow from evidence, and
       the treatment of uncertainty and negative findings. Give specific
       feedback. Inspect supplied artifacts without running experiments.
-agent:
-  timeout: 8m
 ```
 
-Launch: `autohelix run -n 4`.
+Launch: `autohelix run -n 3`.
 
 The validator and summary command must exist and fit the project's protocol.
 The observe entry needs no `metrics`; captured output and files can guide
