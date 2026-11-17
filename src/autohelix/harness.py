@@ -317,8 +317,6 @@ class Harness:
             claude_hooks: dict[str, list] = {}
             if self.config.agent.timeout is not None:
                 self._time_left_script = self._install_time_left(claude_hooks)
-            if self.config.agent.require_notes is not None:
-                self._install_require_notes(claude_hooks)
             self._write_claude_settings(claude_hooks)
 
             self.agent = create_agent(self.config.agent, heartbeat_seconds=heartbeat_seconds)
@@ -527,8 +525,8 @@ class Harness:
         if time_left is None:
             return None
 
-        agent_type = self.config.agent.backend.lower()
-        if agent_type == "claude":
+        agent_type = self.config.agent.cli.lower()
+        if agent_type == "claude-code":
             time_left_hook = self._copy_bin("claude_hook_time_left.sh")
             if time_left_hook is not None:
                 entry = {
@@ -561,21 +559,6 @@ class Harness:
         except OSError:
             pass
 
-    def _install_require_notes(self, hooks: dict[str, list]) -> None:
-        """Install the require-notes Stop hook (claude only).
-
-        Registers a Stop hook that blocks the agent from ending its turn until the
-        iteration's notes file has enough content. Adds it to `hooks`. No-op for
-        non-claude backends (Stop hooks are a Claude Code feature).
-        """
-        if self.config.agent.backend.lower() != "claude":
-            return
-        notes_hook = self._copy_bin("check_notes.sh")
-        if notes_hook is not None:
-            hooks["Stop"] = [
-                {"hooks": [{"type": "command", "command": str(notes_hook)}]}
-            ]
-
     def _write_claude_settings(self, hooks: dict[str, list]) -> None:
         """Write the accumulated Claude Code hooks to claude_settings.json (if any)."""
         if not hooks:
@@ -588,7 +571,7 @@ class Harness:
     def _check_codex_time_left(self) -> None:
         """With `agent.timeout`, Codex gets time-left hints only if its CLI supports the
         hook; otherwise warn and run without them (the deadline still holds)."""
-        if self.config.agent.timeout is None or self.config.agent.backend.lower() != "codex":
+        if self.config.agent.timeout is None or self.config.agent.cli.lower() != "codex":
             return
         hook = self._codex_time_left_hook_path
         if hook is None:
@@ -636,7 +619,7 @@ class Harness:
         # time hook). Only when an iteration deadline is set.
         if (
             self.config.agent.timeout is not None
-            and self.config.agent.backend.lower() == "opencode"
+            and self.config.agent.cli.lower() == "opencode"
         ):
             self._install_opencode_timer_plugin(copy_path)
 
@@ -645,10 +628,13 @@ class Harness:
             print(f"  Log: {log_path}")
             print(f"  Heartbeat: {self.heartbeat_seconds}s")
 
+        # The agent is told its run and iteration, not where the project or the run's
+        # state is (hygiene, not a boundary: gate, observe and stop commands get those).
         deadline_env = {
-            "AUTOHELIX_PROJECT": str(self.project_path),
+            "AUTOHELIX_PROJECT": None,
+            "AUTOHELIX_RUN_DIR": None,
             "AUTOHELIX_RUN_ID": self.paths.run_id,
-            "AUTOHELIX_RUN_DIR": str(self.paths.run_dir),
+            "AUTOHELIX_ITERATION": str(iteration),
             "AUTOHELIX_ITERATION_START": str(int(time.time())),
             "AUTOHELIX_ITERATION_BUDGET": (
                 str(self.config.agent.timeout)
@@ -675,28 +661,6 @@ class Harness:
                 else None
             ),
         }
-
-        # require-notes (Stop hook) env: which file to check, the floor, the cap,
-        # and a per-iteration retry counter (reset here so each iteration is fresh).
-        require_notes = self.config.agent.require_notes
-        if require_notes is not None:
-            notes_file = (
-                copy_path / ITERATION_DIR / "notes" / f"iter-{iteration}.md"
-            )
-            # Retry counter lives under runtime/state/ so it never clutters
-            # the agent's notes dir. Reset here so each iteration starts fresh.
-            retry_file = (
-                copy_path / ITERATION_DIR / "runtime" / "state" / f"iter-{iteration}.retries"
-            )
-            try:
-                retry_file.parent.mkdir(parents=True, exist_ok=True)
-                retry_file.write_text("0")
-            except OSError:
-                pass
-            deadline_env["AUTOHELIX_NOTES_FILE"] = str(notes_file)
-            deadline_env["AUTOHELIX_NOTES_MIN_CHARS"] = str(require_notes.min_chars)
-            deadline_env["AUTOHELIX_NOTES_MAX_RETRIES"] = str(require_notes.max_retries)
-            deadline_env["AUTOHELIX_NOTES_RETRY_FILE"] = str(retry_file)
 
         previous_env: dict[str, str | None] = {}
 
@@ -840,7 +804,7 @@ class Harness:
         the first rejection."""
         if self.verbose:
             self._status("Creating agent copy...")
-        agent_copy = workspace.agent_copy()
+        agent_copy = workspace.agent_copy(hidden=self.config.protected)
         if self.verbose:
             terminal.show(self.console, str(agent_copy.working_dir), "  Working dir: ")
         self.run_status.note(copy=str(agent_copy.working_dir))

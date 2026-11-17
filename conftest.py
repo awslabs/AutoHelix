@@ -45,3 +45,21 @@ def clean_env(copies_dir, tmp_path_factory, monkeypatch):
     for name in ("LINES", "FORCE_COLOR", "NO_COLOR"):  # Rich's terminal size and colours
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("COLUMNS", "80")
+
+
+AWAKE_TOOLS = ("caffeinate", "systemd-inhibit")
+
+
+@pytest.fixture(autouse=True)
+def no_keep_awake(tmp_path_factory, monkeypatch):
+    """`run`/`resume` never start the real caffeinate or systemd-inhibit in a test: in this
+    process `awake._start` records the command instead (`no_keep_awake` is the list), and
+    an `autohelix run` started as a child finds stand-ins first on PATH that exit at once."""
+    started = []
+    monkeypatch.setattr("autohelix.awake._start", lambda command: started.append(command))
+    stubs = tmp_path_factory.mktemp("awake")
+    for name in AWAKE_TOOLS:
+        (stubs / name).write_text("#!/bin/sh\nexit 0\n")
+        (stubs / name).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stubs}{os.pathsep}{os.environ.get('PATH', '')}")
+    return started

@@ -132,6 +132,14 @@ for a cooperative agent, and for candidate code that misbehaves by accident:
   not modules from the candidate's `PYTHONPATH`;
 - a command's background processes are killed when it ends.
 
+The main agent's copy has no config file or prompt template (commands read the
+run's stored config, `$AUTOHELIX_CONFIG`), and its environment doesn't name the
+project or the run folder: `AUTOHELIX_PROJECT` and `AUTOHELIX_RUN_DIR` are for
+gate, observe and stop commands; the agent gets `AUTOHELIX_RUN_ID` and
+`AUTOHELIX_ITERATION`. That is hygiene, so the agent doesn't work in the checkout
+by accident, not a boundary: its copy's `.git` alternates and the copies folder
+still lead to the project.
+
 They are not a security boundary. The agent and candidate code run as you:
 they can still reach the project, its `.git`, other runs and your home folder
 by absolute path, and write run state there (`.autohelix/runs/<id>/`, including
@@ -182,18 +190,17 @@ and named in the next agent's prompt, so it can tell why a change never lands.
 With no scope, the agent may edit the tests and benchmarks that judge it; a run
 with gate or observe commands but no scope warns at start.
 
-## Agent Backends
+## Agent CLIs
 
-AutoHelix supports pluggable agent backends:
+`agent.cli` picks the agent CLI AutoHelix runs:
 
-| Backend | CLI Tool | Key Features |
+| `cli:` | Executable | Key Features |
 |---------|----------|-------------|
-| **Claude Code** | `claude` | Stream JSON, model selection, auto memory control |
-| **Codex** | `codex` | JSON output, reasoning effort, custom settings |
-| **OpenCode** | `opencode` | JSON format, model variants |
-| **Mock** | (built-in) | Deterministic changes for testing |
+| `claude-code` | `claude` (`$AUTOHELIX_CLAUDE_CODE_CMD`) | Stream JSON, model selection, `effort` as `--effort`, auto memory control |
+| `codex` | `codex` (`$AUTOHELIX_CODEX_CMD`) | JSON output, `effort` as `model_reasoning_effort` |
+| `opencode` | `opencode` (`$AUTOHELIX_OPENCODE_CMD`) | JSON format, `effort` as `--variant` |
 
-All backends implement the same interface: receive a prompt, work in a
+All of them implement the same interface: receive a prompt, work in a
 directory, emit events for the live display. Claude Code and Codex can also
 answer `autohelix ask` and `autohelix review`; OpenCode can't, as it has no
 read-only mode.
@@ -274,7 +281,7 @@ observe:
     review: |
       Review the change for clarity, correctness, and performance.
       What single change would most improve the result next iteration?
-    # agent: {backend: codex, model: gpt-5.5}   # a review by another model family
+    # agent: {cli: codex, model: gpt-5.5}   # a review by another model family
 ```
 
 - Each review runs in its **own fresh copy of exactly the candidate**, with the

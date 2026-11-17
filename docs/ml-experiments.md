@@ -58,6 +58,14 @@ mid-run surprises.
   and save notes first. Hints are supported for Claude Code, Codex CLI >= 0.141.0
   (an older Codex warns and runs without them), and OpenCode.
 
+- **Long runs keep the machine awake, within limits.** `run` and `resume` hold a
+  sleep block (macOS `caffeinate`, Linux `systemd-inhibit`) until the segment
+  ends, so an idle workstation doesn't suspend mid-training; where the tool is
+  missing or refused (containers, no systemd, polkit over ssh) there is none. A
+  closed lid still sleeps, and credentials or a VPN can still expire: on a remote
+  GPU box, start `autohelix run` itself (not the training inside it) in `tmux` so
+  it outlives your ssh session.
+
 ## Copy-paste goal-prompt rules
 
 A starting point — drop these into a cell's `autohelix.yaml` `goal:` and adapt

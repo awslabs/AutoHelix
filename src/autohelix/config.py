@@ -90,7 +90,13 @@ RENAMED_TOP_LEVEL_KEYS = {
     "report": "`report:` moved to the command line: `autohelix run --no-report` (also `resume`)",
 }
 
-ENTRY_AGENT_KEYS = ("backend", "model", "reasoning_effort", "command")
+ENTRY_AGENT_KEYS = ("cli", "model", "effort")
+# An entry agent's old keys, errors naming the replacement.
+RENAMED_ENTRY_AGENT_KEYS = {
+    "backend": "`agent.backend` is now `agent.cli` (claude-code or codex)",
+    "reasoning_effort": "`agent.reasoning_effort` is now `agent.effort`",
+    "command": "`agent.command` is gone: set AUTOHELIX_CLAUDE_CODE_CMD or AUTOHELIX_CODEX_CMD",
+}
 # An `ask:` gate's deadline without a `timeout:`: the judge's own default (`autohelix ask`).
 ASK_TIMEOUT = 600
 # The least `timeout:` an `ask:` or `review:` entry may set: in a run the judge keeps
@@ -108,7 +114,7 @@ class CommandSpec:
     command: str
     timeout: int = DEFAULT_CHECK_TIMEOUT
     label: str | None = None  # display text ("ask: <question>"); None shows the command
-    # An `ask:` entry's own `agent.backend` / `agent.command` (those given), for preflight.
+    # An `ask:` entry's own `agent.cli` (when given), for preflight.
     judge: dict[str, str] | None = None
 
     @property
@@ -139,7 +145,7 @@ class ObserveEntry:
     capture: list[str] = field(default_factory=list)  # files to save, relative to the copy
     timeout: int = DEFAULT_CHECK_TIMEOUT
     review: str | None = None  # the review prompt, for review entries
-    judge: dict[str, str] | None = None  # a review entry's own `agent.backend` / `agent.command`
+    judge: dict[str, str] | None = None  # a review entry's own `agent.cli` (when given)
 
 
 def goal_title(goal: str) -> str:
@@ -207,17 +213,15 @@ class Config:
         """Return the set of all declared metric names."""
         return set(self.metric_directions())
 
-    def agent_commands(self) -> list[tuple[str, str, str | None]]:
-        """Every agent the config runs, as (who, backend, command): the main agent, then
-        each `ask:` gate's and `review:` entry's judge, resolved as `judge.judge_config`
-        does (another backend drops the top-level `agent.command`)."""
-        main = self.agent.backend.lower()
-        found = [("agent", main, self.agent.command)]
+    def agent_commands(self) -> list[tuple[str, str]]:
+        """Every agent the config runs, as (who, cli): the main agent, then each `ask:`
+        gate's and `review:` entry's judge, resolved as `judge.judge_config` does."""
+        main = self.agent.cli.lower()
+        found = [("agent", main)]
         judged = [(gate.text, gate.judge) for gate in self.gate_commands() if gate.judge is not None]
         judged += [(f"observe {entry.name}", entry.judge) for entry in self.observe if entry.judge is not None]
         for who, judge in judged:
-            backend = judge.get("backend", main)
-            found.append((who, backend, judge.get("command") or (self.agent.command if backend == main else None)))
+            found.append((who, judge.get("cli", main)))
         return found
 
     def metric_source(self, name: str) -> ObserveEntry:
@@ -258,34 +262,10 @@ class Config:
                 "iterations will always be accepted with no measurement"
             )
 
-        from autohelix.agents import BACKENDS
+        from autohelix.agents import CLIS
 
-        backend = self.agent.backend.lower()
-        if backend not in BACKENDS:
-            error(
-                f"Unknown agent backend '{self.agent.backend}' "
-                f"(must be one of: {', '.join(sorted(BACKENDS))})"
-            )
-
-        # agent.settings is only consumed by codex (-c key=value passthrough)
-        # and by the mock agent for test knobs; other backends ignore it.
-        if self.agent.settings and backend in {"claude", "opencode"}:
-            warning(
-                f"agent.settings is ignored by the '{self.agent.backend}' backend "
-                f"(only the 'codex' backend consumes it)"
-            )
-
-        # require_notes depends on a Claude Code Stop hook.
-        if self.agent.require_notes is not None:
-            if backend in {"codex", "opencode"}:
-                error(
-                    f"agent.require_notes is not implemented for agent backend "
-                    f"'{backend}'. Currently only 'claude' is supported."
-                )
-            if self.agent.require_notes.min_chars < 0:
-                error("agent.require_notes.min_chars must be >= 0")
-            if self.agent.require_notes.max_retries < 1:
-                error("agent.require_notes.max_retries must be >= 1")
+        if self.agent.cli.lower() not in CLIS:
+            error(f"Unknown agent.cli '{self.agent.cli}' (must be one of: claude-code, codex, opencode)")
 
         if (self.prompt_template is not None and self.prompt_template_text is None
                 and not self.prompt_template.is_file()):
@@ -311,9 +291,9 @@ class Config:
         agent, agent_errors = AgentConfig.parse(data.get("agent"))
         errors.extend(agent_errors)
 
-        observe = _parse_observe(data.get("observe"), agent.backend, errors)
+        observe = _parse_observe(data.get("observe"), agent.cli, errors)
         declared = {name: entry for entry in observe for name in entry.metrics}
-        gates = _parse_gates(data.get("gates"), declared, agent.backend, errors)
+        gates = _parse_gates(data.get("gates"), declared, agent.cli, errors)
         stop = _parse_stop(data.get("stop"), errors)
 
         # Parse scope (`or {}` guards a present-but-empty `scope:` key)
@@ -440,13 +420,12 @@ def _command_text(entry: dict, key: str, where: str, errors: list[str]) -> str |
     return value
 
 
-def _entry_agent(entry: dict, timeout: int | None, backend: str, where: str,
+def _entry_agent(entry: dict, timeout: int | None, cli: str, where: str,
                  errors: list[str]) -> tuple[list[str], dict[str, str]]:
     """The flags an `ask:` or `review:` entry's `agent:` mapping and `timeout:` become
     (the entry's `timeout:` is the command's deadline and its agent's `--timeout`: the
-    judges stay inside the deadline on their own), and the mapping's own `backend` and
-    `command`, those given (`CommandSpec.judge`). `backend` is the top-level one, the
-    entry's default."""
+    judges stay inside the deadline on their own), and the mapping's own `cli`, when
+    given (`CommandSpec.judge`). `cli` is the top-level one, the entry's default."""
     agent = entry.get("agent")
     if agent is None:
         agent = {}
@@ -455,22 +434,25 @@ def _entry_agent(entry: dict, timeout: int | None, backend: str, where: str,
         agent = {}
     if "timeout" in agent:
         errors.append(f"{where}: `agent.timeout` is gone here: the entry's `timeout:` bounds its agent")
-        agent = {key: value for key, value in agent.items() if key != "timeout"}
-    _check_keys(agent, ENTRY_AGENT_KEYS, f"{where} agent", errors)
+    for key in agent:
+        if key in RENAMED_ENTRY_AGENT_KEYS:
+            errors.append(f"{where}: {RENAMED_ENTRY_AGENT_KEYS[key]}")
+    _check_keys({key: value for key, value in agent.items()
+                 if key != "timeout" and key not in RENAMED_ENTRY_AGENT_KEYS},
+                ENTRY_AGENT_KEYS, f"{where} agent", errors)
     flags: list[str] = []
-    from autohelix.agents import JUDGE_BACKENDS, agent_string
+    from autohelix.agents import JUDGE_CLIS, agent_string, cli_value
 
-    own = agent_string(agent, "backend", f"{where} agent", errors)
+    own = cli_value(agent, f"{where} agent", errors)
     if own is not None:
-        own = own.lower()
-        if own not in JUDGE_BACKENDS:
-            errors.append(f"{where}: agent.backend {own!r} can't be used here"
+        if own not in JUDGE_CLIS:
+            errors.append(f"{where}: agent.cli {own!r} can't be used here"
                           + (" (OpenCode has no read-only mode)" if own == "opencode" else
-                             " (must be claude or codex)"))
-        flags += ["--agent", own]
-    elif backend == "opencode":
-        errors.append(f"{where}: opencode has no read-only mode; set agent.backend on this entry")
-    for key, flag in (("model", "--model"), ("reasoning_effort", "--effort")):
+                             " (must be claude-code or codex)"))
+        flags += ["--cli", own]
+    elif cli == "opencode":
+        errors.append(f"{where}: opencode has no read-only mode; set agent.cli on this entry")
+    for key, flag in (("model", "--model"), ("effort", "--effort")):
         if (value := agent_string(agent, key, f"{where} agent", errors)) is not None:
             flags += [flag, value]
     if timeout is not None:
@@ -478,10 +460,7 @@ def _entry_agent(entry: dict, timeout: int | None, backend: str, where: str,
             errors.append(f"{where}: `timeout:` must be at least 1m here (the judge keeps 30s of it "
                           "for its usage and its copy)")
         flags += ["--timeout", str(timeout)]
-    if (command := agent_string(agent, "command", f"{where} agent", errors)) is not None:
-        flags += ["--command", command]
-    judge = {key: value for key, value in (("backend", own), ("command", command)) if value is not None}
-    return flags, judge
+    return flags, ({"cli": own} if own is not None else {})
 
 
 def _render(command: list[str], flags: list[str], text: str) -> str:
@@ -504,7 +483,7 @@ def parse_threshold(value: Any) -> float:
     return number
 
 
-def _parse_gates(value: Any, declared: dict[str, ObserveEntry], backend: str,
+def _parse_gates(value: Any, declared: dict[str, ObserveEntry], cli: str,
                  errors: list[str]) -> list[CommandSpec | MetricGate]:
     gates: list[CommandSpec | MetricGate] = []
     for index, entry in enumerate(_entries(value, "gates", errors), start=1):
@@ -542,7 +521,7 @@ def _parse_gates(value: Any, declared: dict[str, ObserveEntry], backend: str,
                     if not isinstance(entry[key], str):
                         errors.append(f"{where}: `{key}:` must be a string")
                     flags += [f"--{key}", str(entry[key])]
-            agent_flags, judge = _entry_agent(entry, timeout, backend, where, errors)
+            agent_flags, judge = _entry_agent(entry, timeout, cli, where, errors)
             if question is not None:
                 gates.append(CommandSpec(command=_render(["autohelix", "ask"], flags + agent_flags, question),
                                          timeout=timeout or ASK_TIMEOUT, label=f"ask: {' '.join(question.split())}",
@@ -566,7 +545,7 @@ def _parse_gates(value: Any, declared: dict[str, ObserveEntry], backend: str,
     return gates
 
 
-def _parse_observe(value: Any, backend: str, errors: list[str]) -> list[ObserveEntry]:
+def _parse_observe(value: Any, cli: str, errors: list[str]) -> list[ObserveEntry]:
     entries: list[ObserveEntry] = []
     names: set[str] = set()
     metric_owner: dict[str, str] = {}
@@ -630,7 +609,7 @@ def _parse_observe(value: Any, backend: str, errors: list[str]) -> list[ObserveE
             flags = ["--previous"] if previous is True else []
             for metric in metrics:  # the direction is the metric gate's, not the reviewer's
                 flags += ["--metric", metric]
-            agent_flags, judge = _entry_agent(entry, timeout, backend, where, errors)
+            agent_flags, judge = _entry_agent(entry, timeout, cli, where, errors)
             command = _render(["autohelix", "review"], flags + agent_flags, text or "")
         else:
             command = text or ""

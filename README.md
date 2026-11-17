@@ -257,8 +257,8 @@ scope:
   editable: [src/pipeline/, src/transforms/]
 
 agent:
-  backend: claude
-  model: claude-opus-4-8
+  cli: claude-code
+  model: opus
   timeout: 30m
 ```
 
@@ -349,7 +349,7 @@ Two time controls:
 
 - **`--time DURATION`** (on `run` / `resume`) — caps that command's wall clock (one segment).
   Checked before each iteration starts; doesn't interrupt one in progress.
-- **`agent.timeout`** — per-iteration deadline, a hard kill. Where the backend supports
+- **`agent.timeout`** — per-iteration deadline, a hard kill. Where the CLI supports
   it, a hook injects a countdown into the agent's context after each tool call, so it can
   wrap up and write notes before the deadline hits.
 

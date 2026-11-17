@@ -28,7 +28,7 @@ def prohibit_execution(monkeypatch):
     monkeypatch.setattr(subprocess, "run", forbidden)
 
 
-@pytest.mark.parametrize("hint", [None, "claude", "codex", "opencode", "unknown"])
+@pytest.mark.parametrize("hint", [None, "claude-code", "codex", "opencode", "unknown"])
 @pytest.mark.parametrize("backend,records,kinds,text", [
     ("codex", [
         {"type": "thread.started"},
@@ -43,7 +43,7 @@ def prohibit_execution(monkeypatch):
         {"type": "text", "part": {"text": "Validation done"}},
         {"type": "step_finish", "part": {"reason": "stop"}},
     ], [Kind.STATUS, Kind.TOOL_USE, Kind.TOOL_RESULT, Kind.ASSISTANT_TEXT, Kind.RESULT], "2 passed"),
-    ("claude", [
+    ("claude-code", [
         {"type": "system", "subtype": "init"},
         {"type": "assistant", "message": {"content": [
             {"type": "text", "text": "Validating"},

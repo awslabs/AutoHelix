@@ -153,7 +153,7 @@ and configs, and says which option you picked; you can switch at any point.
   changing project files: what it controls, why it was chosen, and how to
   adjust it, including effective defaults. It proposes a short name for the
   goal and saves the config as `autohelix/<name>.yaml` (`autohelix.yaml` for
-  the project's first config), with `agent.backend` set to that agent unless
+  the project's first config), with `agent.cli` set to that agent unless
   you decide otherwise. When you agree, it writes the config, checks it with
   `autohelix run NAME --check`, commits it, and gives the `autohelix run NAME`
   command (with a budget) for you to run; it starts a run only when asked.
@@ -228,6 +228,14 @@ tracked files. Commit the config so it's versioned, and any scripts its
 commands use: iteration copies are made from the commit. Do it before the first
 `run`: with auto landing, a later commit on the branch makes `resume` refuse
 (see [`resume`](#autohelix-resume)), leaving `run --import` or `--land manual`.
+
+While the segment runs, `run` (and `resume`) keeps the machine from sleeping:
+`caffeinate -i -w <pid>` on macOS, `systemd-inhibit` (idle and sleep) on Linux.
+The block watches the AutoHelix process, so it goes when the segment ends or
+the process is killed. Where the tool is missing or refuses (a container, no
+systemd, polkit over ssh) there is no block and no message. It doesn't keep a
+closed laptop lid from sleeping, and it keeps no credentials, SSO session or
+VPN alive.
 
 ### What it prints
 
@@ -507,15 +515,15 @@ process, a reboot, three agent failures), a stop condition or `autohelix stop`, 
 | `--land auto\|manual` | Change the run's landing mode (stored; default: keep it) |
 | `--group NAME` | Put the run in group NAME from its next iteration (stored); `--group ''` takes it out of its group |
 
-Other options as for `run`. A run always uses the config it stored when it
+Other options as for `run`, and it keeps the machine awake the same way. A run always uses the config it stored when it
 started ([Config files](#config-files)). Before spending anything, `resume`
 compares it with the config file: when the file's parsed config differs (a
 setting, or the prompt template's text), it refuses, names the settings, and
 names both ways out: `autohelix run <config> --import <id>` applies the new
 config in a new run, or restore the file to continue this one. What the run
 would do counts, not how the file says it: comments, formatting, empty values
-(`gates: []`, a key left out), a default written out (`agent: {backend:
-claude}`) and another spelling (`10m` for `600`, `- pytest` for `- command:
+(`gates: []`, a key left out), a default written out (`agent: {cli:
+claude-code}`) and another spelling (`10m` for `600`, `- pytest` for `- command:
 pytest`) are not changes. A deleted file, or a deleted prompt template, isn't a
 change: the run continues with its copy (other keys are still compared). The
 stored copy is read-only. A
@@ -844,17 +852,16 @@ The run is `--run RUN_ID`, else the [running or latest run](#which-run-a-command
 Ask an agent a yes/no question about the candidate (in a run: a fresh copy of it, with `candidate.diff`), or by hand about the current directory (the change: its working tree against HEAD).
 
 ```bash
-autohelix ask [--yes TEXT] [--no TEXT] [--rubric FILE] [--agent BACKEND] [--model MODEL] [--effort LEVEL] [--timeout DURATION] [--command PATH] -- "QUESTION"
+autohelix ask [--yes TEXT] [--no TEXT] [--rubric FILE] [--cli CLI] [--model MODEL] [--effort LEVEL] [--timeout DURATION] -- "QUESTION"
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--yes`, `--no` | What a "yes" or "no" answer means (optional; makes answers more consistent) |
 | `--rubric` | A file with criteria for the answer |
-| `--agent` | `claude` or `codex` (default: `agent.backend` from the config, else `claude`) |
-| `--model`, `--effort` | Model and reasoning effort (default: from the config's `agent:`, unless `--agent` names another backend) |
+| `--cli` | `claude-code` or `codex` (default: `agent.cli` from the config, else `claude-code`); the executable is `$AUTOHELIX_CLAUDE_CODE_CMD` or `$AUTOHELIX_CODEX_CMD`, else the name on `PATH` |
+| `--model`, `--effort` | Model and reasoning effort, passed through (default: from the config's `agent:`, unless `--cli` names another CLI) |
 | `--timeout` | How long before giving up, including the retry: a duration (`90s`, `10m`; a bare number is seconds; default 10m) |
-| `--command` | The backend's executable (default: `agent.command` from the config, unless `--agent` names another backend) |
 
 Put the question after `--`, so a question starting with `-` isn't read as an
 option. Exits **0** for yes, **1** for no and **2** if no valid answer was
@@ -866,10 +873,10 @@ stop:
   - autohelix ask -- "Is every item in SPEC.md implemented and tested?"
 ```
 
-- **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run: the run's stored config), else the config a bare `autohelix run` in the current directory would use (none, or several: the defaults): backend, command, model and effort only, never `agent.settings` or `extra_args`.
+- **The judge sees only AutoHelix's instructions.** It gets a fixed system prompt with your question and answers in a fixed JSON format; it is told to treat file contents as evidence, not instructions. Settings come from `$AUTOHELIX_CONFIG` (set during a run: the run's stored config), else the config a bare `autohelix run` in the current directory would use (none, or several: the defaults): `cli`, `model` and `effort` only, never `extra_args`. `--agent` and `--command` are gone: errors naming `--cli` and the variables.
 - **What it judges.** In a run (`$AUTOHELIX_CANDIDATE` is set, as for every command the harness runs), its own fresh copy of exactly the candidate tree, made in `$AUTOHELIX_SCRATCH` and removed afterwards, as `autohelix review` does: the complete change (new files included) is `.autohelix-iteration/candidate.diff` there, and the judge's prompt names it. Files earlier commands wrote aren't in that copy: a gate that wants one judged writes it to `$AUTOHELIX_SCRATCH` and names it by absolute path in the question (`python bench.py > "$AUTOHELIX_SCRATCH/report.txt" && autohelix ask -- "Does $AUTOHELIX_SCRATCH/report.txt show ..."`). By hand, the current directory in place; the change, named in the prompt, is its working tree against `HEAD` (computed as for `review`). Outside a git repository there is no diff: the judge judges the files as they are.
 - **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox, with `project_doc_max_bytes=0` so it loads no `AGENTS.md` from the judged files (unconfirmed against a real Codex call). OpenCode can't be used as a judge yet: it has no read-only mode.
-- **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `--cost`, and its transcript is saved with the output of the command that ran it: `.autohelix/runs/<id>/iterations/NNN/gates/<k>/ask.log` for an `ask:` gate (`stop/<k>/` for a stop command, `observe/<name>/` for an observe entry; `ask-2.log`, … for further calls). While the command runs it is written to the command's private `$AUTOHELIX_LOG_DIR`. Outside a run, a line on stderr gives the answer, the agent and where its settings came from, and the cost: `autohelix ask: yes · codex gpt-5 (autohelix/a.yaml) · $0.0120`, or `· claude (defaults: several configs here) · …`, so a by-hand answer from other settings than a run's is visible.
+- **Costs and logs.** During a run, each call's cost counts toward the iteration's cost and `--cost`, and its transcript is saved with the output of the command that ran it: `.autohelix/runs/<id>/iterations/NNN/gates/<k>/ask.log` for an `ask:` gate (`stop/<k>/` for a stop command, `observe/<name>/` for an observe entry; `ask-2.log`, … for further calls). While the command runs it is written to the command's private `$AUTOHELIX_LOG_DIR`. Outside a run, a line on stderr gives the answer, the agent and where its settings came from, and the cost: `autohelix ask: yes · codex gpt-5 (autohelix/a.yaml) · $0.0120`, or `· claude-code (defaults: several configs here) · …`, so a by-hand answer from other settings than a run's is visible.
 - An invalid answer or failed call is retried once. The command stays inside the timeout of the command that runs it.
 - **Scripts own the exit code.** `ask` exits non-zero when it can't answer; a script that swallows that (`autohelix ask ... || true`) and exits 0 passes.
 - **One write guard.** Each call fingerprints the judged files first (git's tracked and non-ignored untracked files, modes, symlinks and submodule contents; outside a repository, every file but cache folders); only the call's own transcript and the usage file may change. If the call changes or adds one, it ends without retry and `ask` exits 2. In a run that write was in the judge's own copy, so it never reaches the candidate.
@@ -880,17 +887,16 @@ stop:
 Review a change with a read-only agent; prints the review as feedback.
 
 ```bash
-autohelix review [--previous] [--metric NAME]... [--agent BACKEND] [--model MODEL] [--effort LEVEL] [--timeout DURATION] [--command PATH] [--base REV] -- "PROMPT"
+autohelix review [--previous] [--metric NAME]... [--cli CLI] [--model MODEL] [--effort LEVEL] [--timeout DURATION] [--base REV] -- "PROMPT"
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--previous` | In a run: include this entry's own review from the last accepted iteration |
 | `--metric NAME` | A number the review must report (repeatable). Which way is better is the config's business (a `review:` entry's `metrics:`); `NAME:higher` is an error naming `--metric NAME` |
-| `--agent` | `claude` or `codex` (default: `agent.backend` from the config, else `claude`) |
-| `--model`, `--effort` | Model and reasoning effort (default: from the config's `agent:`, unless `--agent` names another backend) |
+| `--cli` | `claude-code` or `codex` (default: `agent.cli` from the config, else `claude-code`); the executable is `$AUTOHELIX_CLAUDE_CODE_CMD` or `$AUTOHELIX_CODEX_CMD`, else the name on `PATH` |
+| `--model`, `--effort` | Model and reasoning effort, passed through (default: from the config's `agent:`, unless `--cli` names another CLI) |
 | `--timeout` | How long before giving up, including the retry: a duration (default: the command's deadline in a run, else 30m) |
-| `--command` | The backend's executable (default: `agent.command` from the config, unless `--agent` names another backend) |
 | `--base REV` | By hand: the commit the working tree is compared with (default `HEAD`) |
 
 PROMPT is the review request; put it after `--`. A `review:` entry in

@@ -116,9 +116,9 @@ def write_report(config: Config, project: Path, console, *, run_id: str, _owned:
     draft.unlink(missing_ok=True)
     last = History(project, paths.run_id).get_last_iteration()
 
-    # The run's agent settings (extra_args, settings, reasoning_effort too), within the cap.
+    # The run's agent settings (model, effort, extra_args too), within the cap.
     agent = create_agent(dataclasses.replace(
-        config.agent, timeout=min(config.agent.timeout or TIMEOUT_SECONDS, TIMEOUT_SECONDS), require_notes=None,
+        config.agent, timeout=min(config.agent.timeout or TIMEOUT_SECONDS, TIMEOUT_SECONDS),
     ), heartbeat_seconds=30)
     log_path = paths.logs / "report.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)

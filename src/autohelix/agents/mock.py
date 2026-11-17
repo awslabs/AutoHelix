@@ -23,7 +23,7 @@ class MockAgent:
     Useful for integration tests that need to exercise the full harness loop
     (copies, gate checking, accepting) without invoking a real LLM.
 
-    Config settings:
+    Knobs (`agent.mock:`, accepted with `cli: mock` only):
         change_file: File to modify (default: "mock_change.txt")
         change_content: Content to write (default: "Mock iteration {iteration}")
         should_fail: If True, returns failure (default: False)
@@ -51,7 +51,7 @@ class MockAgent:
         event_callback: EventCallback,
         project_path: Path | None = None,
     ) -> AgentRunResult:
-        settings = self.config.settings
+        settings = self.config.mock
 
         # Emit some events for realism
         event_callback(AgentEvent(kind=AgentEventKind.STATUS, text="mock agent starting"))

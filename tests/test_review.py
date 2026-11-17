@@ -29,7 +29,7 @@ def make_repo(path: Path) -> Path:
 
 def mock_config(path: Path, **settings) -> None:
     (path / "autohelix.yaml").write_text(
-        "goal: g\nagent:\n  backend: mock\n  settings: " + json.dumps(settings) + "\n")
+        "goal: g\nagent:\n  cli: mock\n  mock: " + json.dumps(settings) + "\n")
 
 
 def invoke(args, cwd: Path, monkeypatch):
@@ -117,7 +117,7 @@ def test_budget(monkeypatch):
 
 
 def test_judge_config_takes_the_review_schema():
-    config = judge_config(AgentConfig(backend="claude"), schema=review_schema(["m"]), default_timeout=1800)
+    config = judge_config(AgentConfig(cli="claude-code"), schema=review_schema(["m"]), default_timeout=1800)
     assert config.output_schema == review_schema(["m"]) and config.timeout == 1800 and config.read_only
 
 
@@ -267,9 +267,9 @@ def test_double_dash_makes_an_option_like_prompt_the_prompt(tmp_path, monkeypatc
 
 
 def test_opencode_is_refused(tmp_path, monkeypatch):
-    result = invoke(["--agent", "opencode", "--", "Check it."], tmp_path, monkeypatch)
-    assert result.exit_code == 2 and "Invalid value for '--agent'" in result.stderr  # not offered at all
-    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  backend: opencode\n")
+    result = invoke(["--cli", "opencode", "--", "Check it."], tmp_path, monkeypatch)
+    assert result.exit_code == 2 and "Invalid value for '--cli'" in result.stderr  # not offered at all
+    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  cli: opencode\n")
     assert invoke(["--", "Check it."], tmp_path, monkeypatch).exit_code == 2
 
 
@@ -297,23 +297,24 @@ def test_timeout_takes_a_duration_and_mock_isnt_offered(tmp_path, monkeypatch, c
         raise KeyboardInterrupt
 
     monkeypatch.setattr("autohelix.judge.create_agent", agent)
-    result = CliRunner().invoke(cli_main, [command, "--agent", "mock", "--timeout", "2m", "--", "Q?"])
+    result = CliRunner().invoke(cli_main, [command, "--cli", "mock", "--timeout", "2m", "--", "Q?"])
     assert result.exit_code == 130 and 0 < seen[0] <= 120
     bad = CliRunner().invoke(cli_main, [command, "--timeout", "soon", "--", "Q?"])
     assert bad.exit_code == 2 and "is not a duration" in bad.output
     usage = CliRunner().invoke(cli_main, [command, "--help"]).output
-    assert "[claude|codex]" in usage and "mock" not in usage
+    assert "[claude-code|codex]" in usage and "mock" not in usage
+    assert "--agent" not in usage and "--command" not in usage
 
 
 def test_agent_overrides_reach_the_reviewer(tmp_path, monkeypatch):
-    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  backend: claude\n  model: m\n  command: /bin/c\n")
+    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  cli: claude-code\n  model: m\n")
     reviewer = Recorder()
     monkeypatch.setattr("autohelix.judge.create_agent", reviewer)
-    result = invoke(["--agent", "codex", "--model", "x", "--effort", "high", "--timeout", "50s", "--metric",
+    result = invoke(["--cli", "codex", "--model", "x", "--effort", "high", "--timeout", "50s", "--metric",
                      "n", "--", "Check."], tmp_path, monkeypatch)
     assert result.exit_code == 2  # the fake reviewer's reply has no "n"
     config = reviewer.calls[0]["config"]
-    assert (config.backend, config.model, config.reasoning_effort, config.command) == ("codex", "x", "high", None)
+    assert (config.cli, config.model, config.effort) == ("codex", "x", "high")
     assert config.timeout <= 50 and config.read_only and config.output_schema == review_schema(["n"])
 
 
@@ -356,7 +357,7 @@ def candidate(tmp_path, monkeypatch):
     scratch.mkdir()
     usage = tmp_path / "usage.jsonl"
     config = tmp_path / "autohelix.yaml"
-    config.write_text("goal: g\nagent:\n  backend: mock\n")
+    config.write_text("goal: g\nagent:\n  cli: mock\n")
     for name, value in (("AUTOHELIX_CANDIDATE", tree), ("AUTOHELIX_BASE", base), ("AUTOHELIX_PROJECT", str(repo)),
                         ("AUTOHELIX_SCRATCH", str(scratch)), ("AUTOHELIX_USAGE_FILE", str(usage)),
                         ("AUTOHELIX_LOG_DIR", str(tmp_path / "logs")), ("AUTOHELIX_CONFIG", str(config))):
@@ -446,7 +447,7 @@ def test_previous_review_is_given_as_a_file(candidate, monkeypatch):
 
 
 def test_harness_reviewer_writing_a_file_fails_the_call(candidate, monkeypatch):
-    candidate.config.write_text("goal: g\nagent:\n  backend: mock\n  settings:\n    judge_change_file: planted.md\n")
+    candidate.config.write_text("goal: g\nagent:\n  cli: mock\n  mock:\n    judge_change_file: planted.md\n")
     result = invoke(["--", "Check it."], candidate.cwd, monkeypatch)
     assert result.exit_code == 2
     assert "the reviewer changed files: planted.md" in result.stderr
@@ -464,7 +465,7 @@ def test_harness_requires_its_variables(candidate, monkeypatch):
 
 
 def test_harness_metric_from_the_mock_backend(candidate, monkeypatch):
-    candidate.config.write_text("goal: g\nagent:\n  backend: mock\n  settings:\n"
+    candidate.config.write_text("goal: g\nagent:\n  cli: mock\n  mock:\n"
                                 "    review_text: ok\n    review_metrics: {missing: 2}\n    cost_usd: 0.05\n")
     result = invoke(["--metric", "missing", "--", "Check it."], candidate.cwd, monkeypatch)
     assert result.exit_code == 0, result.stderr
@@ -580,7 +581,7 @@ def test_any_parse_exception_still_records_the_call(tmp_path, monkeypatch):
         raise ValueError("parser bug")
 
     with pytest.raises(ValueError, match="parser bug"):
-        call_judge(tmp_path, judge_config(AgentConfig(backend="claude")), source="review", record={},
+        call_judge(tmp_path, judge_config(AgentConfig(cli="claude-code")), source="review", record={},
                    prompt="P", parse=parse, budget=60)
     [call] = read_usage(usage)
     assert call["status"] == "error" and "parser bug" in call["error"] and call["cost_usd"] == 0.01
@@ -634,7 +635,7 @@ def test_launcher_is_immune_to_the_command_environment(tmp_path):
     (evil / "yaml.py").write_text(EVIL_YAML)
     (evil / "click.py").write_text(EVIL_YAML)
     config = tmp_path / "autohelix.yaml"
-    config.write_text("goal: g\nagent:\n  backend: mock\n  settings: {review_metrics: {missing: 7}}\n")
+    config.write_text("goal: g\nagent:\n  cli: mock\n  mock: {review_metrics: {missing: 7}}\n")
     bin_dir = write_launcher(tmp_path / "bin")
     launcher = bin_dir / "autohelix"
     assert launcher.stat().st_mode & 0o777 == 0o500
@@ -668,8 +669,8 @@ def test_harness_commands_run_autohelix_through_the_launcher(tmp_path, monkeypat
     (project / "autohelix.yaml").write_text("""
 goal: g
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     judge_answer: "no"
     review_metrics: {missing: 7}

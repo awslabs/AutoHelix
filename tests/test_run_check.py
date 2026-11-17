@@ -36,15 +36,19 @@ def test_a_named_config_is_checked(project):
 
 @pytest.mark.parametrize(("values", "message"), [
     ({"stops": ["true"]}, "Unknown config key 'stops' - possible typo?"),
-    ({"agent": {"backend": "mock", "command": ["claude", "-v"]}}, "agent.command must be a non-empty string"),
-    ({"agent": {"backend": "claude", "command": "/nonexistent-agent"}},
+    ({"agent": {"cli": "mock", "model": ["m"]}}, "agent.model must be a non-empty string"),
+    ({"agent": {"cli": "mock", "command": "/opt/claude"}}, "`agent.command` is gone: set AUTOHELIX_CLAUDE_CODE_CMD"),
+    ({"agent": {"cli": "claude-code"}, "env": "/nonexistent-agent"},
      "Agent command '/nonexistent-agent' not found in PATH"),
     ({"prompt_template": "p.md"}, "prompt_template p.md, line 1: Unexpected end of template"),
 ])
-def test_what_run_would_refuse_fails_the_check(project, values, message):
+def test_what_run_would_refuse_fails_the_check(project, values, message, monkeypatch):
     """These passed the setup skill's old Python check (a warning or nothing) and then
     failed `run` (or, for the template, reached the agent)."""
     (project / "p.md").write_text("{% if hints %}\n")
+    values = dict(values)
+    if "env" in values:
+        monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", values.pop("env"))
     configure(project, **values)
     before = _snapshot(project)
     result = cli(project, "run", "--check")

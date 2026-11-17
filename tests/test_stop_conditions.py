@@ -34,8 +34,8 @@ def _configure(project, extra: str) -> None:
 goal: Test stop conditions
 
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     change_content: "# iteration {{iteration}}"
 

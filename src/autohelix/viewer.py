@@ -284,7 +284,7 @@ class RunData:
             summary["template"] = {"file": config_relative(self.project, config.prompt_template), "text": text}
         if config:
             summary.update(
-                agent=" · ".join(filter(None, [config.agent.backend, config.agent.model])),
+                agent=" · ".join(filter(None, [config.agent.cli, config.agent.model])),
                 gates=[gate.text for gate in config.gates],
                 observe=[{"name": entry.name, "review": entry.review is not None, "metrics": entry.metrics}
                          for entry in config.observe],

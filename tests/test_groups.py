@@ -47,7 +47,7 @@ def watch_agent(harness, monkeypatch, seen):
 
 def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, monkeypatch):
     configure(project, observe=[{"name": "bench", "command": "echo '##autohelix[score=3.5]'", "metrics": {"score": "higher"}}],
-              agent={"backend": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
+              agent={"cli": "mock", "mock": {"change_file": "code.py", "change_content": "# {iteration}",
                                                   "notes_content": "tried {iteration}"}})
     first = Harness(project, new=True, group="g")
     first.run(Budget(until=1), report=False)
@@ -157,7 +157,7 @@ def test_the_group_is_in_the_json_and_the_runs_view(project):
 
 
 def test_notes_are_saved_as_versions_and_delete_removes_them(project):
-    configure(project, agent={"backend": "mock", "settings": {"change_file": "code.py",
+    configure(project, agent={"cli": "mock", "mock": {"change_file": "code.py",
                                                            "change_content": "# {iteration}",
                                                            "notes_content": "note {iteration}"}})
     paths, _ = started(project, "--group", "g")

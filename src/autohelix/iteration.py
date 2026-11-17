@@ -178,6 +178,19 @@ def save_notes(paths: RunPaths, copy, iteration: int) -> None:
 REJECTED_PATCH_LIMIT = 2 * 1024 * 1024  # bytes; larger rejected changes are named, not written
 
 
+def _remove_file(root: Path, name: str) -> bool:
+    """Remove `root/name` if it is a file (or a symlink) reached without following a
+    symlink inside `root`; returns whether it did."""
+    path = root / name
+    parents = Path(name).parents
+    if any((root / parent).is_symlink() for parent in parents if parent != Path(".")):
+        return False
+    if not path.is_symlink() and not path.is_file():
+        return False
+    path.unlink()
+    return True
+
+
 class IterationWorkspace:
     """Create, snapshot, evaluate and publish one iteration's candidate."""
 
@@ -205,6 +218,7 @@ class IterationWorkspace:
                         if not self.imported or paths.run_id != self.imported[0].run_id]
         self.refs = (run.paths.ref, *(paths.ref for paths, _ in self.others))
         self._call_folders: list[Path] = []
+        self._hidden: list[str] = []  # repository-relative names `agent_copy` removed
 
     @property
     def others(self) -> list[tuple[RunPaths, dict]]:
@@ -217,9 +231,14 @@ class IterationWorkspace:
         self.copies.append(copy)
         return copy
 
-    def agent_copy(self) -> Copy:
-        """A's files with agent-facing material seeded under `.autohelix-iteration/`."""
+    def agent_copy(self, hidden=()) -> Copy:
+        """A's files with agent-facing material seeded under `.autohelix-iteration/`, and
+        without the files `hidden` names (project-relative: the config and its template,
+        `Config.protected`) where they are in the tree. They are frozen, so a removal
+        never reaches T (`snapshot` resets it) and isn't reported as discarded."""
         self.agent = self._copy("agent", self.base, self.base, watched=False)
+        self._hidden = [name for name in dict.fromkeys(f"{self.repo.prefix}{name}" for name in hidden)
+                        if _remove_file(self.agent.path, name)]
         prepare_state(self._run.paths, self.agent, members=self.others, before=self.iteration)
         self._write_rejected_patch()
         return self.agent
@@ -299,6 +318,9 @@ class IterationWorkspace:
         copy = self.agent
         try:
             tree, discarded = copy.snapshot(scope)
+            # A hidden file still absent is the harness's removal, not the agent's change.
+            discarded = [name for name in discarded
+                         if name not in self._hidden or os.path.lexists(copy.path / name)]
             # One pin keeps the frozen tree alive; the next freeze overwrites it.
             self.repo.git("update-ref", self._run.paths.pin, tree)
             if pinned:
