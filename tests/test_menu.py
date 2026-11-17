@@ -17,11 +17,24 @@ OPTIONS = [("With Claude Code", "it asks"), ("Empty config", "the template"), ("
     (b"\x1b[A", 1, ("move", 0)), (b"k", 0, ("move", 0)), (b"\x1bOA", 2, ("move", 1)),
     (b"\r", 2, ("pick", 2)), (b"\n", 0, ("pick", 0)), (b"2", 0, ("pick", 1)),
     (b"9", 0, ("stay", 0)), (b"x", 1, ("stay", 1)),
-    (b"\x1b", 1, ("leave", -1)), (b"", 0, ("leave", -1)), (b"\x03", 0, ("leave", -1)),
-    (b"q", 1, ("quit", -1)), (b"Q", 0, ("quit", -1)),
+    (b"", 0, ("leave", -1)), (b"\x04", 0, ("leave", -1)),
+    (b"q", 1, ("quit", -1)), (b"Q", 0, ("quit", -1)), (b"\x1b", 1, ("quit", -1)),
 ])
 def test_step(key, current, expected):
     assert menu.step(key, current, 3) == expected
+
+
+def test_ctrl_c_as_a_key_interrupts():
+    with pytest.raises(KeyboardInterrupt):
+        menu.step(b"\x03", 0, 3)
+
+
+def test_a_detail_that_does_not_fit_whole_is_left_out():
+    options = [("Ask", "it summarizes them"), ("Set up a new one", "it drafts")]
+    assert click.unstyle(menu.option_line(options, 0, 0, 80)) == "  ❯ Ask                it summarizes them"
+    assert click.unstyle(menu.option_line(options, 0, 0, 41)) == "  ❯ Ask                it summarizes them"
+    assert click.unstyle(menu.option_line(options, 0, 0, 40)) == "  ❯ Ask             "
+    assert click.unstyle(menu.option_line(options, 1, 0, 40)) == "    Set up a new one   it drafts"
 
 
 def test_without_a_terminal_a_numbered_prompt_asks(monkeypatch):

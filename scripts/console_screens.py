@@ -167,8 +167,11 @@ class Screen(pyte.Screen):
 def run_in_pty(argv, cwd, env, width, *, keys=(), frame_when=None, timeout=180):
     """Run argv under a pty of `width` columns; return (final screen, live frame, exit code).
 
-    keys: (delay seconds, bytes) sent after the process starts. frame_when: a function
-    returning True when the live frame should be taken (checked between reads)."""
+    keys: (when, bytes), sent in order: `when` is a delay in seconds after the previous
+    key (the first: after the start), or text to wait for on the screen (the entry
+    screen drops keys typed before its menu is drawn). frame_when: a function of the
+    screen's text returning True when the live frame should be taken (checked between
+    reads)."""
     screen = Screen(width, ROWS)
     stream = pyte.ByteStream(screen)
     pid, fd = pty.fork()
@@ -177,11 +180,13 @@ def run_in_pty(argv, cwd, env, width, *, keys=(), frame_when=None, timeout=180):
         os.execve(argv[0], argv, env)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, width, 0, 0))
     start, live, pending = time.monotonic(), None, list(keys)
-    code = None
+    code, last_key = None, start
     while True:
         elapsed = time.monotonic() - start
-        while pending and elapsed >= pending[0][0]:
+        while pending and (pending[0][0] in plain(snapshot(screen)) if isinstance(pending[0][0], str)
+                           else time.monotonic() - last_key >= pending[0][0]):
             os.write(fd, pending.pop(0)[1])
+            last_key = time.monotonic()
         if elapsed > timeout:
             os.kill(pid, 9)
         ready, _, _ = select.select([fd], [], [], 0.05)
@@ -193,7 +198,7 @@ def run_in_pty(argv, cwd, env, width, *, keys=(), frame_when=None, timeout=180):
             if not data:
                 break
             stream.feed(data)
-        if live is None and frame_when and frame_when():
+        if live is None and frame_when and frame_when(plain(snapshot(screen))):
             live = snapshot(screen)
         done, status = os.waitpid(pid, os.WNOHANG)
         if done:
@@ -213,14 +218,12 @@ def run_in_pty(argv, cwd, env, width, *, keys=(), frame_when=None, timeout=180):
     return snapshot(screen), live, code
 
 
-def after(seconds: float):
-    """A `frame_when` that is true `seconds` after its first call (the process's start)."""
-    start = []
+MENU = "(q: quit)"  # the last line the entry screen's menu draws
 
-    def ready() -> bool:
-        start.append(time.monotonic())
-        return time.monotonic() - start[0] >= seconds
-    return ready
+
+def showing(*texts: str):
+    """A `frame_when` that is true once the screen shows all of `texts`."""
+    return lambda text: all(t in text for t in texts)
 
 
 def snapshot(screen: pyte.Screen) -> list[list]:
@@ -327,7 +330,7 @@ def main() -> int:
                 mark = root / "mark"
                 env["SCREENS_MARK"] = str(mark)
 
-                def mid_iteration_3():
+                def mid_iteration_3(text):
                     # iteration 2's gate has run: iteration 3's agent is now working (2.5s)
                     if not mark.exists() or "2" not in mark.read_text().split():
                         return False
@@ -352,29 +355,30 @@ def main() -> int:
                 run_in_pty([*cli, "run", "-n", "3", "--no-report"], project, env, width,
                            keys=[(4.0, b"\x03")], timeout=60)
                 # With runs, as drawn while choosing; q quits (exit 0).
-                _, live, code = run_in_pty([*cli], project, env, width, keys=[(3.0, b"q")],
-                                           frame_when=after(2.5), timeout=30)
+                _, live, code = run_in_pty([*cli], project, env, width, keys=[(MENU, b"q")],
+                                           frame_when=showing(MENU), timeout=30)
                 record(f"entry-runs-{width}", live or [], width, f"autohelix · runs (then q) · {width} cols", code)
                 # The same, Enter: the first option starts the (fake) agent with its first prompt.
-                final, _, code = run_in_pty([*cli], project, env, width, keys=[(2.5, b"\r")], timeout=30)
+                final, _, code = run_in_pty([*cli], project, env, width, keys=[(MENU, b"\r")], timeout=30)
                 record(f"entry-ask-{width}", final, width, f"autohelix · runs, Enter · {width} cols", code)
                 # Two agents: the labels say "an agent", then "Which agent?"; q there quits.
                 two = environment(root, width, ("claude", "codex"))
                 _, live, code = run_in_pty([*cli], project, two, width,
-                                           keys=[(2.5, b"\x1b[B"), (3.0, b"\r"), (4.5, b"q")],
-                                           frame_when=after(4.0), timeout=30)
+                                           keys=[(MENU, b"\x1b[B"), (0.5, b"\r"), ("Which agent?", b"q")],
+                                           frame_when=showing("Which agent?", MENU), timeout=30)
                 record(f"entry-agents-{width}", live or [], width,
                        f"autohelix · two agents, ↓ Enter (then q) · {width} cols", code)
 
                 configs = make_project(root, "half-done", True)  # autohelix.yaml, no runs yet
-                _, live, code = run_in_pty([*cli], configs, env, width, keys=[(3.0, b"q")],
-                                           frame_when=after(2.5), timeout=30)
+                _, live, code = run_in_pty([*cli], configs, env, width, keys=[(MENU, b"q")],
+                                           frame_when=showing(MENU), timeout=30)
                 record(f"entry-config-{width}", live or [], width,
                        f"autohelix · a config, no runs (then q) · {width} cols", code)
 
                 empty = make_project(root, "new-project", False)
                 (empty / "src").mkdir()  # started below the top: the project is the checkout's top
-                final, _, code = run_in_pty([*cli], empty / "src", env, width, keys=[(2.5, b"\r")], timeout=30)
+                final, _, code = run_in_pty([*cli], empty / "src", env, width, keys=[("Enter/q", b"\r")],
+                                            timeout=30)
                 record(f"entry-new-{width}", final, width, f"autohelix · nothing yet, Enter · {width} cols", code)
 
                 outside = root / "not-git"

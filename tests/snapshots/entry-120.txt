@@ -9,7 +9,7 @@
     spent 38m 43s · $2.65
   0mws sorting  interrupted            7/7  57,520.8  landed     Nov 13        Make sort_list faster in sort.py.
     spent 38m 43s · $2.65
-  c9d1 sorting  stopped unexpectedly   7/7  57,520.8  landed     Nov 12        Make sort_list faster in sort.py.
+  c9d1 sorting  stopped unexpectedly   7/7  57,520.8  2 to land  Nov 12        Make sort_list faster in sort.py.
     spent 38m 43s · $2.65
 
   m2xq  running · iteration 4               next: autohelix view m2xq

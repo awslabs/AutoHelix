@@ -57,8 +57,8 @@ def main(ctx: click.Context):
     if ctx.invoked_subcommand is not None:
         return
     if not _interactive():  # a script, a pipe, an agent's shell tool: the help, as without a subcommand
-        click.echo(ctx.get_help())
-        click.echo(f"\n{START_HINT}")
+        click.echo(ctx.get_help(), err=True)
+        click.echo(f"\n{START_HINT}", err=True)
         ctx.exit(2)
     _entry(ctx)
 
@@ -211,12 +211,16 @@ def _checkout_top(folder: Path) -> Path | None:
 def entry_project(folder: Path) -> Path | None:
     """The project bare `autohelix` shows: the folder `runs.find_project` picks when it
     finds runs (`folder` or the nearest one above it with runs, within the checkout),
-    else the top of the git checkout; None outside a checkout."""
+    else `folder` or the nearest one above it with a config (where `autohelix run`
+    would find one), else the top of the git checkout; None outside a checkout."""
     top = _checkout_top(folder)
     if top is None:
         return None
     found = find_project(folder)
-    return found if RunPaths(found).runs.is_dir() else top
+    if RunPaths(found).runs.is_dir():
+        return found
+    return next((candidate for candidate in (folder, *folder.parents)
+                 if candidate.is_relative_to(top) and project_configs(candidate)), top)
 
 
 def _home(path: Path) -> str:
@@ -231,9 +235,9 @@ def _unrun(configs: list[str], runs: list[dict]) -> list[str]:
 
 
 def entry_options(agents: list[str], has_runs: bool, unrun: list[str]) -> list[tuple[str, str, str]]:
-    """The entry screen's options, (pick, label, detail): with runs, ask about them or set
-    up a new experiment; with configs but no runs, check and finish them or set up a new
-    one; else none (`entry_question` asks instead). With several agents the labels say
+    """The entry screen's options, (pick, label, detail): with current (non-archived)
+    runs, ask about them or set up a new experiment; with configs no run was started
+    from, check and finish them or set up a new one; else none (`entry_question` asks instead). With several agents the labels say
     "an agent" (`Which agent?` follows)."""
     who = AGENTS[agents[0]] if len(agents) == 1 else "an agent"
     new = ("new", f"Set up a new experiment with {who}", "it drafts a config with you")
@@ -274,7 +278,7 @@ def first_prompt(agent: str, project: Path, pick: str, runs: list[dict], configs
     current = run_table.current_runs(runs)
     archived = len(runs) - len(current)
     unrun = _unrun(configs, runs)
-    options = {p: label for p, label, _ in entry_options([agent], bool(runs), unrun)} or \
+    options = {p: label for p, label, _ in entry_options([agent], bool(current), unrun)} or \
         {"new": entry_question([agent]).rstrip("?")}
     other = next((label for p, label in options.items() if p != pick), "")
     parts = [f"Read `{skill_dir / 'SKILL.md'}` and follow it: you are helping me with AutoHelix in this "
@@ -284,11 +288,11 @@ def first_prompt(agent: str, project: Path, pick: str, runs: list[dict], configs
              + (f"; its user docs are in `{docs}`: read them when needed." if docs else ".")]
     if git:
         problem, fix = git
-        parts.append(f"Git: {problem}" + (f" (`{fix}` fixes it)" if fix else "")
-                     + " `autohelix run` refuses until that is fixed.")
+        parts.append(f"Git: {problem.removesuffix('.')}" + (f" (`{fix}` fixes it)" if fix else "")
+                     + ". `autohelix run` refuses until that is fixed.")
     if current:
         listed = "\n".join(_run_line(run) for run in current)
-        parts.append(f"The project's runs (most recent first; `{cli} view ID --json` and "
+        parts.append(f"The project's runs (live ones first, then by last activity; `{cli} view ID --json` and "
                      f".autohelix/runs/ID/ have their records):\n{listed}"
                      + (f"\n({archived} archived, not listed: `{cli} dashboard --json` has them.)" if archived else ""))
     elif archived:
@@ -310,7 +314,7 @@ def first_prompt(agent: str, project: Path, pick: str, runs: list[dict], configs
     if pick == "ask":
         parts.append("My first request: tell me about these runs. Open with a short summary of the live runs plus "
                      "the most recent one: what was accepted, what was rejected and why, anything odd. Take it from "
-                     "the records, then answer my questions from them. Send `autohelix hint` or `autohelix stop` "
+                     f"the records, then answer my questions from them. Send `{cli} hint` or `{cli} stop` "
                      "(or anything else that changes a run) only when I ask.")
     elif pick == "finish":
         command = run_command(unrun[0]) if len(unrun) == 1 else "autohelix run NAME"
@@ -330,9 +334,23 @@ def first_prompt(agent: str, project: Path, pick: str, runs: list[dict], configs
     return "\n\n".join(parts)
 
 
+def _interruptible(command):
+    """`run`/`resume` and the entry screen: Ctrl-C at any point (the checks before the
+    segment, preflight's agent commands, the segment; the screen's questions) exits 130,
+    not click's "Aborted!" (1)."""
+    @functools.wraps(command)
+    def wrapper(*args, **kwargs):
+        try:
+            return command(*args, **kwargs)
+        except KeyboardInterrupt:
+            raise SystemExit(130) from None
+    return wrapper
+
+
+@_interruptible
 def _entry(ctx: click.Context) -> None:
     """Bare `autohelix` in a terminal: the project's runs and one question; an agent
-    session starts only on a keypress (q quits)."""
+    session starts only on a keypress (q or Esc quits, Ctrl-C exits 130)."""
     from rich.console import Console
 
     from autohelix import menu, terminal
@@ -346,20 +364,20 @@ def _entry(ctx: click.Context) -> None:
         console.print()
         terminal.print_lines(console, run_table.outside_lines(_home(folder), problem, fix, console.width))
         ctx.exit(1)
-    data = ProjectRuns(project).runs()
-    runs = data["runs"]
-    configs = project_configs(project)
     git = _git_problem(project)
     console.print()
-    terminal.print_lines(console, run_table.entry_lines(data, _home(project), console.width,
-                                                        git and (git[0], "yellow")))
+    terminal.print_lines(console, run_table.entry_header(_home(project), console.width, git and (git[0], "yellow")))
+    data = ProjectRuns(project).runs()  # can take seconds: the header is up meanwhile
+    runs = data["runs"]
+    configs = project_configs(project)
+    terminal.print_lines(console, run_table.entry_lines(data, console.width))
     found = _found_agents()
     if not found:
         terminal.warn(console, "No coding agent found to start: install Claude Code (`claude`), Codex (`codex`) "
                       "or OpenCode (`opencode`). To write a config by hand, start from the packaged template "
                       f"({TEMPLATE}) or getting-started.md" + (f" in {docs_dir()}" if docs_dir() else "") + ".")
         ctx.exit(1)
-    options = entry_options(found, bool(runs), _unrun(configs, runs))
+    options = entry_options(found, bool(run_table.current_runs(runs)), _unrun(configs, runs))
     console.print()
     try:
         if options:
@@ -581,18 +599,6 @@ def _last_iteration(project: Path, config: Path | None, run_id: str | None) -> i
     except (RuntimeError, ValueError):
         return -1
     return History(project, planned.run_id).get_last_iteration() if planned else -1
-
-
-def _interruptible(command):
-    """`run`/`resume`: Ctrl-C at any point (the checks before the segment, preflight's
-    agent commands, the segment) exits 130, not click's "Aborted!" (1)."""
-    @functools.wraps(command)
-    def wrapper(*args, **kwargs):
-        try:
-            return command(*args, **kwargs)
-        except KeyboardInterrupt:
-            raise SystemExit(130) from None
-    return wrapper
 
 
 def _segment(harness: Harness, budget: Budget, report: bool) -> None:

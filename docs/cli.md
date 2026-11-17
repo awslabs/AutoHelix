@@ -6,7 +6,8 @@ Commands that read runs (`resume`, `stop`, `land`, `archive`, `delete`, `hint`,
 folder has no runs (`.autohelix/runs/`), they use the nearest folder above it,
 up to the top of its git checkout, that has, and say so ("Using project
 ../.."). `run` takes the folder as given; bare [`autohelix`](#autohelix) uses
-the folder with runs, else the top of the git checkout.
+the folder with runs, else the nearest one with a config, else the top of the
+git checkout.
 
 ### Which run a command acts on
 
@@ -88,11 +89,15 @@ autohelix
 
 The project is the folder with runs (the current folder or the nearest one
 above it with `.autohelix/runs/`, within the git checkout, as for `view` and
-`dashboard`), else the top of the git checkout, whichever subfolder you are
-in. The screen has a header (the version and the project), the project's
+`dashboard`), else the current folder or the nearest one above it with a
+config (`autohelix.yaml` or `autohelix/*.yaml`, the folder `autohelix run`
+there would use), else the top of the git checkout, whichever subfolder you
+are in. The screen has a header (the version and the project), the project's
 current runs as the [dashboard](#autohelix-dashboard) draws them, under them
-the command that applies to each run (`view` a live run, `land` waiting
-commits, `resume` one that stopped before its end), how many runs are
+the command that applies to each run (`view` a live run, `resume` one that
+stopped before its end, `land` waiting commits; an interrupted run or one that
+stopped unexpectedly gets `resume` even with commits to land, which an
+auto-landing resume lands), how many runs are
 archived, and a pointer to `autohelix --help`:
 
 ```
@@ -115,15 +120,16 @@ archived, and a pointer to `autohelix --help`:
 ```
 
 Choose with ↑/↓ and Enter, or an option's number; Enter alone takes the first,
-q quits (exit 0), Esc or Ctrl-C cancels (exit 1). Nothing starts without a key
+q or Esc quits (exit 0), Ctrl-C interrupts (exit 130). Keys typed before the
+screen is drawn are dropped. Nothing starts without a key
 press, so `autohelix` is also a quick look at a project. The question depends
 on what the project has:
 
 | The project has | The question |
 |---|---|
-| runs (also when all are archived: "no current runs, 2 archived") | Ask *agent* about these runs / Set up a new experiment with *agent* |
+| runs that aren't archived | Ask *agent* about these runs / Set up a new experiment with *agent* |
 | configs, no runs (a hand-written or half-finished `autohelix.yaml`) | autohelix.yaml, no runs yet: check and finish it with *agent* / Set up a new experiment with *agent* |
-| neither | Set up an experiment with *agent*? Enter/q |
+| neither (archived runs aside: "no current runs, 2 archived") | Set up an experiment with *agent*? Enter/q |
 
 With several agents installed (looked for in the order `claude`, `codex`,
 `opencode`), the labels say "an agent" and "Which agent?" follows, every
@@ -158,10 +164,10 @@ the installed AutoHelix (`autohelix skill install` puts a copy where your own
 agent sessions find it). Without a terminal (a script, a pipe, an agent's
 shell tool), `autohelix` prints the help, adds "Run `autohelix` in a terminal
 to start.", and exits 2. All screens are drawn in
-[tests/snapshots/](../tests/snapshots/) (`entry-*.txt`).
+[tests/snapshots/](https://github.com/awslabs/AutoHelix/tree/main/tests/snapshots) (`entry-*.txt`).
 
 To write a config by hand instead, start from an
-[example](../examples/), the configs in [Getting Started](getting-started.md)
+[example](https://github.com/awslabs/AutoHelix/tree/main/examples), the configs in [Getting Started](getting-started.md)
 and [Configuration](config.md), or the commented template shipped in the
 package (`autohelix/templates/config_template.yaml`); `autohelix run` without a
 config names all three.
@@ -278,7 +284,7 @@ type next and the files written. `resume` shows the baseline and the last 5 rows
 Wide terminals (where a reason still fits after the values) space the columns out;
 at 80 columns they are as above. Narrower terminals drop the cost column, then the changes. Without a terminal (a
 pipe, a log file) or colours there is no mark and no live row. The renders at 80 and
-120 columns are in [`tests/snapshots/`](../tests/snapshots/).
+120 columns are in [`tests/snapshots/`](https://github.com/awslabs/AutoHelix/tree/main/tests/snapshots).
 
 ### Options
 

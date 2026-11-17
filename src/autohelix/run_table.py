@@ -390,36 +390,48 @@ def format_runs(data: dict, metric: str | None = None, now: float | None = None,
 
 def suggestion(run: dict) -> tuple[str, str] | None:
     """What the entry screen says under the table about a run: its state in the
-    dashboard's words with where it is, and the one command that applies (`view` a live
-    run, `land` waiting commits, `resume` a run that stopped before its end), or None."""
+    dashboard's words with where it is, and the one command that applies, or None:
+    `view` a live run; `resume` an interrupted or crashed one, also with commits to land
+    (resuming is the point, and an auto-landing resume lands them); else `land` waiting
+    commits; else `resume` one that failed or never started."""
     if run.get("error"):
         return None
     short = short_id(run["id"])
-    landing = run.get("landing") or {}
-    where = (f"{landing['commits']} commit{'s' * (landing['commits'] != 1)} to land" if _can_land(run)
-             else f"iteration {_under_way(run) or run['progress']['iterations']}")
-    state = f"{_word(run)} · {where}"
+    state = (run.get("status") or {}).get("state")
     if _live(run):
-        return state, f"autohelix view {short}"
-    if _can_land(run):
-        return state, f"autohelix land {short}"
-    if (run.get("status") or {}).get("state") in ("interrupted", "crashed", "failed", "idle", None):
-        return state, f"autohelix resume {short}"
-    return None
+        verb = "view"
+    elif state in ("interrupted", "crashed"):
+        verb = "resume"
+    elif _can_land(run):
+        verb = "land"
+    elif state in ("failed", "idle", None):
+        verb = "resume"
+    else:
+        return None
+    landing = run.get("landing") or {}
+    where = (f"{landing['commits']} commit{'s' * (landing['commits'] != 1)} to land" if verb == "land"
+             else f"iteration {_under_way(run) or run['progress']['iterations']}")
+    return f"{_word(run)} · {where}", f"autohelix {verb} {short}"
 
 
-def entry_lines(data: dict, folder: str, width: int = 100, git: tuple | None = None, version: str | None = None,
-                now: float | None = None) -> list[Text]:
-    """The entry screen above its question: `AutoHelix  v0.x · <folder>` (with a Git field
-    when a run would refuse the checkout or needs a commit: `git`, a field's value and
-    style), the dashboard's table of the project's current runs, one line per run with
-    the command that applies (`suggestion`), the archived count, and the `--help` footer."""
+def entry_header(folder: str, width: int = 100, git: tuple | None = None, version: str | None = None
+                 ) -> list[Text]:
+    """The entry screen's header, drawn before the runs are read: `AutoHelix  v0.x ·
+    <folder>`, with a Git field when a run would refuse the checkout or needs a commit
+    (`git`, a field's value and style)."""
+    fields = [("Git", *git)] if git else []
+    return terminal.header(terminal.title(folder, version=version or terminal.version()), fields, width,
+                           show_mark=False)
+
+
+def entry_lines(data: dict, width: int = 100, now: float | None = None) -> list[Text]:
+    """The entry screen between its header and its question: the dashboard's table of
+    the project's current runs, one line per run with the command that applies
+    (`suggestion`), the archived count, and the `--help` footer."""
     runs = data.get("runs") or []
     shown = current_runs(runs)
     archived = len(runs) - len(shown)
-    fields = [("Git", *git)] if git else []
-    lines = terminal.header(terminal.title(folder, version=version or terminal.version()), fields, width,
-                            show_mark=False)
+    lines: list[Text] = []
     if shown:
         lines += table_lines(shown, width, now=now)
         found = [(short_id(r["id"]), *s) for r in shown if (s := suggestion(r))]
@@ -440,8 +452,7 @@ def outside_lines(folder: str, problem: str, fix: str | None, width: int = 100, 
     """The entry screen outside a git checkout: the header, why a run refuses the folder
     (`cli._git_problem`) with the command that makes it a checkout, and the footer;
     nothing to start."""
-    lines = terminal.header(terminal.title(folder, version=version or terminal.version()), [], width,
-                            show_mark=False)
+    lines = entry_header(folder, width, version=version)
     lines += terminal.warning(f"{problem} A run refuses this folder, so there is nothing to start here.", width)
     if fix:  # whole, never broken at its spaces
         lines.append(Text("    to make it a checkout: ", style="dim").append(fix, style=terminal.TEAL))

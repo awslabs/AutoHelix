@@ -112,8 +112,9 @@ def test_without_a_terminal_the_help_and_exit_2(project, monkeypatch, execs, run
         start_run(project)
     result = entry()
     assert result.exit_code == 2
-    assert "Usage: " in result.output and "Commands:" in result.output
-    assert lines(result)[-1] == "Run `autohelix` in a terminal to start."
+    assert result.stdout == ""  # all of it on stderr, as click's own usage errors
+    assert "Usage: " in result.stderr and "Commands:" in result.stderr
+    assert result.stderr.splitlines()[-1] == "Run `autohelix` in a terminal to start."
     assert "Ask Claude Code" not in result.output and not execs
 
 
@@ -177,15 +178,58 @@ def test_eof_aborts_and_starts_nothing(project, monkeypatch, execs, tty):
     assert not execs
 
 
+@pytest.mark.parametrize("where", ["question", "loading"])
+def test_ctrl_c_exits_130_and_starts_nothing(project, monkeypatch, execs, tty, where):
+    """Ctrl-C at the question (a real terminal's is in `test_cli_entry_pty.py`) or while
+    the runs load: interrupted (130), not click's "Aborted!" (1)."""
+    from autohelix import menu
+    from autohelix.viewer import ProjectRuns
+
+    agents(["claude"])(monkeypatch)
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    if where == "question":
+        monkeypatch.setattr(menu, "confirm", interrupt)
+    else:
+        monkeypatch.setattr(ProjectRuns, "runs", interrupt)
+    result = entry(input="\n")
+    assert result.exit_code == 130 and "Aborted!" not in result.output
+    assert not execs
+    if where == "loading":  # the header is drawn before the runs are read
+        assert lines(result)[1].startswith("  AutoHelix  ")
+
+
 def test_the_project_is_the_checkouts_top(project, monkeypatch, execs, tty):
+    """No runs and no config from here up to the checkout's top: the top."""
     agents(["claude"])(monkeypatch)
     (project / "src" / "deep").mkdir(parents=True)
+    mock_config(project / "src" / "deep" / "elsewhere", commit=False)  # below: not looked at
     monkeypatch.chdir(project / "src" / "deep")
     result = entry(input="\n")
     assert result.exit_code == 0, result.output
     assert lines(result)[1].endswith(f" · {project.resolve()}")
     [(_, argv, cwd)] = execs
     assert Path(cwd) == project.resolve() and f"in this project ({project.resolve()})" in argv[-1]
+
+
+@pytest.mark.parametrize("start", ["app", "app/pkg"])
+def test_the_project_is_the_nearest_folder_with_a_config(project, monkeypatch, execs, tty, start):
+    """No runs: the folder `autohelix run` would take its config from (here or above), not the
+    top, even when the top has a config too."""
+    agents(["claude"])(monkeypatch)
+    app = project / "app"
+    (app / "pkg").mkdir(parents=True)
+    mock_config(app, "perf", commit=False)
+    mock_config(project, commit=False)
+    monkeypatch.chdir(project / start)
+    result = entry(input="\n")
+    assert result.exit_code == 0, result.output
+    assert lines(result)[1].endswith(f" · {app.resolve()}")
+    assert "autohelix/perf.yaml, no runs yet: check and finish it" in flat(result.output)
+    [(_, argv, cwd)] = execs
+    assert Path(cwd) == app.resolve() and f"in this project ({app.resolve()})" in argv[-1]
 
 
 # --- configs without runs ---------------------------------------------------------
@@ -247,7 +291,9 @@ def test_with_runs_the_table_the_next_commands_and_ask_first(project, monkeypatc
     assert 'I picked "Ask Claude Code about these runs"' in prompt
     assert 'I may switch to the other option ("Set up a new experiment with Claude Code")' in prompt
     assert "Open with a short summary of the live runs plus the most recent one" in prompt
-    assert "Send `autohelix hint` or `autohelix stop`" in prompt and "only when I ask" in prompt
+    cli_name = str(cli._launcher() or "autohelix")
+    assert f"Send `{cli_name} hint` or `{cli_name} stop`" in prompt and "only when I ask" in prompt
+    assert "The project's runs (live ones first, then by last activity;" in prompt
 
 
 def test_a_crashed_run_reads_stopped_unexpectedly_and_resume_applies(project, monkeypatch, execs, tty):
@@ -267,6 +313,30 @@ def test_a_crashed_run_reads_stopped_unexpectedly_and_resume_applies(project, mo
                for line in lines(result)), lines(result)
 
 
+@pytest.mark.parametrize("state, commits, expected", [
+    ("running", 0, ("running · iteration 4", "view")),
+    ("running", 2, ("running · iteration 4", "view")),
+    ("interrupted", 0, ("interrupted · iteration 3", "resume")),
+    ("interrupted", 2, ("interrupted · iteration 3", "resume")),  # resuming is the point; auto landing lands
+    ("crashed", 0, ("stopped unexpectedly · iteration 3", "resume")),
+    ("crashed", 1, ("stopped unexpectedly · iteration 3", "resume")),
+    ("finished", 2, ("finished · 2 commits to land", "land")),
+    ("finished", 1, ("finished · 1 commit to land", "land")),
+    ("finished", 0, None),
+    ("failed", 0, ("failed · iteration 3", "resume")),
+    ("failed", 2, ("failed · 2 commits to land", "land")),
+    (None, 0, ("not started · iteration 3", "resume")),
+])
+def test_one_suggested_command_per_run(state, commits, expected):
+    from autohelix import run_table
+
+    run = {"id": "20261115-1402-sorting-krp3", "progress": {"iterations": 3},
+           "status": {"state": state, "iteration": 4} if state else None,
+           "target_branch": "main", "landing": {"commits": commits, "fast_forward": True}}
+    found = run_table.suggestion(run)
+    assert found == (expected and (expected[0], f"autohelix {expected[1]} krp3"))
+
+
 def test_archived_runs_are_counted(project, monkeypatch, execs, tty):
     agents(["claude"])(monkeypatch)
     mock_config(project)
@@ -277,9 +347,15 @@ def test_archived_runs_are_counted(project, monkeypatch, execs, tty):
     assert "  1 archived · autohelix --help: all commands" in lines(result)
     assert CliRunner().invoke(main, ["archive", second]).exit_code == 0
     result = entry(input="\n")
-    assert "  no current runs, 2 archived · autohelix --help: all commands" in lines(result)
-    assert "1. Ask Claude Code about these runs" in flat(result.output)  # not as none
-    assert "The project has no current runs, 2 archived" in execs[0][1][-1]
+    assert result.exit_code == 0, result.output
+    assert "  no current runs, 2 archived · autohelix --help: all commands" in lines(result)  # not as none
+    # Nothing current to ask about: asked as without runs (its config has runs: no "no runs yet").
+    assert "Ask Claude Code" not in result.output and "no runs yet" not in result.output
+    assert "Set up an experiment with Claude Code? Enter/q" in flat(result.output)
+    prompt = execs[0][1][-1]
+    assert "The project has no current runs, 2 archived" in prompt and "Its configs: autohelix.yaml." in prompt
+    assert 'I picked "Set up an experiment with Claude Code"; I may ask anything else' in prompt
+    assert "save the config as `autohelix/<name>.yaml`" in prompt
 
 
 def test_runs_in_a_subfolder_are_found(project, monkeypatch, execs, tty):
@@ -426,7 +502,7 @@ def test_no_commit_yet_is_in_the_header_and_the_prompt(tmp_path, monkeypatch, ex
     assert result.exit_code == 0, result.output
     assert "  Git        No commits yet; a run starts from a commit." in lines(result)
     prompt = execs[0][1][-1]
-    assert ("Git: No commits yet; a run starts from a commit. (`git add -A && git commit -m 'init'` fixes it) "
+    assert ("Git: No commits yet; a run starts from a commit (`git add -A && git commit -m 'init'` fixes it). "
             "`autohelix run` refuses until that is fixed.") in prompt
 
 

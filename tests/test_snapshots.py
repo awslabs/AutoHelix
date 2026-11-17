@@ -177,13 +177,33 @@ def _menu(options: list[tuple[str, str]], width: int) -> list:
         [Text("  " + QUIT_HINT)]
 
 
+def _question(data: dict, agents: list[str], configs: list[str], width: int) -> list:
+    """The entry screen's question as `cli._entry` picks it: the menu of `entry_options`
+    (drawn while choosing), else the one Enter/q question."""
+    from rich.text import Text
+
+    from autohelix.cli import _unrun, entry_options, entry_question
+    from autohelix.run_table import current_runs
+
+    runs = data["runs"]
+    options = entry_options(agents, bool(current_runs(runs)), _unrun(configs, runs))
+    if not options:
+        return [Text(), Text(f"  {entry_question(agents)} Enter/q")]
+    return _menu([o[1:] for o in options], width)
+
+
+def _entry(data: dict, width: int, agents: list[str], configs: list[str], git: tuple | None = None) -> list:
+    """Bare `autohelix`'s screen: the header, the runs, the question."""
+    from autohelix.run_table import entry_header, entry_lines
+
+    return entry_header("~/code/sorting", width, git) + entry_lines(data, width, now=T) + \
+        _question(data, agents, configs, width)
+
+
 def entry_screen(width: int) -> list:
     """Bare `autohelix` with runs and one agent: the dashboard's runs (the one running,
-    one waiting to land, one interrupted, one whose process is gone, the finished one;
-    one archived), the command for each, and the two options."""
-    from autohelix.cli import entry_options
-    from autohelix.run_table import entry_lines
-
+    one waiting to land, one interrupted, one whose process is gone with commits to land,
+    the finished one; one archived), the command for each, and the two options."""
     finished = _run_payload(False)
     perf = {**_run_payload(True), "id": "20261115-1530-perf-m2xq", "name": "perf", "config_file": "autohelix/perf.yaml",
             "title": "Cut the memory use of sort_list."}
@@ -192,44 +212,29 @@ def entry_screen(width: int) -> list:
     stopped = {**_run_payload(False), "id": "20261113-1000-sorting-0mws", "last_activity": T - 86400 * 2,
                "status": {"state": "interrupted", "iteration": 7}}
     gone = {**_run_payload(False), "id": "20261112-1000-sorting-c9d1", "last_activity": T - 86400 * 3,
-            "status": {"state": "crashed", "iteration": 7}}
+            "status": {"state": "crashed", "iteration": 7}, "landing": {"commits": 2, "fast_forward": True}}
     old = {**_run_payload(False), "id": "20261110-0900-old-a1b2", "archived": True}
     data = {**PROJECT, "runs": [finished, perf, manual, stopped, gone, old]}
-    options = entry_options(["claude"], True, [])
-    return entry_lines(data, "~/code/sorting", width, now=T) + _menu([o[1:] for o in options], width)
+    return _entry(data, width, ["claude"], ["autohelix/sorting.yaml", "autohelix/perf.yaml"])
 
 
 def entry_archived_screen(width: int) -> list:
-    """Bare `autohelix` where every run is archived: counted, not "no runs"."""
-    from autohelix.cli import entry_options
-    from autohelix.run_table import entry_lines
-
+    """Bare `autohelix` where every run is archived, two agents: counted, not "no runs",
+    and asked as with no runs (the config has a run: not "no runs yet")."""
     data = {**PROJECT, "runs": [{**_run_payload(False), "archived": True}]}
-    options = entry_options(["claude", "codex"], True, [])
-    return entry_lines(data, "~/code/sorting", width, now=T) + _menu([o[1:] for o in options], width)
+    return _entry(data, width, ["claude", "codex"], ["autohelix/sorting.yaml"])
 
 
 def entry_config_screen(width: int) -> list:
     """Bare `autohelix` with a config and no runs, no commit yet: the Git field, then the
     question naming the config."""
-    from autohelix.cli import entry_options
-    from autohelix.run_table import entry_lines
-
     git = ("No commits yet; a run starts from a commit.", "yellow")
-    options = entry_options(["claude"], False, ["autohelix.yaml"])
-    return entry_lines({**PROJECT, "runs": []}, "~/code/sorting", width, git, now=T) + \
-        _menu([o[1:] for o in options], width)
+    return _entry({**PROJECT, "runs": []}, width, ["claude"], ["autohelix.yaml"], git)
 
 
 def entry_new_screen(width: int) -> list:
     """Bare `autohelix` with no runs and no configs: one Enter/q question."""
-    from rich.text import Text
-
-    from autohelix.cli import entry_question
-    from autohelix.run_table import entry_lines
-
-    return entry_lines({**PROJECT, "runs": []}, "~/code/sorting", width, now=T) + \
-        [Text(), Text(f"  {entry_question(['claude'])} Enter/q")]
+    return _entry({**PROJECT, "runs": []}, width, ["claude"], [])
 
 
 def entry_no_git_screen(width: int) -> list:

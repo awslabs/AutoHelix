@@ -17,18 +17,22 @@ Option = tuple[str, str]  # label, dimmed detail ("" for none)
 _UP = (b"\x1b[A", b"\x1bOA", b"k")
 _DOWN = (b"\x1b[B", b"\x1bOB", b"j")
 _ENTER = (b"\r", b"\n")
-_LEAVE = (b"", b"\x1b", b"\x03", b"\x04")  # EOF, Esc, Ctrl-C, Ctrl-D
-_QUIT = (b"q", b"Q")
+_LEAVE = (b"", b"\x04")  # EOF, Ctrl-D
+_QUIT = (b"q", b"Q", b"\x1b")  # Esc too
+_INTERRUPT = b"\x03"  # Ctrl-C, where it arrives as a key (the terminal usually sends SIGINT instead)
 QUIT_HINT = "(q: quit)"
 
 
 class Quit(Exception):
-    """q pressed: the user is done (exit 0), unlike Esc or Ctrl-C (`click.Abort`)."""
+    """q or Esc pressed: the user is done (exit 0), unlike EOF (`click.Abort`) or Ctrl-C
+    (`KeyboardInterrupt`)."""
 
 
 def step(key: bytes, current: int, count: int) -> tuple[str, int]:
     """What a key press does: ("move", i), ("pick", i), ("quit", -1), ("leave", -1) or
-    ("stay", current)."""
+    ("stay", current); Ctrl-C raises `KeyboardInterrupt`."""
+    if key == _INTERRUPT:
+        raise KeyboardInterrupt
     if key in _UP:
         return "move", max(current - 1, 0)
     if key in _DOWN:
@@ -58,12 +62,11 @@ def keys(data: bytes) -> list[bytes]:
 
 def option_line(options: list[Option], i: int, current: int, width: int) -> str:
     """`  ❯ With an agent   it asks …`: option `i` of the arrow-key menu, labels aligned,
-    the detail dim and cut to `width`, the pointer and bold label on `current`."""
+    the detail dim (left out when it doesn't fit in `width` whole), the pointer and bold
+    label on `current`."""
     label, detail = options[i]
     text = f"  {'❯' if i == current else ' '} {label:<{max(len(label) for label, _ in options)}}"
-    detail = f"   {detail}" if detail else ""
-    room = width - len(text)
-    detail = detail if len(detail) <= room else (detail[:max(room - 1, 0)] + "…" if room > 1 else "")
+    detail = f"   {detail}" if detail and len(text) + 3 + len(detail) <= width else ""
     styled = click.style(text[:3], fg="cyan") + click.style(text[3:], bold=True) if i == current else text
     return styled + click.style(detail, dim=True)
 
@@ -72,36 +75,34 @@ def choose(title: str, options: list[Option], default: int = 0) -> int:
     """The index of the option picked with ↑/↓ (or k/j) and Enter, or its number; the
     title (none when "") above the options, `(q: quit)` under them.
 
-    q raises `Quit`; Esc, Ctrl-C and EOF abort (`click.Abort`, "Aborted!"). Where stdin
+    q or Esc raises `Quit`, EOF aborts (`click.Abort`, "Aborted!"), Ctrl-C raises
+    `KeyboardInterrupt`. Keys typed before the menu is drawn are dropped. Where stdin
     isn't a terminal that can read single keys, a numbered prompt asks instead."""
     fd, saved = _terminal()
     if fd is None:
         return _numbered(title, options, default)
     import termios
-    import tty
 
     out = sys.stdout
     width = max(shutil.get_terminal_size().columns - 1, 20)
     current = default
 
-    def line(i: int) -> str:
-        return option_line(options, i, current, width)
-
     def draw() -> None:
         for i in range(len(options)):
-            out.write("\r\x1b[2K" + line(i) + "\n")
+            out.write("\r\x1b[2K" + option_line(options, i, current, width) + "\n")
         out.flush()
 
-    if title:
-        out.write("  " + click.style(title, bold=True) + "\n")
-    out.write("\x1b[?25l")  # hide the cursor while choosing
-    draw()
-    out.write("  " + click.style(QUIT_HINT, dim=True) + "\n")
     picked, action = -1, "stay"
+    _single_keys(fd)
     try:
-        tty.setcbreak(fd, termios.TCSANOW)  # single keys, no echo, typeahead kept; Ctrl-C still interrupts
+        if title:
+            out.write("  " + click.style(title, bold=True) + "\n")
+        out.write("\x1b[?25l")  # hide the cursor while choosing
+        draw()
+        out.write("  " + click.style(QUIT_HINT, dim=True) + "\n")
+        out.flush()
         while action not in ("pick", "leave", "quit"):
-            for key in keys(os.read(fd, 32)):
+            for key in keys(_read(fd)):
                 action, current = step(key, current, len(options))
                 if action in ("pick", "leave", "quit"):
                     picked = current if action == "pick" else -1
@@ -110,8 +111,6 @@ def choose(title: str, options: list[Option], default: int = 0) -> int:
                     out.write(f"\x1b[{len(options) + 1}A")
                     draw()
                     out.write("\n")
-    except KeyboardInterrupt:
-        picked, action = -1, "leave"
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
         # Fold the menu into one line: the title and the answer (none for q).
@@ -128,8 +127,9 @@ def choose(title: str, options: list[Option], default: int = 0) -> int:
 
 
 def confirm(question: str) -> None:
-    """`  <question> Enter/q`: returns on Enter, raises `Quit` on q (`click.Abort` on Esc,
-    Ctrl-C or EOF); other keys are ignored. A prompt asks where single keys can't be read."""
+    """`  <question> Enter/q`: returns on Enter, raises `Quit` on q or Esc (`click.Abort`
+    on EOF, `KeyboardInterrupt` on Ctrl-C); other keys are ignored, and so are keys typed
+    before the question. A prompt asks where single keys can't be read."""
     shown = "  " + click.style(question, bold=True) + click.style(" Enter/q", dim=True)
     fd, saved = _terminal()
     if fd is None:
@@ -141,21 +141,20 @@ def confirm(question: str) -> None:
             raise Quit()
         return
     import termios
-    import tty
 
-    sys.stdout.write(shown + "\x1b[?25l")
-    sys.stdout.flush()
     action = "stay"
+    _single_keys(fd)
     try:
-        tty.setcbreak(fd, termios.TCSANOW)
+        sys.stdout.write(shown + "\x1b[?25l")
+        sys.stdout.flush()
         while action == "stay":
-            for key in keys(os.read(fd, 32)):
+            for key in keys(_read(fd)):
+                if key == _INTERRUPT:
+                    raise KeyboardInterrupt
                 action = ("pick" if key in _ENTER else "quit" if key in _QUIT else "leave" if key in _LEAVE
                           else "stay")
                 if action != "stay":
                     break
-    except KeyboardInterrupt:
-        action = "leave"
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
         sys.stdout.write("\n\x1b[?25h")
@@ -164,6 +163,30 @@ def confirm(question: str) -> None:
         raise Quit()
     if action == "leave":
         raise click.Abort()
+
+
+def _single_keys(fd: int) -> None:
+    """Read `fd` a key at a time, unechoed (Ctrl-C still interrupts), and drop what was
+    typed before: keys pressed while the screen loaded must not pick an option."""
+    import termios
+    import tty
+
+    tty.setcbreak(fd, termios.TCSANOW)
+    termios.tcflush(fd, termios.TCIFLUSH)
+
+
+def _read(fd: int) -> bytes:
+    """The next keys on `fd`. An Esc that may begin an arrow key's sequence waits briefly
+    for the rest (a slow link can split it), so it isn't taken for Esc alone."""
+    import select
+
+    data = os.read(fd, 32)
+    while data.endswith((b"\x1b", b"\x1b[", b"\x1bO")) and select.select([fd], [], [], 0.05)[0]:
+        more = os.read(fd, 32)
+        if not more:
+            break
+        data += more
+    return data
 
 
 def _terminal():
