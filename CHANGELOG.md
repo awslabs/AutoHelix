@@ -64,6 +64,23 @@
   replacement).
 - The packaged config template and the setup skill write `model:` explicitly.
 
+### Which model ran
+
+- **Every agent call records which model ran**: the main agent's (in the
+  history's `calls`), each `ask`/`review` judge's and the run summary's (in
+  their usage records) carry `cli`, `model` (the model the CLI's output named:
+  Claude Code's `init` event, a `model` Codex's JSON events name; `null` when
+  it named none, as OpenCode's events do) and `executable` (the resolved path
+  started). A judge's usage record names its CLI as `cli` (was `agent`).
+- **Each segment's start record** in `segments.jsonl` records the main agent's
+  `executable`; `resume` warns when it differs from the run's last segment.
+- **The Agent line** of the `run`/`resume` header reads `Claude Code · opus ·
+  via ~/bin/claude-bedrock`: the configured model (`(its default)` without
+  `model:`), and the executable when it isn't the CLI's plain name on PATH
+  (was `claude-code (opus)`). `view`'s run screen and the web viewer's run page
+  show the model the latest main-agent call reported, else the configured one.
+- A name in `AUTOHELIX_<CLI>_CMD` is resolved on PATH, like the default.
+
 ### Runs keep the machine awake
 
 - **`run` and `resume` keep the machine from sleeping while their segment

@@ -4,6 +4,7 @@
 """Mock agent for testing - makes deterministic changes without calling an LLM."""
 
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -14,6 +15,8 @@ from autohelix.agents import (
     AgentEventKind,
     AgentRunResult,
     EventCallback,
+    call_fields,
+    command_variable,
 )
 
 
@@ -32,6 +35,7 @@ class MockAgent:
             mock exercise `--cost` without a real LLM.
         sleep_seconds: Wall-clock seconds to sleep before returning (default: 0).
             Consumes real time so `--time` can be exercised offline.
+        model: The model its calls report (default: none), as a real CLI's output names one.
 
     For a run-summary prompt it writes a fixed summary instead of changing code.
     """
@@ -41,6 +45,8 @@ class MockAgent:
     def __init__(self, config: AgentConfig, heartbeat_seconds: int = 30):
         self.config = config
         self.heartbeat_seconds = heartbeat_seconds
+        # Starts nothing; records `$AUTOHELIX_MOCK_CMD` as its executable (for tests).
+        self.executable = os.environ.get(command_variable("mock")) or None
 
     def run(
         self,
@@ -51,6 +57,13 @@ class MockAgent:
         event_callback: EventCallback,
         project_path: Path | None = None,
     ) -> AgentRunResult:
+        result = self._run(copy_path, prompt, iteration, log_path, event_callback)
+        model = self.config.mock.get("model")
+        result.usage = {**result.usage, **call_fields("mock", self.executable, str(model) if model else None)}
+        return result
+
+    def _run(self, copy_path: Path, prompt: str, iteration: int, log_path: Path,
+             event_callback: EventCallback) -> AgentRunResult:
         settings = self.config.mock
 
         # Emit some events for realism

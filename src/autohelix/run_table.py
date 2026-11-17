@@ -237,7 +237,10 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
         budget = [f"{progress['max_iterations']} iterations"] if progress.get("max_iterations") else []
         budget += [format_cap(progress["max_cost_usd"])] if progress.get("max_cost_usd") is not None else []
         budget += [left] if (left := time_cap(run, now)) else []
-        fields = terminal.run_fields(config, " · ".join(budget))
+        called = run.get("agent") or {}  # the latest main-agent call's (`latest_agent_call`)
+        agent = terminal.agent_text(config.agent.cli, called.get("model") or config.agent.model,
+                                    called.get("executable"))
+        fields = terminal.run_fields(config, " · ".join(budget), agent)
         table = Table.of(config, width)
     else:
         fields = [("Goal", run.get("title") or (run.get("goal") or "").split("\n")[0]),

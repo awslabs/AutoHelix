@@ -1,6 +1,6 @@
     ⢠⠞⠛⣢⢖⠛⠳⡄     AutoHelix  v0.3.0 · run krp3 · sorting · running
   ⣠⠖⢸⠐⠚⠁⠈⠓⠒⡒⠲⣄   Goal       Make sort_list faster in sort.py.
-  ⢻⡠⠞      ⠳⣄⠟   Agent      claude-code (sonnet)
+  ⢻⡠⠞      ⠳⣄⠟   Agent      Claude Code · sonnet
   ⣴⠙⢦      ⡴⠊⣧   Gates      pytest -q test_sort.py · speed regress 5%
   ⠙⠦⠬⠤⢤⡀⢀⡤⠄⡇⠴⠋   Observe    bench (speed ↑, mem_mb ↓)
     ⠘⢦⣤⠵⠫⣤⡴⠃     Scope      editable: sort.py

@@ -182,3 +182,16 @@ def test_ask_and_review_refuse_the_old_variable(command, tmp_path, monkeypatch):
 
 def test_no_check_notes_hook_is_shipped():
     assert not (Path(__file__).parent.parent / "src" / "autohelix" / "bin" / "check_notes.sh").exists()
+
+
+def test_a_judge_refuses_the_old_variable_before_anything_is_made(tmp_path, monkeypatch):
+    """`judge_config` (the one check, `agents.executable`): before the judged target is
+    built or a usage record is written; a mock judge ignores it."""
+    from autohelix.judge import judge_config
+
+    monkeypatch.setenv("AUTOHELIX_USAGE_FILE", str(tmp_path / "usage.jsonl"))
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CMD", "/opt/claude")
+    with pytest.raises(ConfigError, match="AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD"):
+        judge_config(AgentConfig(cli="codex"))
+    assert not (tmp_path / "usage.jsonl").exists()
+    assert judge_config(AgentConfig(cli="mock")).cli == "mock"

@@ -41,7 +41,7 @@ from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning, StopCheckResult)
 from autohelix.events import iteration_fields
-from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_stop_request
+from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_segments, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, append_usage, read_usage, superseded_marker
 from autohelix.formatting import clean_block, format_cap, format_cost, format_duration, format_total_cost
 from autohelix.iteration_time import format_limit
@@ -429,7 +429,9 @@ class Harness:
         name = self.run_info.get("name") or self.project_path.name
         self.console.print()
         title = terminal.title(f"run {short_id(self.paths.run_id)}", name, terminal.clock(), version=terminal.version())
-        fields = terminal.run_fields(self.config, budget_text(budget, start_iter - 1))
+        agent = terminal.agent_text(self.config.agent.cli, self.config.agent.model,
+                                    getattr(self.agent, "executable", None))
+        fields = terminal.run_fields(self.config, budget_text(budget, start_iter - 1), agent)
         if not self.console.is_terminal:  # no live row to show them under
             fields.append(("Steer", terminal.steer_text(short_id(self.paths.run_id), interrupt=False)))
         terminal.print_lines(self.console, terminal.header(title, fields, width, terminal.shows_mark(self.console)))
@@ -1574,9 +1576,14 @@ class Harness:
         # Records an earlier segment wrote but never logged (it died in between): theirs,
         # before this start.
         self.segment_log.catch_up(self.history.load())
+        executable = getattr(self.agent, "executable", None)
+        if previous := read_segments(self.paths.segments):
+            if (before := previous[-1].get("executable")) and executable and before != executable:
+                self._warn(f"The agent now starts {terminal.home_path(executable)} "
+                           f"(the run's last segment started {terminal.home_path(before)}).")
         self.segment_log.start(segment=self._segment, started_at=segment_started_at,
                                start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
-                               budget={**asdict(budget), "default": budget.default})
+                               budget={**asdict(budget), "default": budget.default}, executable=executable)
         self._segment_target_tip = self._target_tip()
 
         # Again at each segment: the ignore rules may have changed since this Harness was

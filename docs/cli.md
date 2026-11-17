@@ -242,7 +242,7 @@ VPN alive.
 ```text
   AutoHelix  v0.3.0 · run krp3 · sorting · 14:02
   Goal     Make sort_list faster in sort.py.
-  Agent    claude (sonnet)
+  Agent    Claude Code · sonnet
   Gates    pytest -q test_sort.py · speed regress 5%
   Observe  bench (speed ↑, mem_mb ↓)
   Scope    editable: sort.py
@@ -272,7 +272,8 @@ VPN alive.
 ```
 
 The header names the run (its id's last part, which every command accepts), what it
-runs and the budget; in a terminal the AutoHelix mark stands beside it. Then one row
+runs and the budget (the Agent line: the CLI, the configured model or `(its default)`,
+and `via <executable>` when `AUTOHELIX_<CLI>_CMD` names another one); in a terminal the AutoHelix mark stands beside it. Then one row
 per iteration: ✓ accepted or ✗ rejected, its time and cost, each metric's value
 (an accepted row with its change from the baseline, `373×`, `-21%`, in green or red;
 a rejection's values dimmed, without a change), and for a rejection why: the gate
@@ -710,6 +711,7 @@ With `RUN_ID`, `--once` prints the top part of `--terminal`'s screen once and ex
   - `accepted`: the number of accepted iterations;
   - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
   - `progress`: `iterations` attempted, `cost_usd` and `cost_incomplete` (the whole run's), `seconds` (the recorded iterations' wall clock, the baseline's included), and the latest segment's [budget](#budgets), `null` where it had none: `max_iterations` (the last iteration it may run: the previous last iteration + `-n`, or `--until`) and `max_cost_usd` (the run's cost before it + `--cost`) as run totals, "spent before it + its own cap"; `max_seconds`, that segment's own `--time` (not a run total: compare it with the time since `status.segment_started_at`, not with `seconds`). They come from the run's status, never from the config;
+  - `agent`: the latest main-agent call's `model` (the one the CLI reported, `null` if none) and `executable`, `{}` before any call;
   - `target_branch` and `landing`: `commits` the target lacks and whether it can `fast_forward`, or `null` when either side is unavailable;
   - `why` (`run --why`), `archive_why` (`archive --why`) and `import` (`{"run": <id>}` for a run started with `run --import`), each `null` when absent.
   - A run that can't be read has only `id` and `error`.

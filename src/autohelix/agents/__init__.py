@@ -186,11 +186,26 @@ def variable_problem() -> str | None:
 
 
 def command_path(cli: str) -> str:
-    """The executable a CLI runs: `$AUTOHELIX_<CLI>_CMD`, else the CLI's name found on
-    PATH, else the bare name (which then fails to start). The backends (when created)
-    and preflight resolve it here; ConfigError for a variable that is gone."""
+    """The executable a CLI runs, resolved: `$AUTOHELIX_<CLI>_CMD`, else the CLI's name,
+    found on PATH (a name without a slash; a path as it is when executable), else as
+    given (which then fails to start). The backends (when created, `executable`) and
+    preflight resolve it here; ConfigError for a variable that is gone."""
     name = executable(cli)
-    return name if os.environ.get(command_variable(cli)) else shutil.which(name) or name
+    return shutil.which(name) or name
+
+
+def plain_executable(cli: str, path: str | None) -> bool:
+    """Whether `path` is what the CLI's plain name finds on PATH (`claude`), not a
+    `$AUTOHELIX_<CLI>_CMD` of its own: the run header then doesn't name it."""
+    name = EXECUTABLES.get(cli)
+    return path is None or name is None or path == (shutil.which(name) or name)
+
+
+def call_fields(cli: str, executable: str | None, model: str | None) -> dict[str, Any]:
+    """What every agent call's usage records (the main agent's in the history, a
+    judge's or the run summary's in its usage file): the CLI, the model its output
+    named (None: it named none) and the executable started (resolved)."""
+    return {"cli": cli, "model": model, "executable": executable}
 
 
 def executable(cli: str) -> str:

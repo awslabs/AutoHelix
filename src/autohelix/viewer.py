@@ -44,10 +44,11 @@ from autohelix.agents import AgentEventKind
 from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained, open_dir as _open_dir, open_file as _open_file, open_run_log
 from autohelix.config import ConfigError, MetricGate, load_config, template_text
 from autohelix.costs import summarize_costs
-from autohelix.history import History, record_seconds
+from autohelix.history import History, latest_agent_call, record_seconds
 from autohelix.runs import RunPaths, config_relative, git, is_archived, is_transcript, last_activity, load_run_config
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
+from autohelix.terminal import agent_text
 from autohelix.run_status import pending_stop, read_run_status, running_iteration
 from autohelix.workspace import ITERATION_DIR
 
@@ -265,7 +266,9 @@ class RunData:
             cached = self._configs[path] = (key, config, _read_user_file(path))
         return cached[1], path
 
-    def _config_summary(self, config, path: Path | None) -> dict | None:
+    def _config_summary(self, config, path: Path | None, called: dict | None = None) -> dict | None:
+        """The run page's config: its file and text, and the header's fields; `agent` with
+        the model the latest main-agent call reported (`called`), else the configured one."""
         if path is None:
             return None
         cached = self._configs.get(path)
@@ -284,7 +287,8 @@ class RunData:
             summary["template"] = {"file": config_relative(self.project, config.prompt_template), "text": text}
         if config:
             summary.update(
-                agent=" · ".join(filter(None, [config.agent.cli, config.agent.model])),
+                agent=agent_text(config.agent.cli, (called or {}).get("model") or config.agent.model,
+                                 (called or {}).get("executable")),
                 gates=[gate.text for gate in config.gates],
                 observe=[{"name": entry.name, "review": entry.review is not None, "metrics": entry.metrics}
                          for entry in config.observe],
@@ -331,7 +335,7 @@ class RunData:
             # `autohelix stop` asked the running segment to end, as on the run list.
             "stop_requested": pending_stop(self.paths, status),
             "run_id": self.paths.run_id,
-            "config": self._config_summary(config, config_path),
+            "config": self._config_summary(config, config_path, latest_agent_call(records)),
             "notes_files": sorted(self._notes_files(), key=_note_order),
             "iterations": iterations,
             "cost": {
@@ -1020,6 +1024,8 @@ class ProjectRuns:
                 "seconds": sum(record_seconds(r) for r in records),
                 "max_seconds": budget.get("max_time_seconds"),  # the segment's, not a run total
             },
+            # The latest main-agent call's reported model and executable (`latest_agent_call`).
+            "agent": latest_agent_call(records),
             "target_branch": target,
             "landing": self._landing(target_tip, tip),
             "group": data.get("group"),

@@ -10,7 +10,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, command_path
+from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path
 from autohelix.agents.codex_cost import TOKEN_FIELDS, estimate_cost
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_copy_env
@@ -26,8 +26,8 @@ class CodexAgent:
         self.config = config
         self.heartbeat_seconds = heartbeat_seconds
         # Resolved once, when the backend is created: a variable that is gone is a
-        # ConfigError before anything runs.
-        self._command = command_path("codex")
+        # ConfigError before anything runs. Recorded with every call (`call_fields`).
+        self.executable = command_path("codex")
         self._usage: dict[str, object] = {}
         self._turn_error: str | None = None
         self._model: str | None = None  # the model Codex's output names, if it does
@@ -36,7 +36,7 @@ class CodexAgent:
         self._schema_path: Path | None = None
 
     def _command_path(self) -> str:
-        return self._command
+        return self.executable
 
     @staticmethod
     def _parse_version(text: str) -> tuple[int, int, int] | None:
@@ -250,6 +250,7 @@ class CodexAgent:
                 success=False,
                 exit_code=None,
                 error=f"'{command}' not found. Set AUTOHELIX_CODEX_CMD.",
+                usage=call_fields("codex", self.executable, None),
             )
 
         if result.timed_out:
@@ -288,6 +289,6 @@ class CodexAgent:
             success=result.exit_code == 0 and error is None,
             exit_code=result.exit_code,
             error=error,
-            usage=self._usage,
+            usage={**self._usage, **call_fields("codex", self.executable, self._model)},
             final_text=self._final_text,
         )
