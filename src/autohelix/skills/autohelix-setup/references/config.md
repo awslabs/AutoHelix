@@ -37,7 +37,8 @@ Launched with `autohelix run -n 3` (budgets are command-line flags, not config).
 Top-level keys, in the skill's preferred order for generated configs: `goal`,
 `scope`, `gates`, `observe`, `stop`, `agent`, `prompt_template`. This order is a presentation convention; config parsing
 accepts any top-level order. The order of entries within `gates`, `observe`,
-and `stop` affects execution. Keys of the first config format
+and `stop` affects execution. Any other key, at the top level or inside a
+section, is an error (a misspelt `stop:` would otherwise do nothing). Keys of the first config format
 (`constraints`, `metrics`, `observables`, `acceptance`, `reviewer`,
 `agent.type`, `agent.timeout_seconds`, `budget`, `land`, `report`) are errors
 that name their replacement; when editing an existing config, convert them (a
@@ -252,8 +253,8 @@ made by external commands that don't record usage, and the user's
 supervising/setup agent are separate. These boundaries make it a run-control
 threshold, not an absolute all-inclusive financial cap.
 
-Commit the config and any scripts it uses, then start with `autohelix run
-[NAME] --path PROJECT -n 3` (`NAME` for `autohelix/NAME.yaml`, none for
+Commit the config and any scripts it uses, check it with `autohelix run
+[NAME] --check`, then start with `autohelix run [NAME] --path PROJECT -n 3` (`NAME` for `autohelix/NAME.yaml`, none for
 `autohelix.yaml`): always a new run, here of three iterations (an open-ended goal; `-n 1` for a single task its gates can check). A run keeps the config it started with
 (stored in `.autohelix/runs/<id>/config.yaml`, the prompt template beside it as
 `prompt_template.md`). `resume` refuses when the file's parsed config has changed since (comment

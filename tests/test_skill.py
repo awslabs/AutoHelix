@@ -21,6 +21,7 @@ RESOURCE_PATHS = [
     "references/loop-design.md",
     "references/examples.md",
     "references/managed-runs.md",
+    "references/reading-runs.md",
 ]
 PROJECT_DIRS = {
     "claude": ".claude/skills",
