@@ -70,7 +70,8 @@ each metric from baseline to latest accepted value, and the pattern of
 rejections (the same gate failing again and again points at the evaluator or
 the goal, not bad luck). Read `notes/` and `report.md` for the agent's own
 account, and check it against the records. Landing: `landing.commits` the
-target branch lacks (manual runs wait for `autohelix land ID`). Keep it
+target branch lacks, its `relation` (`ahead` waits for `autohelix land ID`;
+`diverged` needs `git merge autohelix/<id>`) and `text`, which says what works. Keep it
 plain: what was tried, what stuck, what to do next (`autohelix resume ID -n
 N`, `land`, a new run with `--import ID`).
 

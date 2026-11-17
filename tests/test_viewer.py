@@ -449,8 +449,13 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
                 two["progress"]["max_seconds"]) == (1, 5, 3600)
         assert (two["status"]["max_cost_usd"], two["status"]["max_time_seconds"]) == (5, 3600)
         assert two["status"]["segment_started_at"] <= two["status"]["stopped_at"]
-        assert one["landing"] == {"commits": 0, "fast_forward": True}  # auto-landed at the end of its segment
-        assert two["landing"] == {"commits": 1, "fast_forward": True}  # manual: ready to land
+        drop = lambda landing: {k: v for k, v in landing.items() if k != "text"}  # noqa: E731
+        assert drop(one["landing"]) == {"relation": "same", "commits": 0, "behind": 0,
+                                        "fast_forward": True}  # auto-landed at the end of its segment
+        assert drop(two["landing"]) == {"relation": "ahead", "commits": 1, "behind": 0,
+                                        "fast_forward": True}  # manual: ready to land
+        short = two["id"].rsplit("-", 1)[1]
+        assert two["landing"]["text"].endswith(f"main can fast-forward: `autohelix land {short}`.")
         assert two["accepted"] == 1 and two["metrics"] is None
         assert two["config_file"] == "autohelix.yaml" and two["goal"] == "Test the integration"
         assert listing["schema"] == 1 and listing["path"] == str(integration_project.resolve())
@@ -460,8 +465,11 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
         subprocess.run(["git", "add", "user.txt"], cwd=integration_project, check=True)
         subprocess.run(["git", "commit", "-qm", "user work"], cwd=integration_project, check=True)
         runs = {r["id"]: r for r in json.loads(get(base + "/api/runs")[1])["runs"]}
-        assert runs[second.paths.run_id]["landing"] == {"commits": 1, "fast_forward": False}
-        assert runs[first.paths.run_id]["landing"]["commits"] == 0
+        diverged = runs[second.paths.run_id]["landing"]
+        assert drop(diverged) == {"relation": "diverged", "commits": 1, "behind": 1, "fast_forward": False}
+        assert diverged["text"].endswith(f"Merge by hand: `git merge autohelix/{second.paths.run_id}`.")
+        assert drop(runs[first.paths.run_id]["landing"]) == {
+            "relation": "behind", "commits": 0, "behind": 1, "fast_forward": False}  # landed; main moved on
 
         # Each run has its own page and routes.
         assert b"viewer.js" in get(base + f"/run/{first.paths.run_id}/")[1]
@@ -552,7 +560,7 @@ def test_runs_json_and_once(measured_project):
     assert set(runs) == {first, second, gone}  # archived runs included
     assert runs[first]["metrics"]["values"] == [
         {"name": "speed", "value": 120, "baseline": 100, "direction": "higher"}]
-    assert runs[second]["landing"] == {"commits": 1, "fast_forward": True}
+    assert runs[second]["landing"]["relation"] == "ahead" and runs[second]["landing"]["commits"] == 1
 
     result = _cli("view", "-p", project, "--once")
     assert result.exit_code == 0, result.output

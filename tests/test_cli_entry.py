@@ -332,7 +332,7 @@ def test_one_suggested_command_per_run(state, commits, expected):
 
     run = {"id": "20261115-1402-sorting-krp3", "progress": {"iterations": 3},
            "status": {"state": state, "iteration": 4} if state else None,
-           "target_branch": "main", "landing": {"commits": commits, "fast_forward": True}}
+           "target_branch": "main", "landing": {"relation": "ahead", "commits": commits, "behind": 0, "fast_forward": True}}
     found = run_table.suggestion(run)
     assert found == (expected and (expected[0], f"autohelix {expected[1]} krp3"))
 

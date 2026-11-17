@@ -23,7 +23,7 @@ from rich.text import Text
 from autohelix import terminal
 from autohelix.formatting import clean, format_cap, format_duration
 from autohelix.iteration_time import format_limit
-from autohelix.runs import short_id
+from autohelix.runs import landing_words, short_id
 from autohelix.terminal import Row, Table
 
 WORDS = {"crashed": "stopped unexpectedly", "idle": "not started"}  # others as they are (dashboard.js)
@@ -113,13 +113,8 @@ def _notes(run: dict) -> str:
 
 
 def _landing(run: dict) -> str:
-    """The dashboard's landing cell: `landed`, `2 to land`, `2 diverged`."""
-    landing = run["landing"]  # None without a target branch or tip
-    if not landing:
-        return "—"
-    if landing["commits"] == 0:
-        return "landed" if run["accepted"] else "—"
-    return f"{landing['commits']} {'to land' if landing['fast_forward'] else 'diverged'}"
+    """The dashboard's landing cell: `landed`, `2 to land`, `2 diverged` (`runs.landing_words`)."""
+    return landing_words(run["landing"], run["id"], run.get("target_branch"), bool(run["accepted"]))[0]
 
 
 def _directions(runs: list[dict]) -> dict[str, str]:
@@ -198,7 +193,7 @@ def _landed(run: dict, made: int) -> tuple[str, str, str | None] | None:
     if not landing or not target:
         return None
     if n := landing["commits"]:
-        if not landing["fast_forward"]:
+        if landing["relation"] == "diverged":
             return terminal.unlanded(n, f"autohelix/{run['id']}", f"{target} has moved on", "yellow")
         return terminal.unlanded(n, f"autohelix/{run['id']}", "manual landing" if run.get("land") == "manual" else "")
     return terminal.landed(made, target)
@@ -207,7 +202,7 @@ def _landed(run: dict, made: int) -> tuple[str, str, str | None] | None:
 def _can_land(run: dict) -> bool:
     """Whether `autohelix land` would fast-forward the target onto the run's commits."""
     landing = run.get("landing") or {}
-    return bool(run.get("target_branch") and landing.get("commits") and landing.get("fast_forward"))
+    return bool(run.get("target_branch") and landing.get("commits") and landing.get("relation") == "ahead")
 
 
 def _live_what(run: dict) -> str:

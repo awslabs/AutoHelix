@@ -32,9 +32,9 @@ from autohelix.terminal import LiveRow, Row, budget_text
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunState, select_run, reconcile, land, git,
                             claim_copies, config_relative, critical_section, new_run_name,
-                            iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
+                            iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, landing,
                             WHY_LIMIT,
-                            imported_run, is_live, target_ahead, target_ahead_refusal,
+                            imported_run, is_live, has_baseline, target_ahead_refusal,
                             write_json)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
@@ -183,7 +183,7 @@ class Harness:
         agent copy shows that run's state read-only, and the baseline's observe entries
         get its last outputs as `$AUTOHELIX_PREVIOUS`. `why` is the new run's note
         (`run --why`). A resume refuses, before writing anything, when its target branch
-        moved past its tip and it lands automatically (`runs.target_ahead`).
+        moved past its tip and it lands automatically (`runs.landing`: `behind`).
 
         `check_only` (`run --check`): make every check up to the first write (config,
         template, clean checkout, preflight) and stop there; the object is good for
@@ -245,10 +245,10 @@ class Harness:
         else:  # a run continues its own tip: refused before anything is written
             data = planned.read_identity()
             if (land_mode or data.get("land") or "auto") == "auto" and (
-                    count := target_ahead(planned, data)):
+                    found := landing(planned, data)).relation == "behind" and has_baseline(planned):
                 if is_live(planned):  # said first: the advice (`--land manual`) would lead straight to it
                     raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
-                raise RuntimeError(target_ahead_refusal(planned, data, count))
+                raise RuntimeError(target_ahead_refusal(planned, data, found))
         if check_only:  # nothing written; the scope advice a run prints at its start too
             if warning := scope_warning(self.config):
                 self._warn(warning)
@@ -1802,6 +1802,6 @@ class Harness:
 
     def _unlanded(self) -> int:
         try:
-            return unlanded(self.paths, self.run_info)
+            return landing(self.paths, self.run_info).ahead
         except Exception:  # noqa: BLE001 - display only
             return 0

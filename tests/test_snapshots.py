@@ -140,7 +140,7 @@ def _run_payload(running: bool) -> dict:
                          "cost_usd": round(sum(r.cost or 0 for r in rows), 2),
                          "cost_incomplete": False, "seconds": sum(r.seconds or 0 for r in rows), "max_cost_usd": 10.0,
                          "max_seconds": None},
-            "target_branch": "main", "landing": {"commits": 0, "fast_forward": True},
+            "target_branch": "main", "landing": {"relation": "same", "commits": 0, "behind": 0, "fast_forward": True},
             "iterations": [_payload_row(row) for row in rows]}
 
 
@@ -165,7 +165,7 @@ def dashboard_screen(width: int) -> list:
     perf["status"].update(max_time_seconds=3600, segment_started_at=T - 372)  # `run --time 1h`
     perf = {**perf, "id": "20261115-1530-perf-m2xq", "name": "perf", "group": "speed",
             "title": "Cut the memory use of sort_list.", "config_file": "autohelix/perf.yaml",
-            "why": "try a lower memory bound", "landing": {"commits": 2, "fast_forward": True}}
+            "why": "try a lower memory bound", "landing": {"relation": "ahead", "commits": 2, "behind": 0, "fast_forward": True}}
     old = {**_run_payload(False), "id": "20261110-0900-old-a1b2", "archived": True}
     return dashboard_lines({**PROJECT, "runs": [_run_payload(False), perf, old]}, width, now=T)
 
@@ -213,11 +213,11 @@ def entry_screen(width: int) -> list:
     perf = {**_run_payload(True), "id": "20261115-1530-perf-m2xq", "name": "perf", "config_file": "autohelix/perf.yaml",
             "title": "Cut the memory use of sort_list."}
     manual = {**finished, "id": "20261114-1000-sorting-xax8", "last_activity": T - 7200, "land": "manual",
-              "landing": {"commits": 1, "fast_forward": True}}
+              "landing": {"relation": "ahead", "commits": 1, "behind": 0, "fast_forward": True}}
     stopped = {**_run_payload(False), "id": "20261113-1000-sorting-0mws", "last_activity": T - 86400 * 2,
                "status": {"state": "interrupted", "iteration": 7}}
     gone = {**_run_payload(False), "id": "20261112-1000-sorting-c9d1", "last_activity": T - 86400 * 3,
-            "status": {"state": "crashed", "iteration": 7}, "landing": {"commits": 2, "fast_forward": True}}
+            "status": {"state": "crashed", "iteration": 7}, "landing": {"relation": "ahead", "commits": 2, "behind": 0, "fast_forward": True}}
     old = {**_run_payload(False), "id": "20261110-0900-old-a1b2", "archived": True}
     data = {**PROJECT, "runs": [finished, perf, manual, stopped, gone, old]}
     return _entry(data, width, ["claude-code"], ["autohelix/sorting.yaml", "autohelix/perf.yaml"])
@@ -309,7 +309,7 @@ def test_view_says_what_waits_for_a_manual_landing():
     """Like `run`'s end block: the commits on the run's branch, why, and `autohelix land`."""
     from autohelix.run_table import Saved, view_lines
 
-    run = {**_run_payload(False), "land": "manual", "landing": {"commits": 3, "fast_forward": True}}
+    run = {**_run_payload(False), "land": "manual", "landing": {"relation": "ahead", "commits": 3, "behind": 0, "fast_forward": True}}
     text = _text(view_lines({**PROJECT, "run": run}, Saved(CONFIG, ROWS, []), 120, now=T))
     assert "  unlanded   3 commits on autohelix/20261115-1402-sorting-krp3 (manual landing)\n" in text
     assert "  next       autohelix resume krp3 · autohelix land krp3\n" in text

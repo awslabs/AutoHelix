@@ -124,15 +124,12 @@ function landingCell(run) {
   const target = run.target_branch;
   // Words rather than a bare dash: each case says why there is nothing to land.
   if (!target) return el('td', { className: 'muted', textContent: 'detached', title: 'Started on a detached HEAD: land with autohelix land --into <branch>' });
-  const l = run.landing;
+  const l = run.landing;  // runs.landing's relation; `text` says what it means (runs.landing_words)
   if (!l) return el('td', { className: 'muted', textContent: 'unavailable', title: `Branch ${target} or the run's commits are not available` });
-  if (l.commits === 0) return el('td', { className: 'muted', textContent: run.accepted ? 'landed' : 'nothing yet', title: run.accepted ? `Everything accepted is in ${target}` : 'Nothing accepted yet' });
+  if (l.relation !== 'diverged' && l.commits === 0) return el('td', { className: 'muted', textContent: run.accepted ? 'landed' : 'nothing yet', title: l.text });
   const n = plural(l.commits, 'commit');
-  if (l.fast_forward) {
-    return el('td', { className: 'landing', title: `${n} not in ${target} yet; ${target} can fast-forward: autohelix land ${run.id}` }, `${n} to land`);
-  }
-  return el('td', { className: 'landing', title: `${target} has commits this run lacks, so it cannot fast-forward. Merge by hand: git merge autohelix/${run.id}` },
-    `${n} · `, el('span', { className: 'warn', textContent: 'diverged' }));
+  if (l.relation !== 'diverged') return el('td', { className: 'landing', title: l.text }, `${n} to land`);
+  return el('td', { className: 'landing', title: l.text }, `${n} · `, el('span', { className: 'warn', textContent: 'diverged' }));
 }
 
 function lastActiveCell(run) {

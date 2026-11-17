@@ -730,17 +730,108 @@ def has_baseline(paths: RunPaths) -> bool:
     return any(r.iteration == 0 and r.accepted for r in History(paths.project, paths.run_id).load())
 
 
-def unlanded(paths: RunPaths, data: dict) -> int:
-    """Accepted commits beyond the base that the target branch lacks (all of them
-    without a target branch). Squash-merged or cherry-picked work counts."""
-    tip = git(paths.project, "rev-parse", "--verify", f"{paths.ref}^{{commit}}", check=False)
-    if tip.returncode:
-        return 0
-    exclude = [f"^{data['base_commit']}"] if data.get("base_commit") else []
-    target = data.get("target_branch")
-    if target and git(paths.project, "rev-parse", "--verify", f"refs/heads/{target}", check=False).returncode == 0:
-        exclude.append(f"^refs/heads/{target}")
-    return int(git(paths.project, "rev-list", "--count", tip.stdout.strip(), *exclude).stdout.strip() or 0)
+@dataclass(frozen=True)
+class Landing:
+    """Where a run's tip stands against its target branch (`landing`).
+
+    `relation`: `same` (the target is at the tip), `ahead` (the run has commits the
+    target lacks and the target can fast-forward onto them), `behind` (the tip is in the
+    target, which has more), `diverged` (each has commits the other lacks), or None
+    when a side is missing (no ref; no target branch: started detached, or it is gone).
+    `ahead`: the run's commits beyond its base that the target lacks, the unlanded ones
+    (all of them without a target branch; squash-merged or cherry-picked work counts);
+    `behind`: the target's commits the tip lacks."""
+
+    tip: str | None
+    target: str | None
+    target_tip: str | None
+    relation: str | None
+    ahead: int = 0
+    behind: int = 0
+
+    def payload(self) -> dict | None:
+        """`view --json`'s `landing` (None without a relation): `commits` is `ahead`, and
+        `fast_forward` whether the target can fast-forward onto the tip (`same`, `ahead`)."""
+        return None if self.relation is None else {
+            "relation": self.relation, "commits": self.ahead, "behind": self.behind,
+            "fast_forward": self.relation in ("same", "ahead")}
+
+
+def _commit(project: Path, ref: str) -> str | None:
+    found = git(project, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}", check=False)
+    return found.stdout.strip() or None if found.returncode == 0 else None
+
+
+def _count(project: Path, *revisions: str) -> int:
+    counted = git(project, "rev-list", "--count", *revisions, check=False)
+    return int(counted.stdout.strip()) if counted.returncode == 0 and counted.stdout.strip().isdigit() else 0
+
+
+def landing(paths: RunPaths, data: dict, tip: str | None = None, *, into: str | None = None,
+            refs: dict[str, str] | None = None, cache: dict | None = None) -> Landing:
+    """The one run/target relation (`Landing`): the run's tip (`tip`, else its ref)
+    against its target branch (`into`, else run.json's `target_branch`). `refs` (ref ->
+    commit, a `for-each-ref` snapshot) replaces the lookups; `cache` (a dict the caller
+    keeps) saves the counts of a pair seen before."""
+    project, target = paths.project, into or data.get("target_branch")
+    if refs is not None:
+        tip = tip or refs.get(paths.ref)
+        target_tip = refs.get(f"refs/heads/{target}") if target else None
+    else:
+        tip = tip or _commit(project, paths.ref)
+        target_tip = _commit(project, f"refs/heads/{target}") if target else None
+    base = data.get("base_commit")
+    exclude = [f"^{base}"] if base else []
+    if not tip:
+        return Landing(None, target, target_tip, None)
+    if not target_tip:
+        return Landing(tip, target, None, None, _count(project, tip, *exclude))
+    key = (tip, target_tip, base)
+    if cache is not None and key in cache:
+        return cache[key]
+    sides = git(project, "rev-list", "--left-right", "--count", f"{target_tip}...{tip}", check=False)
+    counts = sides.stdout.split()
+    if sides.returncode or len(counts) != 2 or not all(c.isdigit() for c in counts):
+        found = Landing(tip, target, target_tip, None)
+    else:
+        behind, ahead = int(counts[0]), int(counts[1])
+        relation = ("same" if tip == target_tip else "ahead" if not behind else "behind" if not ahead
+                    else "diverged")
+        if ahead and base:  # only the run's own commits: not those of its base the target lacks
+            ahead = _count(project, tip, f"^{target_tip}", *exclude)
+        found = Landing(tip, target, target_tip, relation, ahead, behind)
+    if cache is not None:
+        cache[key] = found
+    return found
+
+
+def landing_words(landing: dict | None, run_id: str, target: str | None,
+                  accepted: bool = True) -> tuple[str, str]:
+    """The one wording of a run/target relation (`Landing.payload()`, as `view --json`
+    has it): the runs table's cell (`landed`, `2 to land`, `2 diverged`, `—`) and a
+    sentence saying what it means and what works."""
+    short = short_id(run_id)
+    if not target:
+        return "—", "Started on a detached HEAD: land with `autohelix land --into <branch>`."
+    if not landing:
+        return "—", f"Branch {target} or the run's commits are not available."
+    ahead, behind, relation = landing["commits"], landing["behind"], landing["relation"]
+    if relation == "diverged":
+        return f"{ahead} diverged", (
+            f"{target} diverged from run {short}: {plural(ahead, 'commit')} on autohelix/{run_id} that {target} "
+            f"lacks, {plural(behind, 'commit')} on {target} that it lacks, so {target} can't fast-forward. "
+            f"Merge by hand: `git merge autohelix/{run_id}`.")
+    if not ahead:
+        if not accepted:
+            return "—", "Nothing accepted yet."
+        past = f"; {target} has {plural(behind, 'commit')} past its tip" if relation == "behind" else ""
+        return "landed", f"Everything run {short} accepted is in {target}{past}."
+    return f"{ahead} to land", (f"{plural(ahead, 'commit')} on autohelix/{run_id} not in {target} yet; "
+                                f"{target} can fast-forward: `autohelix land {short}`.")
+
+
+def plural(count: int, word: str) -> str:
+    return f"{count} {word}{'s' * (count != 1)}"
 
 
 def project_runs(project: Path, config_path: str | None = None) -> list[tuple[RunPaths, dict]]:
@@ -879,7 +970,7 @@ def _new_run_notices(project: Path, config_path: str, target: str | None,
     if latest and not is_live(latest[0]):
         paths, data = latest
         short = short_id(paths.run_id)
-        count = unlanded(paths, data)
+        count = landing(paths, data).ahead
         if paths.run_id == imported and (not count or base and git(
                 project, "merge-base", "--is-ancestor", paths.ref, base, check=False).returncode == 0):
             return notices
@@ -1120,31 +1211,14 @@ def repair_history(paths: RunPaths) -> None:
         write_records(paths, records, mode="derived", iterations=stale)
 
 
-def target_ahead(paths: RunPaths, data: dict, tip: str | None = None) -> int:
-    """How many commits the run's target branch has past its tip (`tip`, else its ref)
-    when the tip is behind it (the user committed after it landed), else 0. Before the
-    baseline, 0: the run hasn't started from its base commit yet."""
-    target = data.get("target_branch")
-    if not target or not has_baseline(paths):
-        return 0
-    branch = git(paths.project, "rev-parse", "--verify", "-q", f"refs/heads/{target}^{{commit}}", check=False)
-    tip = tip or git(paths.project, "rev-parse", "--verify", "-q", f"{paths.ref}^{{commit}}", check=False).stdout.strip()
-    target_tip = branch.stdout.strip()
-    if branch.returncode or not tip or target_tip == tip:
-        return 0
-    if git(paths.project, "merge-base", "--is-ancestor", tip, target_tip, check=False).returncode:
-        return 0
-    return int(git(paths.project, "rev-list", "--count", f"{tip}..{target_tip}").stdout.strip() or 0)
-
-
-def target_ahead_refusal(paths: RunPaths, data: dict, count: int) -> str:
-    """Why an auto-landing `resume` refuses a run whose target moved past its tip: by
-    you or another run, after its tip, or since it started if it never accepted a change."""
+def target_ahead_refusal(paths: RunPaths, data: dict, found: Landing) -> str:
+    """Why an auto-landing `resume` refuses a run whose target moved past its tip (`found`
+    is `behind`): by you or another run, after its tip, or since it started if it never
+    accepted a change."""
     short = short_id(paths.run_id)
-    tip = git(paths.project, "rev-parse", "--verify", "-q", f"{paths.ref}^{{commit}}", check=False).stdout.strip()
-    when = (f"committed since run {short} started; it hasn't accepted any changes" if tip == data.get("base_commit")
-            else "committed after its tip")
-    return (f"{data['target_branch']} has {count} commit{'s' * (count != 1)} past run {short}'s tip ({when}). "
+    when = (f"committed since run {short} started; it hasn't accepted any changes"
+            if found.tip == data.get("base_commit") else "committed after its tip")
+    return (f"{found.target} has {plural(found.behind, 'commit')} past run {short}'s tip ({when}). "
             f"A run continues its own code: start a new run that continues from it, "
             f"`{run_command(data['config_path'])} --import {short}`, or continue without landing: "
             f"`autohelix resume {short} --land manual`.")
@@ -1172,28 +1246,24 @@ def reconcile(paths: RunPaths, data: dict, history, land_mode: str) -> tuple[str
                 ))
             break
     warning = None
-    target = data.get("target_branch")
     baseline_captured = any(row.iteration == 0 and row.accepted for row in history.load())
-    branch = git(paths.project, "rev-parse", f"refs/heads/{target}", check=False) if target else None
-    target_tip = branch.stdout.strip() if branch and branch.returncode == 0 else tip
+    found = landing(paths, data, tip)
+    short, target = short_id(paths.run_id), found.target
     # Nothing to say before the baseline, or when the target is the tip.
-    if baseline_captured and target_tip != tip:
-        def ancestor(a, b):
-            return git(paths.project, "merge-base", "--is-ancestor", a, b, check=False).returncode == 0
-
-        if ancestor(tip, target_tip):
-            count = target_ahead(paths, data, tip)
-            if land_mode == "auto":
-                raise RuntimeError(target_ahead_refusal(paths, data, count))
-            warning = (f"{target} has {count} commit{'s' * (count != 1)} past run {short_id(paths.run_id)}'s tip; "
-                       "it continues from its own tip, without them (manual landing: once it accepts a "
-                       f"change, merge it yourself: git merge autohelix/{paths.run_id}).")
-        elif not ancestor(target_tip, tip):
-            warning = (f"Target {target} diverged; continuing run {short_id(paths.run_id)} from its accepted tip. "
-                       "Landing requires a branch that can fast-forward.")
-        elif land_mode == "auto":  # in manual mode, behind just means not landed yet
-            warning = (f"Target {target} is behind run {short_id(paths.run_id)}; auto landing will reapply accepted code. "
-                       f"If a reset meant to discard the run, press Ctrl-C and `autohelix archive {short_id(paths.run_id)}`.")
+    if not baseline_captured:
+        pass
+    elif found.relation == "behind":
+        if land_mode == "auto":
+            raise RuntimeError(target_ahead_refusal(paths, data, found))
+        warning = (f"{target} has {plural(found.behind, 'commit')} past run {short}'s tip; "
+                   "it continues from its own tip, without them (manual landing: once it accepts a "
+                   f"change, merge it yourself: git merge autohelix/{paths.run_id}).")
+    elif found.relation == "diverged":
+        warning = (f"{landing_words(found.payload(), paths.run_id, target)[1]} "
+                   f"Run {short} continues from its accepted tip.")
+    elif found.relation == "ahead" and land_mode == "auto":  # in manual mode, ahead just means not landed yet
+        warning = (f"Target {target} is behind run {short}; auto landing will reapply accepted code. "
+                   f"If a reset meant to discard the run, press Ctrl-C and `autohelix archive {short}`.")
     return tip, warning
 
 
@@ -1203,15 +1273,16 @@ def land(paths: RunPaths, data: dict, expected_tip: str, into: str | None = None
     if not target:
         raise RuntimeError("This run started detached; land requires --into <branch>.")
     ref = f"refs/heads/{target}"
-    found = git(paths.project, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}", check=False)
-    if found.returncode:
+    found = landing(paths, data, expected_tip, into=target)
+    if not found.target_tip:
         raise RuntimeError(f"No branch {target}; create it first (git branch {target} <base>).")
-    old = found.stdout.strip()
-    if git(paths.project, "merge-base", "--is-ancestor", expected_tip, old, check=False).returncode == 0:
+    if found.relation in ("same", "behind"):  # already there
         return
     hint = f"Run {paths.run_id} remains available: git merge autohelix/{paths.run_id}"
-    if git(paths.project, "merge-base", "--is-ancestor", old, expected_tip, check=False).returncode:
-        raise RuntimeError(f"Cannot land: {target} diverged (including commits made during this segment). {hint}")
+    if found.relation != "ahead":
+        why = (landing_words(found.payload(), paths.run_id, target)[1] if found.relation
+               else f"can't compare {target} with the run's tip.")
+        raise RuntimeError(f"Cannot land: {why}" + ("" if found.relation else f" {hint}"))
     checkout = None
     for record in git(paths.project, "worktree", "list", "--porcelain").stdout.split("\n\n"):
         lines = record.splitlines()
@@ -1278,7 +1349,7 @@ def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
             if not force:
                 raise
             data = {}
-        count = unlanded(paths, data) if data else 0
+        count = landing(paths, data).ahead if data else 0
         if count and not force:
             raise RuntimeError(f"Run {short} has {count} unlanded commit{'s' * (count != 1)} on "
                                f"autohelix/{paths.run_id}: land them first (`autohelix land {short}`), "

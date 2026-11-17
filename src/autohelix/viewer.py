@@ -45,7 +45,8 @@ from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained
 from autohelix.config import ConfigError, MetricGate, load_config, template_text
 from autohelix.costs import summarize_costs
 from autohelix.history import History, latest_agent_call, record_seconds
-from autohelix.runs import RunPaths, config_relative, git, is_archived, is_transcript, last_activity, load_run_config
+from autohelix.runs import (RunPaths, config_relative, git, is_archived, is_transcript, landing, landing_words,
+                            last_activity, load_run_config)
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
 from autohelix.terminal import agent_text
@@ -886,7 +887,7 @@ class ProjectRuns:
         self.project = project.resolve()
         self._histories: dict[str, History] = {}
         self._configs: dict[Path, tuple[float, dict]] = {}
-        self._counts: dict[tuple[str, str], int | None] = {}
+        self._landings: dict = {}  # `runs.landing`'s cache
 
     def exists(self, run_id: str) -> bool:
         return bool(re.fullmatch(RUN_ID, run_id)) and (RunPaths(self.project).runs / run_id / "run.json").is_file()
@@ -952,18 +953,6 @@ class ProjectRuns:
         self._configs[path] = (mtime, summary)
         return summary
 
-    def _landing(self, target_tip: str | None, tip: str | None) -> dict | None:
-        """Commits on the run that its target lacks, and whether a fast-forward could add them."""
-        if not (target_tip and tip and COMMIT.fullmatch(target_tip) and COMMIT.fullmatch(tip)):
-            return None
-        key = (target_tip, tip)
-        if key not in self._counts:
-            count = git(self.project, "rev-list", "--count", f"{target_tip}..{tip}", check=False)
-            ancestor = git(self.project, "merge-base", "--is-ancestor", target_tip, tip, check=False)
-            self._counts[key] = None if count.returncode or not count.stdout.strip().isdigit() else {
-                "commits": int(count.stdout), "fast_forward": ancestor.returncode == 0}
-        return self._counts[key]
-
     @staticmethod
     def _metrics(records, directions: dict[str, str]) -> dict | None:
         """The latest accepted measurement (the code a land would deliver) against the baseline.
@@ -990,9 +979,9 @@ class ProjectRuns:
         attempts = [r for r in records if r.iteration > 0]
         cost = summarize_costs([usage for r in records for usage in r.cost_usages] + history.summary_usages())
         budget = status or {}
-        tip = refs.get(paths.ref)
         target = data.get("target_branch")
-        target_tip = refs.get(f"refs/heads/{target}") if target else None
+        accepted = sum(1 for r in attempts if r.accepted)
+        relation = landing(paths, data, refs=refs, cache=self._landings).payload()
         return {
             "id": run_id,
             "name": data.get("name"),
@@ -1010,7 +999,7 @@ class ProjectRuns:
                 "segment", "entry")},
             # `autohelix stop` asked the running segment to end ({requested_at, why, now}), else None.
             "stop_requested": pending_stop(paths, status),
-            "accepted": sum(1 for r in attempts if r.accepted),
+            "accepted": accepted,
             "metrics": self._metrics(records, config.get("directions") or {}),
             # The caps of the latest segment (`run`/`resume` flags), from its status; None
             # where it had none. Iterations and cost as run totals (spent before it plus its
@@ -1027,7 +1016,8 @@ class ProjectRuns:
             # The latest main-agent call's reported model and executable (`latest_agent_call`).
             "agent": latest_agent_call(records),
             "target_branch": target,
-            "landing": self._landing(target_tip, tip),
+            # `runs.landing`'s relation with the run list's words (`landing_words`).
+            "landing": relation and {**relation, "text": landing_words(relation, run_id, target, bool(accepted))[1]},
             "group": data.get("group"),
             "land": data.get("land") or "auto",  # recorded at creation
             **run_notes(data),

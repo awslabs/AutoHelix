@@ -81,6 +81,17 @@
   show the model the latest main-agent call reported, else the configured one.
 - A name in `AUTOHELIX_<CLI>_CMD` is resolved on PATH, like the default.
 
+### One run/target relation
+
+- **The run's tip against its target branch is computed in one place**
+  (same, ahead, behind or diverged, with the commit counts each way) and worded
+  in one: resume's refusal and warnings, `land`, `delete`, the notices at `run`,
+  the runs table, `view --terminal` and the web run list all read it, so they
+  agree (the web list counted commits of the run's base the target lacked).
+- `view --json`'s `landing` gains `relation`, `behind` and `text` (what it
+  means and what works; the web run list's tooltip). `land`'s refusal for a
+  diverged branch names the counts each way and `git merge autohelix/<id>`.
+
 ### Runs keep the machine awake
 
 - **`run` and `resume` keep the machine from sleeping while their segment
