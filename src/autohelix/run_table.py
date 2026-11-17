@@ -218,8 +218,8 @@ def _live_what(run: dict) -> str:
     return " · ".join(filter(None, [_phase(run), clean(entry), "stopping" if run.get("stop_requested") else ""]))
 
 
-def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = None, live: bool = False
-               ) -> tuple[list[Text], list[list[Text]], list]:
+def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = None, live: bool = False,
+               show_mark: bool = False) -> tuple[list[Text], list[list[Text]], list]:
     """`view`'s screen in three parts: the header and column header; each iteration's
     lines (its row and the lines under it); then the live row of the iteration under
     way, or the end block. `saved` (`Saved.read`): the stored config gives the header's
@@ -245,7 +245,7 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
         table = Table(_directions([run]) or {name: "higher" for r in run["iterations"] for name in r["metrics"] or {}},
                       width)
     fields += [("Group", run.get("group") or ""), ("Notes", _notes(run))]
-    head = terminal.header(title, fields, width, show_mark=False)
+    head = terminal.header(title, fields, width, show_mark)  # the mark as `run` has it (`terminal.shows_mark`)
     if saved.rows is None:  # no column header over no rows
         head += terminal.warning("The run's history can't be read: no iterations to show.", width)
     else:
@@ -269,8 +269,9 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
     return head, rows, tail
 
 
-def view_lines(data: dict, saved: Saved, width: int = 100, now: float | None = None) -> list[Text]:
-    head, rows, tail = view_parts(data, saved, width, now)
+def view_lines(data: dict, saved: Saved, width: int = 100, now: float | None = None,
+               show_mark: bool = False) -> list[Text]:
+    head, rows, tail = view_parts(data, saved, width, now, show_mark=show_mark)
     return head + [line for row in rows for line in row] + tail
 
 

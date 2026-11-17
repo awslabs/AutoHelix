@@ -272,7 +272,7 @@ that failed (`pytest -q failed (exit 1)`, `ask: … answered no`), a metric gate
 comparison with the iteration it compares against, or the agent's failure. A reason that doesn't fit goes on the line under the row, with failed
 observe entries and discarded out-of-scope paths. While an iteration runs, a live row
 shows its time and phase (`agent`, `gates`, `observe · bench` with the entry
-running, `stop`), and under it the commands that steer the run, dim:
+running, `stop`), and under it, after a blank line, the commands that steer the run, dim:
 `autohelix view krp3 · hint --run krp3 "…" · stop krp3 · Ctrl-C now` (`stop`
 ends it after the current iteration; Ctrl-C interrupts it now, progress kept),
 then two blank lines. Piped, the header has them as its `Steer` line instead. The end block says how the segment ended (`Done`, `Stopped`,

@@ -1189,7 +1189,8 @@ def view(run_id: str | None, path: Path, terminal: bool, once: bool, as_json: bo
         return
     console = Console()
     saved = run_table.Saved.read(RunPaths(project, selected))
-    screen.print_lines(console, run_table.view_lines(data, saved, console.width))
+    screen.print_lines(console, run_table.view_lines(data, saved, console.width,
+                                                     show_mark=screen.shows_mark(console)))
 
 
 def _view_live(project_path: Path, run_id: str) -> None:

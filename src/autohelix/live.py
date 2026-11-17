@@ -21,7 +21,7 @@ from autohelix import run_table
 from autohelix.display import LiveDisplay
 from autohelix.formatting import clean, format_duration
 from autohelix.replay import LogTail
-from autohelix.terminal import ROOM, cut, earlier_line, fold
+from autohelix.terminal import ROOM, cut, earlier_line, fold, shows_mark
 from autohelix.safe_open import open_run_log
 from autohelix.run_status import read_run_status, running_iteration
 from autohelix.runs import RunPaths, short_id
@@ -220,7 +220,7 @@ def _changes(project: Path, run_id: str | None) -> tuple:
 
 
 def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollower, status: dict | None, height: int,
-                width: int = 100) -> Group:
+                width: int = 100, show_mark: bool = False) -> Group:
     """The run's screen on top, the log panel below it, the status line last, and while
     the run is live `ROOM` blank lines under it (not on the terminal's last lines). The live row
     is timed when drawn (`terminal.LiveRow`).
@@ -233,7 +233,7 @@ def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollowe
         parts = ([Text(clean(data))], [], [])
     else:
         run, saved = data
-        head, rows, tail = run_table.view_parts(run, saved, width, live=True)
+        head, rows, tail = run_table.view_parts(run, saved, width, live=True, show_mark=show_mark)
         # `fit` counts one terminal line per item: a word wider than the screen (a path,
         # a branch name, left whole by `terminal.wrap`) is folded here, where Rich would.
         folded = lambda lines: [piece for line in lines for piece in fold(line, width)]  # noqa: E731
@@ -266,5 +266,5 @@ def view(project: Path, backend: str | None = None, console: Console | None = No
             state = (status, _changes(project, run_id))
             if read_at is None or state != seen or time.monotonic() - read_at >= REREAD_SECONDS:
                 data, read_at, seen = _read_run(runs, project, run_id), time.monotonic(), state
-            live.update(view_screen(data, log, status, console.size.height, console.width))
+            live.update(view_screen(data, log, status, console.size.height, console.width, shows_mark(console)))
             time.sleep(POLL_SECONDS)

@@ -576,10 +576,10 @@ def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int 
 
 
 def with_room(renderable, under: Text | None = None) -> Group:
-    """`renderable` (and the line `under` it) with `ROOM` blank lines under it: a live
-    row shown at the bottom of the terminal doesn't sit on its last lines (gone with the
-    live display)."""
-    return Group(renderable, *[under] * (under is not None), *[Text() for _ in range(ROOM)])
+    """`renderable` (then a blank line and the line `under` it) with `ROOM` blank lines
+    under it: a live row shown at the bottom of the terminal doesn't sit on its last
+    lines (gone with the live display)."""
+    return Group(renderable, *[Text(), under] * (under is not None), *[Text() for _ in range(ROOM)])
 
 
 def steer_text(short: str, interrupt: bool = True) -> str:

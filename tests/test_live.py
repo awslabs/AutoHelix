@@ -188,7 +188,8 @@ def test_the_time_cap_is_the_running_segments_own():
     run["status"] = {"state": "running", "iteration": 2, "segment_started_at": 1000 - 725,
                      "max_time_seconds": 3600, "phase": "agent", "phase_started_at": 990}
     assert W.run_table.time_cap(run, 1000) == "47m 55s left (--time 1h)"  # the cap as --time spells it
-    assert "left" not in W.run_table.format_run(data, W.run_table.Saved(), now=1000)  # the view's live row has the iteration's time
+    once = W.run_table.format_run(data, W.run_table.Saved(), now=1000)  # no stored config: the header still has it
+    assert "  Budget     47m 55s left (--time 1h)" in once and once.count("left") == 1  # the live row has the iteration's time
     run["status"].update(segment_started_at=1000 - 6000, max_time_seconds=5400)
     assert W.run_table.time_cap(run, 1000) == "time up (--time 1h30m)"
     config = Config.from_dict({"goal": "Go faster", "gates": ["true"]})

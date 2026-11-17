@@ -94,7 +94,9 @@ def live_screen(width: int) -> list:
     lines = _header(width, Budget(iterations=7, cost_usd=10))
     for row in ROWS[:4]:
         lines += table.add(row)
-    return lines + [table.live(4, 72, "agent"), terminal.steer_line("krp3", width)]
+    from rich.text import Text
+
+    return lines + [table.live(4, 72, "agent"), Text(), terminal.steer_line("krp3", width)]
 
 
 def resume_screen(width: int) -> list:
@@ -152,7 +154,7 @@ def view_screen(width: int, running: bool = False, readable: bool = True) -> lis
     from autohelix.run_table import Saved, view_lines
 
     saved = Saved(CONFIG, (ROWS[:4] if running else ROWS) if readable else None, FILES)
-    return view_lines({**PROJECT, "run": _run_payload(running)}, saved, width, now=T)
+    return view_lines({**PROJECT, "run": _run_payload(running)}, saved, width, now=T, show_mark=True)
 
 
 def dashboard_screen(width: int) -> list:

@@ -293,7 +293,8 @@ def test_terminal_tables_show_gates_summaries_and_titles(project):
                         "          observe review failed: exited 2",
                         "          discarded, outside the scope: tests/test_sort.py",
                         "  ✗ 2                      pytest -q failed (exit 1)"]
-    assert "  accepted   1  Use the built-in sort" in lines  # no landing to list it under
+    end = max(i for i, line in enumerate(lines) if "────" in line)  # the end block's rule
+    assert not any("Use the built-in sort" in line for line in lines[end:])  # it lists no summaries
 
     # On a short terminal, an iteration leaves with the lines under it; the baseline stays.
     head, iterations, tail = run_table.view_parts(runs.run("test"), saved)
