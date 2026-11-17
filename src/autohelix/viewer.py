@@ -39,6 +39,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from markdown_it import MarkdownIt
 
+from autohelix import run_table
 from autohelix.agents import AgentEventKind
 from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained, open_dir as _open_dir, open_file as _open_file, open_run_log
 from autohelix.config import ConfigError, MetricGate, load_config, template_text
@@ -48,6 +49,7 @@ from autohelix.runs import RunPaths, config_relative, git, is_archived, is_trans
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
 from autohelix.run_status import pending_stop, read_run_status, running_iteration
+from autohelix.terminal import RED, Row, Table
 from autohelix.workspace import ITERATION_DIR
 
 MAX_TEXT = 256 * 1024
@@ -62,6 +64,7 @@ LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
 FROZEN_PHASES = {"preparing checks", "checks", "observe", "review", "accept", "stop check"}
 ASSETS = {
     "/": ("dashboard.html", "text/html; charset=utf-8"),
+    "/common.js": ("common.js", "text/javascript; charset=utf-8"),
     "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
     "/viewer.css": ("viewer.css", "text/css; charset=utf-8"),
     "/viewer.js": ("viewer.js", "text/javascript; charset=utf-8"),
@@ -220,7 +223,7 @@ def _note_order(name: str):
 class RunData:
     """Reads one run's state (`.autohelix/runs/<id>/`) for the viewer."""
 
-    def __init__(self, project: Path, run_id: str):
+    def __init__(self, project: Path, run_id: str, runs: "ProjectRuns | None" = None):
         if not run_id:
             raise ValueError("RunData reads one named run")
         self.project = project.resolve()
@@ -239,6 +242,7 @@ class RunData:
         self._subject_cache: dict[str, str | None] = {}
         self._repository = None
         self._configs: dict[Path, tuple[tuple, object, str | None]] = {}  # path -> (stat key, config, text)
+        self._runs = runs or ProjectRuns(self.project)  # the server's, shared with the run list
 
     def records(self):
         """The run's history (diffs read it outside the server's lock)."""
@@ -314,29 +318,74 @@ class RunData:
             })
         return rows
 
+    def _words(self, config, records, rows: list[dict]) -> dict:
+        """The console's Table over the history (`terminal.Table`; its rules are private,
+        so a rename there fails the viewer's tests). Each row gets `why` (a rejection in the
+        console's words: `python3 check.py failed (exit 1)`, `speed 6.5% worse than iter 3
+        (5% allowed)`, `agent timed out`), `notes` (the console's lines under it: a gate
+        failing at the baseline, a failed observe entry, discarded paths), each with `error`
+        for the console's red, and `tip`: whether it moved the tip, the latest accepted
+        measurement (as the run list, `ProjectRuns._metrics`). Returns the tip,
+        `{metric: {value, iteration}}`."""
+        table = Table.of(config, 200) if config else Table({}, 200)
+        for record, row in zip(records, rows):
+            line = Row.of(record)
+            why, style = table._reason(line)
+            row["why"] = {"text": why, "error": style == RED} if why else None
+            row["notes"] = [{"text": text, "error": style == RED} for text, style in table._notes(line)]
+            table._remember(line)
+            row["tip"] = bool(record.accepted and record.metrics)
+        latest = ProjectRuns._metrics(records, {})
+        return {m["name"]: {"value": m["value"], "iteration": latest["iteration"]} for m in latest["values"]} if latest else {}
+
+    def _run_row(self, records, status: dict | None) -> dict | None:
+        """What the stats line says beside the metrics, as the run list does: iterations
+        (`3/14`, `run_words`), the run's time (the recorded iterations', the baseline's
+        included, and a running iteration's so far) and what is left of --time, accepted
+        iterations, landing (`ProjectRuns.landing_state`) and mode."""
+        try:
+            data = self.paths.read_identity()
+        except RuntimeError:
+            return None
+        now = time.time()
+        seconds = sum(record_seconds(r) for r in records)
+        run = {"status": status, "progress": {"iterations": max((r.iteration for r in records), default=0),
+                                              "max_iterations": (status or {}).get("max_iterations")}}
+        started = status.get("iteration_started_at") if run_table._under_way(run) else None
+        if isinstance(started, (int, float)):
+            seconds += max(0.0, now - started)
+        return {"id": self.paths.run_id, "iterations": run_table._iterations(run), "seconds": seconds,
+                "time_left": run_table.time_cap(run, now),
+                "accepted": sum(1 for r in records if r.iteration > 0 and r.accepted),
+                **self._runs.landing_state(self.paths, data, self._runs._refs()), "land": data.get("land") or "auto"}
+
     def state(self) -> dict:
         config, config_path = self._config()
         records = self.records()
         total_cost = summarize_costs([usage for row in records for usage in row.cost_usages]
                                      + self.history.summary_usages())
         iterations = self.iterations(records)
+        tip = self._words(config, records, iterations)
         status = read_run_status(self.project, self.paths.run_id)
+        # `autohelix stop` asked the running segment to end, as on the run list.
+        stop = pending_stop(self.paths, status)
         return {
             "project": self.project.name,
             "goal": config.goal if config else None,
             "directions": config.metric_directions() if config else {},
-            "status": status,
-            # `autohelix stop` asked the running segment to end, as on the run list.
-            "stop_requested": pending_stop(self.paths, status),
+            "status": with_words(status, stop),
+            "stop_requested": stop,
             "run_id": self.paths.run_id,
             "config": self._config_summary(config, config_path),
             "notes_files": sorted(self._notes_files(), key=_note_order),
             "iterations": iterations,
+            "tip": tip,
             "cost": {
                 "cost_usd": total_cost.cost_usd,
                 "incomplete": total_cost.incomplete,
             },
             "report": self._report(),
+            "run": self._run_row(records, status),
             **self._run_notes(),
         }
 
@@ -370,21 +419,25 @@ class RunData:
         return record
 
     def changes(self, n: int) -> str | None:
-        """Changes vs baseline: an accepted iteration's code against the run's start, or a
-        running one's edits so far. Runs git; the server calls it outside its lock."""
+        """A running iteration's edits so far (a finished one's change is `attempt_diff`).
+        Runs git; the server calls it outside its lock."""
+        if self._record(n) is not None:
+            return None
+        base = _object(self.paths.read_identity().get("base_commit"))
+        return self._live_diff(n, base) if base else None
+
+    def landed_diff(self, n: int) -> str | None:
+        """Everything an accepted iteration's code changed since the run's start (report.html)."""
         record = self._record(n)
         base = _object(self.paths.read_identity().get("base_commit"))
-        if not base:
+        if not (record and record.accepted and base and _object(record.commit)):
             return None
-        if record is None:
-            return self._live_diff(n, base)
-        if record.accepted and _object(record.commit):
-            return self._diff(base, record.commit)
-        return None
+        return self._diff(base, record.commit)
 
     def iteration(self, n: int, logs: bool = True, diff: bool = True, outputs: bool = True) -> dict:
-        """One iteration's card. Without `outputs` (report.html), observe entries keep their
-        status and review text but not their stdout, stderr or captured files."""
+        """One iteration, for the run page's panel. Without `outputs` (report.html),
+        observe entries keep their status and review text but not their stdout, stderr
+        or captured files."""
         status = read_run_status(self.project, self.paths.run_id) or {}
         record = self._record(n, status)
         changes = self.changes(n) if diff else None
@@ -668,7 +721,9 @@ class RunData:
         routes = {"/api/state": state}
         for r in state["iterations"]:
             n = r["iteration"]
-            routes[f"/api/iteration/{n}"] = self.iteration(n, logs=False, diff=n == final, outputs=False)
+            routes[f"/api/iteration/{n}"] = self.iteration(n, logs=False, diff=False, outputs=False)
+        if final is not None:
+            routes[f"/api/iteration/{final}"]["diff"] = self.landed_diff(final)
         for name in state["notes_files"]:
             # The page builds this URL with encodeURIComponent, which leaves !'()* as is.
             routes["/api/notes/" + quote(name, safe="!'()*")] = self.note(name)
@@ -788,8 +843,9 @@ class RunData:
         the frozen candidate once the agent's copy is gone.
 
         Git runs from outside the copy, through the user's repository, with an
-        index of the viewer's own (kept per copy so unchanged files aren't rehashed;
-        one request at a time uses it)."""
+        index of the viewer's own (kept per copy so unchanged files aren't reread;
+        one request at a time uses it): the base's entries, new files intent-to-add,
+        diffed against the work tree. Nothing is hashed into the user's objects."""
         if not _object(base):
             return None
         copy = self._agent_copy(n)
@@ -812,9 +868,20 @@ class RunData:
                         for old in folder.glob(f"view-{run}-*.index"):
                             old.unlink(missing_ok=True)  # an earlier iteration's copy
                         repo.git("read-tree", base, index=index, timeout=5)
-                    repo.git("add", "-A", "--", ".", *repo.unfrozen_excludes(copy, index, timeout=5),
-                             work_tree=copy, index=index, timeout=5)
-                    diff, error = self._run_diff(["--cached", base, "--"], work_tree=copy, index=index)
+                    # Nothing is staged: new files are only marked intent-to-add, and the
+                    # diff reads the work tree, so no blob is written to the user's objects.
+                    # (`--pathspec-from-file`: git 2.25 or later; an older git leaves the
+                    # live diff empty, "failed".)
+                    excludes = repo.unfrozen_excludes(copy, index, timeout=5)
+                    new = repo.git("ls-files", "-z", "--others", "--exclude-standard", "--", ".", *excludes,
+                                   work_tree=copy, index=index, timeout=5).stdout
+                    if new.strip(b"\0"):
+                        specs = b"".join(b":(top,literal)" + path + b"\0" for path in new.split(b"\0") if path)
+                        repo.git("add", "-N", "--pathspec-from-file=-", "--pathspec-file-nul", input=specs,
+                                 work_tree=copy, index=index, timeout=5)
+                    # Stat data for the next poll: unchanged files aren't read again.
+                    repo.git("update-index", "-q", "--refresh", work_tree=copy, index=index, check=False, timeout=5)
+                    diff, error = self._run_diff([base, "--"], work_tree=copy, index=index)
             except (OSError, RuntimeError, subprocess.TimeoutExpired):
                 diff, error = None, "failed"
             if error is not None and index is not None:
@@ -834,6 +901,48 @@ class RunData:
 RUN_ID = r"[a-z0-9][a-z0-9-]{0,50}"
 # `dashboard --json` / `view --json` (and /api/runs): fields are only ever added.
 JSON_SCHEMA = 1
+
+
+def _tone(style: str | None) -> str | None:
+    """A console style as the pages' colour class: red is `error`, yellow `warning`."""
+    return "error" if style == RED else "warning" if style else None
+
+
+def with_words(status: dict | None, stop_requested=None) -> dict | None:
+    """The status with the console's words for it (the stored values stay as they are;
+    this is where the pages get the words). Running: `line`, `view`'s status line
+    (`live.status_line`: `Running · iteration 3 · gates · 12s`), and `phase_word`, the live
+    row's words (`run_table._live_what`: agent, gates, `observe · bench`, stop, summary;
+    `baseline` at iteration 0; `· stopping` once `autohelix stop` asked, said only there,
+    as `view` does). Else
+    `outcome`, the end block's first line (`run_table._outcome`: {word: Done, detail:
+    iteration budget reached (14), tone: `error` where the console writes it red,
+    `warning` yellow})."""
+    if not status:
+        return status
+    run = {"status": status, "stop_requested": stop_requested}
+    if status.get("state") == "running":
+        from autohelix import live  # it imports this module
+        return {**status, "line": live.status_line(status), "phase_word": run_table._live_what(run)}
+    word, detail, style = run_table._outcome(run)
+    return {**status, "outcome": {"word": word, "detail": detail, "tone": _tone(style)}}
+
+
+def run_words(run: dict, now: float) -> dict:
+    """A run list row's cells in the console dashboard's words (run_table's): `state`
+    (running, running (stopping), finished, stopped unexpectedly, archived), `tone` (its
+    colour: `running`, `error`, `warning` or None), `iterations` (`3/14`, the one under
+    way counted), `activity` (`agent 1m 12s` while running, else `5m ago`), `spent`
+    (`spent 24s · $4.34`, a running iteration's time so far included) and `time_left`
+    (`47m 55s left (--time 1h)` while a segment with --time runs)."""
+    if run.get("error"):
+        return {"state": "unreadable", "tone": "error"}
+    live = run_table._live(run)
+    state = run_table._word(run)
+    return {"state": state, "tone": "running" if live else _tone(run_table.STATE_STYLES.get(state)),
+            "iterations": run_table._iterations(run),
+            "activity": run_table._phase(run, now) if live else run_table._ago(run.get("last_activity"), now),
+            "spent": run_table._spent(run, now), "time_left": run_table.time_cap(run, now)}
 
 
 def run_notes(data: dict) -> dict:
@@ -934,6 +1043,12 @@ class ProjectRuns:
                 "commits": int(count.stdout), "fast_forward": ancestor.returncode == 0}
         return self._counts[key]
 
+    def landing_state(self, paths: RunPaths, data: dict, refs: dict[str, str]) -> dict:
+        """`target_branch` (run.json's) and `landing` (`_landing`: the run's commits it lacks)."""
+        target = data.get("target_branch")
+        tip = refs.get(paths.ref)
+        return {"target_branch": target, "landing": self._landing(refs.get(f"refs/heads/{target}") if target else None, tip)}
+
     @staticmethod
     def _metrics(records, directions: dict[str, str]) -> dict | None:
         """The latest accepted measurement (the code a land would deliver) against the baseline.
@@ -960,9 +1075,6 @@ class ProjectRuns:
         attempts = [r for r in records if r.iteration > 0]
         cost = summarize_costs([usage for r in records for usage in r.cost_usages] + history.summary_usages())
         budget = status or {}
-        tip = refs.get(paths.ref)
-        target = data.get("target_branch")
-        target_tip = refs.get(f"refs/heads/{target}") if target else None
         return {
             "id": run_id,
             "name": data.get("name"),
@@ -994,8 +1106,7 @@ class ProjectRuns:
                 "seconds": sum(record_seconds(r) for r in records),
                 "max_seconds": budget.get("max_time_seconds"),  # the segment's, not a run total
             },
-            "target_branch": target,
-            "landing": self._landing(target_tip, tip),
+            **self.landing_state(paths, data, refs),
             "group": data.get("group"),
             "land": data.get("land") or "auto",  # recorded at creation
             **run_notes(data),
@@ -1006,7 +1117,7 @@ def write_static(project: Path, *, run_id: str) -> Path:
     """Write report.html: the viewer page with this run's data built in."""
     resources = files("autohelix").joinpath("viewer_resources")
     read = lambda name: resources.joinpath(name).read_text(encoding="utf-8")  # noqa: E731
-    # Each logo once, in the data; the page's theme code sets the <img> from it.
+    # Each logo once, in the data; the page sets the <img> from it for the system's theme.
     logos = {theme: "data:image/svg+xml," + quote(read(f"autohelix-{theme}.svg"), safe=" =:/-.,;'\"()")
              for theme in ("light", "dark")}
     data = {"routes": RunData(project, run_id).snapshot(), "logos": logos, "saved_at": time.time()}
@@ -1017,10 +1128,12 @@ def write_static(project: Path, *, run_id: str) -> Path:
             .replace('<meta charset="utf-8">',
                      f'<meta charset="utf-8">\n  <meta http-equiv="Content-Security-Policy" content="{STATIC_CSP}">')
             .replace('<link rel="stylesheet" href="/viewer.css">', f"<style>\n{read('viewer.css')}</style>")
+            .replace('<script src="/common.js" defer></script>\n', "")
             .replace('<script src="/viewer.js" defer></script>', "")
             .replace('  <link rel="icon" href="/logo-light.svg">\n', "")
             .replace(' src="/logo-light.svg"', "")
             .replace("</body>", f"<script>window.AUTOHELIX_SNAPSHOT = {script};</script>\n"
+                                f"<script>\n{read('common.js')}</script>\n"
                                 f"<script>\n{read('viewer.js')}</script>\n</body>"))
     out = RunPaths(project, run_id).report_html
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1045,7 +1158,7 @@ def make_server(project: Path, port: int = 8765) -> ThreadingHTTPServer:
             return None
         with lock:
             if rid not in others:
-                others[rid] = RunData(project, rid)
+                others[rid] = RunData(project, rid, dashboard)
             return others[rid]
 
     def run_route(rd: RunData, path: str) -> tuple | None:
@@ -1108,7 +1221,13 @@ def make_server(project: Path, port: int = 8765) -> ThreadingHTTPServer:
                     return 200, resources.joinpath("index.html").read_bytes(), "text/html; charset=utf-8"
             elif path == "/api/runs":
                 with lock:
-                    return 200, dashboard.runs()
+                    payload = dashboard.runs()
+                now = time.time()
+                for row in payload["runs"]:  # the console dashboard's words
+                    row["words"] = run_words(row, now)
+                    if row.get("status"):
+                        row["status"] = with_words(row["status"], row.get("stop_requested"))
+                return 200, payload
             elif match := re.fullmatch(rf"/api/run/({RUN_ID})(/.+)", path):
                 if (rd := run_data(match[1])) and (response := run_route(rd, match[2])):
                     return response

@@ -269,11 +269,5 @@ def test_why_on_the_web_pages_is_text(project):
     paths.identity.write_text(json.dumps(data))
     row = ProjectRuns(project).runs()["runs"][0]
     assert row["why"] is None and row["import"] is None
-    from importlib.resources import files
-
-    resources = files("autohelix").joinpath("viewer_resources")
-    for name in ("dashboard.js", "viewer.js"):
-        script = resources.joinpath(name).read_text()
-        assert "run.why && `Why: ${run.why}`" in script  # set as textContent, never as HTML
-    assert "className: 'status-sub run-why', textContent: notes" in resources.joinpath("dashboard.js").read_text()
-    assert "setText('why', why)" in resources.joinpath("viewer.js").read_text()
+    # The pages write these notes as text (common.js runNotes; tests/test_viewer_js.py
+    # checks that only server-rendered Markdown is ever set as HTML).
