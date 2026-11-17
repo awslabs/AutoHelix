@@ -127,15 +127,33 @@ function runNotes(run) {
     run.archive_why && `archived: ${run.archive_why}`].filter(Boolean).join(' · ');
 }
 
-// The logo for the system's light or dark theme (the colours follow it by CSS).
-function followTheme(logos = { light: '/logo-light.svg', dark: '/logo-dark.svg' }) {
-  const dark = matchMedia('(prefers-color-scheme: dark)');
-  const apply = () => { $('logo').src = dark.matches ? logos.dark : logos.light; };
-  dark.addEventListener('change', apply);
+// The theme button: Auto (follow the system) -> Light -> Dark, remembered in this
+// browser (both pages share the key); the logo follows the theme in use.
+const THEMES = { auto: '◐ Auto', light: '☀ Light', dark: '☾ Dark' };
+
+function themeButton(logos = { light: '/logo-light.svg', dark: '/logo-dark.svg' }) {
+  const system = matchMedia('(prefers-color-scheme: dark)');
+  let theme = 'auto';
+  try { theme = localStorage.getItem('autohelix-theme') || 'auto'; } catch { /* storage blocked */ }
+  if (!(theme in THEMES)) theme = 'auto';
+  const apply = () => {
+    if (theme === 'auto') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+    const dark = theme === 'dark' || (theme === 'auto' && system.matches);
+    $('logo').src = dark ? logos.dark : logos.light;
+    $('theme').textContent = THEMES[theme];
+  };
+  $('theme').addEventListener('click', () => {
+    const order = Object.keys(THEMES);
+    theme = order[(order.indexOf(theme) + 1) % order.length];
+    try { localStorage.setItem('autohelix-theme', theme); } catch { /* still applies to this page */ }
+    apply();
+  });
+  system.addEventListener('change', apply);
   apply();
 }
 
 if (typeof module !== 'undefined') {
   module.exports = { fmtNumber, fmtChange, better, fmtDuration, fmtLimit, fmtMoney, fmtCap, plural,
-    shortId, landingWords, splitRunId, runNotes };
+    shortId, landingWords, splitRunId, runNotes, themeButton };
 }

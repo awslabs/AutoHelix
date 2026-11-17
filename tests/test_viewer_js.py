@@ -113,3 +113,45 @@ def test_both_pages_load_common_js_first():
     for page, script in (("index.html", "viewer.js"), ("dashboard.html", "dashboard.js")):
         scripts = re.findall(r'<script src="/([\w.]+)"', RESOURCES.joinpath(page).read_text())
         assert scripts == ["common.js", script]
+
+
+THEME_RUNNER = """
+// A page with the header's theme button and logo, the system in dark mode, and the
+// stored choice from argv; click the button three times.
+const nodes = {};
+const node = (id) => (nodes[id] ??= { id, dataset: {}, listeners: {}, addEventListener(type, f) { this.listeners[type] = f; } });
+const store = { 'autohelix-theme': process.argv[2] };
+globalThis.document = { getElementById: node, documentElement: node('html') };
+globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; } };
+globalThis.matchMedia = () => ({ matches: true, addEventListener() {} });
+const { themeButton } = require(process.argv[1]);
+const seen = () => [nodes.theme.textContent, nodes.html.dataset.theme ?? 'system', nodes.logo.src, store['autohelix-theme']];
+themeButton();
+const states = [seen()];
+for (let i = 0; i < 3; i++) { nodes.theme.listeners.click(); states.push(seen()); }
+process.stdout.write(JSON.stringify(states));
+"""
+
+
+def test_theme_button_cycles_and_remembers():
+    def clicks(stored):
+        out = subprocess.run(["node", "-e", THEME_RUNNER, str(RESOURCES.joinpath("common.js")), stored],
+                             capture_output=True, text=True, check=True, timeout=30)
+        return json.loads(out.stdout)
+
+    # Auto follows the (dark) system; Light and Dark force one, and the logo follows.
+    assert clicks("") == [
+        ["◐ Auto", "system", "/logo-dark.svg", ""],
+        ["☀ Light", "light", "/logo-light.svg", "light"],
+        ["☾ Dark", "dark", "/logo-dark.svg", "dark"],
+        ["◐ Auto", "system", "/logo-dark.svg", "auto"],
+    ]
+    # A stored choice is where it starts; an unknown one is Auto.
+    assert clicks("light")[0][:2] == ["☀ Light", "light"]
+    assert clicks("sepia")[0][:2] == ["◐ Auto", "system"]
+
+
+def test_both_pages_have_the_theme_button():
+    for page in ("index.html", "dashboard.html"):
+        ids = re.findall(r'\sid="([\w-]+)"', RESOURCES.joinpath(page).read_text())
+        assert {"theme", "logo", "status"} <= set(ids), page

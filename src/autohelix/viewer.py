@@ -929,9 +929,10 @@ def _tone(style: str | None) -> str | None:
 def with_words(status: dict | None, stop_requested=None) -> dict | None:
     """The status with the console's words for it (the stored values stay as they are;
     this is where the pages get the words). Running: `line`, `view`'s status line
-    (`live.status_line`: `Running · iteration 3 · gates · 12s`, `· stopping` added once
-    `autohelix stop` asked), and `phase_word`, the live row's words (`run_table._live_what`:
-    agent, gates, `observe · bench`, stop, summary; `baseline` at iteration 0). Else
+    (`live.status_line`: `Running · iteration 3 · gates · 12s`), and `phase_word`, the live
+    row's words (`run_table._live_what`: agent, gates, `observe · bench`, stop, summary;
+    `baseline` at iteration 0; `· stopping` once `autohelix stop` asked, said only there,
+    as `view` does). Else
     `outcome`, the end block's first line (`run_table._outcome`: {word: Done, detail:
     iteration budget reached (14), tone: `error` where the console writes it red,
     `warning` yellow})."""
@@ -940,8 +941,7 @@ def with_words(status: dict | None, stop_requested=None) -> dict | None:
     run = {"status": status, "stop_requested": stop_requested}
     if status.get("state") == "running":
         from autohelix import live  # it imports this module
-        return {**status, "line": " · ".join(filter(None, [live.status_line(status), stop_requested and "stopping"])),
-                "phase_word": run_table._live_what(run)}
+        return {**status, "line": live.status_line(status), "phase_word": run_table._live_what(run)}
     word, detail, style = run_table._outcome(run)
     return {**status, "outcome": {"word": word, "detail": detail, "tone": _tone(style)}}
 

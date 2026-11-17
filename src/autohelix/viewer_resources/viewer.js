@@ -139,8 +139,8 @@ function renderStats() {
     stats.push([name, fmtNumber(tip.value), moved ? [tip.value, base, state.directions[name]] : null,
       !moved ? 'baseline' : isNumber(base) ? `from ${fmtNumber(base)} · iter ${tip.iteration}` : `iter ${tip.iteration}`]);
   }
-  if (run && run.iterations !== '0') stats.push(['Iterations', run.iterations, null, `${run.accepted} accepted`]);
   if (run) {
+    stats.push(['Iterations', run.iterations, null, `${run.accepted} accepted`]);
     stats.push(['Time', fmtDuration(run.seconds) || '—', null, run.time_left]);
     stats.push(['Cost', fmtMoney(cost.cost_usd, cost.incomplete) || '—', null, cost.incomplete ? 'some call costs unknown' : '']);
     const landing = landingWords(run, state.status?.state === 'running');
@@ -408,7 +408,7 @@ function renderPanel() {
   $('panel-title').replaceChildren(label(n), ...[
     outcome === 'accepted' && el('span', { className: 'mark accepted', textContent: ' ✓ accepted' }),
     outcome === 'rejected' && el('span', { className: 'mark rejected', textContent: ' ✗ rejected' }),
-    outcome === 'running' && el('span', { className: 'mark running', textContent: ` ● ${state.status.phase_word} · ${since(state.status.phase_started_at)}` }),
+    outcome === 'running' && el('span', { className: 'mark running', textContent: ' ● running' }), // what: its row, the status line
     why && el('span', { className: `why${why.error ? ' error' : ''}`, textContent: ` · ${why.text}` }),
   ].filter(Boolean));
   const order = iterationOrder();
@@ -921,7 +921,7 @@ async function loop() {
   }
 }
 
-followTheme(SNAPSHOT?.logos);
+themeButton(SNAPSHOT?.logos);
 $('metric').addEventListener('change', (e) => { metric = e.target.value; render(); });
 $('goal-more').addEventListener('click', () => {
   const open = $('goal').classList.toggle('expanded');

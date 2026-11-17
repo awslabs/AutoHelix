@@ -231,7 +231,7 @@ def test_status_words_are_the_consoles(monkeypatch):
     assert running("benchmark", 2, entry="bench") == ("Running · iteration 2 · observe · 12s", "observe · bench")
     assert running("checks", 0) == ("Running · baseline · gates · 12s", "baseline")
     assert running("report", 14) == ("Running · writing the summary · 12s", "summary")
-    assert running("agent", 2, stop={"now": False}) == ("Running · iteration 2 · agent · 12s · stopping",
+    assert running("agent", 2, stop={"now": False}) == ("Running · iteration 2 · agent · 12s",
                                                         "agent · stopping")
     assert "outcome" not in with_words({"state": "running", "phase": "agent", "iteration": 2})
     # A run that isn't running: the end block's first line, red or yellow where the console's is.

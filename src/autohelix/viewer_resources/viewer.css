@@ -1,4 +1,4 @@
-/* The console's calm colours, following the system's light or dark theme: ✓ green,
+/* The console's calm colours, light or dark (the system's, or the theme button's): ✓ green,
    ✗ muted red, teal the one accent (what is live, links). Red text only for real errors,
    yellow for an interrupted run; a finished one plain, as in the console. */
 :root {
@@ -15,6 +15,9 @@
   --code: light-dark(#f1f4f5, #1d2629);
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+/* The header's theme button can force light or dark. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -44,6 +47,7 @@ h1 { margin: 0; font-size: 22px; font-weight: 650; }
 .run-why { max-width: 90ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .where { font-family: var(--mono); }
 .top-right { display: flex; align-items: center; gap: 18px; flex-shrink: 0; }
+.theme { border-radius: 999px; padding: 3px 10px; }
 .logo { height: 26px; width: auto; display: block; }
 .status { padding: 4px 12px; border-radius: 999px; font-weight: 550; font-size: 13px; background: var(--panel); border: 1px solid var(--line); }
 .status.running { color: var(--accent); border-color: var(--accent); }
@@ -54,7 +58,8 @@ h1 { margin: 0; font-size: 22px; font-weight: 650; }
 /* Narrow: the status under the title, not squeezing it. */
 @media (max-width: 900px) {
   .top { flex-direction: column; gap: 10px; }
-  .top-right { width: 100%; justify-content: space-between; }
+  .top-right { width: 100%; }
+  .theme { margin-left: auto; }
 }
 
 /* config strip */
@@ -197,15 +202,24 @@ pre.diff { margin: 4px 0 8px; white-space: pre; overflow-x: auto; border: 1px so
 .ev.think { color: var(--muted); font-style: italic; }
 .ev.error { color: var(--bad); }
 
-/* run list */
+/* run list: Goal and Last active are columns; narrow, the goal goes under the run's
+   name and when it was last active beside its state. */
 .runs-page { padding: 16px 28px 40px; }
 .run-id { font-family: var(--mono); font-weight: 600; color: var(--text); text-decoration: none; }
 .run-id:hover { color: var(--accent); }
 .run-date { margin-left: 8px; font-size: 12px; color: var(--muted); }
-.runs td.run { max-width: 0; width: 100%; }
-.run-title, .runs .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-config { font-family: var(--mono); }
 .sub { margin-top: 2px; font-size: 12px; color: var(--muted); }
 .runs td { white-space: nowrap; }
+.runs td.goal { width: 100%; max-width: 0; }
+.run-title, .runs .sub { overflow: hidden; text-overflow: ellipsis; }
+.runs .narrow { display: none; }
+@media (max-width: 900px) {
+  .runs .wide { display: none; }
+  .runs span.narrow { display: inline; }
+  .runs div.narrow { display: block; }
+  .runs td:first-child { width: 100%; max-width: 0; }
+}
 .runs tr.archived { opacity: 0.55; }
 .runs th select { font-size: 12px; color: var(--muted); padding: 0 4px; }
 .state.running { color: var(--accent); }

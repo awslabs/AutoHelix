@@ -10,9 +10,9 @@ let showArchived = false;
 const live = (run) => run.status?.state === 'running';
 
 // The console dashboard's cells (the server's `words`): line 1 the state and what a
-// running run is doing (`agent 1m 12s`), else when it was last active; line 2 time
-// (baseline included) and cost so far, and what is left of --time. Stop request,
-// stop reason, budgets and dates are in the tooltip.
+// running run is doing (`agent 1m 12s`; narrow, also when a stopped one was last active,
+// whose column is gone there); line 2 time (baseline included) and cost so far, and
+// what is left of --time. Stop request, stop reason, budgets and dates are in the tooltip.
 function statusCell(run) {
   const w = run.words;
   const s = run.status;
@@ -30,7 +30,7 @@ function statusCell(run) {
   const spent = [w.spent, w.time_left].filter(Boolean).join(' · ');
   return el('td', { title: notes.filter(Boolean).join('\n') },
     el('div', {}, el('span', { className: `state ${w.tone || ''}`, textContent: w.state }),
-      w.activity ? el('span', { className: 'muted', textContent: ` ${w.activity}` }) : null),
+      w.activity ? el('span', { className: live(run) ? 'muted' : 'muted narrow', textContent: ` ${w.activity}` }) : null),
     spent ? el('div', { className: 'sub', textContent: spent }) : null);
 }
 
@@ -64,25 +64,34 @@ function landingCell(run) {
   return el('td', { className: todo ? '' : 'muted', textContent: text, title: hint });
 }
 
-// The run: its name and start, the group and config, then the goal's first line and
-// run.json's notes (why, what it continues from, why archived), always as text.
+// The run: its name and start, the group, the config file under them. Narrow, the
+// goal's cell goes under them too (goalLines).
 function runCell(run, href) {
   const { name, started } = splitRunId(run.id);
   const file = run.config_file && run.config_file
     + (run.config_missing ? ' (not stored)' : run.config_invalid ? ' (invalid)' : '');
-  const notes = runNotes(run);
-  return el('td', { className: 'run' },
+  return el('td', {},
     el('div', {}, el('a', { className: 'run-id', href, textContent: name, title: run.id }),
       run.group ? el('span', { className: 'muted', title: 'Group: runs that see each other\'s notes and code', textContent: ` (${run.group})` }) : null,
       started ? el('span', { className: 'run-date', textContent: started, title: 'Started' }) : null),
-    run.title ? el('div', { className: 'run-title', textContent: run.title, title: run.goal || run.title }) : null,
-    file || notes ? el('div', { className: 'sub', textContent: [file, notes].filter(Boolean).join(' · '), title: notes }) : null);
+    file ? el('div', { className: 'sub run-config', textContent: file, title: 'Config file' }) : null,
+    el('div', { className: 'narrow' }, ...goalLines(run)));
+}
+
+// The goal's first line (the whole goal on hover) and run.json's notes under it (why,
+// what it continues from, why archived), always as text.
+function goalLines(run) {
+  const notes = runNotes(run);
+  return [run.title ? el('div', { className: 'run-title', textContent: run.title, title: run.goal || run.title }) : null,
+    notes ? el('div', { className: 'sub', textContent: notes, title: notes }) : null];
 }
 
 function runRow(run) {
   const href = `/run/${encodeURIComponent(run.id)}/`;
   const tr = el('tr', { className: run.archived ? 'archived' : '', tabIndex: 0 },
-    runCell(run, href), statusCell(run), iterationsCell(run), metric ? metricCell(run) : null, landingCell(run));
+    runCell(run, href), statusCell(run), iterationsCell(run), metric ? metricCell(run) : null, landingCell(run),
+    el('td', { className: 'wide muted', textContent: live(run) ? 'now' : run.words.activity || '' }),
+    el('td', { className: 'wide goal' }, ...goalLines(run)));
   tr.addEventListener('click', (e) => { if (!e.target.closest('a')) location.href = href; });
   tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') location.href = href; });
   return tr;
@@ -147,6 +156,6 @@ async function loop() {
   }
 }
 
-followTheme();
+themeButton();
 $('metric').addEventListener('change', (e) => { metric = e.target.value; if (data) render(); });
 loop();
