@@ -43,7 +43,7 @@ different environments. The user docs are at the path the session's first
 prompt gives; read them when needed.
 
 Recommend, don't interview. From the user's answer and the project (its
-tests, benchmarks, instructions), choose scope, gates, observe entries, backend,
+tests, benchmarks, instructions), choose scope, gates, observe entries, the agent CLI and model,
 and the budget of the launch command. Ask before proposing the config only when the project
 can't tell you something that changes the loop materially, such as there being
 no way yet to check or measure the goal. Don't ask about budgets, timeouts,
@@ -133,7 +133,7 @@ Follow the YAML with a numbered, section-by-section
 walkthrough in configuration order: what each setting controls, why it was
 chosen, and how changing it would affect the run. Cover editable and frozen
 scope, each gate, observations and evidence paths, metric directions and metric
-gates or their absence, the backend, and effective defaults, including omitted
+gates or their absence, the agent CLI and model, and effective defaults, including omitted
 fields that affect the run; then the suggested launch command and its budget.
 Distinguish instructions to the agent from enforced checks, and measurements
 from acceptance decisions. Explain what has been inspected and what remains

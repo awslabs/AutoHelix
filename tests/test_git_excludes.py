@@ -30,8 +30,8 @@ def project_layout(tmp_path, request):
     (project / "autohelix.yaml").write_text(
         "goal: Test local exclusions\n"
         "agent:\n"
-        "  backend: mock\n"
-        "  settings:\n"
+        "  cli: mock\n"
+        "  mock:\n"
         "    change_file: main.py\n"
         "    change_content: '# Modified in iteration {iteration}'\n"
         "gates: ['true']\n"

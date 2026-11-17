@@ -90,7 +90,7 @@ def test_a_summary_that_never_returned_is_an_unknown_cost(project, monkeypatch):
 def test_no_summary_after_the_agent_failed_three_times(project, monkeypatch):
     from tests.helpers import configure
 
-    configure(project, agent={"backend": "mock", "settings": {"should_fail": True}})
+    configure(project, agent={"cli": "mock", "mock": {"should_fail": True}})
     calls = []
     monkeypatch.setattr("autohelix.report.write_report", lambda *a, **k: calls.append(a) or True)
     result = CliRunner().invoke(main, ["run", "-n", "5", "-p", str(project)])
@@ -119,8 +119,8 @@ def test_a_failed_summary_says_why_and_names_its_log(project, monkeypatch):
 def test_the_summary_keeps_the_agent_settings(project, monkeypatch):
     from tests.helpers import configure
 
-    configure(project, agent={"backend": "mock", "reasoning_effort": "high", "extra_args": ["--x"],
-                              "timeout": "2h", "settings": {"change_file": "code.py", "cost_usd": 0.1}})
+    configure(project, agent={"cli": "mock", "effort": "high", "extra_args": ["--x"],
+                              "timeout": "2h", "mock": {"change_file": "code.py", "cost_usd": 0.1}})
     seen = []
     import autohelix.agents as agents
 
@@ -128,7 +128,7 @@ def test_the_summary_keeps_the_agent_settings(project, monkeypatch):
     monkeypatch.setattr(agents, "create_agent", lambda config, **kwargs: seen.append(config) or real(config, **kwargs))
     assert CliRunner().invoke(main, ["run", "-n", "1", "-p", str(project)]).exit_code == 0
     summary = seen[-1]
-    assert (summary.reasoning_effort, summary.extra_args, summary.settings) == (
+    assert (summary.effort, summary.extra_args, summary.mock) == (
         "high", ["--x"], {"change_file": "code.py", "cost_usd": 0.1})
     assert summary.timeout == 15 * 60  # capped
 

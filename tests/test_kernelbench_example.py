@@ -206,7 +206,7 @@ def test_autohelix_template_splits_correctness_from_timing():
     assert config.observe[0].timeout == 1234
     assert "budget" not in raw
     assert config.agent.timeout is None
-    assert config.agent.backend == "claude"
+    assert config.agent.cli == "claude-code"
     assert config.agent.model == "us.anthropic.claude-opus-4-8"
     assert [(gate.metric, gate.mode) for gate in config.metric_gates()] == [("mean_speedup", "regress")]
     assert "You may read and run the evaluation scripts" in config.goal

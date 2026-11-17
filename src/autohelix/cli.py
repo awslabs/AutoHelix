@@ -17,7 +17,8 @@ import click
 
 from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFound, find_config,
                               project_configs, run_command)
-from autohelix.agents import JUDGE_BACKENDS
+from autohelix.agents import CLI_NAMES, JUDGE_CLIS, RENAMED_CLIS, executable, variable_problem
+from autohelix.awake import keep_awake
 from autohelix.harness import DEFAULT_ITERATIONS, Budget, Harness
 from autohelix.history import History
 from autohelix.run_status import read_run_status
@@ -117,13 +118,14 @@ def _chosen_run(project: Path, value: str | None) -> RunPaths:
 TEMPLATE = pkg_files("autohelix.templates") / "config_template.yaml"
 EXAMPLES = "https://github.com/awslabs/AutoHelix/tree/main/examples"
 
-# The agents bare `autohelix` offers, in the order it looks for them: executable -> name.
-# (`mock`, a backend for tests, is never offered.)
-AGENTS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}
+# The agents bare `autohelix` offers, in the order it looks for them: `agent.cli` -> name.
+# (`mock`, a CLI for tests, is never offered.) Found as the runs find them
+# (`$AUTOHELIX_<CLI>_CMD`, else the name on PATH: `agents.executable`).
+AGENTS = CLI_NAMES
 
 
 def _found_agents() -> list[str]:
-    return [agent for agent in AGENTS if shutil.which(agent)]
+    return [agent for agent in AGENTS if shutil.which(executable(agent))]
 
 
 def _interactive() -> bool:
@@ -163,12 +165,13 @@ def _agent_argv(agent: str, project: Path, prompt: str) -> list[str]:
     """The interactive session bare `autohelix` starts: the agent's own CLI with the
     first prompt (`first_prompt`: it points at the bundled skill and the docs; nothing is
     installed or written)."""
-    if agent == "claude":  # --add-dir lets it read the skill and the docs; it takes several folders, hence --
+    command = executable(agent)
+    if agent == "claude-code":  # --add-dir lets it read the skill and the docs; it takes several folders, hence --
         docs = docs_dir()
-        return ["claude", "--add-dir", str(_skill_dir()), *([str(docs)] if docs else []), "--", prompt]
+        return [command, "--add-dir", str(_skill_dir()), *([str(docs)] if docs else []), "--", prompt]
     if agent == "codex":  # reads outside the workspace without a flag (its --add-dir grants writes)
-        return ["codex", prompt]
-    return ["opencode", str(project), "--prompt", prompt]
+        return [command, prompt]
+    return [command, str(project), "--prompt", prompt]
 
 
 def _git_problem(project: Path) -> tuple[str, str | None] | None:
@@ -308,7 +311,7 @@ def first_prompt(agent: str, project: Path, pick: str, runs: list[dict], configs
                     if other else "; I may ask anything else at any point."))
     finish = ("End with the config checked by `{check}` from the project root, committed, and the "
               "`{run}` command (with its budget flags) for me to run. Don't start a run unless I ask.")
-    agreed = (f"with `agent.backend: {agent}` unless we decide otherwise. Show the complete proposal and "
+    agreed = (f"with `agent.cli: {agent}` unless we decide otherwise. Show the complete proposal and "
               "explain its sections, choices and effective defaults before changing project files; discuss "
               "revisions, then write, validate and commit it when we agree.")
     if pick == "ask":
@@ -371,6 +374,9 @@ def _entry(ctx: click.Context) -> None:
     runs = data["runs"]
     configs = project_configs(project)
     terminal.print_lines(console, run_table.entry_lines(data, console.width))
+    if problem := variable_problem():
+        terminal.warn(console, problem)
+        ctx.exit(1)
     found = _found_agents()
     if not found:
         terminal.warn(console, "No coding agent found to start: install Claude Code (`claude`), Codex (`codex`) "
@@ -396,7 +402,7 @@ def _entry(ctx: click.Context) -> None:
     try:
         os.execvp(argv[0], argv)  # the agent's session replaces this process
     except OSError as e:
-        raise click.ClickException(f"Could not start {agent}: {e}") from e
+        raise click.ClickException(f"Could not start {argv[0]}: {e}") from e
 
 
 def _run_id(project: Path, value: str | None) -> str | None:
@@ -507,15 +513,45 @@ def _start(project: Path, config: Path | None, **selection) -> Harness:
         raise click.ClickException(str(e)) from e
 
 
-class JudgeBackend(click.Choice):
-    """`--agent` of `ask`/`review`: claude or codex. The test backend (`mock`) is accepted
-    but not offered."""
+class JudgeCli(click.Choice):
+    """`--cli` of `ask`/`review`: claude-code or codex. The test CLI (`mock`) is accepted
+    but not offered; `claude` is an error naming `claude-code`."""
 
     def __init__(self):
-        super().__init__([name for name in JUDGE_BACKENDS if name != "mock"])
+        super().__init__([name for name in JUDGE_CLIS if name != "mock"])
 
     def convert(self, value, param, ctx):
+        if value in RENAMED_CLIS:
+            self.fail(f"{value!r} is now {RENAMED_CLIS[value]!r}", param, ctx)
         return value if value == "mock" else super().convert(value, param, ctx)
+
+
+def _removed_option(message: str):
+    """A flag that is gone: hidden, and an error naming its replacement when given."""
+    def fail(ctx, param, value):
+        if value is not None:
+            raise click.UsageError(message, ctx)
+    return fail
+
+
+def _judge_options(command):
+    """`--cli`, `--model`, `--effort` of `ask`/`review`, and the flags that are gone."""
+    for option in reversed([
+        click.option("--cli", "cli_name", type=JudgeCli(),
+                     help="The agent CLI: claude-code or codex (default: agent.cli from the config, "
+                          "else claude-code). Its executable: $AUTOHELIX_CLAUDE_CODE_CMD or "
+                          "$AUTOHELIX_CODEX_CMD, else PATH."),
+        click.option("--model", help="Model, passed through (default: agent.model from the config, else "
+                                     "the CLI's own default)."),
+        click.option("--effort", help="Reasoning effort, passed through (default: agent.effort from the config)."),
+        click.option("--agent", hidden=True, expose_value=False, is_eager=True,
+                     callback=_removed_option("--agent is now --cli (claude-code or codex)")),
+        click.option("--command", hidden=True, expose_value=False, is_eager=True,
+                     callback=_removed_option("--command is gone: set AUTOHELIX_CLAUDE_CODE_CMD or "
+                                              "AUTOHELIX_CODEX_CMD to the executable")),
+    ]):
+        command = option(command)
+    return command
 
 
 def _duration_option(ctx, param, value: str | None) -> int | None:
@@ -605,9 +641,10 @@ def _segment(harness: Harness, budget: Budget, report: bool) -> None:
     """Run a segment; exit 0 when it ended politely (a budget, a stop condition,
     `autohelix stop`), 1 on an error (the agent kept failing, landing failed),
     130 when interrupted (Ctrl-C, SIGTERM, `autohelix stop --now`; see
-    `_interruptible`)."""
+    `_interruptible`). The machine stays awake meanwhile (`keep_awake`)."""
     try:
-        ended = harness.run(budget, report=report)
+        with keep_awake():
+            ended = harness.run(budget, report=report)
     except RuntimeError as e:
         if getattr(e, "autohelix_reported", False):  # printed first, above landing and the run page
             raise SystemExit(1) from e
@@ -844,18 +881,11 @@ def delete(run_ids: tuple[str, ...], path: Path, force: bool):
 @click.option("--yes", "yes_means", help='What a "yes" answer means.')
 @click.option("--no", "no_means", help='What a "no" answer means.')
 @click.option("--rubric", type=click.Path(exists=True, dir_okay=False), help="File with criteria for the answer.")
-@click.option("--agent", "agent_type", type=JudgeBackend(),
-              help="Agent backend (default: agent.backend from the config, else claude).")
-@click.option("--model", help="Model (default: agent.model from the config).")
-@click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
+@_judge_options
 @click.option("--timeout", callback=_duration_option, metavar="DURATION",
               help="How long before giving up, retry included: 90s, 10m (a bare number is seconds; default 10m).")
-@click.option("--command", "agent_command",
-              help="The backend's executable (default: agent.command from the config, unless --agent "
-                   "names another backend).")
 def ask(question: str, yes_means: str | None, no_means: str | None, rubric: str | None,
-        agent_type: str | None, model: str | None, effort: str | None, timeout: int | None,
-        agent_command: str | None):
+        cli_name: str | None, model: str | None, effort: str | None, timeout: int | None):
     """Ask an agent a yes/no question about the candidate, or by hand the current directory.
 
     In a run (a gate's `ask:`, a stop command), it judges a fresh copy of the
@@ -882,8 +912,7 @@ def ask(question: str, yes_means: str | None, no_means: str | None, rubric: str 
     cwd = Path.cwd()
     try:
         settings, source = base_config(cwd)
-        config = judge_config(settings, agent=agent_type, model=model, effort=effort,
-                              timeout=timeout, command=agent_command)
+        config = judge_config(settings, cli=cli_name, model=model, effort=effort, timeout=timeout)
         answer = run_ask(question, cwd, config, yes=yes_means, no=no_means,
                          rubric=Path(rubric).read_text() if rubric else None)
     except JudgeError as e:
@@ -896,7 +925,7 @@ def ask(question: str, yes_means: str | None, no_means: str | None, rubric: str 
         raise SystemExit(2)
     click.echo(answer.reason)
     if not os.environ.get(USAGE_ENV):
-        used = describe_agent(config, "--agent" if agent_type else source)
+        used = describe_agent(config, "--cli" if cli_name else source)
         click.echo(f"autohelix ask: {'yes' if answer.yes else 'no'} · {used} · "
                    f"{format_cost(answer.cost_usd, precision=4)}", err=True)
     raise SystemExit(0 if answer.yes else 1)
@@ -926,19 +955,13 @@ def _review_metrics(ctx, param, values: tuple[str, ...]) -> list[str]:
               help="Include this entry's review from the last accepted iteration (in a run).")
 @click.option("--metric", "metrics", multiple=True, metavar="NAME", callback=_review_metrics,
               help="A number the review must report, printed as ##autohelix[NAME=value]. Repeatable.")
-@click.option("--agent", "agent_type", type=JudgeBackend(),
-              help="Agent backend (default: agent.backend from the config, else claude).")
-@click.option("--model", help="Model (default: agent.model from the config).")
-@click.option("--effort", help="Reasoning effort (default: agent.reasoning_effort from the config).")
+@_judge_options
 @click.option("--timeout", callback=_duration_option, metavar="DURATION",
               help="How long before giving up, retry included: 90s, 10m (a bare number is seconds; default: "
                    "the command's deadline in a run, else 30m).")
-@click.option("--command", "agent_command",
-              help="The backend's executable (default: agent.command from the config, unless --agent "
-                   "names another backend).")
 @click.option("--base", help="Outside a run: the commit the working tree is compared with (default HEAD).")
-def review(prompt: str, previous: bool, metrics: list[str], agent_type: str | None, model: str | None,
-           effort: str | None, timeout: int | None, agent_command: str | None, base: str | None):
+def review(prompt: str, previous: bool, metrics: list[str], cli_name: str | None, model: str | None,
+           effort: str | None, timeout: int | None, base: str | None):
     """Review a change with an agent; prints the review as feedback.
 
     PROMPT is the review request; put it after `--` (`autohelix review -- "..."`)
@@ -972,8 +995,8 @@ def review(prompt: str, previous: bool, metrics: list[str], agent_type: str | No
         if not prompt.strip():
             raise JudgeError("the review prompt is empty")
         settings, source = base_config(cwd)
-        config = judge_config(settings, agent=agent_type, model=model, effort=effort,
-                              timeout=timeout, command=agent_command, schema=review_schema(metrics),
+        config = judge_config(settings, cli=cli_name, model=model, effort=effort,
+                              timeout=timeout, schema=review_schema(metrics),
                               default_timeout=DEFAULT_TIMEOUT)
         result = run_review(prompt, cwd, config, metrics=metrics, previous=previous, base=base,
                             timeout=timeout,
@@ -988,7 +1011,7 @@ def review(prompt: str, previous: bool, metrics: list[str], agent_type: str | No
         raise SystemExit(2)
     click.echo(result.output())
     if not os.environ.get(USAGE_ENV):
-        used = describe_agent(config, "--agent" if agent_type else source)
+        used = describe_agent(config, "--cli" if cli_name else source)
         click.echo(f"autohelix review: ok · {used} · {format_cost(result.cost_usd, precision=4)}", err=True)
 
 
@@ -1200,7 +1223,7 @@ def _view_live(project_path: Path, run_id: str) -> None:
 
     console = Console()
     try:
-        backend = load_run_config(RunPaths(project_path, run_id)).agent.backend
+        backend = load_run_config(RunPaths(project_path, run_id)).agent.cli
     except Exception:  # noqa: BLE001 - the log parser can tell backends apart on its own
         backend = None
     try:

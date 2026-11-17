@@ -407,7 +407,7 @@ class TestClaudeCodeSummarizeToolResult:
 
 class TestCodexHandleLine:
     def _agent(self):
-        return CodexAgent(config=AgentConfig(backend="codex"))
+        return CodexAgent(config=AgentConfig(cli="codex"))
 
     def test_build_command_without_time_hook(self, monkeypatch):
         monkeypatch.delenv("AUTOHELIX_CODEX_TIME_LEFT_HOOK", raising=False)
@@ -537,7 +537,7 @@ class TestCodexRunResult:
     ):
         from autohelix.agents.runner import ProcessRunResult
 
-        agent = CodexAgent(config=AgentConfig(backend="codex"))
+        agent = CodexAgent(config=AgentConfig(cli="codex"))
 
         def fake_run_process(**kwargs):
             kwargs["line_callback"](json.dumps({
@@ -565,7 +565,7 @@ class TestCodexRunResult:
 
 class TestOpenCodeHandleLine:
     def _agent(self):
-        return OpenCodeAgent(config=AgentConfig(backend="opencode"))
+        return OpenCodeAgent(config=AgentConfig(cli="opencode"))
 
     def test_invalid_json_emits_raw(self):
         events = _collect_events(self._agent(), "not json")
@@ -681,7 +681,7 @@ class TestOpenCodeRunResult:
             return ProcessRunResult(exit_code=exit_code, timed_out=timed_out)
 
         monkeypatch.setattr("autohelix.agents.opencode.run_process", fake_run_process)
-        agent = OpenCodeAgent(config=AgentConfig(backend="opencode", timeout=4))
+        agent = OpenCodeAgent(config=AgentConfig(cli="opencode", timeout=4))
         events = []
         result = agent.run(copy_path=tmp_path, prompt="test", iteration=1,
                            log_path=tmp_path / "agent.log", event_callback=events.append)

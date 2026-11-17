@@ -317,7 +317,7 @@ def test_a_judge_writing_in_a_run_fails_its_call_in_its_own_copy(project, slot):
     """The judge's write lands in its own copy, never in what commands check or what is
     accepted; its call fails (exit 2), and the script owns that exit code."""
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
-    data["agent"]["settings"]["judge_change_file"] = "code.py"
+    data["agent"]["mock"]["judge_change_file"] = "code.py"
     ask = 'autohelix ask "Done?"; echo "ask=$?" >&2; grep -q "judge edit" code.py && exit 9; exit 1'
     if slot == "gates":
         data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; ' + ask.replace("exit 1", "exit 0")]
@@ -346,7 +346,7 @@ def test_baseline_judge_writing_fails_only_its_call_and_cost_counts(project):
     """At the baseline too, a judge writes only in its own copy: the checks copy and the
     project stay as they were, and its call's cost is counted."""
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
-    data["agent"]["settings"]["judge_change_file"] = "code.py"
+    data["agent"]["mock"]["judge_change_file"] = "code.py"
     data["observe"] = [{"name": "judge", "command": 'autohelix ask "Done?" || true'}]
     (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
     git(project, "add", ".")
@@ -421,7 +421,7 @@ def test_guard_detects_submodule_edit_and_commit(project, tmp_path):
 
 def test_an_ask_gate_whose_judge_writes_rejects(project):
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
-    data["agent"]["settings"]["judge_change_file"] = "code.py"
+    data["agent"]["mock"]["judge_change_file"] = "code.py"
     data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; autohelix ask "Done?"']
     (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
     git(project, "add", ".")
@@ -791,11 +791,12 @@ def test_target_behind_after_baseline_warns_only_for_auto_landing(project):
 
 
 @pytest.mark.parametrize("problem", ["scope", "preflight", "dirty"])
-def test_refused_first_start_creates_no_identity(project, problem, capsys):
+def test_refused_first_start_creates_no_identity(project, problem, capsys, monkeypatch):
     if problem == "scope":  # an entry outside the project (one matching nothing only warns)
         configure(project, scope={"editable": ["../missing_dir/*.py"]})
     elif problem == "preflight":
-        configure(project, agent={"backend": "claude", "command": "/nonexistent/agent"})
+        monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", "/nonexistent/agent")
+        configure(project, agent={"cli": "claude-code"})
     else:
         (project / "code.py").write_text("edited\n")
     # A config error ends the command (SystemExit) before the readiness checks.
@@ -838,7 +839,7 @@ def test_ask_from_an_agent_without_log_dir_records_absolute_log(tmp_path, monkey
     monkeypatch.delenv("AUTOHELIX_LOG_DIR", raising=False)
     work = tmp_path / "work"
     work.mkdir()
-    answer = ask("Done?", work, AgentConfig(backend="mock", read_only=True))
+    answer = ask("Done?", work, AgentConfig(cli="mock", read_only=True))
     assert answer.yes
     [call] = read_usage(usage)
     assert Path(call["log"]).is_absolute() and Path(call["log"]).exists()

@@ -26,7 +26,7 @@ from tests.test_review import candidate  # noqa: F401 - a fixture
 
 
 def mock_judge(**settings) -> AgentConfig:
-    return judge_config(AgentConfig(backend="mock", settings=settings))
+    return judge_config(AgentConfig(cli="mock", mock=settings))
 
 
 # --- parsing and prompts ----------------------------------------------------
@@ -67,40 +67,31 @@ def test_system_prompt_carries_question_and_optional_criteria():
     assert "The change is in candidate.diff." in prompt
 
 
-def test_judge_config_inherits_backend_but_not_settings_or_extra_args():
-    base = AgentConfig(backend="claude", command="/bin/claude", model="m", reasoning_effort="high",
-                       settings={"x": 1}, extra_args=["--dangerously-skip-permissions"])
+def test_judge_config_inherits_cli_but_not_extra_args():
+    base = AgentConfig(cli="claude-code", model="m", effort="high", extra_args=["--dangerously-skip-permissions"])
     config = judge_config(base)
-    assert (config.backend, config.command, config.model, config.reasoning_effort) == ("claude", "/bin/claude", "m", "high")
-    assert config.settings == {} and config.extra_args == []
+    assert (config.cli, config.model, config.effort) == ("claude-code", "m", "high")
+    assert config.extra_args == []
     assert config.read_only and config.output_schema == ANSWER_SCHEMA
-    other = judge_config(base, agent="codex")
-    assert (other.command, other.model, other.reasoning_effort) == (None, None, None)
+    other = judge_config(base, cli="codex")
+    assert (other.cli, other.model, other.effort) == ("codex", None, None)
+    assert judge_config(base, cli="claude-code").model == "m"  # the same CLI keeps them
     assert judge_config(base, model="n", timeout=30).model == "n"
-
-
-def test_judge_config_command_follows_the_backend():
-    base = AgentConfig(backend="claude", command="/bin/claude")
-    assert judge_config(base).command == "/bin/claude"
-    assert judge_config(base, command="/opt/claude").command == "/opt/claude"
-    assert judge_config(base, agent="claude").command == "/bin/claude"  # the same backend keeps it
-    assert judge_config(base, agent="codex").command is None
-    assert judge_config(base, agent="codex", command="/opt/codex").command == "/opt/codex"
 
 
 def test_load_base_config_reads_v2_agent_and_rejects_old_keys(tmp_path, monkeypatch):
     from autohelix.judge import load_base_config
 
     monkeypatch.delenv("AUTOHELIX_CONFIG", raising=False)
-    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  backend: codex\n  timeout: 5m\n")
+    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  cli: codex\n  timeout: 5m\n")
     config = load_base_config(tmp_path)
-    assert (config.backend, config.timeout) == ("codex", 300)
-    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  type: claude\n")
-    with pytest.raises(JudgeError, match="`agent.type` is now `agent.backend`"):
+    assert (config.cli, config.timeout) == ("codex", 300)
+    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  backend: claude\n")
+    with pytest.raises(JudgeError, match="`agent.backend` is now `agent.cli`"):
         load_base_config(tmp_path)
 
 
-def test_cli_command_option_reaches_the_judge(tmp_path, monkeypatch):
+def test_cli_option_reaches_the_judge(tmp_path, monkeypatch):
     import autohelix.judge as judge
     from autohelix.judge import Answer
 
@@ -109,13 +100,14 @@ def test_cli_command_option_reaches_the_judge(tmp_path, monkeypatch):
                         or Answer(yes=True, reason="ok", cost_usd=0.0))
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("AUTOHELIX_CONFIG", raising=False)
-    result = CliRunner().invoke(main, ["ask", "Done?", "--agent", "codex", "--command", "/opt/codex"])
+    result = CliRunner().invoke(main, ["ask", "Done?", "--cli", "codex", "--model", "m", "--effort", "low"])
     assert result.exit_code == 0, result.output
-    assert (seen[0].backend, seen[0].command) == ("codex", "/opt/codex")
+    assert (seen[0].cli, seen[0].model, seen[0].effort) == ("codex", "m", "low")
+    assert "codex m (--cli)" in result.output
 
 
 def test_claude_read_only_command():
-    config = judge_config(AgentConfig(backend="claude", model="m", extra_args=["--evil"]))
+    config = judge_config(AgentConfig(cli="claude-code", model="m", extra_args=["--evil"]))
     config.system_prompt = "SYSTEM"
     cmd = ClaudeCodeAgent(config)._build_command("PROMPT")
     assert "--dangerously-skip-permissions" not in cmd and "--evil" not in cmd
@@ -128,12 +120,12 @@ def test_claude_read_only_command():
 
 
 def test_regular_claude_command_is_unchanged():
-    cmd = ClaudeCodeAgent(AgentConfig(backend="claude", extra_args=["--x"]))._build_command("P")
+    cmd = ClaudeCodeAgent(AgentConfig(cli="claude-code", extra_args=["--x"]))._build_command("P")
     assert "--dangerously-skip-permissions" in cmd and "--tools" not in cmd and cmd[-2:] == ["--x", "P"]
 
 
 def test_codex_read_only_command(tmp_path):
-    config = judge_config(AgentConfig(backend="codex", extra_args=["--evil"]))
+    config = judge_config(AgentConfig(cli="codex", extra_args=["--evil"]))
     config.system_prompt = "SYSTEM"
     agent = CodexAgent(config)
     agent._schema_path = tmp_path / "s.json"
@@ -220,7 +212,7 @@ def test_usage_records_merge_by_id_and_reject_bad_costs(tmp_path):
 
 def _project_with_mock_agent(path, **settings):
     (path / "autohelix.yaml").write_text(
-        "goal: g\nagent:\n  backend: mock\n  settings: " + json.dumps(settings) + "\n")
+        "goal: g\nagent:\n  cli: mock\n  mock: " + json.dumps(settings) + "\n")
 
 
 @pytest.mark.parametrize("answer,code", [("yes", 0), ("no", 1)])
@@ -258,8 +250,8 @@ def test_ask_as_a_stop_condition_counts_its_cost(tmp_path):
     (project / "autohelix.yaml").write_text(f"""
 goal: g
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: hello.py
     cost_usd: 0.10
     judge_answer: "yes"
@@ -290,9 +282,9 @@ def test_reason_cannot_carry_a_metric():
 
 def test_opencode_is_refused_as_a_judge():
     with pytest.raises(JudgeError, match="OpenCode"):
-        judge_config(AgentConfig(backend="opencode"))
+        judge_config(AgentConfig(cli="opencode"))
     with pytest.raises(JudgeError, match="OpenCode"):
-        judge_config(AgentConfig(backend="claude"), agent="opencode")
+        judge_config(AgentConfig(cli="claude-code"), cli="opencode")
 
 
 def test_retry_shares_one_overall_timeout(tmp_path, monkeypatch, usage_file):
@@ -315,11 +307,11 @@ def test_retry_shares_one_overall_timeout(tmp_path, monkeypatch, usage_file):
 
     monkeypatch.setattr(judge, "create_agent", SlowInvalid)
     with pytest.raises(JudgeError):
-        ask("Done?", tmp_path, judge_config(AgentConfig(backend="claude"), timeout=100))
+        ask("Done?", tmp_path, judge_config(AgentConfig(cli="claude-code"), timeout=100))
     assert seen == [100, 60]
 
 
-@pytest.mark.parametrize("config_text", ["goal: g\nagent:\n  backend: bogus\n", "goal: g\nagent:\n  type: claude\n",
+@pytest.mark.parametrize("config_text", ["goal: g\nagent:\n  cli: bogus\n", "goal: g\nagent:\n  type: claude\n",
                                          "goal: g\nagent: [1, 2]\n"])
 def test_cli_internal_errors_exit_2_not_no(tmp_path, monkeypatch, config_text):
     (tmp_path / "autohelix.yaml").write_text(config_text)
@@ -363,7 +355,7 @@ def test_in_a_run_ask_judges_its_own_fresh_copy_of_the_candidate(candidate, monk
 
 
 def test_in_a_run_a_judge_writing_fails_and_its_copy_goes(candidate, monkeypatch):
-    candidate.config.write_text("goal: g\nagent:\n  backend: mock\n  settings:\n    judge_change_file: a.py\n")
+    candidate.config.write_text("goal: g\nagent:\n  cli: mock\n  mock:\n    judge_change_file: a.py\n")
     monkeypatch.chdir(candidate.cwd)
     result = CliRunner().invoke(main, ["ask", "Done?"])
     assert result.exit_code == 2 and "the judge changed files: a.py" in result.stderr

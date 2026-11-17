@@ -710,7 +710,7 @@ def test_a_rejected_attempt_keeps_its_patch_in_its_folder(project):
 
 
 def test_no_iteration_patch_for_a_no_op(project):
-    _configure(project, agent={"backend": "mock", "settings": {"should_fail": True}})
+    _configure(project, agent={"cli": "mock", "mock": {"should_fail": True}})
     harness = Harness(project, land_mode="manual")
     try:
         harness.run(Budget(until=1), report=False)  # fails before changing anything: no tree kept

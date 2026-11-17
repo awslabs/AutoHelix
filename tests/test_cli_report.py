@@ -115,11 +115,11 @@ class TestReportCommand:
         assert create.call_args[0][0].timeout == 15 * 60
 
     def test_reads_the_stored_config_and_refuses_without_one(self, runner, project):
-        (project / "autohelix.yaml").write_text("goal: edited\nagent:\n  backend: codex\n")
+        (project / "autohelix.yaml").write_text("goal: edited\nagent:\n  cli: codex\n")
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok")) as create:
             result = runner.invoke(main, ["report", "-p", str(project)])
         assert result.exit_code == 0, result.output
-        assert create.call_args[0][0].backend == "claude"
+        assert create.call_args[0][0].cli == "claude-code"
         assert "Make it faster" in self._agent_prompt(create)
         latest_run(project).config.unlink()
         result = runner.invoke(main, ["report", "-p", str(project)])

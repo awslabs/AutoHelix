@@ -18,7 +18,7 @@ clear:
 
 - "Use AutoHelix to make the solver faster. Prepare a config for me to review."
 - "Use AutoHelix to improve this API guide. Prepare the loop and start a pilot
-  using my configured backend."
+  using my configured agent."
 - "Use AutoHelix to make the solver faster. Prepare, run, and supervise three
   iterations, with four minutes per agent call and fifteen minutes for the
   loop. Use my configured agent and model, keep existing evaluations fixed,
@@ -38,8 +38,8 @@ The third request includes ongoing management; read
 
 The coding agent in this session (picked on bare `autohelix`'s screen, or
 the one `autohelix skill install --agent` installed the skill for) need not be
-the backend that performs loop iterations: that is the config's
-`agent.backend`.
+the agent CLI that performs loop iterations: that is the config's
+`agent.cli`.
 
 ## Performance optimization
 

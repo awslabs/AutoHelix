@@ -84,7 +84,7 @@ def mock_config(project, name=None, commit=True):
     """A mock-agent config (autohelix.yaml, or autohelix/NAME.yaml), committed."""
     path = project / (f"autohelix/{name}.yaml" if name else "autohelix.yaml")
     path.parent.mkdir(exist_ok=True)
-    path.write_text(yaml.safe_dump({"goal": "Make a checked change", "agent": {"backend": "mock", "settings": {
+    path.write_text(yaml.safe_dump({"goal": "Make a checked change", "agent": {"cli": "mock", "mock": {
         "change_file": "main.py", "change_content": "x = {iteration}\n", "cost_usd": 0.1}}}))
     if commit:
         git(project, "add", "-A")
@@ -388,7 +388,7 @@ def test_several_agents_say_an_agent_then_ask_which(project, monkeypatch, execs,
     assert "2. Set up a new experiment with an agent" in flat(result.output)
     assert "  Which agent?\n  1. Claude Code\n  2. Codex\n  3. OpenCode\n  Choose (q: quit) [1]:" in "\n".join(lines(result))
     assert "Mock" not in result.output and "mock" not in flat(result.output).lower().replace("autohelix", "")
-    assert execs[0][1][0] == "codex" and "`agent.backend: codex`" not in execs[0][1][-1]  # ask: no backend
+    assert execs[0][1][0] == "codex" and "`agent.cli: codex`" not in execs[0][1][-1]  # ask: no backend
     result = entry(input="2\nq\n")  # q at "Which agent?" quits too
     assert result.exit_code == 0 and len(execs) == 1
 
@@ -411,7 +411,7 @@ def test_codex_and_opencode_argv(project, monkeypatch, execs, tty, agent):
         assert len(argv) == 2
     else:
         assert argv[:3] == ["opencode", str(project.resolve()), "--prompt"] and len(argv) == 4
-    assert f"with `agent.backend: {agent}` unless we decide otherwise" in argv[-1]
+    assert f"with `agent.cli: {agent}` unless we decide otherwise" in argv[-1]
 
 
 def test_claude_gets_the_skill_and_the_docs(project, monkeypatch, execs, tty):
@@ -578,3 +578,21 @@ def test_the_wheel_and_the_sdist_ship_the_docs(tmp_path):
     import tarfile
 
     assert any(name.endswith("/docs/concepts.md") for name in tarfile.open(sdist).getnames())
+
+
+def test_the_agent_session_uses_the_runs_variables(project, monkeypatch, execs, tty):
+    """The entry screen finds and starts each CLI as a run does: `$AUTOHELIX_<CLI>_CMD`,
+    else the name on PATH."""
+    agents(["/opt/claude-bedrock"])(monkeypatch)
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", "/opt/claude-bedrock")
+    assert entry(input="\n").exit_code == 0
+    [(file, argv, _)] = execs
+    assert file == argv[0] == "/opt/claude-bedrock" and argv[1] == "--add-dir"
+
+
+def test_the_old_claude_variable_refuses_the_session(project, monkeypatch, execs, tty):
+    agents(["claude"])(monkeypatch)
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CMD", "/opt/claude")
+    result = entry(input="\n")
+    assert result.exit_code == 1 and not execs
+    assert "AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD" in flat(result.output)

@@ -33,7 +33,7 @@ export, and update behavior.
 
 ## Agent Setup
 
-AutoHelix supports multiple agent backends. You need at least one installed.
+AutoHelix runs one of three agent CLIs (`agent.cli`). You need at least one installed.
 
 ### Claude Code (default)
 
@@ -43,29 +43,40 @@ Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code), then veri
 claude --version
 ```
 
-AutoHelix looks for `claude` in PATH. To use a custom command:
+```yaml
+agent:
+  cli: claude-code
+  model: opus             # passed through unchanged; unset = the CLI's default
+```
+
+AutoHelix looks for `claude` in PATH. To use another executable (a wrapper, a
+Bedrock launcher), set it in the environment, never in the config:
 
 ```bash
-export AUTOHELIX_CLAUDE_CMD=/path/to/my/claude-wrapper
+export AUTOHELIX_CLAUDE_CODE_CMD=/path/to/my/claude-wrapper
 ```
 
 ### Codex
 
 ```yaml
 agent:
-  backend: codex
-  command: /path/to/codex
+  cli: codex
   model: gpt-5.5
-  reasoning_effort: high
+  effort: high
 ```
+
+`$AUTOHELIX_CODEX_CMD` overrides `codex` on PATH.
 
 ### OpenCode
 
 ```yaml
 agent:
-  backend: opencode
-  command: /path/to/opencode
+  cli: opencode
+  model: anthropic/claude-sonnet-4-5
 ```
+
+`$AUTOHELIX_OPENCODE_CMD` overrides `opencode` on PATH. Each CLI's model
+default, what `effort` maps to and its model docs: [Config → Agent](config.md#agent).
 
 ## Your First Run
 
@@ -86,7 +97,7 @@ checks, and evidence. The agent saves the config as `autohelix.yaml` (the
 project's first config; for later ones it proposes a short name for the goal
 and saves them as `autohelix/<name>.yaml`), checks it with `autohelix run --check`, commits it, and
 gives the `autohelix run` command to start. The agent you choose becomes
-`agent.backend`, the loop's backend, unless you decide otherwise.
+`agent.cli`, the loop's agent, unless you decide otherwise.
 
 Later, `autohelix` lists the project's runs with the command that applies to
 each (`resume`, `land`, `view`), and offers to ask the agent about them (it
@@ -95,8 +106,8 @@ another experiment. See [CLI → autohelix](cli.md#autohelix).
 
 With the skill installed as described above, you can also start from an
 ordinary agent session. The installation's `--agent` selects the agent that
-discovers the skill; `agent.backend` in the generated configuration selects the
-loop backend. For preparation only, ask:
+discovers the skill; `agent.cli` in the generated configuration selects the
+loop's agent. For preparation only, ask:
 
 > Set up AutoHelix to improve [goal]. [Optional instructions.]
 
@@ -154,6 +165,11 @@ of gates and observe entries, including the baseline's. The run summary's cost
 counts in the run's total but runs after `--cost` is checked; supervisor calls
 are separate. Missing cost
 is unknown, not zero. See [CLI → Budgets](cli.md#budgets) before relying on a cap.
+For a long run, `run` and `resume` keep the machine from sleeping until the
+segment ends (macOS `caffeinate`, Linux `systemd-inhibit`; nothing where the tool
+is missing or refused). A closed laptop lid still sleeps, and expiring
+credentials or a dropped VPN still stop the agent: keep the lid open (or use a
+server) and check how long your login lasts.
 The console, `autohelix view`, the run summary and run page (`report.md`,
 `report.html`), and saved records already support inspecting results.
 

@@ -31,15 +31,12 @@ goal: |
 # prompt_template: prompts/agent.md   # rare: replaces the built-in agent prompt
 
 agent:
-  backend: claude         # claude (default), codex, opencode, mock
-  # model: claude-opus-4-8
-  # reasoning_effort: high
+  cli: claude-code        # claude-code (default), codex or opencode
+  model: opus             # passed through unchanged; unset = the CLI's default
+  # effort: high
   # timeout: 30m          # per iteration: a hard kill, with time-left hints
-  # command: /path/to/claude
-  # settings: {}          # codex: -c key=value pass-through
   # extra_args: []        # extra CLI arguments for the main agent
   # auto_memory: false    # Claude Code's built-in memory (off by default)
-  # require_notes: true   # claude: block the agent from ending before it writes notes
 
 scope:
   editable: [sort.py]     # only these may change
@@ -63,7 +60,7 @@ observe:                  # feedback for the next agent, numbers for the harness
     # timeout: 30m
   - name: review          # = autohelix review -- "..."
     review: Review the diff for correctness. What is the most important next fix?
-    # agent: {backend: codex, model: gpt-5.5}
+    # agent: {cli: codex, model: gpt-5.5}
 
 stop:                     # end the run early once one exits 0
   - jq -e '.speed >= 5000' "$AUTOHELIX_METRICS"
@@ -78,8 +75,8 @@ Top-level keys: `goal`, `prompt_template`, `agent`,
 `scope`, `gates`, `observe` and `stop`. An unknown key is an error (a
 misspelt `stop:` or `gates:` would otherwise do nothing); a key of the old
 format is an error that names its replacement (see [Old → new](#old--new)).
-`goal:` must be a string (`|` for several lines), `agent.command`, `model`,
-`reasoning_effort` and `backend` strings (arguments go in `extra_args`), and
+`goal:` must be a string (`|` for several lines), `agent.cli`, `model` and
+`effort` strings (arguments go in `extra_args`), and
 `auto_memory` `true` or `false`. `autohelix run` lists every error and starts
 nothing until they are fixed; `autohelix run --check` makes the same checks
 without starting (see [`run --check`](cli.md#autohelix-run)).
@@ -129,19 +126,20 @@ gates:
     yes: Every public function keeps its name and signature.   # optional
     no: A public function was removed, renamed or changed.     # optional
     # timeout: 15m
-    # agent: {backend: codex, model: gpt-5.5, reasoning_effort: high}
+    # agent: {cli: codex, model: gpt-5.5, effort: high}
 ```
 
 - `ask: <question>` becomes `autohelix ask [flags] -- "<question>"`: flags first,
   then `--`, so a question starting with `-` stays a question.
 - `yes:` and `no:` say what each answer means (`--yes`, `--no`).
-- `agent:` takes only `backend` (`claude` or `codex`), `model`,
-  `reasoning_effort` and `command`; they become flags. Unset ones come
-  from the top-level `agent:`, except that naming another backend drops the
-  top-level `model`, `reasoning_effort` and `command` (they belong to the other
-  backend). OpenCode has no read-only mode: with `agent.backend: opencode` at the
-  top level, every `ask:` entry needs its own `agent.backend`, and an `autohelix
-  ask` a script runs needs `--agent claude` or `--agent codex`.
+- `agent:` takes only `cli` (`claude-code` or `codex`), `model` and `effort`;
+  they become flags (`--cli`, `--model`, `--effort`). Unset ones come from the
+  top-level `agent:`, except that naming another CLI drops the top-level
+  `model` and `effort` (they belong to the other CLI). The executable comes
+  from the environment, as the main agent's does (see [Agent](#agent)).
+  OpenCode has no read-only mode: with `agent.cli: opencode` at the top level,
+  every `ask:` entry needs its own `agent.cli`, and an `autohelix ask` a script
+  runs needs `--cli claude-code` or `--cli codex`.
 - `timeout:` is the command's deadline (default 10m, at least 1m: the judge
   keeps 30s of it for its usage and its copy), which also bounds the judge. An
   entry's `agent.timeout` is an error naming `timeout:`.
@@ -285,7 +283,7 @@ observe:
     previous: true            # = --previous
     metrics: {missing: lower} # = --metric missing (the direction is for the metric gate)
     # timeout: 30m
-    # agent: {backend: codex, model: gpt-5.5}
+    # agent: {cli: codex, model: gpt-5.5}
 ```
 
 - `previous: true` gives the reviewer its own output from the last accepted
@@ -297,8 +295,7 @@ observe:
   only those lines count (the review's prose is escaped, so it can't carry a
   number). A review that leaves a declared number out fails. What a number means
   is up to the prompt.
-- `agent:` as for [`ask:` entries](#gates): `backend`, `model`,
-  `reasoning_effort`, `command`.
+- `agent:` as for [`ask:` entries](#gates): `cli`, `model`, `effort`.
 - `timeout:` the command's deadline (default 30m, at least 1m), which also bounds the review.
 
 Review numbers are noisy and gameable: fine for display and `stop:`, not
@@ -388,6 +385,15 @@ started is killed. Each gets:
 | `AUTOHELIX_COMMAND_DEADLINE` | The command's deadline, in Unix seconds |
 | `AUTOHELIX_PREVIOUS` | Observe commands only: see [Previous output](#previous-output) |
 | `AUTOHELIX_METRICS`, `AUTOHELIX_OBSERVATIONS` | Stop commands only: see [Stop](#stop) |
+
+The main agent gets fewer: `AUTOHELIX_RUN_ID`, `AUTOHELIX_ITERATION` and, with
+`agent.timeout`, the time-left hint's variables (`AUTOHELIX_TIME_LEFT_SCRIPT`);
+not `AUTOHELIX_PROJECT`, `AUTOHELIX_RUN_DIR` or the others above. Its copy has no
+config file and no `prompt_template:` file (both frozen, so the removal is never
+committed; commands read `$AUTOHELIX_CONFIG`). This is hygiene, not a boundary:
+the agent can still find the project (its copy's `.git` borrows the project's
+objects through alternates, and the copies folder records the checkout) and runs
+as you.
 
 `PYTHONPATH` is remapped so the project's own sources import from the copy.
 That would let candidate code replace modules inside `autohelix ask` or
@@ -502,30 +508,66 @@ another repository clones it outside its copy (under `/tmp`, say).
 
 | Key | Meaning |
 |---|---|
-| `backend` | `claude` (default), `codex`, `opencode` or `mock` |
-| `model` | The model (default: the backend's) |
-| `reasoning_effort` | e.g. `low`, `medium`, `high`, `xhigh` |
+| `cli` | `claude-code` (default), `codex` or `opencode` |
+| `model` | The model, passed to the CLI unchanged; unset: the CLI's own default (see below) |
+| `effort` | The reasoning effort, passed through unchanged (e.g. `low`, `medium`, `high`) |
 | `timeout` | A duration per iteration; unset means no limit (see below) |
-| `command` | The backend's executable (default: `$AUTOHELIX_CLAUDE_CMD`, `$AUTOHELIX_CODEX_CMD` or `$AUTOHELIX_OPENCODE_CMD`, else `claude`, `codex`, `opencode` on `PATH`); `run` checks before starting that every agent the config runs (the main agent, each `ask:` and `review:` entry's judge) can be found |
-| `settings` | Codex only: `-c key=value` pass-through |
-| `extra_args` | Extra CLI arguments for the main agent |
+| `extra_args` | Extra CLI arguments for the main agent (also the place for a CLI's own settings, e.g. Codex `["-c", "key=value"]`) |
 | `auto_memory` | Claude Code's built-in memory; off by default for self-contained iterations |
-| `require_notes` | Claude only: `true`, or `{min_chars: 50, max_retries: 3}`; a Stop hook keeps the agent going until it has written notes |
+
+AutoHelix keeps no list of model names: `model:` goes to the CLI as written, and
+the CLI says whether it knows it. Write it explicitly, so a run doesn't change
+model when the CLI's default does.
+
+**Claude Code** (`cli: claude-code`)
+
+| | |
+|---|---|
+| Example `model:` | `opus`, `sonnet`, or a full name such as `claude-opus-4-8` |
+| Default model | Claude Code's settings (`model` in `settings.json`), or `ANTHROPIC_MODEL` |
+| `effort:` | `--effort` |
+| Executable | `$AUTOHELIX_CLAUDE_CODE_CMD`, else `claude` on `PATH` |
+| Models | [Claude Code model configuration](https://docs.claude.com/en/docs/claude-code/model-config) |
+
+**Codex** (`cli: codex`)
+
+| | |
+|---|---|
+| Example `model:` | `gpt-5.5` |
+| Default model | `model` in Codex's `config.toml` (`~/.codex/config.toml`) |
+| `effort:` | `-c model_reasoning_effort="..."` |
+| Executable | `$AUTOHELIX_CODEX_CMD`, else `codex` on `PATH` |
+| Models | [Codex models](https://developers.openai.com/codex/models) |
+
+**OpenCode** (`cli: opencode`)
+
+| | |
+|---|---|
+| Example `model:` | `anthropic/claude-sonnet-4-5` (provider/model) |
+| Default model | `model` in OpenCode's config (`opencode.json`) |
+| `effort:` | `--variant` |
+| Executable | `$AUTOHELIX_OPENCODE_CMD`, else `opencode` on `PATH` |
+| Models | [OpenCode models](https://opencode.ai/docs/models/) |
+
+The executable is never in the config: set the variable (a wrapper script, a
+Bedrock or proxy launcher) where you run `autohelix`. `run` checks before
+starting that every agent the config runs (the main agent, each `ask:` and
+`review:` entry's judge) can be found; `ask`, `review` and bare `autohelix` use
+the same variables.
 
 `ask:` and `review:` calls keep their own independent, read-only defaults and
-use only `backend`, `model`, `reasoning_effort` and `command` from here, never
-`settings`, `extra_args` or `auto_memory`. They don't use `agent.timeout` either:
-an entry's `timeout:` bounds its judge (`ask` defaults to 10 minutes, a review to
-30).
+use only `cli`, `model` and `effort` from here, never `extra_args` or
+`auto_memory`. They don't use `agent.timeout` either: an entry's `timeout:`
+bounds its judge (`ask` defaults to 10 minutes, a review to 30).
 
 **`agent.timeout`** is a hard kill: at the deadline the agent is stopped, even
 mid-step, and the iteration is rejected unchecked (its tree is still kept, see
 [Concepts → Rejected work](concepts.md#rejected-work)); the loop goes on with
-the next iteration, as after any failed agent call, until three fail in a row. Where the backend
+the next iteration, as after any failed agent call, until three fail in a row. Where the CLI
 supports it, the agent also sees the time left, so it can wrap up and write
 notes first: Claude Code through hooks after each tool call, Codex through the
 same hook on CLI versions that support it (an older Codex warns and runs without
-hints), OpenCode through a plugin. Every backend can run
+hints), OpenCode through a plugin. Every agent can run
 `bash "$AUTOHELIX_TIME_LEFT_SCRIPT"`, and the prompt says so. See
 [ML Experiments](ml-experiments.md) for when this matters.
 
@@ -582,8 +624,8 @@ before relying on the results. An interrupted run gets no summary; run
 [`autohelix report`](cli.md#autohelix-report) to write one. Pass `--no-report`
 to `run` or `resume` to skip it; it counts for that command only, not stored
 with the run like `--land`, so pass it to each `resume` too (a `report:` key
-is an error naming the flag). The call uses the run's agent settings (backend,
-command, model, `reasoning_effort`, `settings`, `extra_args`), with a
+is an error naming the flag). The call uses the run's agent settings (`cli`,
+`model`, `effort`, `extra_args`), with a
 timeout of `agent.timeout` capped at 15 minutes. Its time and cost are shown
 next to the summary in `autohelix view` and `report.html`, and every summary's
 cost is counted in the run's total (the end block, `view`, the run
@@ -607,13 +649,19 @@ replacement; there are no aliases and no migration.
 | `autohelix ask "..."` in `constraints:` | a `gates:` entry `ask:` (or the command, unchanged) | |
 | `reviewer:` | an `observe:` entry with `name:` and `review:` | `` `reviewer:` is now an `observe:` entry with `name:` and `review: <prompt>` `` |
 | `reviewer.model`, `reviewer.timeout_seconds` | `agent:` and `timeout:` on the review entry | |
-| `agent.type` | `agent.backend` | `` `agent.type` is now `agent.backend` `` |
+| `agent.type`, `agent.backend` | `agent.cli` | `` `agent.backend` is now `agent.cli` (claude-code, codex or opencode) `` |
+| `agent.backend: claude` | `agent.cli: claude-code` | `` `agent.cli: claude` is now `claude-code` `` |
+| `agent.reasoning_effort` | `agent.effort` | `` `agent.reasoning_effort` is now `agent.effort` `` |
+| `agent.command` | `$AUTOHELIX_CLAUDE_CODE_CMD`, `$AUTOHELIX_CODEX_CMD`, `$AUTOHELIX_OPENCODE_CMD` | `` `agent.command` is gone: set AUTOHELIX_CLAUDE_CODE_CMD, ... `` |
+| `$AUTOHELIX_CLAUDE_CMD` | `$AUTOHELIX_CLAUDE_CODE_CMD` | `AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD: ...` |
+| `agent.settings` | `agent.extra_args` | `` `agent.settings` is gone: pass the CLI's own options in `agent.extra_args` `` |
+| `agent.require_notes` | ask for notes in the goal or the prompt template | `` `agent.require_notes` is gone: ... `` |
+| `ask`/`review` `--agent`, `--command` | `--cli`; the variables above | `--agent is now --cli (claude-code or codex)` |
 | `agent.timeout_seconds` | `agent.timeout` (a duration) | `` `agent.timeout_seconds` is now `agent.timeout` (a duration such as 30m) `` |
 | `budget:` (`iterations`, `cost`, `time`) | the `run`/`resume` flags `-n`, `--cost`, `--time`, per segment (see [CLI → Budgets](cli.md#budgets)) | `` `budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`; ...) `` |
 | `land:` | `run --land auto\|manual` (also `resume`), stored with the run; default `auto`, `manual` with `--group` | `` `land:` moved to the command line: `autohelix run --land auto\|manual` (also `resume`; ...) `` |
 | `report:` | `run --no-report` (also `resume`; per command, not stored) | `` `report:` moved to the command line: `autohelix run --no-report` (also `resume`) `` |
 | `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | as `budget:` |
-| `agent.settings.model` | `agent.model` | `` `agent.settings.model` is now `agent.model` `` |
 | a bare number as the threshold (`max_regression_pct: 5` was one; `regress: 5` now) | `regress: 5%` | `write the percentage with %, e.g. 5%, got 5` |
 | `timeout:` in seconds | durations everywhere (a bare number, or a string of digits like `"90"`, is still seconds) | |
 | `.autohelix/prompt.md` | `prompt_template:` (relative to the config) | a warning at run start |
@@ -697,8 +745,8 @@ goal: |
   Optimize the attention kernel for maximum TFLOPS on A100.
 
 agent:
-  backend: claude
-  model: claude-opus-4-8
+  cli: claude-code
+  model: opus
   timeout: 30m
 
 gates:
@@ -717,7 +765,7 @@ observe:
     review: |
       Review the Triton kernel for correctness, numerical stability and
       performance. Suggest the single most impactful optimization.
-    agent: {backend: codex}
+    agent: {cli: codex}
 
 scope:
   editable: [kernel.py]
@@ -777,11 +825,11 @@ Controls Claude Code's built-in memory system for the main agent:
 - `ask` and `review` calls always run without it.
 - Disabled via `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`; with `auto_memory: true` an
   inherited `CLAUDE_CODE_DISABLE_AUTO_MEMORY` is removed from the agent's
-  environment. Ignored for non-Claude backends.
+  environment. Ignored by the other CLIs.
 
 ## Cost Tracking
 
-Available token usage and cost are captured from agent backends and shown:
+Available token usage and cost are captured from the agent CLIs and shown:
 
 - Per iteration (after accepted/rejected). A `+` after the amount (`$0.10+`) means part of that iteration's cost (agent or a command's model call) is unavailable, so the amount is what is known.
 - Cumulative in the final summary
@@ -807,7 +855,7 @@ an agent call consume no iteration. Failed baseline attempts retain their costs 
 iteration 0 for a clean retry. A process killed before a durable history write can
 still lose unreturned usage; recovered accepted commits record that charge as unknown.
 
-The numeric field is `usage.cost_usd` for every backend. `usage.cost_source` is
+The numeric field is `usage.cost_usd` for every CLI. `usage.cost_source` is
 `backend` when the CLI supplies the amount, or `calculated` when AutoHelix
 calculates it. Backend-supplied amounts can themselves be estimates; they are
 not necessarily invoice totals. Older history without this metadata still loads.
@@ -817,7 +865,7 @@ and output token counts and a bundled snapshot of the model's published
 [OpenAI API rates](https://developers.openai.com/api/docs/pricing).
 For subscription and Bedrock users, these are API-equivalent amounts, not
 subscription charges or provider bills. The normal display uses the same
-**Cost** label for every backend; provenance is saved in history:
+**Cost** label for every CLI; provenance is saved in history:
 
 - `cost_model` identifies the model priced.
 - `cost_basis: openai_standard_api` identifies Standard pricing at ordinary

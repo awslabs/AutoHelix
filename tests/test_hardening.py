@@ -42,7 +42,7 @@ def _project(repo, sub=None, files=None):
 
 
 def _configure(project, repo, settings=None, **sections):
-    config = {"goal": "Harden", "agent": {"backend": "mock", "settings": {
+    config = {"goal": "Harden", "agent": {"cli": "mock", "mock": {
         "change_file": "hello.py", "change_content": "# iteration {iteration}", **(settings or {})}}, **sections}
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     git(repo, "add", "-A")
@@ -75,7 +75,8 @@ class Agent:
 
 def _apply_in_probe(copy_dir, patch):
     """Apply rejected.patch with `git apply` in a copy of the agent's copy; returns the
-    tree the probe's files hash to (the harness's material left out), or the error."""
+    tree the probe's files hash to (the harness's material left out, the removed config
+    file back), or the error."""
     copy_root = copy_dir
     while not (copy_root / ".git").exists():
         copy_root = copy_root.parent
@@ -91,6 +92,9 @@ def _apply_in_probe(copy_dir, patch):
         state = (copy_dir.relative_to(copy_root) / ITERATION_DIR).as_posix()
         git(probe, "add", "-A", "--", ".", env=index)
         git(probe, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", state, env=index)
+        # The agent copy has no config file (`agent_copy(hidden=...)`); T has it, as the snapshot resets it.
+        config = (copy_dir.relative_to(copy_root) / "autohelix.yaml").as_posix()
+        git(probe, "reset", "-q", "HEAD", "--", config, env=index)
         return git(probe, "write-tree", env=index)
     finally:
         subprocess.run(["rm", "-rf", str(probe)], check=True)
@@ -471,12 +475,13 @@ def test_run_start_warnings_wrap_under_their_label(repo, capsys):
     assert all(not line.strip() or line.startswith("  ") for line in out.splitlines()[:12])
 
 
-def test_a_preflight_failure_keeps_a_long_path_whole(repo, capsys):
+def test_a_preflight_failure_keeps_a_long_path_whole(repo, capsys, monkeypatch):
     """The FAIL line wraps at spaces (`terminal.show`): an agent command's path wider
     than the screen is printed whole, never split across lines."""
     project = _project(repo)
     command = "/opt/" + "a-very-long-folder-name/" * 5 + "claude"
-    _configure(project, repo, agent={"backend": "claude", "command": command})
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", command)
+    _configure(project, repo, agent={"cli": "claude-code"})
     with pytest.raises(RuntimeError, match="Preflight checks failed"):
         Harness(project, verbose=False).run(Budget(until=1), report=False)
     out = capsys.readouterr().out

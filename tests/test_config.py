@@ -56,15 +56,15 @@ class TestConfigFromDict:
         config = Config.from_dict({"goal": "x", "gates": [{
             "ask": "Does it keep the 'public' API?", "yes": "it's kept", "no": "a $name changed",
             "timeout": "20m",
-            "agent": {"backend": "codex", "model": "gpt 6", "reasoning_effort": "high", "command": "/opt/codex x"},
+            "agent": {"cli": "codex", "model": "gpt 6", "effort": "high"},
         }]})
         gate = config.gates[0]
         assert gate.label == "ask: Does it keep the 'public' API?"
         assert gate.timeout == 1200
         assert shlex.split(gate.command) == [
             "autohelix", "ask", "--yes", "it's kept", "--no", "a $name changed",
-            "--agent", "codex", "--model", "gpt 6", "--effort", "high", "--timeout", "1200",
-            "--command", "/opt/codex x", "--", "Does it keep the 'public' API?",
+            "--cli", "codex", "--model", "gpt 6", "--effort", "high", "--timeout", "1200",
+            "--", "Does it keep the 'public' API?",
         ]
 
     def test_an_ask_gate_without_timeout_has_the_judges_ten_minutes(self):
@@ -161,14 +161,14 @@ class TestConfigFromDict:
         config = Config.from_dict({"goal": "x", "observe": [{
             "name": "progress", "review": "List items; report `missing`. Don't trust 'STATUS'.",
             "previous": True, "metrics": {"missing": "lower", "done": "higher"},
-            "agent": {"backend": "Claude", "model": "opus"}, "timeout": 600,
+            "agent": {"cli": "Claude-Code", "model": "opus"}, "timeout": 600,
         }]})
         entry = config.observe[0]
         assert entry.review == "List items; report `missing`. Don't trust 'STATUS'."
         assert entry.capture == [] and entry.timeout == 600
         assert shlex.split(entry.command) == [
             "autohelix", "review", "--previous",
-            "--metric", "missing", "--metric", "done", "--agent", "claude", "--model", "opus",
+            "--metric", "missing", "--metric", "done", "--cli", "claude-code", "--model", "opus",
             "--timeout", "600", "--", "List items; report `missing`. Don't trust 'STATUS'.",
         ]
         assert Config.from_dict({"goal": "x", "observe": [{"name": "r", "review": "Go"}]}).observe[0].command \
@@ -211,23 +211,21 @@ class TestConfigFromDict:
 
     def test_agent_keys(self):
         config = Config.from_dict({"goal": "x", "agent": {
-            "backend": "codex", "model": "m", "reasoning_effort": "high", "timeout": "30m", "command": "c",
-            "settings": {"a": 1}, "extra_args": "--x", "auto_memory": True, "require_notes": True}})
+            "cli": "codex", "model": "m", "effort": "high", "timeout": "30m",
+            "extra_args": "--x", "auto_memory": True}})
         agent = config.agent
-        assert (agent.backend, agent.model, agent.reasoning_effort, agent.timeout, agent.command) == \
-            ("codex", "m", "high", 1800, "c")
-        assert agent.settings == {"a": 1} and agent.extra_args == ["--x"] and agent.auto_memory
-        assert agent.require_notes is not None
+        assert (agent.cli, agent.model, agent.effort, agent.timeout) == ("codex", "m", "high", 1800)
+        assert agent.extra_args == ["--x"] and agent.auto_memory
         assert Config.from_dict({"goal": "x", "agent": {"timeout": 90}}).agent.timeout == 90
 
     def test_agent_defaults(self):
         agent = Config.from_dict({"goal": "x"}).agent
-        assert (agent.backend, agent.timeout, agent.auto_memory) == ("claude", None, False)
+        assert (agent.cli, agent.model, agent.timeout, agent.auto_memory) == ("claude-code", None, None, False)
 
     def test_agent_from_dict_raises_on_malformed(self):
-        with pytest.raises(ValueError, match="agent.backend"):
+        with pytest.raises(ValueError, match="agent.cli"):
             AgentConfig.from_dict({"type": "claude"})
-        assert AgentConfig.from_dict({"backend": "mock"}).backend == "mock"
+        assert AgentConfig.from_dict({"cli": "mock"}).cli == "mock"
 
 
 class TestTitle:
@@ -259,9 +257,14 @@ class TestOldKeys:
         ({"observables": []}, "`observables:` is now `observe:`"),
         ({"acceptance": {"metric_gates": []}}, "`acceptance:` is now a `gates:` entry"),
         ({"reviewer": True}, "`reviewer:` is now an `observe:` entry with `name:` and `review: <prompt>`"),
-        ({"agent": {"type": "claude"}}, "`agent.type` is now `agent.backend`"),
+        ({"agent": {"type": "claude"}}, "`agent.type` is now `agent.cli`"),
+        ({"agent": {"backend": "codex"}}, "`agent.backend` is now `agent.cli` (claude-code, codex or opencode)"),
+        ({"agent": {"reasoning_effort": "high"}}, "`agent.reasoning_effort` is now `agent.effort`"),
+        ({"agent": {"command": "/opt/claude"}}, "`agent.command` is gone: set AUTOHELIX_CLAUDE_CODE_CMD"),
+        ({"agent": {"require_notes": True}}, "`agent.require_notes` is gone"),
+        ({"agent": {"cli": "claude"}}, "`agent.cli: claude` is now `claude-code`"),
         ({"agent": {"timeout_seconds": 60}}, "`agent.timeout_seconds` is now `agent.timeout`"),
-        ({"agent": {"settings": {"model": "m"}}}, "`agent.settings.model` is now `agent.model`"),
+        ({"agent": {"settings": {"model": "m"}}}, "`agent.settings` is gone: pass the CLI's own options in `agent.extra_args`"),
         ({"budget": {"iterations": 3}},
          "`budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`"),
         ({"budget": None}, "`budget:` moved to the command line"),
@@ -295,11 +298,13 @@ class TestEntryErrors:
         ({"metric": "speed", "regress": "-5%"}, "regress: must be a percentage of 0% or more"),
         ({"metric": "nope", "improve": "0%"}, "metric 'nope' is not declared"),
         ({"metric": "speed", "regress": 0.05}, "write the percentage with %, e.g. 0.05%"),
-        ({"ask": "Q?", "agent": {"backend": "gemini"}}, "(must be claude or codex)"),
+        ({"ask": "Q?", "agent": {"cli": "gemini"}}, "(must be claude-code or codex)"),
+        ({"ask": "Q?", "agent": {"backend": "codex"}}, "`agent.backend` is now `agent.cli`"),
+        ({"ask": "Q?", "agent": {"command": "x"}}, "`agent.command` is gone: set AUTOHELIX_CLAUDE_CODE_CMD"),
         ({"command": ""}, "`command:` must be a non-empty string"),
         ({"command": "x", "timeout": "soon"}, "timeout: 'soon' is not a valid duration"),
         ({"command": "x", "timeout": 0}, "is not a valid duration"),
-        ({"ask": "Q?", "agent": {"backend": "opencode"}}, "OpenCode has no read-only mode"),
+        ({"ask": "Q?", "agent": {"cli": "opencode"}}, "OpenCode has no read-only mode"),
         ({"ask": "Q?", "agent": {"settings": {}}}, "unknown key `settings`"),
         ({"ask": "Q?", "agent": {"extra_args": ["--x"]}}, "unknown key `extra_args`"),
         ({"ask": "Q?", "agent": "claude"}, "`agent:` must be a mapping"),
@@ -323,7 +328,7 @@ class TestEntryErrors:
         ({"name": "b", "command": "x", "metrics": {"a-b": "higher"}}, "must be letters, digits or _"),
         ({"name": "b", "command": "x", "metrics": ["s"]}, "`metrics:` must map metric names"),
         ({"name": "b", "review": "y", "previous": "yes"}, "`previous:` must be true or false"),
-        ({"name": "b", "review": "y", "agent": {"backend": "opencode"}}, "OpenCode has no read-only mode"),
+        ({"name": "b", "review": "y", "agent": {"cli": "opencode"}}, "OpenCode has no read-only mode"),
         ({"name": "b", "review": "y", "agent": {"auto_memory": True}}, "unknown key `auto_memory`"),
         ("python bench.py", "expected a mapping"),
     ])
@@ -344,35 +349,20 @@ class TestEntryErrors:
     def test_stop_entry_errors(self):
         assert any("unknown key `ask`" in e for e in errors({"goal": "g", "stop": [{"ask": "Done?"}]}))
 
-    def test_top_level_opencode_needs_a_backend_on_ask_and_review_entries(self):
-        data = {"goal": "g", "agent": {"backend": "OpenCode"},
-                "gates": ["pytest", {"ask": "Q?"}, {"ask": "R?", "agent": {"backend": "claude"}}],
+    def test_top_level_opencode_needs_a_cli_on_ask_and_review_entries(self):
+        data = {"goal": "g", "agent": {"cli": "OpenCode"},
+                "gates": ["pytest", {"ask": "Q?"}, {"ask": "R?", "agent": {"cli": "claude-code"}}],
                 "observe": [{"name": "bench", "command": "x"}, {"name": "r", "review": "y"}]}
         found = sorted(e for e in errors(data) if "read-only" in e)
-        assert found == ["gates entry 2: opencode has no read-only mode; set agent.backend on this entry",
-                         "observe entry `r`: opencode has no read-only mode; set agent.backend on this entry"]
+        assert found == ["gates entry 2: opencode has no read-only mode; set agent.cli on this entry",
+                         "observe entry `r`: opencode has no read-only mode; set agent.cli on this entry"]
 
-    def test_backends_are_lowercased(self):
-        config = Config.from_dict({"goal": "g", "agent": {"backend": "Codex"},
-                                   "gates": [{"ask": "Q?", "agent": {"backend": "CLAUDE"}}]})
-        assert config.agent.backend == "codex"
-        assert shlex.split(config.gates[0].command)[2:4] == ["--agent", "claude"]
-        assert not errors({"goal": "g", "agent": {"backend": "Codex"}})
-
-    @pytest.mark.parametrize("value, message", [
-        ({"min_chars": "x"}, "agent.require_notes.min_chars must be an integer"),
-        ({"max_retries": 1.5}, "agent.require_notes.max_retries must be an integer"),
-        ({"min_char": 10}, "Unknown key agent.require_notes.min_char"),
-        ([1], "agent.require_notes must be true, false or a mapping"),
-        ("yes", "agent.require_notes must be true, false or a mapping"),
-    ])
-    def test_require_notes_errors(self, value, message):
-        found = errors({"goal": "g", "agent": {"require_notes": value}})
-        assert any(message in e for e in found), found
-
-    def test_require_notes_values(self):
-        notes = Config.from_dict({"goal": "g", "agent": {"require_notes": {"min_chars": 10}}}).agent.require_notes
-        assert (notes.min_chars, notes.max_retries) == (10, 3)
+    def test_clis_are_lowercased(self):
+        config = Config.from_dict({"goal": "g", "agent": {"cli": "Codex"},
+                                   "gates": [{"ask": "Q?", "agent": {"cli": "CLAUDE-CODE"}}]})
+        assert config.agent.cli == "codex"
+        assert shlex.split(config.gates[0].command)[2:4] == ["--cli", "claude-code"]
+        assert not errors({"goal": "g", "agent": {"cli": "Codex"}})
 
     def test_unknown_agent_key_is_an_error(self):
         assert any("Unknown key agent.colour" in e for e in errors({"goal": "g", "agent": {"colour": "blue"}}))
@@ -442,40 +432,29 @@ class TestConfigValidate:
         assert "goal must be a string (use `|` for several lines)" in errors({"goal": goal, "gates": ["p"]})
 
     @pytest.mark.parametrize(("agent", "message"), [
-        ({"command": ["claude", "--verbose"]},
-         "agent.command must be a non-empty string, got ['claude', '--verbose'] (put arguments in agent.extra_args)"),
         ({"model": 4}, "agent.model must be a non-empty string, got 4"),
-        ({"reasoning_effort": ["high"]}, "agent.reasoning_effort must be a non-empty string"),
-        ({"backend": 1}, "agent.backend must be a non-empty string, got 1"),
+        ({"effort": ["high"]}, "agent.effort must be a non-empty string"),
+        ({"cli": 1}, "agent.cli must be a non-empty string, got 1"),
         ({"auto_memory": "false"}, "agent.auto_memory must be true or false, got 'false'"),
         ({"auto_memory": 1}, "agent.auto_memory must be true or false, got 1"),
     ])
     def test_agent_values_are_type_checked(self, agent, message):
-        """A list as `command` crashed preflight with a TypeError; a quoted "false" turned
-        auto memory on."""
+        """A quoted "false" turned auto memory on."""
         assert any(message in e for e in errors({"goal": "x", "gates": ["p"], "agent": agent}))
         assert Config.from_dict({"goal": "x", "agent": agent}).agent.auto_memory is False
 
     @pytest.mark.parametrize(("agent", "message"), [
-        ({"command": ["x", "y"]}, "gates entry 1 agent.command must be a non-empty string"),
         ({"model": 4}, "gates entry 1 agent.model must be a non-empty string"),
-        ({"backend": ["codex"]}, "gates entry 1 agent.backend must be a non-empty string"),
+        ({"cli": ["codex"]}, "gates entry 1 agent.cli must be a non-empty string"),
     ])
     def test_ask_entry_agent_values_are_type_checked(self, agent, message):
         found = errors({"goal": "x", "gates": [{"ask": "Is it good?", "agent": agent}]})
         assert any(message in e for e in found), found
 
-    def test_unknown_agent_backend_is_error(self):
-        assert any("Unknown agent backend" in e for e in errors({"goal": "x", "agent": {"backend": "gpt4"}}))
-        for backend in ["claude", "codex", "opencode", "mock"]:
-            assert not any("Unknown agent backend" in e for e in errors({"goal": "x", "agent": {"backend": backend}}))
-
-    def test_settings_ignored_warning_for_claude(self):
-        assert any("agent.settings is ignored" in w
-                   for w in warnings({"goal": "x", "agent": {"backend": "claude", "settings": {"foo": "bar"}}}))
-        assert not any("agent.settings is ignored" in w
-                       for w in warnings({"goal": "x", "agent": {"backend": "codex", "settings": {"foo": "bar"}}}))
-        assert not any("agent.settings is ignored" in w for w in warnings({"goal": "x", "agent": {}}))
+    def test_unknown_agent_cli_is_error(self):
+        assert any("Unknown agent.cli 'gpt4'" in e for e in errors({"goal": "x", "agent": {"cli": "gpt4"}}))
+        for cli in ["claude-code", "codex", "opencode", "mock"]:
+            assert not any("agent.cli" in e for e in errors({"goal": "x", "agent": {"cli": cli}}))
 
     def test_observe_entry_without_metrics_is_valid(self):
         assert not errors({"goal": "x", "observe": [{"name": "log", "command": "cat log"}]})

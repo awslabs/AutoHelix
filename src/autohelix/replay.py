@@ -14,12 +14,12 @@ from autohelix.agents.opencode import OpenCodeAgent
 
 
 _TYPES = {
-    "claude": {"system", "stream_event", "assistant", "user", "result"},
+    "claude-code": {"system", "stream_event", "assistant", "user", "result"},
     "codex": {"thread.started", "turn.started", "turn.failed", "turn.completed",
               "item.started", "item.completed"},
     "opencode": {"step_start", "text", "tool_use", "step_finish"},
 }
-_PARSERS = {"claude": ClaudeCodeAgent, "codex": CodexAgent, "opencode": OpenCodeAgent}
+_PARSERS = {"claude-code": ClaudeCodeAgent, "codex": CodexAgent, "opencode": OpenCodeAgent}
 _STREAM_TYPES = {
     "content_block_start", "content_block_delta", "content_block_stop",
     "message_start", "message_delta", "message_stop",
@@ -60,7 +60,7 @@ class LogReplay:
             if backend == "codex" and kind.startswith("item."):
                 if payload.get("item", {}).get("type") not in {"command_execution", "agent_message"}:
                     return raw
-            if backend == "claude":
+            if backend == "claude-code":
                 if kind == "stream_event":
                     if payload.get("event", {}).get("type") not in _STREAM_TYPES:
                         return raw
@@ -69,10 +69,10 @@ class LogReplay:
                     if streamed:
                         return []
             if backend not in self._parsers:
-                self._parsers[backend] = _PARSERS[backend](AgentConfig(backend=backend))
+                self._parsers[backend] = _PARSERS[backend](AgentConfig(cli=backend))
             parser = self._parsers[backend]
             events: list[AgentEvent] = []
-            if backend == "claude":
+            if backend == "claude-code":
                 parser._handle_line(line, events.append, replay=True)
                 if events and kind == "stream_event" and payload["event"]["type"] in {"content_block_start", "content_block_delta"}:
                     self._claude_streamed = True

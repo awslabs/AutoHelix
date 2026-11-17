@@ -144,8 +144,8 @@ observe:
   as `##autohelix[...]` lines by the command). What a number means is defined
   only by the prompt. Review numbers are noisy and gameable: suitable for
   display and `stop`, not recommended for gates.
-- `agent` on a review or `ask` entry takes only `backend` (`claude` or
-  `codex`), `model`, `reasoning_effort`, `command`; the entry's `timeout:`
+- `agent` on a review or `ask` entry takes only `cli` (`claude-code` or
+  `codex`), `model`, `effort`; the entry's `timeout:`
   bounds its judge (at least 1m; an `ask` entry's defaults to 10 minutes).
 
 An observe entry that fails (non-zero exit, timeout, a review without a valid
@@ -184,20 +184,27 @@ requires execution under the entrypoint's verification policy.
 
 ```yaml
 agent:
-  backend: claude
-  # command: /path/to/agent-wrapper
-  # model: your-preferred-model
+  cli: claude-code     # claude-code, codex or opencode
+  model: opus          # passed through unchanged; unset = the CLI's default
+  # effort: high
   timeout: 30m
 ```
 
-`agent.backend` selects `claude` (default), `codex`, or `opencode`. Optional
-`command` and `model` select the executable and model; `reasoning_effort` the
-effort. Respect the user's installed agent and preferences. `agent` is also the
-default backend and model for `ask` and `review` entries; OpenCode has no
-read-only mode, so with an OpenCode main agent each `ask`/`review` entry needs
-its own `agent.backend`.
+`agent.cli` selects `claude-code` (default), `codex`, or `opencode`. Write
+`model:` explicitly (AutoHelix passes it through and keeps no list of names; ask
+the user which model, e.g. `opus` for Claude Code, `gpt-5.5` for Codex,
+`provider/model` for OpenCode); `effort` is passed through too (Claude Code
+`--effort`, Codex `model_reasoning_effort`, OpenCode `--variant`). The
+executable is never in the config: `AUTOHELIX_CLAUDE_CODE_CMD`,
+`AUTOHELIX_CODEX_CMD` or `AUTOHELIX_OPENCODE_CMD` in the environment, else the
+name on PATH. A CLI's own options go in `extra_args`. Respect the user's
+installed agent and preferences. `agent` is also the default CLI and model for
+`ask` and `review` entries; OpenCode has no read-only mode, so with an OpenCode
+main agent each `ask`/`review` entry needs its own `agent.cli`. Old keys
+(`backend`, `reasoning_effort`, `command`, `settings`, `require_notes`) are
+errors naming their replacement.
 
-`agent.timeout` is a per-iteration hard kill (default: none); where the backend
+`agent.timeout` is a per-iteration hard kill (default: none); where the CLI
 supports it the agent also sees the remaining time. `ask` and `review` entries
 don't use it: their own `timeout:` bounds them.
 
@@ -300,12 +307,13 @@ For the YAML at the start of this reference, the explanation could be:
    candidate.
 5. **Launch:** `autohelix run -n 3`: three attempts, enough to see whether the
    benchmark moves. No `--cost` or `--time`: the tests and benchmark are cheap,
-   and there is no per-agent time limit. Add `--cost` only with reliable backend
+   and there is no per-agent time limit. Add `--cost` only with reliable CLI
    reporting (it doesn't cover all calls); `autohelix resume <id> -n 5` gives
    more later.
 
-This example does not override the default Claude backend or configure a
-review. Explain the actual backend/model choices and omitted defaults in the
+This example does not set `agent:` (the default `claude-code` with its own
+default model) or configure a review; a real config writes `model:` explicitly.
+Explain the actual CLI/model choices and omitted defaults in the
 user's configuration, and flag choices still open.
 
 Follow the entrypoint's agreement workflow before saving, validating, and

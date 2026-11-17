@@ -19,8 +19,8 @@ CONFIG = """\
 goal: Make a checked change  # the title
 observe: [{name: bench, command: "true"}]
 agent:
-  backend: mock
-  settings:
+  cli: mock
+  mock:
     change_file: code.py
     change_content: "# iteration {iteration}"
 """
@@ -244,7 +244,7 @@ def test_config_changes_compares_what_the_harness_uses(tmp_path):
         return config_changes(parsed(tmp_path, a), parsed(tmp_path, b))
 
     assert changes("goal: g\ngates: [pytest]\n", "goal: g\ngates: [{command: pytest, timeout: 1800}]\n") == []
-    assert changes("goal: g\nagent: {timeout: 10m}\n", "goal: g\nagent: {timeout: 600, backend: claude}\n") == []
+    assert changes("goal: g\nagent: {timeout: 10m}\n", "goal: g\nagent: {timeout: 600, cli: claude-code}\n") == []
     assert changes("goal: g\nscope: {editable: null}\ngates: []\n", "goal: g\n") == []
     assert changes("goal: g\nagent: {timeout: 10m}\n", "goal: g\nagent: {timeout: 11m}\n") == ["agent"]
     assert changes("goal: g\nscope: {editable: [src/]}\n", "goal: h\nscope: {editable: [./src/]}\n") == ["goal"]

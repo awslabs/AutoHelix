@@ -143,6 +143,13 @@ autohelix run a -p PROJECT --land manual -n 10 --why "approach a"
 autohelix run b -p PROJECT --land manual -n 10 --why "approach b"
 ```
 
+Without session tools, `nohup autohelix run a -p PROJECT --land manual -n 10 >
+a.log 2>&1 &` works too (`autohelix stop <id>` ends it; Ctrl-C doesn't reach it).
+`run` and `resume` keep the machine awake until their segment ends (macOS
+`caffeinate`, Linux `systemd-inhibit`, nothing where the tool is missing or
+refused), but a closed lid still sleeps and they don't keep credentials or a VPN
+alive: say so when the user leaves a laptop to run overnight.
+
 Follow them with `autohelix view --json` (`view --once` for a table, `view --once
 --metric NAME` to compare one metric). Each run keeps its own budget, stop
 conditions and cost. When they finish, compare the latest accepted metrics and

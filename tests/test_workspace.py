@@ -234,24 +234,51 @@ def test_symlinked_parent_directory_is_a_change(repo_dir, copies, tmp_path):
     assert copy.changed() == ["pkg"]
 
 
-def test_three_thousand_files_are_fast(repo_dir, copies):
+def _git_calls_for(root, copies, files_per_folder, monkeypatch):
+    """Git invocations for one iteration's copy work (agent copy, snapshot, checks
+    copy, three verifications) on a repository of 30 folders of this many files."""
+    root.mkdir()
+    git(root, "init", "-q", "-b", "main")
+    git(root, "config", "user.email", "local@example.com")
+    git(root, "config", "user.name", "Local")
     for directory in range(30):
-        folder = repo_dir / f"d{directory}"
+        folder = root / f"d{directory}"
         folder.mkdir()
-        for index in range(100):
-            (folder / f"f{index}.py").write_text(f"value = {directory * 100 + index}\n")
-    head = commit_all(repo_dir)
-    started = time.monotonic()
-    repo = Repo(repo_dir)
-    copy = Copy.create(repo, copies / "agent", files=head, head=head)
-    (copy.path / "d3" / "f7.py").write_text("value = -1\n")
-    tree, _ = copy.snapshot(Scope(editable=("d3",)))
-    checks = Copy.create(repo, copies / "checks", files=tree, head=head, watched=True)
-    for _ in range(3):
-        assert checks.changed() == []
-    copy.remove()
-    checks.remove()
-    assert time.monotonic() - started < 30
+        for index in range(files_per_folder):
+            (folder / f"f{index}.py").write_text(f"value = {directory * 1000 + index}\n")
+    head = commit_all(root)
+    copies.mkdir(parents=True)
+    copies = copies.resolve()
+    calls = []
+    real_run = subprocess.run
+
+    def counting_run(argv, *args, **kwargs):
+        if argv and os.path.basename(str(argv[0])) == "git":
+            calls.append(argv)
+        return real_run(argv, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "run", counting_run)
+        repo = Repo(root)
+        copy = Copy.create(repo, copies / "agent", files=head, head=head)
+        (copy.path / "d3" / "f7.py").write_text("value = -1\n")
+        tree, _ = copy.snapshot(Scope(editable=("d3",)))
+        checks = Copy.create(repo, copies / "checks", files=tree, head=head, watched=True)
+        for _ in range(3):
+            assert checks.changed() == []
+        copy.remove()
+        checks.remove()
+    assert blob(root, tree, "d3/f7.py") == b"value = -1\n"
+    return len(calls)
+
+
+def test_git_calls_do_not_grow_with_the_number_of_files(tmp_path, monkeypatch):
+    """No per-file git work: 3,000 files take as many git invocations as 300
+    (counted, not timed: a loaded machine can't fail it)."""
+    small = _git_calls_for(tmp_path / "small", tmp_path / "copies-small", 10, monkeypatch)
+    large = _git_calls_for(tmp_path / "large", tmp_path / "copies-large", 100, monkeypatch)
+    assert small > 0
+    assert large == small
 
 
 def test_filenames_with_newlines(repo_dir, copies):

@@ -23,13 +23,14 @@ def test_polite_endings_exit_0(project):
     assert result.exit_code == 0 and "stop condition met" in result.output, result.output
 
 
-def test_a_resume_whose_preflight_fails_exits_1_and_records_a_failed_segment(project, tmp_path):
+def test_a_resume_whose_preflight_fails_exits_1_and_records_a_failed_segment(project, tmp_path, monkeypatch):
     agent = tmp_path / "bin" / "claude"
     agent.parent.mkdir()
     agent.write_text("#!/bin/sh\nexit 1\n")
     agent.chmod(0o755)
     # The baseline fails (a gate that edits files), so a resume runs preflight again.
-    configure(project, gates=[MUTATING], agent={"backend": "claude", "command": str(agent)})
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", str(agent))
+    configure(project, gates=[MUTATING], agent={"cli": "claude-code"})
     first = cli(project, "run", "-n", "1", "--no-report")
     assert first.exit_code == 1 and "Baseline command modified candidate files" in first.output, first.output
     paths = latest_run(project)

@@ -29,7 +29,7 @@ def project(tmp_path):
 
 def _configure(project, settings=None, **sections) -> None:
     config = {"goal": "Test rejected work",
-              "agent": {"backend": "mock", "settings": {"change_file": "hello.py",
+              "agent": {"cli": "mock", "mock": {"change_file": "hello.py",
                                                         "change_content": "# iteration {iteration}",
                                                         **(settings or {})}},
               **sections}

@@ -13,7 +13,7 @@ from tests.helpers import configure
 
 def _judge_config(project, **settings):
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
-    data["agent"]["settings"].update(settings)
+    data["agent"]["mock"].update(settings)
     return data
 
 

@@ -19,7 +19,7 @@ from tests.helpers import git, latest_run
 
 CONFIG = {
     "goal": "Make sort_list faster in sort.py.\nMore detail below the title.",
-    "agent": {"backend": "claude", "model": "opus", "timeout": "30m"},
+    "agent": {"cli": "claude-code", "model": "opus", "timeout": "30m"},
     "gates": ["pytest -q", {"ask": "keeps the public API?"}, {"metric": "speed", "regress": "5%"}],
     "observe": [{"name": "bench", "command": "python bench.py", "metrics": {"speed": "higher"}},
                 {"name": "review", "review": "Review the diff."},
@@ -42,7 +42,7 @@ def test_header_lines():
     assert lines[:-1] == [
         "  AutoHelix  v0.3.0 · run 0mws · sorting · 12:00",
         "  Goal       Make sort_list faster in sort.py.",
-        "  Agent      claude (opus)",
+        "  Agent      claude-code (opus)",
         "  Gates      pytest -q · ask: keeps the public API? · speed regress 5%",
         "  Observe    bench (speed ↑) · review · progress (missing ↓)",
         "  Scope      editable: sort.py",
@@ -53,7 +53,7 @@ def test_header_lines():
 
 def test_header_omits_empty_lines():
     lines = _header(Config.from_dict({"goal": "g"}), Budget(until=1))
-    assert lines[1:-1] == ["  Goal       g", "  Agent      claude", "  Budget     1 iteration"]
+    assert lines[1:-1] == ["  Goal       g", "  Agent      claude-code", "  Budget     1 iteration"]
 
 
 def test_the_mark_is_beside_the_header():
@@ -258,7 +258,7 @@ def project(tmp_path):
 
 
 def _configure(project, settings=None, **sections):
-    config = {"goal": "Test the console", "agent": {"backend": "mock", "settings": {
+    config = {"goal": "Test the console", "agent": {"cli": "mock", "mock": {
         "change_file": "hello.py", "change_content": "# iteration {iteration}", **(settings or {})}}, **sections}
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     git(project, "add", "-A")
