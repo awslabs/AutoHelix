@@ -2,20 +2,10 @@
   ────────────────────────────────────────────────────────────────────────────
   run           state                 iter   speed ↑  landing    activity
   m2xq perf     running                4/7  35,310.7  landed     agent 1m 12s
-    Cut the memory use of sort_list.
-    spent 6m 12s · $0.95
   krp3 sorting  finished               7/7  57,520.8  landed     just now
-    Make sort_list faster in sort.py.
-    spent 38m 43s · $2.65
   xax8 sorting  finished               7/7  57,520.8  1 to land  2h ago
-    Make sort_list faster in sort.py.
-    spent 38m 43s · $2.65
   0mws sorting  interrupted            7/7  57,520.8  landed     Nov 13
-    Make sort_list faster in sort.py.
-    spent 38m 43s · $2.65
   c9d1 sorting  stopped unexpectedly   7/7  57,520.8  2 to land  Nov 12
-    Make sort_list faster in sort.py.
-    spent 38m 43s · $2.65
 
   m2xq  running · iteration 4               next: autohelix view m2xq
   xax8  finished · 1 commit to land         next: autohelix land xax8

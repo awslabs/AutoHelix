@@ -493,7 +493,7 @@ async function loadAttempt(n, attempt) {
   if (selected !== n || panel.diff?.key !== key) return;
   // Not loaded: say so, and try again on the next poll (report.html has no other diff to load).
   panel.diff = d ? { key, text: d.diff, error: d.error }
-    : { key: SNAPSHOT ? key : null, text: null, error: SNAPSHOT ? 'Not saved in this file; see autohelix view --web.' : 'Could not load the diff.' };
+    : { key: SNAPSHOT ? key : null, text: null, error: SNAPSHOT ? 'Not saved in this file; see autohelix view.' : 'Could not load the diff.' };
   renderPanel();
 }
 
@@ -655,7 +655,7 @@ function observeSection(d, o, where) {
     } else if (o.stdout) {
       parts.push(el('pre', { className: 'output', textContent: o.stdout }));
     } else if (o.stdout === null && SNAPSHOT) {
-      parts.push(el('p', { className: 'muted', textContent: 'Output is not saved in this file; see autohelix view --web.' }));
+      parts.push(el('p', { className: 'muted', textContent: 'Output is not saved in this file; see autohelix view.' }));
     }
     if (o.stderr) parts.push(fileLike('stderr', el('pre', { textContent: o.stderr })));
     for (const a of o.files) parts.push(fileEl(artifactUrl(d.iteration, a.path), a.path.slice(o.name.length + 1), a.size));

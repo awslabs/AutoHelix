@@ -522,15 +522,15 @@ class Table:
                              width or self._label_width(word))
 
     def ending(self, outcome: tuple[str, str, str | None], *, spent: str, landing: tuple[str, str, str | None] | None,
-               landed: list[Row], commands: list[str], files: list[tuple[str, str]],
-               more_landed: str = "") -> list[Text]:
+               commands: list[str], files: list[tuple[str, str]]) -> list[Text]:
         """After a rule: the outcome, each metric's baseline → tip value with its change,
-        the run's totals, what landed (`landing`: label, text, style) with the accepted
-        summaries of `landed`, then what to type next and the files written (label, path)."""
+        the run's totals, what landed (`landing`: label, text, style; the commits'
+        summaries are on the run page), then what to type next and the files written
+        (label, path)."""
         iterations = [row for row in self.rows if row.iteration > 0]
         accepted = sum(row.accepted for row in iterations)
         seconds = sum(row.seconds or 0 for row in iterations)
-        width = self._label_width(outcome[0], "summary", "unlanded", "accepted", "landing")
+        width = self._label_width(outcome[0], "summary", "unlanded", "landing")
 
         def field(label: str, *parts: tuple[str, str | None], style: str | None = "dim") -> Text:
             return field_line(label, *parts, width=self.width, label_width=width, label_style=style)
@@ -554,13 +554,6 @@ class Table:
         if landing:
             label, text, landing_style = landing
             lines += self._wrapped(label, text, landing_style, "dim", width)
-        summaries = landed[-5:] if any(row.summary for row in landed) else []
-        for i, row in enumerate(summaries):  # under the landing line, else on their own
-            summary = clean(row.summary)
-            lines.append(field("" if landing or i else "accepted", (f"{row.iteration:<3}", "dim"),
-                               (summary or "(no summary)", None if summary else "dim")))
-        if more_landed and summaries:
-            lines.append(field("", (more_landed, "dim")))
         if 2 + width + len(" · ".join(commands)) <= self.width:
             parts: list[tuple[str, str | None]] = []
             for i, command in enumerate(commands):
@@ -582,10 +575,23 @@ def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int 
                width)
 
 
-def with_room(renderable) -> Group:
-    """`renderable` with `ROOM` blank lines under it: a live row shown at the bottom of
-    the terminal doesn't sit on its last lines (gone with the live display)."""
-    return Group(renderable, *[Text() for _ in range(ROOM)])
+def with_room(renderable, under: Text | None = None) -> Group:
+    """`renderable` (then a blank line and the line `under` it) with `ROOM` blank lines
+    under it: a live row shown at the bottom of the terminal doesn't sit on its last
+    lines (gone with the live display)."""
+    return Group(renderable, *[Text(), under] * (under is not None), *[Text() for _ in range(ROOM)])
+
+
+def steer_text(short: str, interrupt: bool = True) -> str:
+    """The commands that steer a running run: `autohelix view krp3 · hint --run krp3 "…" ·
+    stop krp3` (after this iteration), then `Ctrl-C now` (interrupt, progress kept) in
+    the terminal that runs it."""
+    return f'autohelix view {short} · hint --run {short} "…" · stop {short}' + " · Ctrl-C now" * interrupt
+
+
+def steer_line(short: str, width: int) -> Text:
+    """`run`/`resume`'s line under the live row (the header has long scrolled away)."""
+    return cut(Text("  " + steer_text(short), style="dim"), width)
 
 
 def outcome(stop: dict | None, error: BaseException | None, interrupted_at: int | None) -> tuple[str, str, str | None]:

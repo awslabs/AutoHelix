@@ -12,3 +12,5 @@
   ✗ 2      2m 23s   $0.48  pytest -q test_sort.py failed (exit 1)
   ✓ 3      2m 06s   $0.32  35,310.7 753×          96 -20%
   ⠋ 4      1m 12s  agent
+
+  autohelix view krp3 · hint --run krp3 "…" · stop krp3 · Ctrl-C now

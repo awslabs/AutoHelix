@@ -1,4 +1,4 @@
-"""The live terminal views: `view` follows the log the run status points at; `dashboard` redraws."""
+"""The live terminal view: `view --terminal` follows the log the run status points at."""
 
 import io
 import json
@@ -8,6 +8,7 @@ import pytest
 from rich.console import Console
 
 import autohelix.live as W
+from autohelix.config import Config
 from autohelix.run_status import RunStatus
 from autohelix.runs import RunLock
 from tests.helpers import latest_run
@@ -122,7 +123,7 @@ def _cli(*args):
 
 def test_live_view_exits_with_hints_instead_of_waiting(tmp_path):
     def hint():
-        result = _cli("view", "-p", tmp_path)
+        result = _cli("view", "--terminal", "-p", tmp_path)
         assert result.exit_code == 1
         return " ".join(result.output.split())
 
@@ -135,35 +136,35 @@ def test_live_view_exits_with_hints_instead_of_waiting(tmp_path):
             in hint())
 
 
-@pytest.mark.parametrize("command", ["view", "dashboard"])
-@pytest.mark.parametrize("flags", [["--json", "--once"], ["--json", "--web"], ["--once", "--web"],
-                                   ["--port", "9000"], ["--open"], ["--once", "--port", "0"], ["--json", "--open"]])
-def test_one_mode_at_a_time(tmp_path, command, flags):
-    result = _cli(command, "-p", tmp_path, *flags)
-    assert result.exit_code == 2, result.output
-    assert "--port and --open apply to --web" in result.output or "Use one of --json, --once and --web" in result.output
+@pytest.mark.parametrize("flags", [["--json", "--once"], ["--terminal", "--json"], ["--once", "--terminal"]])
+def test_one_mode_at_a_time(tmp_path, flags):
+    result = _cli("view", "-p", tmp_path, *flags)
+    assert result.exit_code == 2 and "Use one of --terminal, --once and --json" in result.output, result.output
 
 
-@pytest.mark.parametrize("flags", [["--json"], ["--web"]])
-def test_dashboard_metric_goes_with_the_table(tmp_path, flags):
-    result = _cli("dashboard", "-p", tmp_path, "--metric", "speed", *flags)
-    assert result.exit_code == 2 and "--metric applies to the table" in result.output
+@pytest.mark.parametrize("flags", [["--port", "9000", "--once"], ["--open", "--terminal"], ["--json", "--open"]])
+def test_port_and_open_go_with_the_web_page(tmp_path, flags):
+    result = _cli("view", "-p", tmp_path, *flags)
+    assert result.exit_code == 2 and "--port and --open apply to the web page" in result.output, result.output
 
 
-def test_live_dashboard_draws_the_table_until_ctrl_c(tmp_path, monkeypatch, run_paths):
-    _stop_after(monkeypatch, polls=2)
-    reads = []
-    real = W.run_table.dashboard_lines
-    monkeypatch.setattr(W.run_table, "dashboard_lines", lambda data, *a, **k: reads.append(k) or real(data, *a, **k))
-    out = io.StringIO()
-    with pytest.raises(KeyboardInterrupt):
-        W.dashboard(tmp_path, Console(file=out, width=100, force_terminal=False))
-    assert len(reads) == 2  # redrawn after the first sleep
-    assert "Runs       1 run" in out.getvalue() and "Ctrl-C to stop" in out.getvalue()
-    # Through the CLI, Ctrl-C ends it quietly.
-    _stop_after(monkeypatch)
-    result = _cli("dashboard", "-p", tmp_path)
-    assert result.exit_code == 0 and "dashboard" in result.output, result.output
+@pytest.mark.parametrize(("args", "page"), [([], "/"), (["r1"], "/run/r1/")])
+def test_view_serves_the_web_page_by_default(tmp_path, monkeypatch, args, page):
+    """A bare `view` serves the run list, `view ID` that run's page (`_serve`)."""
+    import autohelix.cli as cli
+
+    served = []
+    monkeypatch.setattr(cli, "_serve", lambda project, port, open_browser, path: served.append((port, open_browser, path)))
+    monkeypatch.setattr(cli, "_chosen_run", lambda project, run_id: type("Chosen", (), {"run_id": run_id})())
+    result = _cli("view", *args, "-p", tmp_path, "--port", "9000", "--open")
+    assert result.exit_code == 0, result.output
+    assert served == [(9000, True, page)]
+
+
+@pytest.mark.parametrize("flags", [["--json"], [], ["r1", "--once"]])
+def test_metric_goes_with_the_runs_table(tmp_path, flags):
+    result = _cli("view", "-p", tmp_path, "--metric", "speed", *flags)
+    assert result.exit_code == 2 and "--metric applies to the runs table" in result.output, result.output
 
 
 def _run_data(iterations: int) -> dict:
@@ -187,16 +188,17 @@ def test_the_time_cap_is_the_running_segments_own():
     run["status"] = {"state": "running", "iteration": 2, "segment_started_at": 1000 - 725,
                      "max_time_seconds": 3600, "phase": "agent", "phase_started_at": 990}
     assert W.run_table.time_cap(run, 1000) == "47m 55s left (--time 1h)"  # the cap as --time spells it
-    assert "left" not in W.run_table.format_run(data, W.run_table.Saved(), now=1000)  # the view's live row has the iteration's time
+    once = W.run_table.format_run(data, W.run_table.Saved(), now=1000)  # no stored config: the header still has it
+    assert "  Budget     47m 55s left (--time 1h)" in once and once.count("left") == 1  # the live row has the iteration's time
     run["status"].update(segment_started_at=1000 - 6000, max_time_seconds=5400)
     assert W.run_table.time_cap(run, 1000) == "time up (--time 1h30m)"
-    listing = W.run_table.format_runs({**data, "runs": [run]}, now=1000)
-    assert "spent 1m 00s · $1.50 · time up (--time 1h30m)" in listing
+    config = Config.from_dict({"goal": "Go faster", "gates": ["true"]})
+    assert "Budget     time up (--time 1h30m)" in W.run_table.format_run(data, W.run_table.Saved(config), now=1000)
     run["status"]["segment_started_at"] = 1000 + 5  # clock skew
     assert W.run_table.time_cap(run, 1000) == "1h 30m left (--time 1h30m)"
     run["status"].update(state="finished")
     assert W.run_table.time_cap(run, 1000) == ""
-    assert "1h30m" not in W.run_table.format_runs({**data, "runs": [run]}, now=1000)
+    assert "1h30m" not in W.run_table.format_run(data, W.run_table.Saved(config), now=1000)
 
 
 def _screen_lines(data, log, height) -> list[str]:
@@ -237,8 +239,8 @@ def test_on_a_short_terminal_the_log_shrinks_first(tmp_path):
     assert not any(map(row(1), tiny))  # the oldest rows went
     assert any("step 29" in line for line in tiny) and tiny[-1].startswith("Finished")
 
-    cramped = _screen_lines(_run_data(40), log, 21)  # no room for the log: the table keeps the screen
-    assert len(cramped) <= 20 and cramped[0].endswith("finished") and cramped[-1].startswith("Finished")
+    cramped = _screen_lines(_run_data(40), log, 16)  # no room for the log: the table keeps the screen
+    assert len(cramped) <= 15 and cramped[0].endswith("finished") and cramped[-1].startswith("Finished")
     assert not any("step" in line for line in cramped) and any(map(row(39), cramped))
 
 
@@ -344,7 +346,8 @@ def test_a_live_view_keeps_a_blank_line_at_the_bottom(tmp_path):
     log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()), "test")
     data = (_running(_run_data(3), time.time()), W.run_table.Saved())
     running = W.view_screen(data, log, {"state": "running", "phase": "agent", "iteration": 3}, 40).renderables
-    assert [line.plain for line in running[-2:]] == ["", ""] and running[-3].plain.startswith("Running")
+    assert [line.plain for line in running[-2:]] == ["", ""] and running[-4].plain.startswith("Running")
+    assert running[-3].plain == 'Ctrl-C quits this view · autohelix stop test stops the run · hint --run test "…"'
     stopped = W.view_screen((_run_data(3), W.run_table.Saved()), log, {"state": "finished"}, 40).renderables
     assert stopped[-1].plain.startswith("Finished")
 

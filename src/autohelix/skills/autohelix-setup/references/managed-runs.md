@@ -24,14 +24,15 @@ monitoring, explain that limit and give a concrete handoff; do not claim that
 supervision completed.
 
 Take the run id from the `started` event of `autohelix wait` (its `run` field; or the run's header
-line, `AutoHelix · run k3f9 · …`) and always pass it: `view ID`, `report ID`, `hint --run ID`, `stop ID`.
+line, `AutoHelix · run k3f9 · …`) and always pass it: `view ID --json`, `report ID`, `hint --run ID`, `stop ID`.
 Then read `.autohelix/runs/<id>/history.jsonl`, the current backend log
 `.autohelix/runs/<id>/iterations/NNN/agent.log` (NNN: the iteration, three digits), observations under
 `.autohelix/runs/<id>/iterations/NNN/observe/<name>/` (one folder per observe entry, reviews
 included), gate and stop command output under `iterations/NNN/gates/<k>/` and `stop/<k>/` (k: the
 entry's 1-based position in `gates:` / `stop:`), and persistent `.autohelix/runs/<id>/notes/iter-N.md`.
-`autohelix view --json` (or `--once`) prints the run's state and iterations once; a bare
-`autohelix view` is a live terminal view that does not exit, for people; `view --json` has the run's state
+`autohelix view ID --json` (or `--once`) prints the run's state and iterations once
+(without ID, every run's row: state, progress, metrics, no iterations); a bare `autohelix view` (a web page) and `view --terminal` (a live
+terminal view) do not exit, for people; `view ID --json` has the run's state
 and phase, and `.autohelix/runs/<id>/report.html` is saved when it stops. If the view does not present the selected
 backend's activity use its logs and saved records.
 
@@ -115,14 +116,14 @@ segment: `resume -n 5 --cost 3` is 5 more iterations, up to $3 more, and a
 iteration N in total, safe to repeat) over `-n` (N more iterations) in scripts
 and retries: a retried `-n` would run N again. `--until` makes retries safe for
 iterations only: `--cost` and `--time` start fresh on each segment, so track
-the total yourself (`progress.cost_usd` in `autohelix dashboard --json`) and
+the total yourself (`run.progress.cost_usd` in `autohelix view ID --json`) and
 pass only the remainder. `run` and `resume` exit 0 when the segment ended
 by a budget, a `stop:` condition or `autohelix stop`; 1 on an error (no run to
 resume, failed preflight checks, the agent failing three times in a row, a
 landing that failed); 130 when interrupted (Ctrl-C, `autohelix stop --now`). A failed actual main-agent call consumes its number; resume at the next
 iteration. Do not archive or delete runs, reset accepted code, or extend the
 agreed effort without authorization. Record why you start or archive a run, one
-line each, so the dashboard explains it: `autohelix run a --why "baseline for the
+line each, so `autohelix view` explains it: `autohelix run a --why "baseline for the
 cache idea"`, `autohelix archive <id> --why "lost to k3f9 on speed"`.
 A run that finishes writes its summary to `.autohelix/runs/<id>/report.md`; after an
 interrupted run, `autohelix report` writes one when requested.
@@ -141,8 +142,8 @@ autohelix run a -p PROJECT --land manual -n 10 --why "approach a"
 autohelix run b -p PROJECT --land manual -n 10 --why "approach b"
 ```
 
-Follow them with `autohelix dashboard --json` (`--once` for a table; add
-`--metric NAME` to compare one metric). Each run keeps its own budget, stop
+Follow them with `autohelix view --json` (`view --once` for a table, `view --once
+--metric NAME` to compare one metric). Each run keeps its own budget, stop
 conditions and cost. When they finish, compare the latest accepted metrics and
 diffs (`git diff main autohelix/<id>`), land the winner with `autohelix land
 <id>`, and archive the rest with the reason (`autohelix archive <id> --why

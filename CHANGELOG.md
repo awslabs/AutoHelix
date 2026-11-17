@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### One `view` command: the web page first
+
+- **`autohelix view` serves the web page** (the run list at `/`; with a run id,
+  that run's page), with `--port` and `--open`. `view --terminal [ID]` follows a
+  run live in the terminal (without an id, the running or latest run, as
+  before). `view --once` / `--json` print the project's runs (the runs
+  table, `--metric` picks its column); with an id, that run. **Breaking for
+  scripts:** `view --json` / `--once` without an id used to print the running
+  or latest run and now print the run list (pass an id for one run); a bare
+  `view` used to follow a run in the terminal (now `--terminal`).
+- **Removed `autohelix dashboard`** (no alias) and `view --web`; the live
+  terminal runs table goes with it (bare `autohelix` and `view --once` show the
+  table).
+- **The runs table is one line per run**: run, state, iterations, the metric,
+  landing, cost, activity and the goal (left out when there is no room; the
+  cost goes first on a narrow terminal). The
+  group and notes are in the header of `view ID --once` / `--terminal`; group,
+  config file and time spent on the web run list; all of it in `--json`. What
+  is left of `--time` is in `view`'s Budget field.
+- **`run` and `resume` show the commands that steer the run** under the live
+  row: `autohelix view krp3 · hint --run krp3 "…" · stop krp3 · Ctrl-C now`
+  (piped: a `Steer` header line). `view --terminal` says what Ctrl-C does there
+  (quits the view, not the run).
+- **The end block no longer lists the landed commits' summaries** (the
+  `landed`/`unlanded` line stays; the summaries are on the run page).
+
 ### One entry point: bare `autohelix`
 
 - **Bare `autohelix` in a terminal** shows the project's runs (the folder with

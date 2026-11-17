@@ -1,10 +1,9 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The live terminal views: `autohelix dashboard` and `autohelix view`.
+"""The live terminal view: `autohelix view --terminal`.
 
-`dashboard` redraws the run table (run_table.dashboard_lines). `view` shows one
-run's screen (run_table.view_parts) above the log being written for what the
+It shows one run's screen (run_table.view_parts) above the log being written for what the
 run is doing, which its status (runs/<id>/.internal/status.json) says: the
 agent's during an iteration, an `ask`/`review` call's transcript while gate,
 observe or stop commands make one (live from its call folder, then stored), the
@@ -22,14 +21,13 @@ from autohelix import run_table
 from autohelix.display import LiveDisplay
 from autohelix.formatting import clean, format_duration
 from autohelix.replay import LogTail
-from autohelix.terminal import ROOM, earlier_line, fold
+from autohelix.terminal import ROOM, cut, earlier_line, fold, shows_mark
 from autohelix.safe_open import open_run_log
 from autohelix.run_status import read_run_status, running_iteration
-from autohelix.runs import RunPaths
+from autohelix.runs import RunPaths, short_id
 from autohelix.viewer import ProjectRuns
 
 POLL_SECONDS = 0.3  # the log and the run's status
-TABLE_SECONDS = 5  # rereading the runs (history, config, git) for `dashboard`
 REREAD_SECONDS = 5  # `view`: rereading the run (~200 ms) when none of its files changed (git, reports)
 REFRESH_PER_SECOND = 10  # `view`: redrawing (the live row's spinner and clock are timed at draw time)
 MIN_LOG_LINES = 5  # the log panel at its smallest: borders, header lines, one line of output
@@ -157,14 +155,21 @@ class LogFollower:
                 self.display.handle_event(event)
 
     def render(self, status: dict | None, height: int | None = None) -> list:
-        """The panel (at most `height` lines, none below MIN_LOG_LINES), if there is a log, then the status line."""
+        """The panel (at most `height` lines, none below MIN_LOG_LINES), if there is a log,
+        then the status line; while the run goes, what Ctrl-C does here and the commands
+        that steer the run (`steer_line`)."""
         running = bool(status) and status.get("state") == "running"
         # A crashed run has no stopped_at; its last status update is when it was last alive.
         end = time.time() if running or not status else (
             status.get("stopped_at") or status.get("updated_at") or time.time())
         show = self.display and (height is None or height >= MIN_LOG_LINES)
         parts = [self.display.render(elapsed=int(end - self.started), height=height)] if show else []
-        return parts + [Text(status_line(status), style="dim")]
+        return parts + [Text(status_line(status), style="dim")] + [self.steer_line()] * running
+
+    def steer_line(self) -> Text:
+        short = short_id(self.run_id)
+        return cut(Text(f'Ctrl-C quits this view · autohelix stop {short} stops the run · hint --run {short} "…"',
+                        style="dim"), self.console.width or 100)
 
 
 def fit(parts: tuple[list, list[list], list], height: int) -> list:
@@ -215,7 +220,7 @@ def _changes(project: Path, run_id: str | None) -> tuple:
 
 
 def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollower, status: dict | None, height: int,
-                width: int = 100) -> Group:
+                width: int = 100, show_mark: bool = False) -> Group:
     """The run's screen on top, the log panel below it, the status line last, and while
     the run is live `ROOM` blank lines under it (not on the terminal's last lines). The live row
     is timed when drawn (`terminal.LiveRow`).
@@ -228,14 +233,15 @@ def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollowe
         parts = ([Text(clean(data))], [], [])
     else:
         run, saved = data
-        head, rows, tail = run_table.view_parts(run, saved, width, live=True)
+        head, rows, tail = run_table.view_parts(run, saved, width, live=True, show_mark=show_mark)
         # `fit` counts one terminal line per item: a word wider than the screen (a path,
         # a branch name, left whole by `terminal.wrap`) is folded here, where Rich would.
         folded = lambda lines: [piece for line in lines for piece in fold(line, width)]  # noqa: E731
         parts = (folded(head), [folded(row) for row in rows], folded(tail))
     running = bool(status) and status.get("state") == "running"
-    # The status line, a spare line so the terminal doesn't scroll, the blank lines under a live run.
-    room = height - 2 - ROOM * running
+    # The status line (and the steer line under a live run), a spare line so the terminal
+    # doesn't scroll, the blank lines under a live run.
+    room = height - 2 - (1 + ROOM) * running
     lines = fit(parts, room - (MIN_LOG_LINES if log.display else 0)) if parts else []
     log_height = room - len(lines)
     if parts and (log_height < MIN_LOG_LINES or (parts[2] and lines[-1] is not parts[2][-1])):
@@ -260,17 +266,5 @@ def view(project: Path, backend: str | None = None, console: Console | None = No
             state = (status, _changes(project, run_id))
             if read_at is None or state != seen or time.monotonic() - read_at >= REREAD_SECONDS:
                 data, read_at, seen = _read_run(runs, project, run_id), time.monotonic(), state
-            live.update(view_screen(data, log, status, console.size.height, console.width))
+            live.update(view_screen(data, log, status, console.size.height, console.width, shows_mark(console)))
             time.sleep(POLL_SECONDS)
-
-
-def dashboard(project: Path, console: Console | None = None, *, metric: str | None = None) -> None:
-    """Redraw the project's run table every TABLE_SECONDS until interrupted."""
-    console = console or Console()
-    runs = ProjectRuns(project)
-    with Live(console=console, auto_refresh=False) as live:
-        while True:
-            lines = run_table.dashboard_lines(runs.runs(), console.width, metric=metric)
-            footer = Text(f"  updated {time.strftime('%H:%M:%S')} · Ctrl-C to stop", style="dim")
-            live.update(Group(*lines, Text(""), footer), refresh=True)
-            time.sleep(TABLE_SECONDS)

@@ -294,9 +294,9 @@ def first_prompt(agent: str, project: Path, pick: str, runs: list[dict], configs
         listed = "\n".join(_run_line(run) for run in current)
         parts.append(f"The project's runs (live ones first, then by last activity; `{cli} view ID --json` and "
                      f".autohelix/runs/ID/ have their records):\n{listed}"
-                     + (f"\n({archived} archived, not listed: `{cli} dashboard --json` has them.)" if archived else ""))
+                     + (f"\n({archived} archived, not listed: `{cli} view --json` has them.)" if archived else ""))
     elif archived:
-        parts.append(f"The project has no current runs, {archived} archived (`{cli} dashboard --json` lists them).")
+        parts.append(f"The project has no current runs, {archived} archived (`{cli} view --json` lists them).")
     else:
         parts.append("The project has no runs yet.")
     if configs:
@@ -626,7 +626,7 @@ def _segment(harness: Harness, budget: Budget, report: bool) -> None:
 @click.option("--import", "import_run", metavar="RUN_ID",
               help="Continue from another run: its notes and history (read-only) in every iteration, its last "
                    "observe outputs at the baseline. Code still comes from your checkout.")
-@click.option("--why", help="Why this run is started (one line, shown on the dashboard).")
+@click.option("--why", help="Why this run is started (one line, shown by `autohelix view`).")
 @click.option("--check", is_flag=True,
               help="Only make the checks a run makes before it writes anything (config, prompt template, "
                    "clean checkout, agent command, scope); exit 0 if it would start, else 1.")
@@ -653,7 +653,7 @@ def run(config_name: str | None, path: Path, verbose: bool, no_report: bool, lan
     runs of that group: their notes and history, and their code (each run's
     ref, refs/autohelix/<id>). Groups are for runs that should build on each
     other's work. To compare approaches, start separate runs with --land manual,
-    compare them on the dashboard, land the winner and archive the rest.
+    compare them with `autohelix view`, land the winner and archive the rest.
 
     With --import RUN_ID (or its last part), the new run continues from that
     one: its agents see its run.json, history and notes (read-only, in
@@ -697,7 +697,7 @@ def _resume_target(project: Path, value: str | None) -> tuple[str | None, Path |
                 raise click.ClickException(str(error)) from error
             raise click.ClickException(
                 f"No run or config {value!r} in {project}: name a run (its id or last part, e.g. k3f9) or a config "
-                f"(`perf` for {CONFIG_DIR}/perf.yaml); `autohelix dashboard` lists runs.") from error
+                f"(`perf` for {CONFIG_DIR}/perf.yaml); `autohelix view --once` lists runs.") from error
     return None, _segment_config(project, value, "resume")
 
 
@@ -1119,64 +1119,65 @@ def stop(run_ids: tuple[str, ...], path: Path, why: str | None, now: bool):
 
 
 _JSON_HELP = "Print once as JSON and exit (for scripts and agents; fields are only ever added)."
-_ONCE_HELP = "Print the table once and exit."
-_WEB_HELP = "Serve a live web page on 127.0.0.1 instead."
-_PORT_HELP = "Port for --web (default 8765)."
-
-
-def _mode(as_json: bool, once: bool, web: bool, port: int | None, open_browser: bool) -> str:
-    """live (the default), once, json or web; one at a time."""
-    if as_json + once + web > 1:
-        raise click.UsageError("Use one of --json, --once and --web.")
-    if not web and (port is not None or open_browser):
-        raise click.UsageError("--port and --open apply to --web.")
-    return "json" if as_json else "once" if once else "web" if web else "live"
-
-
-def _mode_options(command):
-    """The options `view` and `dashboard` share: the project and one mode."""
-    for option in reversed([
-        _path_option(),
-        click.option("--once", is_flag=True, help=_ONCE_HELP),
-        click.option("--json", "as_json", is_flag=True, help=_JSON_HELP),
-        click.option("--web", is_flag=True, help=_WEB_HELP),
-        click.option("--port", type=click.IntRange(0, 65535), help=_PORT_HELP),
-        click.option("--open", "open_browser", is_flag=True, help="With --web: open the page in a browser."),
-    ]):
-        command = option(command)
-    return command
 
 
 @main.command()
 @click.argument("run_id", required=False)
-@_mode_options
-def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, port: int | None,
-         open_browser: bool):
-    """One run, live in the terminal: RUN_ID (or its last part), else the running run, else the most recently active.
+@_path_option()
+@click.option("--terminal", is_flag=True, help="Follow one run live in the terminal (the running one, else the latest).")
+@click.option("--once", is_flag=True, help="Print the runs table (with RUN_ID: that run's) once and exit.")
+@click.option("--json", "as_json", is_flag=True, help=_JSON_HELP)
+@click.option("--metric", help="With --once and no RUN_ID: the table's metric column (default: the most recent run's first).")
+@click.option("--port", type=click.IntRange(0, 65535), help="The web page's port (default 8765).")
+@click.option("--open", "open_browser", is_flag=True, help="Open the web page in a browser.")
+def view(run_id: str | None, path: Path, terminal: bool, once: bool, as_json: bool, metric: str | None,
+         port: int | None, open_browser: bool):
+    """The project's runs on a live web page; --terminal follows a run here.
 
-    On top, the run's state, its config file, time and cost so far, iterations
-    (of its latest segment's cap), landing, why it stopped, its goal and latest
-    accepted metrics; then one row per iteration; below, the live output of the agent, a review
-    or the summary agent. Keeps waiting when the run stops; Ctrl-C stops watching
-    (not the run). Safe to run alongside `autohelix run`; it only reads
-    .autohelix/.
+    The page is served on 127.0.0.1 until Ctrl-C: the run list at /, each run at
+    /run/<id>/ (with RUN_ID, the page opens there). Over SSH: ssh -L 8765:127.0.0.1:8765 host, then open
+    http://localhost:8765, or use --terminal.
 
-    --once prints the table and exits; --json prints it as JSON. --web serves
-    a live page on 127.0.0.1 instead (the same server lists all runs at /).
-    Over SSH: ssh -L 8765:127.0.0.1:8765 host, then open http://localhost:8765.
+    --terminal shows one run (RUN_ID or its last part, else the running run, else
+    the most recently active): its header, one row per iteration, and the live
+    output of the agent, a review or the summary agent. Keeps waiting when the
+    run stops; Ctrl-C stops watching (not the run).
+
+    --once prints the runs table (one line per run; archived runs are counted,
+    not listed), or with RUN_ID that run's screen, and exits; --json prints the
+    same as JSON (every run, archived ones too). All of it only reads .autohelix/.
     """
-    mode = _mode(as_json, once, web, port, open_browser)
+    if as_json + once + terminal > 1:
+        raise click.UsageError("Use one of --terminal, --once and --json.")
+    if (port is not None or open_browser) and (as_json or once or terminal):
+        raise click.UsageError("--port and --open apply to the web page (without --terminal, --once, --json).")
+    if metric and (not once or run_id):
+        raise click.UsageError("--metric applies to the runs table (--once without RUN_ID); the web page has a menu.")
     project = _project(path)
-    selected = _chosen_run(project, run_id).run_id
-    if mode == "live":
+    selected = _chosen_run(project, run_id).run_id if run_id or terminal else None
+    if terminal:
         _view_live(project, selected)
         return
-    if mode == "web":
-        _serve(project, port, open_browser, f"/run/{selected}/")
+    if not (once or as_json):
+        _serve(project, port, open_browser, f"/run/{selected}/" if selected else "/")
         return
+    from rich.console import Console
+
+    from autohelix import terminal as screen
     from autohelix.viewer import ProjectRuns
 
     runs = ProjectRuns(project)
+    if selected is None:
+        data = runs.runs()
+        if as_json:
+            click.echo(json.dumps(data, indent=2))
+            return
+        names = run_table.metric_names([r for r in data["runs"] if not r.get("archived")])
+        if metric and metric not in names:
+            raise click.ClickException(f"No run has metric {metric!r}" + (f"; known: {', '.join(names)}" if names else ""))
+        console = Console()
+        screen.print_lines(console, run_table.dashboard_lines(data, console.width, metric=metric))
+        return
     if not runs.exists(selected):
         raise click.ClickException(f"Run {short_id(selected)} has no readable run.json in {project}.")
     try:
@@ -1186,13 +1187,10 @@ def view(run_id: str | None, path: Path, once: bool, as_json: bool, web: bool, p
     if as_json:
         click.echo(json.dumps(data, indent=2))
         return
-    from rich.console import Console
-
-    from autohelix import terminal
-
     console = Console()
     saved = run_table.Saved.read(RunPaths(project, selected))
-    terminal.print_lines(console, run_table.view_lines(data, saved, console.width))
+    screen.print_lines(console, run_table.view_lines(data, saved, console.width,
+                                                     show_mark=screen.shows_mark(console)))
 
 
 def _view_live(project_path: Path, run_id: str) -> None:
@@ -1209,54 +1207,6 @@ def _view_live(project_path: Path, run_id: str) -> None:
         live_view(project_path, backend, console, run_id=run_id)
     except KeyboardInterrupt:
         console.print("Stopped watching. The run is unaffected.", style="dim")
-
-
-@main.command()
-@_mode_options
-@click.option("--metric", help="The table's metric column (default: the most recent run's first).")
-def dashboard(path: Path, once: bool, as_json: bool, web: bool, port: int | None, open_browser: bool,
-              metric: str | None):
-    """This project's runs, live in the terminal.
-
-    One row per run with its status, iterations (of its latest segment's cap), latest
-    accepted metrics, landing state and last activity; archived runs are
-    counted, not listed. Redrawn every 5 seconds until Ctrl-C.
-
-    --once prints the table and exits; --json prints every run (archived ones
-    too) as JSON. --web serves a live page on 127.0.0.1 instead; each run
-    links to its run page. Over SSH: ssh -L 8765:127.0.0.1:8765 host, then
-    open http://localhost:8765.
-    """
-    mode = _mode(as_json, once, web, port, open_browser)
-    if metric and mode in ("json", "web"):
-        raise click.UsageError("--metric applies to the table (live or --once); the web page has a menu.")
-    path = _project(path)
-    if mode == "web":
-        _serve(path, port, open_browser, "/")
-        return
-    from autohelix.viewer import ProjectRuns
-
-    data = ProjectRuns(path).runs()
-    if mode == "json":
-        click.echo(json.dumps(data, indent=2))
-        return
-    names = run_table.metric_names([r for r in data["runs"] if not r.get("archived")])
-    if metric and metric not in names:
-        raise click.ClickException(f"No run has metric {metric!r}" + (f"; known: {', '.join(names)}" if names else ""))
-    if mode == "once":
-        from rich.console import Console
-
-        from autohelix import terminal
-
-        console = Console()
-        terminal.print_lines(console, run_table.dashboard_lines(data, console.width, metric=metric))
-        return
-    from autohelix.live import dashboard as live_dashboard
-
-    try:
-        live_dashboard(path, metric=metric)
-    except KeyboardInterrupt:
-        pass
 
 
 def _serve(project: Path, port: int | None, open_browser: bool, page: str) -> None:

@@ -432,6 +432,8 @@ class Harness:
         self.console.print()
         title = terminal.title(f"run {short_id(self.paths.run_id)}", name, terminal.clock(), version=terminal.version())
         fields = terminal.run_fields(self.config, budget_text(budget, start_iter - 1))
+        if not self.console.is_terminal:  # no live row to show them under
+            fields.append(("Steer", terminal.steer_text(short_id(self.paths.run_id), interrupt=False)))
         terminal.print_lines(self.console, terminal.header(title, fields, width, terminal.shows_mark(self.console)))
         self._table = terminal.Table.of(self.config, width)
         if start_iter > 1:  # resuming: the rows so far, for context
@@ -464,7 +466,9 @@ class Harness:
         """Show `renderable` live, transient, with a blank line under it: in the Live
         already showing (the whole iteration's, so its row stays up between phases), else
         in a new one."""
-        renderable = terminal.with_room(renderable)  # not on the terminal's last line
+        # Not on the terminal's last line; under it, the commands that steer the run.
+        steer = terminal.steer_line(short_id(self.paths.run_id), self.console.width or 100)
+        renderable = terminal.with_room(renderable, steer if self.console.is_terminal else None)
         outer = getattr(self, "_live_display", None)
         if outer is not None:
             previous = outer.renderable
@@ -1425,7 +1429,6 @@ class Harness:
         self._interrupted_at: int | None = None
         self._land_error: Exception | None = None  # why auto landing failed (`run` then raises)
         self._segment_checked = False  # past the start's checks: from there the segment lands
-        self._segment_first = 1
         try:
             self._land_attempted = False
             if self._run(budget or Budget()) and report:
@@ -1584,7 +1587,6 @@ class Harness:
         segment_start = time.monotonic()  # --time counts from here, baseline included
         segment_started_at = time.time()
         start_iter = self.history.get_last_iteration() + 1
-        self._segment_first = start_iter  # the ending lists what this segment landed
         max_iter = budget.last_iteration(start_iter - 1)
         needs_baseline = not any(r.iteration == 0 and r.accepted for r in self.history.load())
 
@@ -1803,7 +1805,7 @@ class Harness:
 
     def _print_ending(self, error: BaseException | None) -> None:
         """The end block (`terminal.Table.ending`): how the segment ended, each metric's
-        baseline → tip, totals, what landed with this segment's accepted summaries, what
+        baseline → tip, totals, what landed, what
         to type next, the files written. An error printed here is marked reported (the
         CLI then exits without printing it again)."""
         at = self._interrupted_at
@@ -1817,17 +1819,11 @@ class Harness:
                 pass
         try:
             table = self._rows()
-            first = self._segment_first
-            landed = [row for row in table.rows if row.iteration >= first and row.accepted and row.commit]
-            if self._landed_count == 0:  # auto landing found nothing new on the target
-                landed = []
-            more = landed[:-5]
             short = short_id(self.paths.run_id)
             # `autohelix land` whenever commits wait: a manual run, or an auto landing that failed.
             commands = terminal.next_commands(short, land=self._landed_count is None and bool(self._unlanded()))
             lines = table.ending(outcome, spent=format_total_cost(self.history.cost_usages), landing=self._landing,
-                                 landed=landed, commands=commands, files=self._files,
-                                 more_landed=f"… {len(more)} earlier · autohelix view {short}" if more else "")
+                                 commands=commands, files=self._files)
         except Exception as e:  # noqa: BLE001 - the outcome line still shows
             self.log.warn(f"Could not render the ending: {e}")
             lines = [Text(f"  {outcome[0]}  {outcome[1]}")]

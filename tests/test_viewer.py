@@ -542,11 +542,11 @@ observe:
     return integration_project, first.paths.run_id, second.paths.run_id, gone.paths.run_id
 
 
-def test_dashboard_json_and_once(measured_project):
+def test_runs_json_and_once(measured_project):
     from autohelix.viewer import ProjectRuns
 
     project, first, second, gone = measured_project
-    data = json.loads(_cli("dashboard", "-p", project, "--json").output)
+    data = json.loads(_cli("view", "-p", project, "--json").output)
     assert data.keys() == ProjectRuns(project).runs().keys()  # the page's payload, schema 1 (checked above)
     runs = {r["id"]: r for r in data["runs"]}
     assert set(runs) == {first, second, gone}  # archived runs included
@@ -554,27 +554,28 @@ def test_dashboard_json_and_once(measured_project):
         {"name": "speed", "value": 120, "baseline": 100, "direction": "higher"}]
     assert runs[second]["landing"] == {"commits": 1, "fast_forward": True}
 
-    result = _cli("dashboard", "-p", project, "--once")
+    result = _cli("view", "-p", project, "--once")
     assert result.exit_code == 0, result.output
     lines = [line.rstrip() for line in result.output.splitlines()]
-    assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(" · dashboard · test_project")
+    assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(" · runs · test_project")
     assert lines[1].startswith("  Project    ") and lines[1].endswith(" @ " + subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip())
     assert lines[2].startswith("  Runs       2 runs") and lines[2].endswith("1 archived (not listed; see --json)")
-    assert lines[4].split() == ["run", "state", "iter", "speed", "↑", "landing", "activity", "goal"]
-    rows = {line.split()[0]: line for line in lines[5:] if not line.startswith("    ")}
-    assert set(rows) == {short_id(first), short_id(second)}
+    assert lines[4].split() == ["run", "state", "iter", "speed", "↑", "landing", "cost", "activity", "goal"]
+    rows = {line.split()[0]: line for line in lines[5:]}
+    assert set(rows) == {short_id(first), short_id(second)}  # one line each
     assert rows[short_id(first)].split()[1:5] == ["finished", "2/2", "120", "landed"]
     assert rows[short_id(first)].endswith("Test the integration")
     assert rows[short_id(second)].split()[1:6] == ["finished", "1/1", "130", "1", "to"]
-    assert "    spent " in result.output and "autohelix.yaml · " not in result.output  # runs are named after it
 
-    assert "no run has metric" in _cli("dashboard", "-p", project, "--once", "--metric", "nope").output.lower()
-    assert _cli("dashboard", "-p", project, "--metric", "speed", "--json").exit_code == 2
-    assert _cli("dashboard", "-p", project, "--json", "--once").exit_code == 2
+    assert "no run has metric" in _cli("view", "-p", project, "--once", "--metric", "nope").output.lower()
+    assert _cli("view", "-p", project, "--metric", "speed", "--json").exit_code == 2
+    assert _cli("view", "-p", project, "--json", "--once").exit_code == 2
 
 
-def test_view_json_and_once(measured_project):
+def test_view_json_and_once(measured_project, monkeypatch):
+    from tests.test_live import _stop_after
+
     project, first, second, gone = measured_project
     data = json.loads(_cli("view", first, "-p", project, "--json").stdout)
     assert data["project"] == "test_project"
@@ -582,11 +583,12 @@ def test_view_json_and_once(measured_project):
     assert run["id"] == first and run["goal"] == "Test the integration"
     assert [(r["iteration"], r["accepted"], r["metrics"]) for r in run["iterations"]] == [
         (0, True, {"speed": 100}), (1, True, {"speed": 110}), (2, True, {"speed": 120})]
-    # Without an id: the most recently active run that isn't archived (not `gone`, the last
-    # one started), named on stderr.
-    chosen = _cli("view", "-p", project, "--json")
-    assert json.loads(chosen.stdout)["run"]["id"] == second
+    # --terminal without an id: the most recently active run that isn't archived (not
+    # `gone`, the last one started), named on stderr.
+    _stop_after(monkeypatch)
+    chosen = _cli("view", "--terminal", "-p", project)
     assert f"Run {short_id(second)} (the most recently active run" in chosen.stderr
+    assert f"run {short_id(second)} · " in chosen.stdout
 
     text = _cli("view", first, "-p", project, "--once").output
     lines = [line.rstrip() for line in text.splitlines()]
@@ -633,8 +635,15 @@ def test_table_shows_the_iteration_under_way():
               "commit": "abc1234"}
     listing = format_runs({**header, "runs": [run]}, now=1000).splitlines()
     assert listing[1] == "  Project    /x · detached @ abc1234"
-    assert listing[5].split() == ["r1", "running", "3/5", "—", "gates", "30s"]  # activity: what it is doing
-    assert listing[6].strip() == "a.yaml · spent 2m 40s · $1.50+"  # 60s done + 100s under way
+    assert listing[5].split() == ["r1", "running", "3/5", "—", "$1.50+", "gates", "30s"]  # activity: what it is doing
+    assert len(listing) == 6  # one line per run
+    unreadable = {"id": "20261101-0000-x-dddd", "error": "run.json: Expecting value"}
+    for width in (60, 100):  # its why, whatever the width
+        listing = format_runs({**header, "runs": [run, unreadable]}, now=1000, width=width).splitlines()
+        assert listing[-1].split() == ["dddd", "unreadable:", "run.json:", "Expecting", "value"]
+    narrow = format_runs({**header, "runs": [run]}, now=1000, width=44).splitlines()
+    assert narrow[4].split() == ["run", "state", "iter", "landing", "activity"]  # the cost goes first
+    assert narrow[5].split() == ["r1", "running", "3/5", "—", "gates", "30s"]
     one = format_run({**header, "run": run}, Saved(), now=1000).splitlines()
     assert one[0].endswith(" · run r1 · p · running")
     assert one[-1].split() == ["⠋", "3", "1m", "40s", "gates"]  # the iteration's own time so far
@@ -646,7 +655,7 @@ def test_live_view_shows_the_run_table_and_where_it_stopped(measured_project, mo
     project, first, second, gone = measured_project
     monkeypatch.setenv("LINES", "60")  # room for the run's screen and the log under it
     _stop_after(monkeypatch, polls=2)
-    result = _cli("view", short_id(first), "-p", project)
+    result = _cli("view", short_id(first), "--terminal", "-p", project)
     assert result.exit_code == 0, result.output
     assert f"run {short_id(first)} · test_project · finished" in result.output
     assert "  Goal       Test the integration" in result.output

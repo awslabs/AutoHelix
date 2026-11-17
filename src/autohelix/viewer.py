@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""`autohelix view --web` / `autohelix dashboard --web`: a small live web app, served on 127.0.0.1.
+"""`autohelix view`: a small live web app, served on 127.0.0.1.
 
 Two pages share one server: `/` lists the project's runs, `/run/<id>/` shows one
 run. The pages poll a few JSON routes. There are no write routes. Every file read
@@ -847,7 +847,7 @@ class RunData:
 
 
 RUN_ID = r"[a-z0-9][a-z0-9-]{0,50}"
-# `dashboard --json` / `view --json` (and /api/runs): fields are only ever added.
+# `view --json`, with and without a run id (and /api/runs): fields are only ever added.
 JSON_SCHEMA = 1
 
 
@@ -888,7 +888,7 @@ class ProjectRuns:
         return bool(re.fullmatch(RUN_ID, run_id)) and (RunPaths(self.project).runs / run_id / "run.json").is_file()
 
     def runs(self) -> dict:
-        """The run list: `/api/runs` and `dashboard --json` (add-only, see JSON_SCHEMA)."""
+        """The run list: `/api/runs` and `view --json` (add-only, see JSON_SCHEMA)."""
         root = RunPaths(self.project)
         refs = self._refs()
         rows = []
