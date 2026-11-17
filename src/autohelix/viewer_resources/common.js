@@ -1,6 +1,5 @@
 // AutoHelix web pages: what the run list (dashboard.js) and the run page (viewer.js)
-// share. Numbers, changes, durations and money as the console writes them
-// (terminal.number, terminal.change, formatting.format_duration, terminal.money).
+// share: elements, number and time formats, the theme button.
 // Loaded before the page's own script; report.html inlines it. Node loads it in the tests.
 'use strict';
 
@@ -20,26 +19,25 @@ function setText(id, text) {
 
 const isNumber = (v) => typeof v === 'number' && Number.isFinite(v);
 
-// 80,200 · 17,481.5 · 46.9 · 1.235 · 0.1235: integers whole, else 1, 3 or 4 decimals.
+// A metric value: four significant digits, one decimal from 100 up.
 function fmtNumber(v) {
   if (!isNumber(v)) return '—';
-  if (v && !(Math.abs(v) >= 1e-4 && Math.abs(v) < 1e15)) return Number(v.toPrecision(3)).toExponential();
-  const decimals = Number.isInteger(v) ? 0 : Math.abs(v) >= 100 ? 1 : Math.abs(v) >= 1 ? 3 : 4;
-  return v.toLocaleString('en-US', { maximumFractionDigits: decimals });
+  return Math.abs(v) >= 100 ? v.toFixed(1) : Number(v.toPrecision(4)).toString();
 }
 
-// How `value` compares with `reference`: +17%, -0.4%, 373× (ten times or more),
-// 0.05× (a tenth or less); '' when unchanged or not comparable. The sign is the
-// difference's, against the reference's size, so a negative reference keeps it right
-// (-1 to -2 is -100%). The × forms only for positive values: 20× of a negative
-// number would not say which way it moved.
-function fmtChange(value, reference) {
-  if (!isNumber(value) || !isNumber(reference) || reference === 0 || value === reference) return '';
-  const ratio = value / reference;
-  if (value > 0 && reference > 0 && ratio >= 10) return `${ratio.toFixed(0)}×`;
-  if (value > 0 && reference > 0 && ratio <= 0.1) return `${Number(ratio.toPrecision(2))}×`;
-  const pct = ((value - reference) / Math.abs(reference)) * 100;
-  return `${pct > 0 ? '+' : ''}${pct.toFixed(Math.abs(pct) < 1 ? 1 : 0)}%`;
+// How `value` compares with `baseline`: ↑ 17.0%, ↓ 0.4%, ↑ 12x; '' when unchanged or not
+// comparable. The arrow is the difference's direction, against the baseline's size, so a
+// negative baseline keeps it right. The x forms only for positive values (12x of a
+// negative number would not say which way it moved).
+function formatDelta(value, baseline) {
+  if (!isNumber(value) || !isNumber(baseline) || baseline === 0 || value === baseline) return '';
+  const pct = ((value - baseline) / Math.abs(baseline)) * 100;
+  const arrow = pct < 0 ? '↓' : '↑';
+  const abs = Math.abs(pct);
+  const positive = value > 0 && baseline > 0;
+  if (positive && pct > 0 && abs >= 900) return `${arrow} ${(abs / 100 + 1).toFixed(0)}x`;
+  if (positive && pct < 0 && abs >= 90 && 100 / (100 - abs) >= 10) return `${arrow} ${(100 / (100 - abs)).toFixed(0)}x`;
+  return `${arrow} ${abs.toFixed(1)}%`;
 }
 
 const better = (value, reference, direction) => (direction === 'lower' ? value < reference : value > reference);
@@ -89,29 +87,6 @@ function splitRunId(id) {
   return { name: m[6].includes('-') ? m[6] : `Run ${m[6]}`, started: `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` };
 }
 
-// The suffix every command accepts: "20261114-2333-sorting-1q3w" -> "1q3w".
-const shortId = (id) => (id || '').split('-').at(-1);
-
-// Where the run's accepted code is, in the console dashboard's words (run_table._landing):
-// `landed`, `3 to land`, `3 diverged`, `—` when nothing is to say; with `manual · ` first
-// for a run that lands by hand (the pages' one addition: no other column shows the mode).
-// `hint` says where, or what to type. `run`: a run list row, or the
-// run page's state.run (id, target_branch, landing, accepted, land).
-function landingWords(run, running = false) {
-  const { id, target_branch: target, landing, accepted } = run;
-  const none = { text: '—', hint: 'Nothing accepted yet' };
-  if (!target) return accepted ? { text: 'detached', hint: `Started on a detached HEAD: autohelix land ${shortId(id)} --into <branch>` } : none;
-  if (!landing) return { text: '—', hint: `Branch ${target} or the run's commits are not available` };
-  if (landing.commits === 0) return accepted ? { text: 'landed', hint: `on ${target}` } : none;
-  const manual = run.land === 'manual' ? 'manual · ' : '';
-  const n = plural(landing.commits, 'commit');
-  if (!landing.fast_forward) {
-    return { text: `${manual}${landing.commits} diverged`, hint: `${target} has moved on: git merge autohelix/${id}` };
-  }
-  return { text: `${manual}${landing.commits} to land`, todo: true,
-    hint: running && run.land !== 'manual' ? `${n}, on ${target} when the run ends` : `${n}: autohelix land ${shortId(id)}` };
-}
-
 // A <select> of metric names (the chart's, the run list's column), refilled only when they change.
 function fillMenu(menu, names, value) {
   if (Array.from(menu.options, (o) => o.value).join('\n') !== names.join('\n')) {
@@ -120,10 +95,9 @@ function fillMenu(menu, names, value) {
   menu.value = value;
 }
 
-// run.json's notes (run --why, --import, archive --why), as the console's dashboard
-// writes them; always shown as text.
+// "Why: … · continues from k3f9 · archived: …" from run.json's notes (shown as text).
 function runNotes(run) {
-  return [run.why && `why: ${run.why}`, run.import?.run && `continues from ${run.import.run}`,
+  return [run.why && `Why: ${run.why}`, run.import?.run && `continues from ${run.import.run}`,
     run.archive_why && `archived: ${run.archive_why}`].filter(Boolean).join(' · ');
 }
 
@@ -154,6 +128,6 @@ function themeButton(logos = { light: '/logo-light.svg', dark: '/logo-dark.svg' 
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { fmtNumber, fmtChange, better, fmtDuration, fmtLimit, fmtMoney, fmtCap, plural,
-    shortId, landingWords, splitRunId, runNotes, themeButton };
+  module.exports = { fmtNumber, formatDelta, better, fmtDuration, fmtLimit, fmtMoney, fmtCap, plural,
+    splitRunId, runNotes, themeButton };
 }
