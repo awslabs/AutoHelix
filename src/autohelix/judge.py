@@ -39,7 +39,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
-from autohelix.agents import AgentConfig, AgentEvent, create_agent, variable_problem
+from autohelix.agents import AgentConfig, AgentEvent, create_agent
 from autohelix.config import ASK_TIMEOUT, ConfigNotFound, find_config
 from autohelix.workspace import ITERATION_DIR, Copy, Fingerprint, Repo, diff_args, git_env
 from autohelix.usage_log import append_usage, new_call_id
@@ -107,8 +107,6 @@ def judge_config(base: AgentConfig, *, cli: str | None = None, model: str | None
     its extra args. Another CLI (`cli`) drops the config's model and effort unless they
     are given too. `schema` is the answer's JSON Schema (`autohelix review` passes its
     own). The executable comes from the environment, as the main agent's does."""
-    if problem := variable_problem():
-        raise JudgeError(problem)
     overrides_cli = cli is not None and cli != base.cli
     cli = cli or base.cli
     if cli == "opencode":

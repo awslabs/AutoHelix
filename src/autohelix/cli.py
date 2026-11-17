@@ -17,7 +17,7 @@ import click
 
 from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFound, find_config,
                               project_configs, run_command)
-from autohelix.agents import CLI_NAMES, JUDGE_CLIS, RENAMED_CLIS, executable, variable_problem
+from autohelix.agents import CLI_NAMES, JUDGE_CLIS, RENAMED_CLIS, executable
 from autohelix.awake import keep_awake
 from autohelix.harness import DEFAULT_ITERATIONS, Budget, Harness
 from autohelix.history import History
@@ -374,10 +374,11 @@ def _entry(ctx: click.Context) -> None:
     runs = data["runs"]
     configs = project_configs(project)
     terminal.print_lines(console, run_table.entry_lines(data, console.width))
-    if problem := variable_problem():
-        terminal.warn(console, problem)
+    try:
+        found = _found_agents()
+    except ConfigError as e:  # a variable that is gone (`agents.executable`)
+        terminal.warn(console, str(e))
         ctx.exit(1)
-    found = _found_agents()
     if not found:
         terminal.warn(console, "No coding agent found to start: install Claude Code (`claude`), Codex (`codex`) "
                       "or OpenCode (`opencode`). To write a config by hand, start from the packaged template "
@@ -915,7 +916,7 @@ def ask(question: str, yes_means: str | None, no_means: str | None, rubric: str 
         config = judge_config(settings, cli=cli_name, model=model, effort=effort, timeout=timeout)
         answer = run_ask(question, cwd, config, yes=yes_means, no=no_means,
                          rubric=Path(rubric).read_text() if rubric else None)
-    except JudgeError as e:
+    except (JudgeError, ConfigError) as e:  # ConfigError: a variable that is gone
         click.echo(f"autohelix ask: no valid answer: {e}", err=True)
         raise SystemExit(2)
     except KeyboardInterrupt:
@@ -1001,7 +1002,7 @@ def review(prompt: str, previous: bool, metrics: list[str], cli_name: str | None
         result = run_review(prompt, cwd, config, metrics=metrics, previous=previous, base=base,
                             timeout=timeout,
                             warn=lambda message: click.echo(f"autohelix review: {message}", err=True))
-    except JudgeError as e:
+    except (JudgeError, ConfigError) as e:  # ConfigError: a variable that is gone
         click.echo(f"autohelix review: no valid review: {e}", err=True)
         raise SystemExit(2)
     except KeyboardInterrupt:
@@ -1275,23 +1276,25 @@ def report(run_id: str | None, path: Path):
     if History(project_path, run_id).get_last_iteration() == 0:
         _warn(f"Run {short_id(run_id)} has no iterations yet. Nothing to report.")
         raise SystemExit(1)
+    from rich.text import Text
+
+    from autohelix import terminal
+
     try:
         config = load_run_config(paths)
     except (RuntimeError, ConfigError) as e:
-        from rich.text import Text
-
-        from autohelix import terminal
-
         terminal.show(console, str(e), Text("Error: ", style="red"))
         raise SystemExit(1)
-
-    if not write_report(config, project_path, console, run_id=run_id):
+    try:
+        written = write_report(config, project_path, console, run_id=run_id)
+    except ConfigError as e:  # the agent's executable: a variable that is gone (`agents.executable`)
+        terminal.show(console, str(e), Text("Error: ", style="red"))
+        raise SystemExit(1)
+    if not written:
         raise SystemExit(1)
     from autohelix.viewer import write_static
 
     write_static(project_path, run_id=run_id)
-    from rich.text import Text
-
     for label, file in (("summary", paths.report), ("page", paths.report_html)):
         shown = file.relative_to(Path.cwd()) if file.is_relative_to(Path.cwd()) else file
         console.print(Text.assemble("  ", (f"{label:<9}", "dim"), str(shown)), highlight=False)

@@ -19,11 +19,14 @@ class OpenCodeAgent:
     def __init__(self, config: AgentConfig, heartbeat_seconds: int = 30):
         self.config = config
         self.heartbeat_seconds = heartbeat_seconds
+        # Resolved once, when the backend is created: a variable that is gone is a
+        # ConfigError before anything runs.
+        self._command = command_path("opencode")
         self._usage: dict[str, object] = {}
         self._final_text: str | None = None
 
     def _command_path(self) -> str:
-        return command_path("opencode")
+        return self._command
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [

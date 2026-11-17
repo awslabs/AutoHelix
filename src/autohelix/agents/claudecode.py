@@ -20,6 +20,9 @@ class ClaudeCodeAgent:
     def __init__(self, config: AgentConfig, heartbeat_seconds: int = 30):
         self.config = config
         self.heartbeat_seconds = heartbeat_seconds
+        # Resolved once, when the backend is created: a variable that is gone is a
+        # ConfigError before anything runs.
+        self._command = command_path("claude-code")
         self._tool_names: dict[int, str] = {}
         self._tool_inputs: dict[int, str] = {}
         self._active_kind: AgentEventKind | None = None
@@ -33,7 +36,7 @@ class ClaudeCodeAgent:
         self._structured_output = None
 
     def _command_path(self) -> str:
-        return command_path("claude-code")
+        return self._command
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [

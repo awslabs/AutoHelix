@@ -25,6 +25,9 @@ class CodexAgent:
     def __init__(self, config: AgentConfig, heartbeat_seconds: int = 30):
         self.config = config
         self.heartbeat_seconds = heartbeat_seconds
+        # Resolved once, when the backend is created: a variable that is gone is a
+        # ConfigError before anything runs.
+        self._command = command_path("codex")
         self._usage: dict[str, object] = {}
         self._turn_error: str | None = None
         self._model: str | None = None  # the model Codex's output names, if it does
@@ -33,7 +36,7 @@ class CodexAgent:
         self._schema_path: Path | None = None
 
     def _command_path(self) -> str:
-        return command_path("codex")
+        return self._command
 
     @staticmethod
     def _parse_version(text: str) -> tuple[int, int, int] | None:

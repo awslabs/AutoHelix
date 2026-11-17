@@ -187,17 +187,20 @@ def variable_problem() -> str | None:
 
 def command_path(cli: str) -> str:
     """The executable a CLI runs: `$AUTOHELIX_<CLI>_CMD`, else the CLI's name found on
-    PATH, else the bare name (which then fails to start). The backends, preflight and
-    the entry screen all resolve it here. ValueError for a variable that is gone."""
+    PATH, else the bare name (which then fails to start). The backends (when created)
+    and preflight resolve it here; ConfigError for a variable that is gone."""
     name = executable(cli)
     return name if os.environ.get(command_variable(cli)) else shutil.which(name) or name
 
 
 def executable(cli: str) -> str:
     """What starts a CLI, unresolved: `$AUTOHELIX_<CLI>_CMD`, else its name (`claude`).
-    ValueError for a variable that is gone (`variable_problem`)."""
+    The one check of a variable that is gone (`variable_problem`): a ConfigError, which
+    every command reports as it reports a config error (no traceback)."""
     if problem := variable_problem():
-        raise ValueError(problem)
+        from autohelix.config import ConfigError  # config imports this module
+
+        raise ConfigError(problem)
     return os.environ.get(command_variable(cli)) or EXECUTABLES.get(cli, cli)
 
 

@@ -48,7 +48,8 @@ def preflight_check(config: Config, project_path: Path) -> list[PreflightIssue]:
     """Run preflight validation checks on a project.
 
     Checks config validity, agent availability, and scope patterns.
-    Returns a list of issues found (empty means all OK).
+    Returns a list of issues found (empty means all OK); ConfigError when an agent's
+    executable can't be resolved (`agents.executable`: a variable that is gone).
     """
     issues: list[PreflightIssue] = []
 
@@ -58,12 +59,10 @@ def preflight_check(config: Config, project_path: Path) -> list[PreflightIssue]:
         issues.append(PreflightIssue(level=ci.level, message=ci.message))
 
     # 2. Every agent the config runs (main agent, `ask:` and `review:` judges) can start:
-    # its executable resolved as the backend resolves it (mock is built in).
-    from autohelix.agents import CLI_NAMES, command_variable, variable_problem
+    # its executable resolved as the backend resolves it (mock is built in; a variable
+    # that is gone raises ConfigError there, reported as the config errors are).
+    from autohelix.agents import CLI_NAMES, command_variable
 
-    if problem := variable_problem():
-        issues.append(PreflightIssue(level="error", message=problem))
-        return issues
     missing: dict[str, list[str]] = {}
     for who, cli in config.agent_commands():
         if cli in CLI_NAMES and not shutil.which(path := command_path(cli)):

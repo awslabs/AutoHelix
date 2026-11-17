@@ -54,7 +54,9 @@
   `extra_args`) and `agent.require_notes` (with its Stop hook,
   `check_notes.sh`). Every removed key or value is a config error naming its
   replacement, and a set `AUTOHELIX_CLAUDE_CMD` is an error naming
-  `AUTOHELIX_CLAUDE_CODE_CMD`. Runs whose stored config uses the old keys
+  `AUTOHELIX_CLAUDE_CODE_CMD` wherever an agent's executable is resolved
+  (`run`, `resume`, `report`, `ask`, `review`, bare `autohelix`; a `mock` run
+  ignores it), reported like a config error (no traceback). Runs whose stored config uses the old keys
   can't be resumed; start a new run.
 - **`ask:` and `review:` entries' `agent:` take `cli`, `model`, `effort`**;
   `autohelix ask` / `review` take `--cli` (`claude-code` or `codex`) instead
