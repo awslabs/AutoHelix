@@ -6,7 +6,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 import glob as globmod
-import json
 import math
 import os
 import re
@@ -25,9 +24,8 @@ MAX_DURATION = 30 * 24 * 3600  # 30 days
 def parse_duration(value: str | int | float) -> int:
     """Parse a duration string like '1h', '30m', '2h30m' into total seconds.
 
-    Also accepts an integer or a string of digits ("90"), as seconds. Unlike the optional variant
-    in iteration_time, this requires a positive result of at most 30 days and
-    raises on invalid or empty/zero input.
+    Also accepts an integer or a string of digits ("90"), as seconds. Requires a positive
+    result of at most 30 days; raises ValueError on invalid or empty/zero input.
     """
     if isinstance(value, bool):
         raise ValueError(f"Duration must be a string or number, got bool ({value})")
@@ -92,8 +90,13 @@ RENAMED_TOP_LEVEL_KEYS = {
     "report": "`report:` moved to the command line: `autohelix run --no-report` (also `resume`)",
 }
 
-ENTRY_AGENT_KEYS = ("backend", "model", "reasoning_effort", "timeout", "command")
-_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+ENTRY_AGENT_KEYS = ("backend", "model", "reasoning_effort", "command")
+# An `ask:` gate's deadline without a `timeout:`: the judge's own default (`autohelix ask`).
+ASK_TIMEOUT = 600
+# The least `timeout:` an `ask:` or `review:` entry may set: in a run the judge keeps
+# `judge.COPY_MARGIN` (30s) of it for its usage and its copy's removal, and needs time to answer.
+JUDGE_MIN_TIMEOUT = 60
+ENTRY_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")  # an observe entry's `name:` (also its folder)
 _METRIC_NAME = re.compile(r"\w+")
 TITLE_LENGTH = 80
 
@@ -105,6 +108,8 @@ class CommandSpec:
     command: str
     timeout: int = DEFAULT_CHECK_TIMEOUT
     label: str | None = None  # display text ("ask: <question>"); None shows the command
+    # An `ask:` entry's own `agent.backend` / `agent.command` (those given), for preflight.
+    judge: dict[str, str] | None = None
 
     @property
     def text(self) -> str:
@@ -134,6 +139,7 @@ class ObserveEntry:
     capture: list[str] = field(default_factory=list)  # files to save, relative to the copy
     timeout: int = DEFAULT_CHECK_TIMEOUT
     review: str | None = None  # the review prompt, for review entries
+    judge: dict[str, str] | None = None  # a review entry's own `agent.backend` / `agent.command`
 
 
 def goal_title(goal: str) -> str:
@@ -164,7 +170,7 @@ class Config:
     editable: list[str] = field(default_factory=list)
     frozen: list[str] = field(default_factory=list)
     # A Jinja file replacing the built-in agent prompt, resolved against the config file's folder;
-    # `prompt_template_text` is its text when the config is a run's stored copy (which inlines it).
+    # `prompt_template_text` is its text when the config is a run's stored copy (`RunPaths.template`).
     prompt_template: Path | None = None
     prompt_template_text: str | None = None
     # The config file and its template, project-relative, as named and (for symlinks) as
@@ -201,6 +207,19 @@ class Config:
         """Return the set of all declared metric names."""
         return set(self.metric_directions())
 
+    def agent_commands(self) -> list[tuple[str, str, str | None]]:
+        """Every agent the config runs, as (who, backend, command): the main agent, then
+        each `ask:` gate's and `review:` entry's judge, resolved as `judge.judge_config`
+        does (another backend drops the top-level `agent.command`)."""
+        main = self.agent.backend.lower()
+        found = [("agent", main, self.agent.command)]
+        judged = [(gate.text, gate.judge) for gate in self.gate_commands() if gate.judge is not None]
+        judged += [(f"observe {entry.name}", entry.judge) for entry in self.observe if entry.judge is not None]
+        for who, judge in judged:
+            backend = judge.get("backend", main)
+            found.append((who, backend, judge.get("command") or (self.agent.command if backend == main else None)))
+        return found
+
     def metric_source(self, name: str) -> ObserveEntry:
         """The observe entry declaring a metric; KeyError if none does."""
         for entry in self.observe:
@@ -208,13 +227,8 @@ class Config:
                 return entry
         raise KeyError(name)
 
-    def validate(self, raw_data: dict[str, Any] | None = None) -> list[ConfigIssue]:
-        """Return a list of structured validation issues.
-
-        Args:
-            raw_data: If provided, also checks for unknown top-level keys
-                      (catches typos like 'gaol' instead of 'goal').
-        """
+    def validate(self) -> list[ConfigIssue]:
+        """Return a list of structured validation issues (parse errors included)."""
         issues: list[ConfigIssue] = []
 
         def error(msg: str) -> None:
@@ -225,12 +239,6 @@ class Config:
 
         for message in self._parse_errors:
             error(message)
-
-        # Check for unknown keys (typo detection)
-        if raw_data is not None:
-            unknown = set(raw_data.keys()) - KNOWN_TOP_LEVEL_KEYS - set(RENAMED_TOP_LEVEL_KEYS)
-            for key in sorted(unknown):
-                warning(f"Unknown config key '{key}' - possible typo?")
 
         # Goal must be non-empty and not the default placeholder
         if not isinstance(self.goal, str) or not self.goal.strip():
@@ -250,12 +258,13 @@ class Config:
                 "iterations will always be accepted with no measurement"
             )
 
-        known_backends = {"claude", "codex", "opencode", "mock"}
+        from autohelix.agents import BACKENDS
+
         backend = self.agent.backend.lower()
-        if backend not in known_backends:
+        if backend not in BACKENDS:
             error(
                 f"Unknown agent backend '{self.agent.backend}' "
-                f"(must be one of: {', '.join(sorted(known_backends))})"
+                f"(must be one of: {', '.join(sorted(BACKENDS))})"
             )
 
         # agent.settings is only consumed by codex (-c key=value passthrough)
@@ -281,6 +290,11 @@ class Config:
         if (self.prompt_template is not None and self.prompt_template_text is None
                 and not self.prompt_template.is_file()):
             error(f"prompt_template not found: {self.prompt_template}")
+        elif self.prompt_template is not None:
+            from autohelix.prompt_template import template_problem
+
+            if problem := template_problem(self):
+                error(problem)
         return issues
 
     @classmethod
@@ -290,6 +304,9 @@ class Config:
         for key in data:
             if key in RENAMED_TOP_LEVEL_KEYS:
                 errors.append(RENAMED_TOP_LEVEL_KEYS[key])
+            elif key not in KNOWN_TOP_LEVEL_KEYS:  # a misspelt `stop:` or `gates:` would do nothing
+                errors.append(f"Unknown config key '{key}' - possible typo? "
+                              f"(known: {', '.join(sorted(KNOWN_TOP_LEVEL_KEYS))})")
 
         agent, agent_errors = AgentConfig.parse(data.get("agent"))
         errors.extend(agent_errors)
@@ -304,15 +321,17 @@ class Config:
         if not isinstance(scope, dict):
             errors.append("scope must be a mapping with editable: and/or frozen:")
             scope = {}
-        editable = _paths(scope.get("editable"), "scope.editable", errors)
-        frozen = _paths(scope.get("frozen"), "scope.frozen", errors)
+        editable = _scope_paths(scope.get("editable"), "scope.editable", errors)
+        frozen = _scope_paths(scope.get("frozen"), "scope.frozen", errors)
         for key in scope:
             if key not in ("editable", "frozen"):
                 errors.append(f"Unknown key scope.{key} (known: editable, frozen)")
 
         goal = data.get("goal", "")
+        if goal is not None and not isinstance(goal, str):  # a list or mapping isn't one text
+            errors.append("goal must be a string (use `|` for several lines)")
         return cls(
-            goal=goal if isinstance(goal, str) else "" if goal is None else str(goal),
+            goal=goal if isinstance(goal, str) else "",
             gates=gates,
             observe=observe,
             stop=stop,
@@ -341,6 +360,30 @@ def _paths(value: Any, where: str, errors: list[str]) -> list[str]:
         errors.append(f"{where} must be a path or a list of paths")
         return []
     return list(value)
+
+
+def scope_path(pattern: str) -> str:
+    """A scope entry as the matcher (`workspace.path_in_scope`) takes it: relative to the
+    project, without `./` or empty components (`.` is the whole project; a trailing `/`
+    is kept). ValueError for an absolute path or a `..` component."""
+    if pattern.startswith("/"):
+        raise ValueError("is an absolute path; scope entries are relative to the project folder")
+    parts = [part for part in pattern.split("/") if part not in ("", ".")]
+    if ".." in parts:
+        raise ValueError("has a `..` component; scope entries stay inside the project folder")
+    if not parts:
+        return "."
+    return "/".join(parts) + ("/" if pattern.endswith("/") else "")
+
+
+def _scope_paths(value: Any, where: str, errors: list[str]) -> list[str]:
+    patterns = []
+    for pattern in _paths(value, where, errors):
+        try:
+            patterns.append(scope_path(pattern))
+        except ValueError as e:
+            errors.append(f"{where}: {pattern!r} {e}")
+    return patterns
 
 
 # An observe entry's own output files in `iterations/NNN/observe/<name>/`, and folders a
@@ -398,23 +441,29 @@ def _command_text(entry: dict, key: str, where: str, errors: list[str]) -> str |
 
 
 def _entry_agent(entry: dict, timeout: int | None, backend: str, where: str,
-                 errors: list[str]) -> tuple[list[str], int]:
-    """The flags an `ask:` or `review:` entry's `agent:` mapping becomes, and the entry's
-    command timeout. The entry's `timeout:` also bounds its agent, unless `agent.timeout`
-    sets that; `agent.timeout` alone makes the command timeout a minute longer.
-    `backend` is the top-level one, the entry's default."""
+                 errors: list[str]) -> tuple[list[str], dict[str, str]]:
+    """The flags an `ask:` or `review:` entry's `agent:` mapping and `timeout:` become
+    (the entry's `timeout:` is the command's deadline and its agent's `--timeout`: the
+    judges stay inside the deadline on their own), and the mapping's own `backend` and
+    `command`, those given (`CommandSpec.judge`). `backend` is the top-level one, the
+    entry's default."""
     agent = entry.get("agent")
     if agent is None:
         agent = {}
     if not isinstance(agent, dict):
         errors.append(f"{where}: `agent:` must be a mapping")
         agent = {}
+    if "timeout" in agent:
+        errors.append(f"{where}: `agent.timeout` is gone here: the entry's `timeout:` bounds its agent")
+        agent = {key: value for key, value in agent.items() if key != "timeout"}
     _check_keys(agent, ENTRY_AGENT_KEYS, f"{where} agent", errors)
     flags: list[str] = []
-    own = agent.get("backend")
+    from autohelix.agents import JUDGE_BACKENDS, agent_string
+
+    own = agent_string(agent, "backend", f"{where} agent", errors)
     if own is not None:
-        own = str(own).lower()
-        if own not in ("claude", "codex", "mock"):
+        own = own.lower()
+        if own not in JUDGE_BACKENDS:
             errors.append(f"{where}: agent.backend {own!r} can't be used here"
                           + (" (OpenCode has no read-only mode)" if own == "opencode" else
                              " (must be claude or codex)"))
@@ -422,20 +471,17 @@ def _entry_agent(entry: dict, timeout: int | None, backend: str, where: str,
     elif backend == "opencode":
         errors.append(f"{where}: opencode has no read-only mode; set agent.backend on this entry")
     for key, flag in (("model", "--model"), ("reasoning_effort", "--effort")):
-        if agent.get(key) is not None:
-            flags += [flag, str(agent[key])]
-    agent_timeout = None
-    if agent.get("timeout") is not None:
-        agent_timeout = _duration(agent["timeout"], f"{where} agent.timeout", errors)
-    if agent_timeout is not None and timeout is not None and agent_timeout >= timeout:
-        errors.append(f"{where}: agent.timeout ({agent_timeout}s) must be shorter than the entry's "
-                      f"timeout ({timeout}s), which stops the whole command")
-    if agent_timeout is not None or timeout is not None:
-        flags += ["--timeout", str(agent_timeout or timeout)]
-    if agent.get("command") is not None:
-        flags += ["--command", str(agent["command"])]
-    command_timeout = timeout or (agent_timeout + 60 if agent_timeout else DEFAULT_CHECK_TIMEOUT)
-    return flags, command_timeout
+        if (value := agent_string(agent, key, f"{where} agent", errors)) is not None:
+            flags += [flag, value]
+    if timeout is not None:
+        if timeout < JUDGE_MIN_TIMEOUT:
+            errors.append(f"{where}: `timeout:` must be at least 1m here (the judge keeps 30s of it "
+                          "for its usage and its copy)")
+        flags += ["--timeout", str(timeout)]
+    if (command := agent_string(agent, "command", f"{where} agent", errors)) is not None:
+        flags += ["--command", command]
+    judge = {key: value for key, value in (("backend", own), ("command", command)) if value is not None}
+    return flags, judge
 
 
 def _render(command: list[str], flags: list[str], text: str) -> str:
@@ -496,10 +542,11 @@ def _parse_gates(value: Any, declared: dict[str, ObserveEntry], backend: str,
                     if not isinstance(entry[key], str):
                         errors.append(f"{where}: `{key}:` must be a string")
                     flags += [f"--{key}", str(entry[key])]
-            agent_flags, command_timeout = _entry_agent(entry, timeout, backend, where, errors)
+            agent_flags, judge = _entry_agent(entry, timeout, backend, where, errors)
             if question is not None:
                 gates.append(CommandSpec(command=_render(["autohelix", "ask"], flags + agent_flags, question),
-                                         timeout=command_timeout, label=f"ask: {' '.join(question.split())}"))
+                                         timeout=timeout or ASK_TIMEOUT, label=f"ask: {' '.join(question.split())}",
+                                         judge=judge))
         else:
             _check_keys(entry, ("metric", "regress", "improve"), where, errors)
             metric = entry.get("metric")
@@ -529,7 +576,7 @@ def _parse_observe(value: Any, backend: str, errors: list[str]) -> list[ObserveE
             errors.append(f"{where}: expected a mapping with `name:` and `command:` or `review:`, got {entry!r}")
             continue
         name = entry.get("name")
-        if isinstance(name, str) and _NAME.fullmatch(name):
+        if isinstance(name, str) and ENTRY_NAME.fullmatch(name):
             where = f"observe entry `{name}`"
             if name in names:
                 errors.append(f"observe: two entries are named `{name}`; names must be unique")
@@ -575,15 +622,15 @@ def _parse_observe(value: Any, backend: str, errors: list[str]) -> list[ObserveE
             metrics[metric] = direction
 
         capture: list[str] = []
-        command_timeout = timeout or DEFAULT_CHECK_TIMEOUT
+        judge = None
         if review:
             previous = entry.get("previous", False)
             if not isinstance(previous, bool):
                 errors.append(f"{where}: `previous:` must be true or false")
             flags = ["--previous"] if previous is True else []
-            for metric, direction in metrics.items():
-                flags += ["--metric", f"{metric}:{direction}"]
-            agent_flags, command_timeout = _entry_agent(entry, timeout, backend, where, errors)
+            for metric in metrics:  # the direction is the metric gate's, not the reviewer's
+                flags += ["--metric", metric]
+            agent_flags, judge = _entry_agent(entry, timeout, backend, where, errors)
             command = _render(["autohelix", "review"], flags + agent_flags, text or "")
         else:
             command = text or ""
@@ -594,7 +641,8 @@ def _parse_observe(value: Any, backend: str, errors: list[str]) -> list[ObserveE
         if text is None or not isinstance(name, str):
             continue
         entries.append(ObserveEntry(name=name, command=command, metrics=metrics, capture=capture,
-                                    timeout=command_timeout, review=text if review else None))
+                                    timeout=timeout or DEFAULT_CHECK_TIMEOUT, review=text if review else None,
+                                    judge=judge))
     return entries
 
 
@@ -723,18 +771,14 @@ def _project_relative(project: Path, paths) -> list[str]:
 
 
 def load_config(project_path: Path, config_file: Path | None = None, *,
-                source: Path | None = None) -> tuple[Config, dict[str, Any]]:
+                source: Path | None = None, template_text: str | None = None) -> Config:
     """Load configuration from `config_file`, else the project's config (`find_config`).
 
-    `prompt_template:` is a path, resolved next to the config file, or a run's stored
-    form `{file, text}` (`stored_config_text`): the text is the template. For a run's
-    stored copy, `source` is the file it was made from: `file` resolves next to it, and
-    it is the config file `Config.protected` freezes.
-
-    Returns:
-        A tuple of (Config, raw_data) where raw_data is the parsed YAML dict.
-        The raw_data is used for unknown-key validation.
-    """
+    `prompt_template:` is a path, resolved next to the config file. For a run's stored
+    copy (`runs.load_run_config`), `source` is the file it was made from: the template
+    resolves next to it, and it is the config file `Config.protected` freezes; and
+    `template_text` is the template's stored text (`RunPaths.template`), which the
+    prompt uses instead of the file."""
     config_path = Path(config_file) if config_file else find_config(project_path)
     if not config_path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
@@ -743,118 +787,43 @@ def load_config(project_path: Path, config_file: Path | None = None, *,
     config = Config.from_dict(data)
     origin = Path(source) if source else config_path
     template = data.get("prompt_template")
-    if isinstance(template, dict):
-        for key in template:
-            if key not in ("file", "text"):
-                config._parse_errors.append(f"Unknown key prompt_template.{key} (known: file, text)")
-        file, text = template.get("file"), template.get("text")
-        if isinstance(file, str) and file.strip() and isinstance(text, str):
-            config.prompt_template = template_path(origin, file)
-            config.prompt_template_text = text
-        else:
-            config._parse_errors.append("a stored prompt_template needs file: (its path) and text: (its contents)")
-    elif isinstance(template, str) and template.strip():
+    named = [origin]
+    if isinstance(template, str) and template.strip():
         config.prompt_template = template_path(origin, template)
+        config.prompt_template_text = template_text
+        named.append(origin.resolve().parent / Path(template).expanduser())  # where it resolves from
     elif template is not None:
         config._parse_errors.append("prompt_template must be a path to a template file")
-    named = [origin]
-    if config.prompt_template is not None:
-        file = template["file"] if isinstance(template, dict) else template
-        named.append(origin.resolve().parent / Path(file).expanduser())  # where it resolves from
     config.protected = _project_relative(Path(project_path), named)
-    return config, data
+    return config
 
 
-STORED_NOTE = "# stored when the run started"
-
-
-def inlined(config_path: Path, data: dict[str, Any] | None = None, *,
-            project: Path | None = None) -> dict[str, Any]:
-    """The config in `config_path` (parsed: `data`) as a run stores it: a `prompt_template:`
-    path becomes `{file, text}` with the template's current text. Raises ConfigError
-    when the file or its template can't be read (naming it relative to `project`)."""
-    if data is None:
-        data = parse_config(config_path, project or config_path.parent)
-    template = data.get("prompt_template")
-    if not isinstance(template, str) or not template.strip():
-        return data
+def template_text(config: Config) -> str | None:
+    """The text of the config's `prompt_template:` (its stored text, else the file),
+    None without one. Raises ConfigError when the file can't be read."""
+    if config.prompt_template is None:
+        return None
+    if config.prompt_template_text is not None:
+        return config.prompt_template_text
     try:
-        text = template_path(config_path, template).read_text()
+        return config.prompt_template.read_text()
     except (OSError, UnicodeDecodeError) as e:
-        raise ConfigError(f"Cannot read prompt_template {template}: {e}") from None
-    return {**data, "prompt_template": {"file": template, "text": text}}
+        raise ConfigError(f"Cannot read prompt_template {config.prompt_template}: {e}") from None
 
 
-class _StoredDumper(yaml.SafeDumper):
-    """Multi-line strings as literal blocks where YAML allows it (the dump fallback)."""
+# What `config_changes` compares, named as the config spells them.
+_COMPARED = (("goal", "goal"), ("agent", "agent"), ("gates", "gates"), ("observe", "observe"),
+             ("stop", "stop"), ("editable", "scope.editable"), ("frozen", "scope.frozen"),
+             ("prompt_template", "prompt_template"))
 
 
-_StoredDumper.add_representer(str, lambda dumper, value: dumper.represent_scalar(
-    "tag:yaml.org,2002:str", value, style="|" if "\n" in value else None))
-
-
-def _template_block(file: str, text: str) -> str:
-    """`prompt_template:` in its stored form, as YAML lines: `text` a literal block with
-    the chomping its trailing newlines need, and an indentation indicator when its
-    first line starts with spaces. `stored_config_text` checks the result parses back."""
-    plain = yaml.safe_load(f"k: {file}") == {"k": file} if file.strip() == file and file else False
-    chomp = "+" if text.endswith("\n\n") else "" if text.endswith("\n") else "-"
-    first = next((line for line in text.split("\n") if line.strip()), "")
-    indicator = "2" if first.startswith(" ") else ""
-    body = text if text.endswith("\n") else text + "\n"
-    lines = "".join(("    " + line if line else "") + "\n" for line in body.split("\n")[:-1])
-    return (f"prompt_template:  {STORED_NOTE}\n"
-            + f"  file: {file if plain else json.dumps(file)}\n  text: |{indicator}{chomp}\n{lines}")
-
-
-def stored_config_text(config_path: Path) -> str:
-    """What a run stores as `runs/<id>/config.yaml`: the config file's text verbatim
-    (comments kept), with a `prompt_template: x.md` line replaced by the stored form
-    `{file, text}`. When that line can't be replaced textually (flow style, a value
-    on the next line), a YAML dump of the stored form. Raises ConfigError as `inlined`."""
-    text = config_path.read_text()
-    data = parse_config(config_path, config_path.parent)
-    stored = inlined(config_path, data)
-    if stored is data:
-        return text
-    lines = text.splitlines(keepends=True)
-    found = [i for i, line in enumerate(lines) if re.match(r"prompt_template\s*:", line)]
-    if len(found) == 1:
-        i = found[0]
-        template = stored["prompt_template"]
-        candidate = ("".join(lines[:i]) + _template_block(template["file"], template["text"])
-                     + "".join(lines[i + 1:]))
-        try:
-            if yaml.safe_load(candidate) == stored:
-                return candidate
-        except yaml.YAMLError:
-            pass
-    return (f"{STORED_NOTE} from {config_path.name} (its prompt_template inlined)\n"
-            + yaml.dump(stored, Dumper=_StoredDumper, sort_keys=False, allow_unicode=True))
-
-
-def _normalized(value: Any) -> Any:
-    """Mappings without None values or empty containers, at any depth (`gates: []`,
-    `scope: {editable: null}` and no key are the same)."""
-    if isinstance(value, dict):
-        items = ((key, _normalized(item)) for key, item in value.items())
-        return {key: item for key, item in items if item is not None and item != {} and item != []}
-    if isinstance(value, list):
-        return [_normalized(item) for item in value]
-    return value
-
-
-def config_changes(stored: dict[str, Any], current: dict[str, Any]) -> list[str]:
-    """The top-level keys whose parsed values differ: comments and formatting don't count,
-    nor empty values (`_normalized`) or how `prompt_template.file` spells the path
-    (`./p.md`). Defaults written out (`agent: {backend: claude}`) and other spellings (`10m`, `600`)
-    do: the refusal names the keys."""
-    def normalized(data: dict[str, Any]) -> dict[str, Any]:
-        data = _normalized(data)
-        template = data.get("prompt_template")
-        if isinstance(template, dict) and isinstance(template.get("file"), str):
-            data["prompt_template"] = {**template, "file": os.path.normpath(template["file"])}
-        return data
-
-    stored, current = normalized(stored), normalized(current)
-    return [key for key in dict.fromkeys([*stored, *current]) if stored.get(key) != current.get(key)]
+def config_changes(stored: Config, current: Config) -> list[str]:
+    """The settings in which two parsed configs differ, as the config names them: what
+    the harness uses, so formatting, comments and other spellings of the same value
+    (`600` and `10m`, `- pytest` and `- command: pytest`, a default written out) don't
+    count. `prompt_template` also differs when the templates' texts do (`template_text`;
+    ConfigError when one can't be read)."""
+    changed = [name for attr, name in _COMPARED if getattr(stored, attr) != getattr(current, attr)]
+    if "prompt_template" not in changed and template_text(stored) != template_text(current):
+        changed.append("prompt_template")
+    return changed

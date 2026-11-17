@@ -11,10 +11,11 @@ it never runs git inside a copy once a call has used it. `Fingerprint` detects
 lasting changes to a copy's files from their raw bytes.
 """
 
-import fnmatch
+import functools
 import hashlib
 import logging
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -60,9 +61,12 @@ def diff_args(*args: str) -> tuple[str, ...]:
 # The harness's per-iteration material in agent and reviewer copies (prompt, notes,
 # history, other runs of the group); never part of a candidate.
 ITERATION_DIR = ".autohelix-iteration"
+# The OpenCode time-left plugin the harness puts in an agent copy (OpenCode loads
+# project plugins from there); the project's own `.opencode/` is left alone.
+OPENCODE_PLUGIN = ".opencode/plugin/autohelix_time_left.js"
 # Never frozen: the project's own state folder (only in a copy if an inner run made it)
 # and the harness's material. Excluded by pathspec, so their files are never hashed.
-_UNFROZEN = (".autohelix", ITERATION_DIR)
+_UNFROZEN = (".autohelix", ITERATION_DIR, OPENCODE_PLUGIN)
 # Transient lock contention from a concurrent git process on the same repository
 # (packed-refs, reflogs, a ref's own lock); a CAS mismatch is not one.
 # Matched by the lock file's name (`<path>.lock'`), which git prints in every language.
@@ -76,6 +80,19 @@ def git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def english_messages(env) -> dict[str, str]:
+    """`env` with git's messages in English whatever the user's locale (`LC_MESSAGES=C`,
+    no `LANGUAGE`): the harness reads some of them (`_LOCK_ERRORS`, a nested repository
+    without commits, "not a git repository"). Only messages: an `LC_ALL` becomes the
+    `LC_CTYPE` it implied, so filters and hooks git starts keep the user's encoding."""
+    env = dict(env)
+    if every := env.pop("LC_ALL", None):
+        env["LC_CTYPE"] = every
+    env["LC_MESSAGES"] = "C"
+    env.pop("LANGUAGE", None)
+    return env
+
+
 def is_lock_error(stderr) -> bool:
     text = stderr if isinstance(stderr, str) else os.fsdecode(stderr or b"")
     return any(marker in text for marker in _LOCK_ERRORS)
@@ -84,6 +101,7 @@ def is_lock_error(stderr) -> bool:
 def run_git(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     """`subprocess.run` for git on the user's repository, retried briefly while
     another git process (a concurrent run) holds one of its lock files."""
+    kwargs["env"] = english_messages(kwargs.pop("env", None) or os.environ)
     for delay in (*_LOCK_RETRIES, None):
         result = subprocess.run(argv, **kwargs)
         if not result.returncode or delay is None or not is_lock_error(result.stderr):
@@ -144,14 +162,61 @@ class Repo:
         return [f":(top,exclude){name}" for name in unfrozen if name not in ignored]
 
 
+@functools.lru_cache(maxsize=256)
+def _scope_regex(pattern: str) -> re.Pattern:
+    """A scope pattern as a regular expression over project-relative paths. `*` and
+    `?` stay within one folder, `[...]` is a character class, `**/` (at the start of a
+    component) is zero or more folders and a final `**` everything below. A pattern also
+    matches everything inside what it names (`src`, `src/`, `src/*` cover `src/a/b.py`)."""
+    pattern = pattern.rstrip("/")
+    out, i, n = [], 0, len(pattern)
+    while i < n:
+        at_component = i == 0 or pattern[i - 1] == "/"
+        if at_component and pattern.startswith("**/", i):
+            out.append("(?:[^/]*/)*")
+            i += 3
+        elif at_component and pattern.startswith("**", i) and i + 2 == n:
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif pattern[i] == "[":
+            j = i + 1
+            if j < n and pattern[j] in "!^":
+                j += 1
+            if j < n and pattern[j] == "]":
+                j += 1
+            while j < n and pattern[j] != "]":
+                j += 1
+            if j >= n:  # no closing bracket: a literal `[`
+                out.append(re.escape("["))
+                i += 1
+                continue
+            body = pattern[i + 1:j]
+            negated = body[:1] in ("!", "^")
+            body = re.sub(r"([\\\[\]&~|^])", r"\\\1", body[1:] if negated else body)
+            out.append(("[^/" if negated else "[") + body + "]")
+            i = j + 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("(?:" + "".join(out) + ")(?:/.*)?", re.S)
+
+
 def path_in_scope(path: str, patterns) -> bool:
-    for pattern in patterns:
-        if pattern in (".", "./"):
-            return True
-        prefix = pattern.rstrip("/")
-        if path == prefix or path.startswith(prefix + "/") or fnmatch.fnmatch(path, pattern):
-            return True
-    return False
+    """Whether a project-relative path is covered by one of the scope patterns
+    (`config.scope_path` normalised them: no `./`, `.` for the whole project). The one
+    matcher for freezing, discarded-change reports and preflight."""
+    return any(pattern == "." or _scope_regex(pattern).fullmatch(path) for pattern in patterns)
+
+
+def nested_repository(name: str) -> str:
+    """Why a candidate holding a git repository of its own is rejected, and what to do."""
+    return f"nested git repository at {name}: remove its .git or clone outside the project"
 
 
 @dataclass(frozen=True)
@@ -316,7 +381,7 @@ class Copy:
         # symlink that would make git write through it into the user's index.
         self.index = _private_index_dir() / (hashlib.sha256(os.fsencode(path)).hexdigest()[:16] + ".index")
         self.gitlinks: list[str] = []
-        self.fingerprint = Fingerprint()
+        self.fingerprint: Fingerprint | None = None  # `watched` copies only
 
     @property
     def env(self) -> dict[str, str]:
@@ -325,7 +390,10 @@ class Copy:
         return {"GIT_CEILING_DIRECTORIES": str(self.path.parent)}
 
     @classmethod
-    def create(cls, repo: Repo, path: Path, *, files: str, head: str, refs=()) -> "Copy":
+    def create(cls, repo: Repo, path: Path, *, files: str, head: str, refs=(), watched: bool = False) -> "Copy":
+        """A fresh copy of `files` with HEAD at `head`. A `watched` copy fingerprints
+        its files, for `changed()` (checks, stop and report copies; agent and judge
+        copies aren't, their files being the agent's to change or guarded otherwise)."""
         path = Path(path)
         _check_root(path.parent)
         if path.exists() or path.is_symlink():  # left over from an interrupted segment
@@ -342,7 +410,8 @@ class Copy:
                 metadata, name = record.split("\t", 1)
                 (copy.gitlinks if metadata.startswith(GITLINK + " ") else names).append(name)
             copy._init_private_git()
-            copy.fingerprint = Fingerprint.take(path, names)
+            if watched:
+                copy.fingerprint = Fingerprint.take(path, names)
         except BaseException:
             try:
                 copy.remove()
@@ -369,7 +438,8 @@ class Copy:
         (private / "info").mkdir(exist_ok=True)
         (private / "info" / "exclude").write_text(
             (user.read_text() if user.is_file() else "")
-            + "".join(f"\n/{repo.prefix}{name}/" for name in _UNFROZEN) + "\n")
+            + "".join(f"\n/{repo.prefix}{name}{'' if name == OPENCODE_PLUGIN else '/'}" for name in _UNFROZEN)
+            + "\n")
         # The private index starts stat-valid for `files`, then points at `head`.
         shutil.copyfile(self.index, private / "index")
         if self.files != self.head:  # entries unchanged between the two keep their stat data
@@ -391,6 +461,8 @@ class Copy:
             repo.git(*attributes, "add", "-A", "--", ".", *repo.unfrozen_excludes(self.path, self.index),
                      work_tree=self.path, index=self.index)
         except RuntimeError as e:  # e.g. an unreadable file or an embedded repo without commits
+            if nested := re.search(r"'([^'\n]+?)/?' does not have a commit checked out", str(e)):
+                raise CandidateRejected(nested_repository(nested.group(1))) from e
             raise CandidateRejected(f"could not snapshot the candidate: {e}") from e
         changes = self._changes()
         # Reset to `files` in the index only; git drops new entries that conflict with a restored path.
@@ -409,6 +481,8 @@ class Copy:
         changes = {}
         for metadata, name in zip(records[::2], records[1::2]):
             old_mode, new_mode, old_oid, _ = metadata.lstrip(":").split(" ", 3)
+            if old_mode == "000000" and new_mode == GITLINK:  # a repository the agent made or cloned
+                raise CandidateRejected(nested_repository(name))
             if GITLINK in (old_mode, new_mode):
                 raise CandidateRejected(f"submodule changes are not supported: {name}")
             changes[name] = (old_mode, old_oid)
@@ -417,6 +491,8 @@ class Copy:
     def changed(self) -> list[str]:
         """Names of `files` modified or deleted since the copy was created."""
         _check_copy(self.path)
+        if self.fingerprint is None:
+            raise RuntimeError(f"copy {self.path} isn't watched (Copy.create(watched=True))")
         return self.fingerprint.changed(self.path)
 
     def _check_index(self) -> None:
@@ -439,3 +515,93 @@ def remove_copy(path: Path) -> None:
         path.unlink()
     elif path.exists():
         _remove_tree(path)
+
+
+# Keeping `.autohelix/` out of the user's git: a local info/exclude rule, checked effective.
+
+class GitExcludeError(RuntimeError):
+    """Local exclusions could not keep AutoHelix runtime state out of git."""
+
+
+def _exclude_file(project_path: Path) -> Path:
+    """The common git directory's info/exclude, shared by linked worktrees. Git may
+    return a relative path, including when the project is a subdirectory."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        cwd=project_path, capture_output=True, text=True, check=True,
+    )
+    common_dir = Path(result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = project_path / common_dir
+    return common_dir / "info" / "exclude"
+
+
+def ensure_git_exclude_entry(project_path: Path, entry: str) -> None:
+    """Add a local ignore rule without changing the working tree or index."""
+    exclude = _exclude_file(project_path)
+    content = exclude.read_text() if exclude.exists() else ""
+    if entry in content.splitlines():
+        return
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    with exclude.open("a") as f:
+        if content and not content.endswith("\n"):
+            f.write("\n")
+        f.write(f"{entry}\n")
+
+
+def ensure_runtime_ignored(project_path: Path) -> None:
+    """Require an effective runtime exclusion, including on repeated calls. A refusal
+    leaves info/exclude as it was (the entry it added is taken out again)."""
+    try:
+        exclude = _exclude_file(project_path)
+        before = exclude.read_bytes() if exclude.exists() else None
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise GitExcludeError(f"Could not configure local git exclusions: {e}") from e
+    try:
+        _require_runtime_ignored(project_path)
+    except GitExcludeError:
+        try:
+            if before is None:
+                exclude.unlink(missing_ok=True)
+            elif exclude.read_bytes() != before:
+                exclude.write_bytes(before)
+        except OSError:
+            pass
+        raise
+
+
+def _require_runtime_ignored(project_path: Path) -> None:
+    try:
+        ensure_git_exclude_entry(project_path, ".autohelix/")
+        result = subprocess.run(
+            ["git", "check-ignore", "--quiet", "--", ".autohelix/"],
+            cwd=project_path, capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            return
+        if result.returncode != 1:
+            raise GitExcludeError(
+                f"Could not check whether .autohelix/ is ignored: {result.stderr.strip()}"
+            )
+        # Without the trailing slash Git also identifies negations such as !.*.
+        detail = subprocess.run(
+            [
+                "git", "check-ignore", "--verbose", "--non-matching", "--",
+                ".autohelix/", ".autohelix",
+            ],
+            cwd=project_path, capture_output=True, text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise GitExcludeError(f"Could not configure local git exclusions: {e}") from e
+    rule = next(
+        (line.split("\t", 1)[0] for line in detail.stdout.splitlines()
+         if not line.startswith("::")),
+        None,
+    )
+    source = f" Conflicting ignore rule: {rule}." if rule else ""
+    raise GitExcludeError(
+        ".autohelix/ is not effectively ignored; a git ignore rule overrides "
+        f"the local exclusion.{source} Add .autohelix/ after the conflicting "
+        "negation rules in your .gitignore, then retry. "
+        "AutoHelix has not modified your .gitignore."
+    )

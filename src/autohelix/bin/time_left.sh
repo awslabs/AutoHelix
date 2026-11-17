@@ -15,16 +15,8 @@ fi
 NOW=$(date +%s)
 ELAPSED=$((NOW - START))
 REMAINING=$((BUDGET - ELAPSED))
-BUDGET_H=$((BUDGET / 3600))
-BUDGET_M=$(((BUDGET % 3600) / 60))
-
-fmt_budget() {
-    if [ "$BUDGET_H" -gt 0 ]; then
-        echo "${BUDGET_H}h"
-    else
-        echo "${BUDGET_M}m"
-    fi
-}
+# The harness formats the budget (1h30m); a bare number of seconds otherwise.
+BUDGET_TEXT="${AUTOHELIX_ITERATION_BUDGET_TEXT:-${BUDGET}s}"
 
 # Human-friendly remaining time: hours+minutes, minutes, or seconds.
 fmt_remaining() {
@@ -44,7 +36,7 @@ fmt_remaining() {
 # across it. What to do about it is the agent's call. The number ticking down
 # after every tool call is the escalation; it needs no WARNING/URGENT labels.
 if [ "$REMAINING" -le 0 ]; then
-    echo "[AutoHelix time_left] Deadline passed $((-REMAINING))s ago (of $(fmt_budget) budget). The process is hard-killed at the deadline; notes you've written persist to the next iteration."
+    echo "[AutoHelix time_left] Deadline passed $((-REMAINING))s ago (of $BUDGET_TEXT budget). The process is hard-killed at the deadline; notes you've written persist to the next iteration."
 else
-    echo "[AutoHelix time_left] $(fmt_remaining) left of $(fmt_budget) budget. The process is hard-killed at the deadline; notes you've written persist to the next iteration."
+    echo "[AutoHelix time_left] $(fmt_remaining) left of $BUDGET_TEXT budget. The process is hard-killed at the deadline; notes you've written persist to the next iteration."
 fi

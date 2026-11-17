@@ -160,7 +160,7 @@ def _run_payload(running: bool) -> dict:
               {"state": "finished", "phase": None, "iteration": 7, "stopped_at": T,
                "stop_reason": {"kind": "budget", "detail": "iteration budget reached (7)"}})
     return {"id": "20261115-1402-sorting-krp3", "name": "sorting", "archived": False, "last_activity": T - 30,
-            "config_file": "autohelix/sorting.yaml", "config_missing": False, "config_invalid": False,
+            "config_file": "autohelix/sorting.yaml", "config_invalid": False,
             "goal": CONFIG.goal, "title": CONFIG.title, "status": status, "stop_requested": None,
             "accepted": 3, "group": None, "why": None, "archive_why": None, "import": None,
             "metrics": {"iteration": 6 if not running else 3, "values": [
@@ -243,10 +243,11 @@ def test_screens_fit_their_width(name):
 
 def test_an_unreadable_history_shows_the_outcome_only():
     """Totals and landing would be counted from no rows, so the end block stops after
-    the outcome; the warning is yellow, like every warning."""
+    the outcome; the warning is `terminal.warning`'s, like every warning."""
     lines = view_screen(80, readable=False)
     [warning] = [line for line in lines if "history can't be read" in line.plain]
-    assert warning.style == "yellow"
+    assert warning.plain.startswith("  ! ") and [span.style for span in warning.spans] == ["yellow"]
+    assert warning.spans[0].start == 2 and warning.spans[0].end == 4
     assert lines[-1].plain.split() == ["Done", "iteration", "budget", "reached", "(7)"]
 
 

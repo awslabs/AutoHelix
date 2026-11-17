@@ -24,7 +24,7 @@ LEAKY = [
 
 def test_each_test_starts_from_a_clean_environment(copies_dir, tmp_path_factory):
     harness = {name for name in os.environ if name.startswith("AUTOHELIX_")} - {"AUTOHELIX_UPDATE_SNAPSHOTS"}
-    assert harness == {"AUTOHELIX_COPIES_ROOT", "AUTOHELIX_HOOK_AUDIT_LOG"}
+    assert harness == {"AUTOHELIX_COPIES_ROOT"}
     assert os.environ["AUTOHELIX_COPIES_ROOT"] == str(copies_dir)
     assert "CLAUDE_CODE_DISABLE_AUTO_MEMORY" not in os.environ
     assert os.environ["GIT_CONFIG_GLOBAL"].startswith(str(tmp_path_factory.getbasetemp()))
@@ -51,7 +51,6 @@ def test_a_run_inside_a_harness_command_writes_nothing_outside_its_tmp_path(tmp_
         "AUTOHELIX_BASE": "0" * 40,
         "AUTOHELIX_SCRATCH": str(outer / "scratch"),
         "AUTOHELIX_COMMAND_DEADLINE": str(time.time() + 30),  # little time left in the outer gate
-        "AUTOHELIX_HOOK_AUDIT_LOG": str(outer / "hook_audit.log"),
         "AUTOHELIX_COPIES_ROOT": str(outer / "copies"),
         "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
         "GIT_CONFIG_GLOBAL": str(signing),

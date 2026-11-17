@@ -204,6 +204,8 @@ def main() -> int:
     print(f"baseline_ns: {{baseline_time}}")
     print(f"solver_ns: {{solver_time}}")
     print(f"speedup: {{speedup:.4f}}")
+    # The metric AutoHelix records (only ##autohelix lines count; inf reports none).
+    print(f"##autohelix[speedup={{speedup:.4f}}]")
     return 0
 
 

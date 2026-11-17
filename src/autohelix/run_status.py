@@ -10,7 +10,7 @@ import os
 import socket
 import time
 from pathlib import Path
-from autohelix.runs import RunPaths, SCHEMA, write_json
+from autohelix.runs import RunPaths, SCHEMA, held_here, is_live, write_json
 
 
 def _path(project: Path, run_id: str | None = None) -> Path:
@@ -64,9 +64,11 @@ class RunStatus:
 
 
 class SegmentLog:
-    """runs/<id>/.internal/segments.jsonl, append-only: for every segment (one `run`
-    or `resume` command) that started, a start record, and an end record when it
-    ended, linked by `segment` (1, 2, ... in the run). Each record is one `write()`
+    """runs/<id>/.internal/segments.jsonl, the run's event log, append-only: for
+    every segment (one `run` or `resume` command) that started, a start record, an
+    iteration record each time one of its iterations is final, and an end record
+    when it ended, linked by `segment` (1, 2, ... in the run; `autohelix wait`
+    reads it, `events`). Each record is one `write()`
     on an O_APPEND descriptor, then fsync: nothing earlier is ever rewritten, so a
     damaged line costs only itself. A segment whose process died has no end record
     (`read_segments` reports it open). Best-effort, like the status; the run lock
@@ -86,6 +88,32 @@ class SegmentLog:
         self.segment = segment
         self._append({"segment": self.segment, "event": "start", "started_at": started_at, "pid": os.getpid(),
                       "host": socket.gethostname(), "budget": budget, "start_iteration": start_iteration})
+
+    def iteration(self, *, ended_at: float | None, **fields) -> None:
+        """An iteration's record is final (`events.iteration_fields`; nothing outside a
+        segment): the line `autohelix wait` reports as its `iteration` event."""
+        if self.segment is not None:
+            self._append({"segment": self.segment, "event": "iteration", "ended_at": ended_at, **fields})
+
+    def catch_up(self, records: list) -> None:
+        """Before a segment's start: an iteration line, for the last segment, for each
+        history record no line reports (its process died between its record and its line,
+        e.g. in an accepted iteration's stop commands, or `runs.reconcile` recovered it).
+        Records are `history.IterationResult`s; nothing without a segment."""
+        from autohelix.events import iteration_fields
+
+        logged, last = set(), None
+        for record in _segment_records(self.path):
+            if record.get("event") == "iteration":
+                logged.add(record.get("iteration"))
+            last = record["segment"] if last is None else max(last, record["segment"])
+        if last is None:
+            return
+        for result in records:
+            if result.iteration not in logged:
+                # A recovered record has no end time: now, so the event keeps its place.
+                self._append({"segment": last, "event": "iteration", "ended_at": result.ended_at or time.time(),
+                              **iteration_fields(result)})
 
     def end(self, *, state: str | None, stop_reason: dict | None, last_iteration: int | None,
             iterations: int | None, error: str | None = None) -> None:
@@ -111,17 +139,14 @@ class SegmentLog:
             pass  # never break a run over it
 
 
-def _segment_records(path: Path | None, data: bytes | None = None, terminated: bool = False) -> list[dict]:
-    """The log's records (objects with an int `segment`), damaged lines skipped: from
-    `data` if given, else read from `path`; with `terminated`, only newline-terminated
-    lines (an unterminated last line may still be being written)."""
-    if data is None:
-        try:
-            data = path.read_bytes()
-        except OSError:
-            return []
+def _segment_records(path: Path) -> list[dict]:
+    """The log's records (objects with an int `segment`), damaged lines skipped."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return []
     records = []
-    for line in data.split(b"\n")[:-1] if terminated else data.splitlines():
+    for line in data.splitlines():
         try:
             record = json.loads(line)
         except ValueError:  # UnicodeDecodeError included
@@ -131,15 +156,13 @@ def _segment_records(path: Path | None, data: bytes | None = None, terminated: b
     return records
 
 
-def read_segments(path: Path | None, *, data: bytes | None = None, terminated: bool = False) -> list[dict]:
-    """The segments in the log, oldest first: each start record with its end record's
-    fields merged in (`ended_at`, `state`, `stop_reason`, `last_iteration`,
+def read_segments(path: Path) -> list[dict]:
+    """The segments in the log, oldest first (iteration records aside): each start
+    record with its end record's fields merged in (`ended_at`, `state`, `stop_reason`, `last_iteration`,
     `iterations`, `error`), and `open` true when it has none (still running, or its
-    process died). Lines that aren't records (damaged, undecodable) are skipped. The
-    log is read from `path`, or given as `data`; `terminated` ignores an unterminated
-    last line (`autohelix wait`, which reads while the harness appends)."""
+    process died). Lines that aren't records (damaged, undecodable) are skipped."""
     segments: dict[int, dict] = {}
-    for record in _segment_records(path, data, terminated):
+    for record in _segment_records(path):
         n = record["segment"]
         fields = {k: v for k, v in record.items() if k != "event"}
         if record.get("event") == "start":
@@ -150,8 +173,22 @@ def read_segments(path: Path | None, *, data: bytes | None = None, terminated: b
     return [segments[n] for n in sorted(segments)]
 
 
+def holder_gone(paths: RunPaths, host, pid) -> bool:
+    """Whether the process (`pid` on `host`) that wrote a running status or an open
+    segment is certainly gone: on this host, when nothing holds the run's lock
+    (`is_live`; `run`/`resume` hold it from start to end, and a pid could be reused),
+    or when this process holds it and isn't `pid` (a resume reading the segment it
+    continues). Another host's can't be checked (False)."""
+    if host != socket.gethostname():
+        return False
+    if held_here(paths.lock):
+        return pid != os.getpid()
+    return not is_live(paths)
+
+
 def read_run_status(project: Path, run_id: str | None = None) -> dict | None:
-    """Return the last recorded status, with state corrected if the process died."""
+    """Return the last recorded status; a running one whose process is gone
+    (`holder_gone`) reads as crashed."""
     paths = RunPaths(project, run_id)
     if paths.run_id is None:
         return None
@@ -159,13 +196,10 @@ def read_run_status(project: Path, run_id: str | None = None) -> dict | None:
         data = json.loads(paths.status.read_text())
     except (OSError, ValueError):
         return None
-    if data.get("state") == "running" and data.get("host") == socket.gethostname():
-        try:
-            os.kill(int(data["pid"]), 0)
-        except ProcessLookupError:
-            data["state"] = "crashed"
-        except (PermissionError, KeyError, TypeError, ValueError):
-            pass
+    if not isinstance(data, dict):
+        return None
+    if data.get("state") == "running" and holder_gone(paths, data.get("host"), data.get("pid")):
+        data["state"] = "crashed"
     return data
 
 

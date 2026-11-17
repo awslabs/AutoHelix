@@ -19,15 +19,7 @@ from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.runs import RunLock, RunPaths, archive, delete, git, land, repair_history, short_id
 from click.testing import CliRunner
-
-
-def configure(project, **values):
-    path = project / "autohelix.yaml"
-    data = yaml.safe_load(path.read_text())
-    data.update(values)
-    path.write_text(yaml.safe_dump(data))
-    git(project, "add", "autohelix.yaml")
-    git(project, "commit", "-qm", "config")
+from tests.helpers import configure
 
 
 def test_identity_selection_new_and_explicit_config(project):
@@ -194,6 +186,34 @@ def test_recovery_after_ref_publication_and_torn_append(project, monkeypatch):
     resumed.close()
 
 
+def test_a_record_never_written_is_logged_once_recovered(project, monkeypatch):
+    """The history append failed: no line then (the history hasn't it); the resume's
+    recovered record gets its line, for the segment that wrote none, before its start."""
+    from autohelix.run_status import _segment_records
+
+    harness = Harness(project, land_mode="manual")
+    original = harness.history.append
+
+    def crash(result):
+        if result.iteration:
+            raise OSError("crash after publication")
+        original(result)
+
+    monkeypatch.setattr(harness.history, "append", crash)
+    with pytest.raises(AutoHelixRunError, match="crash after publication"):
+        harness.run(Budget(until=1), report=False)
+    harness.close()
+    assert [(r["segment"], r["event"], r.get("iteration")) for r in _segment_records(harness.paths.segments)] == [
+        (1, "start", None), (1, "iteration", 0), (1, "end", None)]
+    resumed = Harness(project, land_mode="manual")
+    resumed.run(Budget(until=2), report=False)
+    records = _segment_records(harness.paths.segments)
+    assert [(r["segment"], r["event"], r.get("iteration")) for r in records] == [
+        (1, "start", None), (1, "iteration", 0), (1, "end", None), (1, "iteration", 1),
+        (2, "start", None), (2, "iteration", 2), (2, "end", None)]
+    assert records[3]["reason"] == "recovered" and records[3]["accepted"]
+
+
 def test_ref_cas_failure_never_records_acceptance(project, monkeypatch):
     from autohelix.workspace import Repo
 
@@ -293,14 +313,16 @@ def test_normalize_git_state_before_validation(project, monkeypatch, operation, 
 
 
 @pytest.mark.parametrize("slot", ["gates", "observe", "stop"])
-def test_nested_ask_mutation_cannot_be_swallowed(project, slot):
+def test_a_judge_writing_in_a_run_fails_its_call_in_its_own_copy(project, slot):
+    """The judge's write lands in its own copy, never in what commands check or what is
+    accepted; its call fails (exit 2), and the script owns that exit code."""
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
     data["agent"]["settings"]["judge_change_file"] = "code.py"
-    ask = 'autohelix ask "Done?" || true'
+    ask = 'autohelix ask "Done?"; echo "ask=$?" >&2; grep -q "judge edit" code.py && exit 9; exit 1'
     if slot == "gates":
-        data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] || ' + ask]
+        data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; ' + ask.replace("exit 1", "exit 0")]
     elif slot == "observe":
-        data["observe"] = [{"name": "judge", "command": '[ "$AUTOHELIX_ITERATION" = 0 ] || ' + ask}]
+        data["observe"] = [{"name": "judge", "command": '[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; ' + ask}]
     else:
         data["stop"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 1; ' + ask]
     (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
@@ -309,15 +331,20 @@ def test_nested_ask_mutation_cannot_be_swallowed(project, slot):
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
     record = harness.history.load()[-1]
-    assert record.accepted == (slot == "stop")
-    assert record.stop is None
-    assert any(call["usage"].get("integrity_violation") for call in record.calls)
+    assert record.accepted and record.stop is None
+    [judge] = [call for call in record.calls if call["role"] == "command"]
+    assert judge["usage"]["status"] == "error" and judge["usage"]["error"] == "the judge changed files: code.py"
+    assert "integrity_violation" not in judge["usage"]
     assert record.cost.cost_usd == pytest.approx(0.2)
     accepted = git(project, "show", f"{harness.paths.ref}:code.py").stdout
     assert "Unvalidated judge edit" not in accepted
+    folder = {"gates": "gates/1", "observe": "observe/judge", "stop": "stop/1"}[slot]
+    assert "ask=2" in (harness.paths.iteration_dir(1) / folder / "stderr.txt").read_text()
 
 
-def test_baseline_judge_mutation_fails_and_cost_survives(project):
+def test_baseline_judge_writing_fails_only_its_call_and_cost_counts(project):
+    """At the baseline too, a judge writes only in its own copy: the checks copy and the
+    project stay as they were, and its call's cost is counted."""
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
     data["agent"]["settings"]["judge_change_file"] = "code.py"
     data["observe"] = [{"name": "judge", "command": 'autohelix ask "Done?" || true'}]
@@ -325,16 +352,13 @@ def test_baseline_judge_mutation_fails_and_cost_survives(project):
     git(project, "add", ".")
     git(project, "commit", "-qm", "baseline judge")
     harness = Harness(project, land_mode="manual")
-    with pytest.raises(AutoHelixRunError, match="Baseline command modified candidate files"):
-        harness.run(Budget(until=1), report=False)
-    [baseline] = harness.history.load()
-    assert not baseline.accepted and baseline.iteration == 0
+    harness.run(Budget(until=1), report=False)
+    baseline = harness.history.load()[0]
+    assert baseline.accepted and baseline.iteration == 0
     assert baseline.cost.cost_usd == 0.1
+    assert [call["usage"]["status"] for call in baseline.calls] == ["error"]
     assert (project / "code.py").read_text() == "print('baseline')\n"
-    retry = Harness(project, land_mode="manual")
-    with pytest.raises(AutoHelixRunError, match="Baseline command modified candidate files"):
-        retry.run(Budget(until=1), report=False)
-    assert retry.history.load()[0].cost.cost_usd == pytest.approx(0.2)
+    harness.close()
 
 
 @pytest.mark.parametrize("change", ["dirty", "new", "delete", "mode", "symlink"])
@@ -395,20 +419,18 @@ def test_guard_detects_submodule_edit_and_commit(project, tmp_path):
     assert DirectoryGuard(project).violations() == []
 
 
-def test_judge_violation_stays_recorded_after_wrapper_restores_files(project):
+def test_an_ask_gate_whose_judge_writes_rejects(project):
     data = yaml.safe_load((project / "autohelix.yaml").read_text())
     data["agent"]["settings"]["judge_change_file"] = "code.py"
-    data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; cp code.py /tmp/ah-saved.$$; '
-                           'autohelix ask "Done?"; cp /tmp/ah-saved.$$ code.py; exit 0']
+    data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; autohelix ask "Done?"']
     (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
     git(project, "add", ".")
-    git(project, "commit", "-qm", "restoring wrapper")
+    git(project, "commit", "-qm", "judge gate")
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
     record = harness.history.load()[-1]
-    assert not record.accepted
-    assert "judge call changed the files it judged" in record.reason
-    assert any(call["usage"].get("integrity_violation") for call in record.calls)
+    assert not record.accepted and record.gates[0]["passed"] is False and record.gates[0]["return_code"] == 2
+    assert "the judge changed files: code.py" in (harness.paths.iteration_dir(1) / "gates" / "1" / "stderr.txt").read_text()
     harness.close()
 
 
@@ -461,6 +483,28 @@ def test_resume_keeps_its_own_tip_past_user_commits_and_land_divergence_is_safe(
     assert git(project, "rev-parse", "HEAD").stdout.strip() == target
 
 
+def test_land_into_a_missing_branch_names_it(project):
+    """It used to fail with git's own "fatal: Needed a single revision"."""
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    with RunLock(harness.paths.lock), pytest.raises(RuntimeError) as raised:
+        land(harness.paths, harness.run_info, harness.run_state.expected_tip, into="release")
+    assert str(raised.value) == "No branch release; create it first (git branch release <base>)."
+
+
+def test_a_corrupt_history_doesnt_break_a_bare_resume_of_another_run(project):
+    """A bare resume orders the config's runs by baseline: one unreadable history made it
+    fail for every run of the config."""
+    good = Harness(project, land_mode="manual")
+    good.run(Budget(until=1), report=False)
+    broken = Harness(project, new=True, land_mode="manual")
+    broken.run(Budget(until=1), report=False)
+    broken.paths.history.write_text('broken\n{"iteration":0,"accepted":true}\n')
+    result = CliRunner().invoke(main, ["resume", "-n", "1", "--no-report", "--path", str(project)])
+    assert result.exit_code == 0, result.output
+    assert History(project, good.paths.run_id).get_last_iteration() == 2
+
+
 def test_auto_land_before_report_and_after_abort(project, monkeypatch):
     harness = Harness(project)
     seen = []
@@ -504,15 +548,28 @@ def test_delete_symbolic_ref_does_not_delete_user_branch(project):
     assert git(project, "rev-parse", "--verify", paths.ref, check=False).returncode != 0
 
 
-def test_same_harness_failed_restart_does_not_land_old_tip(project):
+def test_a_failed_restart_does_not_land_old_tip(project):
     harness = Harness(project)
     harness.run(Budget(until=1), report=False)
     git(project, "reset", "--hard", harness.run_info["base_commit"])
-    (project / ".gitignore").write_text("!.*\n")
     before = git(project, "rev-parse", "HEAD").stdout.strip()
+    resumed = Harness(project)  # auto landing, as the first
+    assert git(project, "rev-parse", resumed.paths.ref).stdout.strip() != before  # a tip that could land
+    # Broken after the Harness was made: the segment's own start checks refuse it.
+    (project / ".gitignore").write_text("!.*\n")
     with pytest.raises(RuntimeError, match="gitignore"):
-        harness.run(Budget(until=2), report=False)
+        resumed.run(Budget(until=2), report=False)
     assert git(project, "rev-parse", "HEAD").stdout.strip() == before
+
+
+def test_a_harness_runs_one_segment(project):
+    """A second `run` on the same Harness used to re-take the lock and skip the rest of
+    the start (the config comparison, preflight): a path only tests took."""
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    with pytest.raises(RuntimeError, match="A Harness runs one segment"):
+        harness.run(Budget(until=2), report=False)
+    assert History(project, harness.paths.run_id).get_last_iteration() == 1
 
 
 def test_prompt_setup_failure_does_not_consume_attempt(project, monkeypatch):
@@ -566,12 +623,14 @@ def test_archived_noop_retains_its_own_tip(project, monkeypatch):
     assert run_tip(resumed.paths) == run_tip_before
 
 
-def test_viewer_calls_containment_and_current_alias(project):
+def test_viewer_calls_containment_and_one_run_per_reader(project):
     from autohelix.viewer import RunData
 
-    data = RunData(project, run_id="current")
+    with pytest.raises(ValueError):
+        RunData(project, None)  # no "current run" mode: a reader reads one named run
     harness = Harness(project)
     harness.run(Budget(until=1), report=False)
+    data = RunData(project, harness.paths.run_id)
     assert data.state()["run_id"] == harness.paths.run_id
     outside = project / "private.log"
     outside.write_text(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "private"}]}}) + "\n")
@@ -581,8 +640,8 @@ def test_viewer_calls_containment_and_current_alias(project):
     assert data._events(linked) == []
     second = Harness(project, new=True)
     second.run(Budget(until=1), report=False)
-    assert data.state()["run_id"] == second.paths.run_id
-    assert [call["role"] for call in data.iteration(1)["calls"]] == ["agent"]
+    assert data.state()["run_id"] == harness.paths.run_id  # a reader stays on its run
+    assert [call["role"] for call in RunData(project, second.paths.run_id).iteration(1)["calls"]] == ["agent"]
     row = json.loads(second.paths.history.read_text().splitlines()[-1])
     assert row["metrics"] == {} and row["cost"]["cost_usd"] == 0.1
 
@@ -731,16 +790,23 @@ def test_target_behind_after_baseline_warns_only_for_auto_landing(project):
     assert git(project, "rev-parse", "HEAD").stdout.strip() == base
 
 
-@pytest.mark.parametrize("problem", ["editable", "preflight"])
-def test_refused_first_start_creates_no_identity(project, problem):
-    if problem == "editable":
-        configure(project, scope={"editable": ["missing_dir/*.py"]})
-    else:
+@pytest.mark.parametrize("problem", ["scope", "preflight", "dirty"])
+def test_refused_first_start_creates_no_identity(project, problem, capsys):
+    if problem == "scope":  # an entry outside the project (one matching nothing only warns)
+        configure(project, scope={"editable": ["../missing_dir/*.py"]})
+    elif problem == "preflight":
         configure(project, agent={"backend": "claude", "command": "/nonexistent/agent"})
-    with pytest.raises(RuntimeError, match="No files found|Preflight checks failed"):
+    else:
+        (project / "code.py").write_text("edited\n")
+    # A config error ends the command (SystemExit) before the readiness checks.
+    with pytest.raises((RuntimeError, SystemExit)) as refused:
         Harness(project)
+    if problem != "scope":
+        assert re.search("Preflight checks failed|Uncommitted changes in tracked files", str(refused.value))
+    else:
+        assert "has a `..` component" in " ".join(capsys.readouterr().out.split())
     root = RunPaths(project).root
-    assert not RunPaths(project).current.exists()
+    assert not (RunPaths(project).project_internal / "current").exists()  # no pointer is ever written
     assert not list((root / "runs").glob("*/run.json"))
     assert not git(project, "for-each-ref", "--format=%(refname)", "refs/autohelix/").stdout.strip()
 
@@ -776,7 +842,6 @@ def test_ask_from_an_agent_without_log_dir_records_absolute_log(tmp_path, monkey
     assert answer.yes
     [call] = read_usage(usage)
     assert Path(call["log"]).is_absolute() and Path(call["log"]).exists()
-
 
 
 def test_old_reviewer_call_costs_count_in_the_run_total(project):

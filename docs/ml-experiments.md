@@ -18,9 +18,8 @@ benchmark. The `posttrain` example is a full working reference.
   same absolute artifacts path, independent of the current working directory.
 - **Report the score in a parseable form.** AutoHelix reads the metric from your
   eval command's stdout (an `observe:` entry with `metrics: {score: higher}`). It
-  recognizes `##autohelix[score=<number>]` (unambiguous, recommended) or a plain
-  `score: <number>` / `score=<number>` line matching the metric name. Without a
-  recognizable value the metric is missing: the baseline stops with a setup
+  reads only a `##autohelix[score=<number>]` line (a plain `score: 0.9` line
+  doesn't count). Without one the metric is missing: the baseline stops with a setup
   error, and later a `metric:` gate on it fails. Use the entry's `capture:` to
   also save training logs, eval JSON, etc. for the next agent and for later
   inspection.

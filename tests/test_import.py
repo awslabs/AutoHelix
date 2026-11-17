@@ -7,13 +7,13 @@ import shutil
 
 from autohelix.harness import Budget, Harness
 from autohelix.runs import RunPaths, git, short_id
-from tests.test_groups import cli, identity, started, watch_agent
-from tests.test_runs import configure
+from tests.helpers import cli, configure
+from tests.test_groups import identity, started, watch_agent
 
 TRACKER = {"name": "tracker", "metrics": {"score": "higher"},
            "command": 'echo "run $AUTOHELIX_RUN_ID"; '
                       'if [ -n "$AUTOHELIX_PREVIOUS" ]; then echo "previous $(head -1 "$AUTOHELIX_PREVIOUS/stdout.txt")"; '
-                      'else echo "previous none"; fi; echo "score: 1"'}
+                      'else echo "previous none"; fi; echo "##autohelix[score=1]"'}
 OTHER = {"name": "other", "command": 'echo "previous ${AUTOHELIX_PREVIOUS:-none}"'}
 MOCK = {"backend": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
                                         "notes_content": "tried {iteration}"}}
@@ -212,8 +212,8 @@ def test_a_manual_resume_continues_from_its_own_tip(project):
     assert git(project, "show", f"{new_tip}:user.py", check=False).returncode  # without the user's commit
     # Auto landing again: diverged, said as before, nothing lost.
     result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report", "--land", "auto")
-    assert result.exit_code == 0, result.output
-    assert "diverged" in result.output
+    assert result.exit_code == 1, result.output  # a landing that failed is an error
+    assert "landing failed: Cannot land: main diverged" in " ".join(result.output.split())
     assert git(project, "show", "HEAD:user.py").returncode == 0
 
 

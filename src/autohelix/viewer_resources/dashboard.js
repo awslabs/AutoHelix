@@ -194,7 +194,7 @@ function runRow(run) {
   const href = `/run/${encodeURIComponent(run.id)}/`;
   const { name, started } = splitRunId(run.id);
   const file = run.config_file && run.config_file
-    + (run.config_missing ? ' (not stored)' : run.config_invalid ? ' (invalid)' : '');
+    + (run.config_invalid ? ' (invalid)' : '');
   const notes = [run.why && `Why: ${run.why}`, run.import?.run && `continues from ${run.import.run}`,
     run.archive_why && `archived: ${run.archive_why}`].filter(Boolean).join(' · ');
   const tr = el('tr', { className: run.archived ? 'archived' : '', tabIndex: 0 },

@@ -68,7 +68,10 @@ that name their replacement; when editing an existing config, convert them (a
   - A command (a string, or a mapping with `command` and `timeout`) must exit 0.
   - `ask: <question>` is shorthand for `autohelix ask -- "<question>"`, a yes/no
     judgment by a read-only agent; `yes:` / `no:` keys (quoted or not) say what each
-    answer means.
+    answer means. The judge sees its own fresh copy of the candidate, with the
+    complete change as `.autohelix-iteration/candidate.diff`, not files earlier
+    gates wrote: a gate whose output should be judged writes it to
+    `$AUTOHELIX_SCRATCH` and names that path in its own `autohelix ask`.
   - `metric: NAME` with `regress: N%` or `improve: N%` compares a number from an
     `observe` entry with the last accepted iteration (see below).
 - Time values are durations: a bare number is seconds, a string uses `h`, `m`,
@@ -79,7 +82,9 @@ that name their replacement; when editing an existing config, convert them (a
   inside `editable` (both together mean editable minus frozen). Changes outside
   the scope are discarded before gates run, and the next agent is told. Without
   either, code changes are unrestricted by scope, and a run with gate or observe
-  commands warns.
+  commands warns. Entries are project-relative paths (a folder covers its
+  contents) or globs: `*` stays within one folder, `**/` is zero or more folders
+  (`tests/**/*.py` includes `tests/test_a.py`); no absolute paths or `..`.
 - Prefer relative paths. Copies and scope isolate repository changes, not
   host access: processes can still write to external files and use credentials
   available to the agent.
@@ -139,12 +144,14 @@ observe:
   only by the prompt. Review numbers are noisy and gameable: suitable for
   display and `stop`, not recommended for gates.
 - `agent` on a review or `ask` entry takes only `backend` (`claude` or
-  `codex`), `model`, `reasoning_effort`, `timeout`, `command`.
+  `codex`), `model`, `reasoning_effort`, `command`; the entry's `timeout:`
+  bounds its judge (at least 1m; an `ask` entry's defaults to 10 minutes).
 
 An observe entry that fails (non-zero exit, timeout, a review without a valid
 answer) does not reject the iteration: the failure is recorded and shown, and
-it contributes no metrics. Only gates reject. A command or reviewer that
-changes the candidate's files does reject the iteration.
+it contributes no metrics. Only gates reject. A command that changes the
+candidate's files does reject the iteration; a reviewer or `ask` judge that
+writes only fails its own call (it works in its own fresh copy).
 
 Without metric gates, passing gates can accept a change even if a measured
 value regresses. A metric gate compares with the last accepted iteration (the
@@ -190,15 +197,17 @@ read-only mode, so with an OpenCode main agent each `ask`/`review` entry needs
 its own `agent.backend`.
 
 `agent.timeout` is a per-iteration hard kill (default: none); where the backend
-supports it the agent also sees the remaining time. `ask` defaults to 600
-seconds and a review to its entry's timeout, independently of `agent.timeout`.
+supports it the agent also sees the remaining time. `ask` and `review` entries
+don't use it: their own `timeout:` bounds them.
 
 ## Stop conditions
 
 `stop` lists commands, in the same forms as gate commands, that end the run
 early. They run after the baseline and after each accepted iteration: exit 0
 stops (the last stdout line is the recorded reason), 1 continues, anything else
-is an error (fatal on the baseline, a warning later). `$AUTOHELIX_METRICS` is a
+is an error (fatal on the baseline, marked on the iteration's row later). A
+Python script exits 1 on an uncaught exception, which would read as "continue":
+have it catch its errors and exit 2, or use `jq -e`. `$AUTOHELIX_METRICS` is a
 JSON file of the metrics just measured, so a target is
 `jq -e '.speedup >= 10' "$AUTOHELIX_METRICS"`; `$AUTOHELIX_OBSERVATIONS` is a
 copy of the accepted iteration's observations (one folder per entry name);
@@ -235,9 +244,10 @@ the harness's commands report (`ask` gates, reviews) cost, the baseline's
 included, with the dollar limit. History keeps each actual model call in the
 `calls` list, including its role, usage and relative log path. Claude Code and
 OpenCode can report dollar costs; Codex can provide calculated API-equivalent
-estimates. Only rely on `--cost` when usable dollar usage is recorded for the
+estimates (set `agent.model` for them: without it Codex's cost is unavailable). Only rely on `--cost` when usable dollar usage is recorded for the
 selected backend/configuration; missing cost is not evidence of free usage
-(`--cost` counts known costs only, and warns). Report generation, model calls
+(`--cost` counts known costs only, and warns). The run summary (written after
+the loop; its cost counts in the run's total), model calls
 made by external commands that don't record usage, and the user's
 supervising/setup agent are separate. These boundaries make it a run-control
 threshold, not an absolute all-inclusive financial cap.
@@ -245,8 +255,9 @@ threshold, not an absolute all-inclusive financial cap.
 Commit the config and any scripts it uses, then start with `autohelix run
 [NAME] --path PROJECT -n 3` (`NAME` for `autohelix/NAME.yaml`, none for
 `autohelix.yaml`): always a new run, here of three iterations (an open-ended goal; `-n 1` for a single task its gates can check). A run keeps the config it started with
-(stored in `.autohelix/runs/<id>/config.yaml`, the prompt template inlined). `resume` refuses when
-the file's parsed config has changed since (comment edits don't count): apply an edited config with a
+(stored in `.autohelix/runs/<id>/config.yaml`, the prompt template beside it as
+`prompt_template.md`). `resume` refuses when the file's parsed config has changed since (comment
+edits and other spellings of the same value don't count): apply an edited config with a
 new run, `autohelix run [NAME] --import <id>`, or restore the file. The config and template files are
 always frozen; freeze scripts the config calls under `scope.frozen` if they must not change. Continue one with `autohelix resume [RUN_ID]
 --path PROJECT` and its own budget flags. A bare `resume` continues the latest run of the config a

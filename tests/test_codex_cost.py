@@ -1,14 +1,12 @@
 """Codex pricing, model resolution, and recorded-usage regression tests."""
 
 import json
-from datetime import datetime, timezone
-from uuid import UUID
 
 import pytest
 
 from autohelix.agents import AgentConfig
 from autohelix.agents.codex import CodexAgent
-from autohelix.agents.codex_cost import estimate_cost, session_metadata
+from autohelix.agents.codex_cost import estimate_cost
 from autohelix.agents.runner import ProcessRunResult
 from autohelix.history import History, IterationResult
 
@@ -20,32 +18,11 @@ USAGE = {
     "output_tokens": 100_000,
     "reasoning_output_tokens": 50_000,
 }
-CREATED = datetime(2026, 10, 27, 22, 39, 46, tzinfo=timezone.utc)
-THREAD_ID = str(UUID(int=(int(CREATED.timestamp() * 1000) << 80) | (7 << 76) | (2 << 62) | 1))
-
-
-def rollout(tmp_path, monkeypatch, *, model="openai.gpt-6.1-sol", reasoning_included=None):
-    """A model supplied by the actual session, independent of caller config."""
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
-    directory = tmp_path / "sessions" / CREATED.strftime("%Y/%m/%d")
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"rollout-example-{THREAD_ID}.jsonl"
-    records = [
-        {"type": "session_meta", "payload": {"id": THREAD_ID, "model_provider": "amazon-bedrock"}},
-        {"type": "turn_context", "payload": {"model": model}},
-    ]
-    if reasoning_included is not None:
-        records.append({"type": "event_msg", "payload": {
-            "type": "token_count", "info": {"last_usage_includes_reasoning": reasoning_included},
-        }})
-    path.write_text("".join(json.dumps(record) + "\n" for record in records))
-    return path
-
-
-def run_agent(tmp_path, monkeypatch, config=None, *, usage=USAGE, thread_id=None, timed_out=False):
+def run_agent(tmp_path, monkeypatch, config=None, *, usage=USAGE, model=None, timed_out=False):
+    """A fake Codex call; `model`: the model its output names (on its `thread.started`)."""
     def fake_run_process(**kwargs):
-        if thread_id:
-            kwargs["line_callback"](json.dumps({"type": "thread.started", "thread_id": thread_id}))
+        kwargs["line_callback"](json.dumps({"type": "thread.started", "thread_id": "t",
+                                            **({"model": model} if model else {})}))
         if usage is not None:
             kwargs["line_callback"](json.dumps({"type": "turn.completed", "usage": usage}))
         return ProcessRunResult(exit_code=124 if timed_out else 0, timed_out=timed_out)
@@ -130,163 +107,46 @@ def test_zero_usage_is_a_known_zero_cost():
     assert estimate_cost(usage, "gpt-6.1-sol")["cost_usd"] == 0
 
 
-def test_session_uses_thread_creation_date_and_actual_model(tmp_path, monkeypatch):
-    rollout(tmp_path, monkeypatch, reasoning_included=False)
-    # The current date is different from the recorded thread's creation date.
-    result = session_metadata(THREAD_ID, datetime(2026, 11, 6, tzinfo=timezone.utc))
-    assert result == {
-        "model": "openai.gpt-6.1-sol", "provider": "amazon-bedrock",
-        "output_includes_reasoning": False,
-    }
-
-
-def test_session_lookup_accepts_local_date_before_utc_date(tmp_path, monkeypatch):
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
-    # 03:41 UTC on November 5 is still November 4 in New York.
-    created = datetime(2026, 11, 5, 3, 41, tzinfo=timezone.utc)
-    uid = str(UUID(int=(int(created.timestamp() * 1000) << 80) | (7 << 76) | (2 << 62) | 1))
-    directory = tmp_path / "sessions" / "2026/11/04"
-    directory.mkdir(parents=True)
-    (directory / f"rollout-local-{uid}.jsonl").write_text(
-        json.dumps({"type": "session_meta", "payload": {"id": uid, "model_provider": "amazon-bedrock"}}) + "\n"
-        + json.dumps({"type": "turn_context", "payload": {"model": "openai.gpt-6.1-sol"}}) + "\n"
-    )
-    assert session_metadata(uid, created)["model"] == "openai.gpt-6.1-sol"
-
-
-def test_duplicate_thread_files_are_ambiguous(tmp_path, monkeypatch):
-    path = rollout(tmp_path, monkeypatch)
-    second_directory = tmp_path / "sessions" / "2026/10/26"
-    second_directory.mkdir(parents=True)
-    (second_directory / path.name).write_bytes(path.read_bytes())
-    assert session_metadata(THREAD_ID, CREATED) == {}
-
-
-def test_session_metadata_requires_matching_session_id(tmp_path, monkeypatch):
-    path = rollout(tmp_path, monkeypatch)
-    path.write_text(path.read_text().replace(THREAD_ID, "another-thread"))
-    assert session_metadata(THREAD_ID, CREATED) == {}
-
-
-@pytest.mark.parametrize("thread_id", [None, "../../secret", "*", "", "not-a-uuid", 12])
-def test_invalid_thread_ids_do_not_read_rollouts(tmp_path, monkeypatch, thread_id):
-    rollout(tmp_path, monkeypatch)
-    assert session_metadata(thread_id, CREATED) == {}
-
-
-def test_missing_or_unreadable_rollout_is_harmless(tmp_path, monkeypatch):
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
-    assert session_metadata(THREAD_ID, CREATED) == {}
-    path = rollout(tmp_path, monkeypatch)
-    path.unlink()
-    path.mkdir()
-    assert session_metadata(THREAD_ID, CREATED) == {}
-
-
-def test_reasoning_marker_in_tail_of_large_rollout(tmp_path, monkeypatch):
-    path = rollout(tmp_path, monkeypatch)
-    with path.open("a") as log:
-        log.write(json.dumps({"type": "response_item", "payload": "x" * 1_100_000}) + "\n")
-        log.write(json.dumps({"type": "event_msg", "payload": {
-            "type": "token_count", "info": {"last_usage_includes_reasoning": False},
-        }}) + "\n")
-    assert session_metadata(THREAD_ID, CREATED)["output_includes_reasoning"] is False
-
-
-def test_model_change_in_middle_of_large_rollout_is_detected(tmp_path, monkeypatch):
-    path = rollout(tmp_path, monkeypatch)
-    with path.open("a") as log:
-        log.write(json.dumps({"type": "response_item", "payload": "x" * 600_000}) + "\n")
-        log.write(json.dumps({"type": "turn_context", "payload": {"model": "gpt-6-astra"}}) + "\n")
-        log.write(json.dumps({"type": "response_item", "payload": "x" * 600_000}) + "\n")
-        log.write(json.dumps({"type": "turn_context", "payload": {"model": "openai.gpt-6.1-sol"}}) + "\n")
-    result, _ = run_agent(tmp_path, monkeypatch, thread_id=THREAD_ID)
-    assert "cost_usd" not in result.usage
-    assert "multiple models" in result.usage["cost_unavailable_reason"]
-
-
-@pytest.mark.parametrize("limit", ["record", "total"])
-def test_session_read_limits_make_cost_unavailable(tmp_path, monkeypatch, limit):
-    import autohelix.agents.codex_cost as pricing
-
-    path = rollout(tmp_path, monkeypatch)
-    if limit == "record":
-        monkeypatch.setattr(pricing, "_MAX_RECORD_BYTES", 1024)
-    else:
-        monkeypatch.setattr(pricing, "_MAX_SESSION_BYTES", 1024)
-    with path.open("a") as log:
-        log.write(json.dumps({"type": "response_item", "payload": "x" * 2048}) + "\n")
-    result, _ = run_agent(tmp_path, monkeypatch, thread_id=THREAD_ID)
-    assert "cost_usd" not in result.usage
-    assert "bounded read" in result.usage["cost_unavailable_reason"]
-
-
-def test_multiple_models_in_rollout_are_not_priced_as_one(tmp_path, monkeypatch):
-    path = rollout(tmp_path, monkeypatch)
-    with path.open("a") as log:
-        log.write(json.dumps({"type": "turn_context", "payload": {"model": "gpt-6-astra"}}) + "\n")
-    result, _ = run_agent(tmp_path, monkeypatch, thread_id=THREAD_ID)
-    assert "cost_usd" not in result.usage
-    assert "multiple models" in result.usage["cost_unavailable_reason"]
-
-
-def test_invalid_model_context_does_not_reuse_an_earlier_model(tmp_path, monkeypatch):
-    path = rollout(tmp_path, monkeypatch)
-    with path.open("a") as log:
-        log.write(json.dumps({"type": "turn_context", "payload": {}}) + "\n")
-    result, _ = run_agent(tmp_path, monkeypatch, thread_id=THREAD_ID)
-    assert "cost_usd" not in result.usage
-    assert "invalid model context" in result.usage["cost_unavailable_reason"]
-
-
-def test_default_model_resolved_from_rollout_overrides_config(tmp_path, monkeypatch):
-    rollout(tmp_path, monkeypatch, reasoning_included=False)
-    result, _ = run_agent(
-        tmp_path, monkeypatch, AgentConfig(backend="codex", model="gpt-6-luna"),
-        thread_id=THREAD_ID,
-    )
+def test_the_model_codex_output_names_is_priced_over_agent_model(tmp_path, monkeypatch):
+    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(backend="codex", model="gpt-6-luna"),
+                          usage={**USAGE, "output_includes_reasoning": False}, model="openai.gpt-6.1-sol")
     assert result.success
     assert result.usage["cost_usd"] == pytest.approx(2.27)
     assert result.usage["cost_model"] == "openai.gpt-6.1-sol"
-    assert result.usage["cost_provider"] == "amazon-bedrock"
     assert result.usage["usage_complete"] is True
     assert result.usage["cache_write_input_tokens"] == 200_000
 
 
-def test_omitted_model_resolved_from_rollout(tmp_path, monkeypatch):
-    rollout(tmp_path, monkeypatch)
-    result, _ = run_agent(
-        tmp_path, monkeypatch, AgentConfig(backend="codex"), thread_id=THREAD_ID,
-    )
+def test_without_a_reported_model_agent_model_prices_it(tmp_path, monkeypatch):
+    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(backend="codex", model="gpt-6.1-sol"))
+    assert result.usage["cost_usd"] == pytest.approx(1.77) and result.usage["cost_model"] == "gpt-6.1-sol"
+
+
+@pytest.mark.parametrize("extra_args", [["-m", "gpt-6-luna"], ["resume", "t"], ["--profile", "other"]])
+def test_extra_args_dont_change_the_pricing(tmp_path, monkeypatch, extra_args):
+    """No guessing from arguments: the reported model, else agent.model."""
+    result, _ = run_agent(tmp_path, monkeypatch,
+                          AgentConfig(backend="codex", model="gpt-6.1-sol", extra_args=extra_args))
     assert result.usage["cost_usd"] == pytest.approx(1.77)
 
 
-@pytest.mark.parametrize("config", [
-    AgentConfig(backend="codex", model="gpt-6.1-sol", extra_args=["--ephemeral"]),
-    AgentConfig(backend="codex", settings={"model": "openai.gpt-6.1-sol"}),
-])
-def test_explicit_model_can_price_ephemeral_usage(tmp_path, monkeypatch, config):
-    result, _ = run_agent(tmp_path, monkeypatch, config)
+@pytest.mark.parametrize("config", [AgentConfig(backend="codex"),
+                                    AgentConfig(backend="codex", settings={"model": "gpt-6.1-sol"})])
+def test_no_model_anywhere_says_set_agent_model(tmp_path, monkeypatch, config):
+    result, events = run_agent(tmp_path, monkeypatch, config)
+    assert "cost_usd" not in result.usage
+    assert result.usage["cost_unavailable_reason"].startswith("set agent.model")
+    assert any(event.text.startswith("Cost unavailable: set agent.model") for event in events)
+
+
+def test_codex_session_files_are_never_read(tmp_path, monkeypatch):
+    """A session folder naming another model changes nothing."""
+    sessions = tmp_path / "codex" / "sessions"
+    sessions.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setattr("pathlib.Path.glob", lambda *a, **k: (_ for _ in ()).throw(AssertionError("read")))
+    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(backend="codex", model="gpt-6.1-sol"))
     assert result.usage["cost_usd"] == pytest.approx(1.77)
-
-
-@pytest.mark.parametrize("extra_args", [
-    ["--model=gpt-6-luna"], ["-m", "gpt-6-luna"],
-    ["-mgpt-6-luna"], ['-cmodel="gpt-6-luna"'], ["-pother"],
-    ["-c", 'model="gpt-6-luna"'], ["--profile", "other"], ["resume", THREAD_ID],
-])
-def test_ambiguous_or_resumed_usage_is_not_guessed(tmp_path, monkeypatch, extra_args):
-    result, events = run_agent(
-        tmp_path, monkeypatch,
-        AgentConfig(backend="codex", model="gpt-6.1-sol", extra_args=extra_args),
-    )
-    assert "cost_usd" not in result.usage
-    assert any("Cost unavailable" in event.text for event in events)
-
-
-def test_missing_model_does_not_invent_a_default(tmp_path, monkeypatch):
-    result, _ = run_agent(tmp_path, monkeypatch, AgentConfig(backend="codex"))
-    assert "cost_usd" not in result.usage
 
 
 @pytest.mark.parametrize("timed_out,usage", [(True, None), (True, USAGE), (False, None)])

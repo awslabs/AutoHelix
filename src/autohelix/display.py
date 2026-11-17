@@ -13,7 +13,7 @@ from rich.segment import Segment
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind
-from autohelix.formatting import clean, format_duration  # noqa: F401 - clean: re-exported
+from autohelix.formatting import clean, format_duration
 from autohelix.terminal import live_line
 
 
@@ -33,7 +33,7 @@ class LiveDisplay:
         max_entries: int = 10,
     ):
         self.console = console
-        self.title = title
+        self.title = clean(title)  # may name a transcript file: shown as plain text
         self.border_style = border_style
         self.verbose = verbose
         self._state: dict = {
@@ -45,7 +45,7 @@ class LiveDisplay:
             "tools": 0,
             "input_tokens": 0,
             "output_tokens": 0,
-            "last_update": f"Waiting for {title.lower()} output",
+            "last_update": f"Waiting for {self.title.lower()} output",
         }
         self._elapsed = 0
         self._start_time = _time.monotonic()
@@ -174,7 +174,7 @@ class LiveDisplay:
         if height is not None:  # the borders and the header lines stay; the log keeps its newest lines
             head = 2 if last_update else 1
             content = Group(*body[:head], Tail(Group(*body[head:]), max(1, height - 2 - head)))
-        return Panel(content, title=self.title, border_style=self.border_style)
+        return Panel(content, title=Text(self.title), border_style=self.border_style)
 
 
 class Tail:
@@ -195,8 +195,9 @@ class Tail:
 
 
 def truncate_for_display(text: str, limit: int = 220) -> str:
-    """Keep live panel lines compact while preserving the most recent content."""
-    single_line = " ".join(text.split())
+    """Agent text as one live-panel line: made safe for the terminal (`clean`: escape
+    sequences and control characters removed), the most recent content kept."""
+    single_line = clean(text)
     if len(single_line) <= limit:
         return single_line
     return "..." + single_line[-(limit - 3):]
@@ -211,7 +212,7 @@ def event_presenter(event: AgentEvent) -> tuple[str, str]:
     if event.kind == AgentEventKind.TOOL_USE:
         return "tool", "cyan"
     if event.kind == AgentEventKind.TOOL_INPUT:
-        tool_name = str(event.metadata.get("tool_name") or "tool")
+        tool_name = clean(event.metadata.get("tool_name"), limit=40) or "tool"
         return f"{tool_name} input", "cyan"
     if event.kind == AgentEventKind.TOOL_RESULT:
         return "tool result", "red" if event.metadata.get("is_error") else "yellow"
@@ -224,7 +225,7 @@ def event_presenter(event: AgentEvent) -> tuple[str, str]:
     if event.kind == AgentEventKind.STATUS:
         return "status", "dim"
     if isinstance(event.kind, str) and event.kind:
-        return event.kind.replace("_", " "), "yellow"
+        return clean(event.kind.replace("_", " "), limit=40) or "raw", "yellow"
     return "raw", "yellow"
 
 

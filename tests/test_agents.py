@@ -8,6 +8,7 @@ from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind
 from autohelix.agents.claudecode import ClaudeCodeAgent
 from autohelix.agents.codex import CodexAgent
 from autohelix.agents.opencode import OpenCodeAgent
+from autohelix.agents.runner import ProcessRunResult
 
 
 def _collect_events(agent, line: str) -> list[AgentEvent]:
@@ -278,7 +279,7 @@ class TestClaudeCodeRunResult:
             side_effect=fake_run_process,
         ):
             result = agent.run(
-                worktree_path=tmp_path,
+                copy_path=tmp_path,
                 prompt="test",
                 iteration=1,
                 log_path=tmp_path / "agent.log",
@@ -312,7 +313,7 @@ class TestClaudeCodeAutoMemory:
         with patch("autohelix.agents.claudecode.run_process", side_effect=fake_run_process):
             from pathlib import Path
             agent.run(
-                worktree_path=Path("/tmp/fake"),
+                copy_path=Path("/tmp/fake"),
                 prompt="test",
                 iteration=1,
                 log_path=Path("/tmp/fake.log"),
@@ -340,7 +341,7 @@ class TestClaudeCodeAutoMemory:
         with patch("autohelix.agents.claudecode.run_process", side_effect=fake_run_process):
             from pathlib import Path
             agent.run(
-                worktree_path=Path("/tmp/fake"),
+                copy_path=Path("/tmp/fake"),
                 prompt="test",
                 iteration=1,
                 log_path=Path("/tmp/fake.log"),
@@ -350,7 +351,8 @@ class TestClaudeCodeAutoMemory:
         assert captured_env.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY") == "1"
 
     def test_auto_memory_enabled_no_env(self):
-        """When auto_memory is True, env should not set the disable flag."""
+        """When auto_memory is True, env has no disable flag, even an inherited one."""
+        import os
         from unittest.mock import patch, MagicMock
         from autohelix.agents.claudecode import ClaudeCodeAgent
 
@@ -365,16 +367,19 @@ class TestClaudeCodeAutoMemory:
             result.timed_out = False
             return result
 
-        with patch("autohelix.agents.claudecode.run_process", side_effect=fake_run_process):
+        with patch("autohelix.agents.claudecode.run_process", side_effect=fake_run_process), \
+                patch.dict(os.environ, {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}):
             from pathlib import Path
             agent.run(
-                worktree_path=Path("/tmp/fake"),
+                copy_path=Path("/tmp/fake"),
                 prompt="test",
                 iteration=1,
                 log_path=Path("/tmp/fake.log"),
                 event_callback=lambda e: None,
                 project_path=Path("/tmp/project"),
             )
+            assert os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+        assert captured_env  # the agent got an explicit environment
         assert "CLAUDE_CODE_DISABLE_AUTO_MEMORY" not in captured_env
 
 
@@ -546,7 +551,7 @@ class TestCodexRunResult:
             fake_run_process,
         )
         result = agent.run(
-            worktree_path=tmp_path,
+            copy_path=tmp_path,
             prompt="test",
             iteration=1,
             log_path=tmp_path / "agent.log",
@@ -664,3 +669,36 @@ class TestOpenCodeHandleLine:
         line = json.dumps({"type": "new_event_type"})
         events = _collect_events(self._agent(), line)
         assert events[0].kind == AgentEventKind.STATUS
+
+
+class TestOpenCodeRunResult:
+    """A killed call's cost of finished steps isn't its cost: unknown, like Claude's and Codex's."""
+
+    def _run(self, monkeypatch, tmp_path, *, exit_code=0, timed_out=False):
+        def fake_run_process(**kwargs):
+            kwargs["line_callback"](json.dumps({"type": "step_finish", "part": {
+                "reason": "stop", "cost": 0.25, "tokens": {"input_tokens": 10, "output_tokens": 5}}}))
+            return ProcessRunResult(exit_code=exit_code, timed_out=timed_out)
+
+        monkeypatch.setattr("autohelix.agents.opencode.run_process", fake_run_process)
+        agent = OpenCodeAgent(config=AgentConfig(backend="opencode", timeout=4))
+        events = []
+        result = agent.run(copy_path=tmp_path, prompt="test", iteration=1,
+                           log_path=tmp_path / "agent.log", event_callback=events.append)
+        return result, events
+
+    def test_a_timeout_is_an_error_with_unknown_cost(self, monkeypatch, tmp_path):
+        result, events = self._run(monkeypatch, tmp_path, exit_code=124, timed_out=True)
+        assert not result.success and result.error == "timed out after 4 seconds"
+        assert "cost_usd" not in result.usage and result.usage["partial_cost_usd"] == 0.25
+        assert "timed out" in result.usage["cost_unavailable_reason"]
+        assert any(event.text == "Agent timed out after 4 seconds" for event in events)
+
+    def test_a_failed_call_says_its_status_and_keeps_its_cost(self, monkeypatch, tmp_path):
+        result, _ = self._run(monkeypatch, tmp_path, exit_code=3)
+        assert not result.success and result.error == "OpenCode exited with status 3"
+        assert result.usage["cost_usd"] == 0.25
+
+    def test_a_finished_call_is_priced(self, monkeypatch, tmp_path):
+        result, _ = self._run(monkeypatch, tmp_path)
+        assert result.success and result.error is None and result.usage["cost_usd"] == 0.25

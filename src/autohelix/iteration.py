@@ -8,7 +8,7 @@ copy is snapshotted to a tree T through the user's repository; checks and stop
 commands each get a new copy; accepting publishes exactly T.
 """
 
-import filecmp
+import functools
 import os
 import shutil
 import stat
@@ -75,16 +75,16 @@ def _seed_iteration(paths: RunPaths, record, target: Path) -> None:
         return
     os.close(fd)
     target.mkdir(parents=True)
-    copy_file(paths.project, [*folder, paths.record(0).name], target / paths.record(0).name)
+    copy_file(paths.project, [*folder, RunPaths.RECORD], target / RunPaths.RECORD)
     failing = [k for k, gate in enumerate(record.gates, start=1)
                if isinstance(gate, dict) and gate.get("passed") is False]
-    gates = paths.gate_dir(0, 1).parent.name
+    gates = RunPaths.GATES
     for k in failing:
         (target / gates).mkdir(exist_ok=True)
         copy_dir(paths.project, [*folder, gates, str(k)], target / gates / str(k))
     if (target / gates).is_dir() and not any((target / gates).iterdir()):
         (target / gates).rmdir()
-    for kind in (paths.observe_dir(0).name, paths.stop_dir(0, 1).parent.name):
+    for kind in (RunPaths.OBSERVE, RunPaths.STOP):
         copy_dir(paths.project, [*folder, kind], target / kind)
 
 
@@ -149,37 +149,21 @@ def save_notes(paths: RunPaths, copy, iteration: int) -> None:
     a second save of 7), then point the `runs/<id>/notes` link at it in one rename, and
     the iteration's `iterations/NNN/notes` link too. A note the agent deleted stays
     deleted, and readers (other runs of the group) never see a half-saved mix. Every
-    version is kept. Symlinks the agent left in its notes are not saved."""
+    version is kept, each a plain copy (editing one changes no other). Symlinks the
+    agent left in its notes are not saved."""
     state = copy.working_dir / ITERATION_DIR
     if state.is_symlink() or not state.is_dir():  # replaced by the agent: nothing trustworthy to save
         return
     source = state / "notes"
     if source.is_symlink():
         return
-    try:
-        previous = paths.notes.resolve(strict=True) if paths.notes.is_symlink() else None
-    except OSError:
-        previous = None
     versions = paths.notes_versions
     for planted in (paths.internal, versions):  # outermost first: planted links are never written through
         remove_planted(planted)
     versions.mkdir(parents=True, exist_ok=True)
     version = _unused(versions, str(iteration))
-
-    def link_or_copy(src, dst):
-        # Files unchanged since the previous version are hard links to it, so keeping
-        # every version costs only what changed.
-        old = previous / os.path.relpath(src, source) if previous else None
-        try:
-            if old and old.is_file() and not old.is_symlink() and filecmp.cmp(src, old, shallow=False):
-                os.link(old, dst)
-                return dst
-        except OSError:
-            pass
-        return shutil.copy2(src, dst)
-
     if source.is_dir():
-        shutil.copytree(source, version, symlinks=True, copy_function=link_or_copy,
+        shutil.copytree(source, version, symlinks=True,
                         ignore=lambda folder, names: [n for n in names if os.path.islink(os.path.join(folder, n))])
     else:  # the agent removed its notes folder: an empty version, not the old notes again
         version.mkdir()
@@ -220,24 +204,22 @@ class IterationWorkspace:
         self.members = [(paths, data) for paths, data in group_members(run.paths, run.data)
                         if not self.imported or paths.run_id != self.imported[0].run_id]
         self.refs = (run.paths.ref, *(paths.ref for paths, _ in self.others))
-        self._calls = 0  # per-command folders made so far (`call_folder`)
         self._call_folders: list[Path] = []
-        self._candidate: tuple[str, str] | None = None  # (T, its tree hash)
 
     @property
     def others(self) -> list[tuple[RunPaths, dict]]:
         """Every other run the agent copy shows: the imported one first, then the group's."""
         return [*([self.imported] if self.imported else []), *self.members]
 
-    def _copy(self, role: str, files: str, head: str) -> Copy:
+    def _copy(self, role: str, files: str, head: str, *, watched: bool = True) -> Copy:
         path = ensure_copies(self._run.copies_root) / f"iter-{self.iteration}-{role}"
-        copy = Copy.create(self.repo, path, files=files, head=head, refs=self.refs)
+        copy = Copy.create(self.repo, path, files=files, head=head, refs=self.refs, watched=watched)
         self.copies.append(copy)
         return copy
 
     def agent_copy(self) -> Copy:
         """A's files with agent-facing material seeded under `.autohelix-iteration/`."""
-        self.agent = self._copy("agent", self.base, self.base)
+        self.agent = self._copy("agent", self.base, self.base, watched=False)
         prepare_state(self._run.paths, self.agent, members=self.others, before=self.iteration)
         self._write_rejected_patch()
         return self.agent
@@ -295,7 +277,7 @@ class IterationWorkspace:
         ref, or None if there is no tree (the freeze never happened or failed)."""
         if not self.tree or self.iteration == 0:
             return None
-        if self.tree == self.repo.out("rev-parse", f"{self.base}^{{tree}}"):  # nothing to keep (or apply)
+        if self.tree == self.base_tree:  # nothing to keep (or apply)
             return None
         ref = self._run.paths.rejected_ref(self.iteration)
         self.repo.git("update-ref", ref, self.tree)
@@ -331,34 +313,38 @@ class IterationWorkspace:
         self.tree, self.discarded = tree, discarded
         return discarded
 
+    @functools.cached_property
+    def base_tree(self) -> str:
+        """A's tree hash."""
+        return self.repo.out("rev-parse", f"{self.base}^{{tree}}")
+
     def unchanged(self) -> None:
         """Evaluate A itself (the baseline): T is A's tree."""
-        self.tree = self.base
+        self.tree = self.base_tree
 
     def candidate(self) -> str:
-        """T as a tree hash (at the baseline, A's tree): `$AUTOHELIX_CANDIDATE`."""
-        if self._candidate is None or self._candidate[0] != self.tree:
-            self._candidate = (self.tree, self.repo.out("rev-parse", f"{self.tree}^{{tree}}"))
-        return self._candidate[1]
+        """T, a tree hash (at the baseline, A's tree): `$AUTOHELIX_CANDIDATE`."""
+        return self.tree
 
     @contextmanager
-    def call_folder(self, **sources: Path | None):
-        """A private folder for one command, `iter-N-call-K/` under the run's copies
-        folder, removed when the command ends (also on an error or interrupt): an empty
-        `scratch/`, `bin/` holding the `autohelix` launcher (`launcher.py`; put it first
-        on the command's PATH), plus for each named source a copy of that folder under
-        the same name (an empty folder if the source doesn't exist or is reached through a
-        symlink; no entry for None).
-        Yields {"scratch": path, "logs": path, "bin": path, <name>: path, ...}. A copy keeps what the command reads from
-        run state fixed, whatever the command or the agent writes meanwhile."""
-        self._calls += 1
-        folder = ensure_copies(self._run.copies_root) / RunPaths.call_folder_name(self.iteration, self._calls)
+    def call_folder(self, call: str, **sources: Path | None):
+        """A private folder for the command whose output goes to `call` (`gates/2`,
+        `observe/bench`, `stop/1`: its `$AUTOHELIX_CALL`), `iter-N-gates-2/` under the
+        run's copies folder, removed when the command ends (also on an error or
+        interrupt): an empty `scratch/` and `logs/` (`$AUTOHELIX_LOG_DIR`), `bin/` holding
+        the `autohelix` launcher (`launcher.py`; put it first on the command's PATH), plus
+        for each named source a copy of that folder under the same name (an empty folder
+        if the source doesn't exist or is reached through a symlink; no entry for None).
+        Yields {"call": call, "scratch": path, "logs": path, "bin": path, <name>: path, ...}.
+        A copy keeps what the command reads from run state fixed, whatever the command or
+        the agent writes meanwhile."""
+        folder = ensure_copies(self._run.copies_root) / RunPaths.call_folder_name(self.iteration, call)
         if os.path.lexists(folder):  # left by a crashed process
             remove_copy(folder)
         folder.mkdir(mode=0o700)
         self._call_folders.append(folder)
         try:
-            paths = {"scratch": folder / "scratch", "logs": folder / "logs"}
+            paths = {"call": call, "scratch": folder / "scratch", "logs": folder / "logs"}
             paths["scratch"].mkdir()
             paths["logs"].mkdir()
             paths["bin"] = write_launcher(folder / "bin")  # `autohelix`, immune to the command's env
@@ -387,18 +373,16 @@ class IterationWorkspace:
         return stage
 
     @staticmethod
-    def move_transcripts(folders: dict[str, Path], stage: Path) -> dict[str, str]:
+    def move_transcripts(folders: dict[str, Path], stage: Path) -> None:
         """Move the judge and review transcripts the command's `ask`/`review` calls wrote
-        to its `logs/` folder into `stage` (after the command ended): only regular,
-        single-link files named like one (`runs.is_transcript`) directly in that folder,
-        never symlinks or anything else the command left there. One already in `stage`
-        (a capture with that name) is replaced. Returns {the path a call recorded
-        (resolved): the name in `stage`}."""
+        to its `logs/` folder into `stage` (after the command ended), where their usage
+        records find them (`RunPaths.usage_log`): only regular, single-link files named
+        like one (`runs.is_transcript`) directly in that folder, never symlinks or
+        anything else the command left there. One already in `stage` (a capture with
+        that name) is replaced."""
         logs = folders["logs"]
-        moved = {}
         if logs.is_symlink() or not logs.is_dir():
-            return moved
-        recorded = os.path.realpath(logs)
+            return
         for entry in os.scandir(logs):
             try:
                 info = entry.stat(follow_symlinks=False)
@@ -410,8 +394,6 @@ class IterationWorkspace:
             if os.path.lexists(target):
                 remove_copy(target)
             os.rename(entry.path, target)
-            moved[os.path.join(recorded, entry.name)] = entry.name
-        return moved
 
     def _remove_call_folder(self, folder: Path) -> None:
         try:
@@ -442,9 +424,8 @@ class IterationWorkspace:
         """Publish T as a commit on A, then record it, as one critical section."""
         run = self._run
         message += f"\n\nAutoHelix-Run: {run.paths.run_id}\nAutoHelix-Iteration: {self.iteration}\n"
-        original = self.repo.out("rev-parse", f"{self.base}^{{tree}}")
         commit = None
-        if self.tree != original:
+        if self.tree != self.base_tree:
             commit = self.repo.out("commit-tree", self.tree, "-p", self.base, "-F", "-",
                                    input=message.encode())
         with critical_section():
@@ -460,13 +441,17 @@ class IterationWorkspace:
                 run.expected_tip = commit
         return commit
 
-    def record(self, result) -> None:
-        """Write the final record: update an accepted one, else append it once. A
-        failed append may have torn the history's tail; the next owner repairs it."""
+    def record(self, result) -> bool:
+        """Write the final record: update an accepted one, else append it once; True if
+        written. A failed append may have torn the history's tail; the next owner repairs
+        it."""
         if self.recorded:
             self._history.update(result)
         elif not self.record_write_attempted:
             self._history.append(result)
+        else:
+            return False
+        return True
 
     def remove(self, copy: Copy) -> None:
         """Delete a copy; a failure is logged and retried at the next segment."""

@@ -15,7 +15,7 @@ from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.runs import RunLock, RunPaths, delete, git, land, short_id
 from autohelix.usage_log import append_usage
 from autohelix.viewer import RunData
-from tests.test_runs import configure
+from tests.helpers import configure, latest_run
 
 
 @pytest.mark.parametrize("operation", ["delete-marker", "orphan"])
@@ -144,7 +144,7 @@ def test_dirty_first_start_allocates_no_run(project):
             harness.run(Budget(until=1), report=False)
         finally:
             harness.close()
-    assert not RunPaths(project).current.exists()
+    assert not (RunPaths(project).project_internal / "current").exists()  # no pointer is ever written
     assert not list((project / ".autohelix" / "runs").glob("*/run.json"))
     assert not git(project, "for-each-ref", "--format=%(refname)", "refs/autohelix/").stdout.strip()
 
@@ -190,7 +190,8 @@ def test_auto_landing_never_rewinds_target_changed_during_segment(project, monke
         return run_agent(*args)
 
     monkeypatch.setattr(harness, "run_agent", agent)
-    harness.run(Budget(until=1), report=False)
+    with pytest.raises(AutoHelixRunError, match="auto landing failed: Target main changed during this segment"):
+        harness.run(Budget(until=1), report=False)  # a refused landing is an error (exit 1)
     assert harness.history.load()[-1].accepted
     assert git(project, "rev-parse", "HEAD").stdout.strip() == observed[0]
     assert (project / "user.txt").read_text() == "legitimate concurrent user commit"
@@ -248,7 +249,7 @@ def test_calls_only_retains_usage_with_unsafe_live_log_metadata(project, tmp_pat
         ledger = kwargs["extra_env"]["AUTOHELIX_USAGE_FILE"]
         append_usage({"id": "bad-log", "source": "custom", "cost_usd": 0.2, "log": value}, path=Path(ledger))
         append_usage({"id": "unfinished", "source": "custom", "status": "started", "cost_usd": None}, path=Path(ledger))
-        live = RunData(project).iteration(1, diff=False)
+        live = RunData(project, latest_run(project).run_id).iteration(1, diff=False)
         bad = next(call for call in live["calls"] if call["usage"].get("id") == "bad-log")
         assert bad["log"] is None and bad["usage"]["cost_usd"] == 0.2
         return []
@@ -274,10 +275,17 @@ def test_no_current_observers_ignore_old_top_level_files(tmp_path):
     (root / ".internal" / "status.json").write_text('{"state":"running"}')
     (root / "notes").mkdir()
     (root / "notes" / "iter-1.md").write_text("old notes")
-    data = RunData(tmp_path)
-    assert data.state()["iterations"] == []
-    assert data.state()["status"] is None and data.state()["notes_files"] == []
-    assert data.iteration(1)["calls"] == []
+    from click.testing import CliRunner
+
+    from autohelix.cli import main
+    from autohelix.viewer import ProjectRuns
+
+    # No run reads them: the run list is empty, and a view without a run id has none to show.
+    assert ProjectRuns(tmp_path).runs()["runs"] == []
+    result = CliRunner().invoke(main, ["view", "--json", "-p", str(tmp_path)])
+    assert result.exit_code == 1 and "No runs in" in result.output
+    with pytest.raises(ValueError):
+        RunData(tmp_path, None)  # the viewer reads named runs only
 
 
 @pytest.mark.parametrize("preexisting", [False, True])
@@ -287,7 +295,7 @@ def test_checks_cannot_modify_candidate_but_capture_new_files(project, preexisti
         git(project, "add", "metric.txt")
         git(project, "commit", "-qm", "protected capture")
     configure(project, scope={"editable": ["code.py"]}, observe=[{
-        "name": "bench", "command": "echo 'new metric output' > metric.txt; echo 'score: 1'",
+        "name": "bench", "command": "echo 'new metric output' > metric.txt; echo '##autohelix[score=1]'",
         "metrics": {"score": "higher"}, "capture": ["metric.txt"],
     }])
     harness = Harness(project, land_mode="manual")

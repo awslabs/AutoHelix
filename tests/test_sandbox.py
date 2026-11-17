@@ -10,8 +10,9 @@ import pytest
 from types import SimpleNamespace
 
 from autohelix.iteration import prepare_state, save_notes
-from autohelix.runs import RunPaths
-from autohelix.sandbox import build_worktree_env, ensure_editable_files_ready
+from autohelix.config import scope_path
+from autohelix.runs import RunPaths, require_clean
+from autohelix.sandbox import build_copy_env
 from autohelix.workspace import Repo, path_in_scope
 
 
@@ -30,7 +31,7 @@ class TestPathInScope:
     def test_dot_means_whole_project(self):
         # editable: ["."] used to match nothing -> everything reverted -> no-op loop.
         assert path_in_scope("anything/at/all.py", ["."])
-        assert path_in_scope("top.py", ["./"])
+        assert path_in_scope("top.py", [scope_path("./")])
 
     def test_glob_pattern(self):
         assert path_in_scope("src/a.py", ["src/*.py"])
@@ -39,16 +40,71 @@ class TestPathInScope:
     def test_no_patterns_matches_nothing(self):
         assert not path_in_scope("src/a.py", [])
 
+    # [01-1] one glob language: `**/` is zero or more folders, `*` stays in one.
+    @pytest.mark.parametrize("path, pattern, expected", [
+        ("tests/test_a.py", "tests/**/*.py", True),  # zero folders: used to stay editable
+        ("tests/sub/deep/test_b.py", "tests/**/*.py", True),
+        ("src/a.py", "src/**/*.py", True),  # used to be discarded
+        ("a.py", "**/*.py", True),
+        ("x/y/a.py", "**/*.py", True),
+        ("tests/test_x.py", "*.py", False),  # `*` used to cross folders
+        ("top.py", "*.py", True),
+        ("top.pyc", "*.py", False),
+        ("src/a/b.py", "src/*", True),  # what a pattern names covers what is inside it
+        ("tests/a/b.py", "tests/**", True),
+        ("anything/at/all", "**", True),
+        ("a/c.py", "[ab]/c.py", True),
+        ("c/c.py", "[ab]/c.py", False),
+        ("c/c.py", "[!ab]/c.py", True),
+        ("/c.py", "[!ab]/c.py", False),  # a class never matches the separator
+        ("s1/x", "s?/x", True),
+        ("s/1/x", "s?/x", False),
+        ("weird[name/x.py", "weird[[]name/x.py", True),  # glob.escape'd config path
+        ("open[/x", "open[/x", True),  # an unclosed `[` is literal
+    ])
+    def test_scope_glob_semantics(self, path, pattern, expected):
+        assert path_in_scope(path, [pattern]) is expected
 
-# ── build_worktree_env ──────────────────────────────────────────────────
+    def test_frozen_double_star_freezes_top_level_tests(self):
+        from autohelix.workspace import Scope
+        scope = Scope(editable=(".",), frozen=("tests/**/*.py",))
+        assert not scope.allows("tests/test_a.py")
+        assert not scope.allows("tests/sub/test_b.py")
+        assert scope.allows("src/a.py")
 
 
-class TestBuildWorktreeEnv:
+# ── scope entries normalised (config.scope_path) [01-8] ───────────────
+
+
+class TestScopePath:
+    @pytest.mark.parametrize("written, normal", [
+        ("./src/", "src/"), ("./src", "src"), ("./src/*.py", "src/*.py"), ("./", "."), (".", "."),
+        ("src//a/./b.py", "src/a/b.py"), ("./**/*.py", "**/*.py"), (".hidden/", ".hidden/"),
+    ])
+    def test_normalised(self, written, normal):
+        assert scope_path(written) == normal
+
+    def test_dot_slash_patterns_now_match(self):
+        for written in ("./src/", "./src", "./src/*.py"):
+            assert path_in_scope("src/a.py", [scope_path(written)])
+
+    @pytest.mark.parametrize("written, message", [
+        ("/abs/src", "absolute path"), ("../other", "`..`"), ("src/../../x", "`..`"),
+    ])
+    def test_refused(self, written, message):
+        with pytest.raises(ValueError, match=message):
+            scope_path(written)
+
+
+# ── build_copy_env ──────────────────────────────────────────────────
+
+
+class TestBuildCopyEnv:
     def test_remaps_project_paths(self, tmp_path):
         project = tmp_path / "project"
-        worktree = tmp_path / "worktree"
+        copy_dir = tmp_path / "copy_dir"
         project.mkdir()
-        worktree.mkdir()
+        copy_dir.mkdir()
 
         fake_sys_path = [
             str(project / "src"),
@@ -56,30 +112,30 @@ class TestBuildWorktreeEnv:
             "/unrelated/path",
         ]
         with patch.object(sys, "path", fake_sys_path):
-            env = build_worktree_env(project, worktree)
+            env = build_copy_env(project, copy_dir)
 
         parts = env["PYTHONPATH"].split(":")
-        assert str(worktree / "src") in parts
-        assert str(worktree / "lib") in parts
+        assert str(copy_dir / "src") in parts
+        assert str(copy_dir / "lib") in parts
         assert "/unrelated/path" not in parts
 
     def test_no_remap_when_no_project_paths(self, tmp_path):
         project = tmp_path / "project"
-        worktree = tmp_path / "worktree"
+        copy_dir = tmp_path / "copy_dir"
         project.mkdir()
-        worktree.mkdir()
+        copy_dir.mkdir()
 
         with patch.object(sys, "path", ["/other/path"]):
-            env = build_worktree_env(project, worktree)
+            env = build_copy_env(project, copy_dir)
 
         # PYTHONPATH should not be set (or unchanged from env)
         assert "PYTHONPATH" not in env or env["PYTHONPATH"] == os.environ.get("PYTHONPATH", "")
 
     def test_excludes_autohelix_paths(self, tmp_path):
         project = tmp_path / "project"
-        worktree = tmp_path / "worktree"
+        copy_dir = tmp_path / "copy_dir"
         project.mkdir()
-        worktree.mkdir()
+        copy_dir.mkdir()
 
         fake_sys_path = [
             str(project / "src"),
@@ -87,80 +143,80 @@ class TestBuildWorktreeEnv:
         ]
         with patch.object(sys, "path", fake_sys_path), \
              patch.dict(os.environ, {"PYTHONPATH": ""}, clear=False):
-            env = build_worktree_env(project, worktree)
+            env = build_copy_env(project, copy_dir)
 
         # Only the src path should be remapped, not the .autohelix path
-        remapped_autohelix = str(worktree / ".autohelix")
+        remapped_autohelix = str(copy_dir / ".autohelix")
         parts = [p for p in env.get("PYTHONPATH", "").split(":") if p]
-        assert str(worktree / "src") in parts
+        assert str(copy_dir / "src") in parts
         assert not any(p.startswith(remapped_autohelix) for p in parts)
 
     def test_does_not_exclude_autohelix_prefix_in_other_names(self, tmp_path):
         """Paths like .autohelix-backup should NOT be excluded."""
         project = tmp_path / "project"
-        worktree = tmp_path / "worktree"
+        copy_dir = tmp_path / "copy_dir"
         project.mkdir()
-        worktree.mkdir()
+        copy_dir.mkdir()
 
         fake_sys_path = [
             str(project / ".autohelix-backup" / "src"),
         ]
         with patch.object(sys, "path", fake_sys_path), \
              patch.dict(os.environ, {"PYTHONPATH": ""}, clear=False):
-            env = build_worktree_env(project, worktree)
+            env = build_copy_env(project, copy_dir)
 
         parts = [p for p in env.get("PYTHONPATH", "").split(":") if p]
-        assert str(worktree / ".autohelix-backup" / "src") in parts
+        assert str(copy_dir / ".autohelix-backup" / "src") in parts
 
     def test_matches_only_on_a_path_boundary(self, tmp_path):
         project = tmp_path / "project"
-        worktree = tmp_path / "worktree"
+        copy_dir = tmp_path / "copy_dir"
         with patch.object(sys, "path", [str(tmp_path / "project2" / "src"), str(project)]), \
              patch.dict(os.environ, {"PYTHONPATH": ""}):
-            env = build_worktree_env(project, worktree)
-        assert env["PYTHONPATH"] == str(worktree)
+            env = build_copy_env(project, copy_dir)
+        assert env["PYTHONPATH"] == str(copy_dir)
 
     def test_skips_installed_packages_and_relative_entries(self, tmp_path):
         project = tmp_path / "project"
-        worktree = tmp_path / "worktree"
+        copy_dir = tmp_path / "copy_dir"
         fake_sys_path = ["", "src", str(project / ".venv" / "lib" / "python3.12" / "site-packages"),
                          str(project / "usr" / "lib" / "python3" / "dist-packages"), str(project / "src")]
         with patch.object(sys, "path", fake_sys_path), patch.dict(os.environ, {"PYTHONPATH": ""}):
-            env = build_worktree_env(project, worktree)
-        assert env["PYTHONPATH"] == str(worktree / "src")
+            env = build_copy_env(project, copy_dir)
+        assert env["PYTHONPATH"] == str(copy_dir / "src")
 
     def test_project_inside_another_projects_state_is_remapped(self, tmp_path):
         """A nested project may itself sit under some .autohelix/ folder."""
         project = tmp_path / "outer" / ".autohelix" / "inner"
-        worktree = tmp_path / "worktree"
+        copy_dir = tmp_path / "copy_dir"
         with patch.object(sys, "path", [str(project / "src"), str(project / ".autohelix" / "x")]), \
              patch.dict(os.environ, {"PYTHONPATH": ""}):
-            env = build_worktree_env(project, worktree)
-        assert env["PYTHONPATH"] == str(worktree / "src")
+            env = build_copy_env(project, copy_dir)
+        assert env["PYTHONPATH"] == str(copy_dir / "src")
 
     def test_unresolved_entries_of_a_resolved_project(self, tmp_path):
         real = tmp_path / "real"
         (real / "src").mkdir(parents=True)
         (tmp_path / "link").symlink_to(real)
-        worktree = tmp_path / "worktree"
+        copy_dir = tmp_path / "copy_dir"
         with patch.object(sys, "path", [str(tmp_path / "link" / "src")]), \
              patch.dict(os.environ, {"PYTHONPATH": ""}):
-            env = build_worktree_env(real.resolve(), worktree)
-        assert env["PYTHONPATH"] == str(worktree / "src")
+            env = build_copy_env(real.resolve(), copy_dir)
+        assert env["PYTHONPATH"] == str(copy_dir / "src")
 
     def test_preserves_existing_pythonpath(self, tmp_path):
         project = tmp_path / "project"
-        worktree = tmp_path / "worktree"
+        copy_dir = tmp_path / "copy_dir"
         project.mkdir()
-        worktree.mkdir()
+        copy_dir.mkdir()
 
         fake_sys_path = [str(project / "src")]
         with patch.object(sys, "path", fake_sys_path), \
              patch.dict(os.environ, {"PYTHONPATH": "/existing"}):
-            env = build_worktree_env(project, worktree)
+            env = build_copy_env(project, copy_dir)
 
         assert env["PYTHONPATH"].endswith(":/existing")
-        assert str(worktree / "src") in env["PYTHONPATH"]
+        assert str(copy_dir / "src") in env["PYTHONPATH"]
 
 
 # ── Helper to create a git repo ────────────────────────────────────────
@@ -196,8 +252,8 @@ def _fake_copy(project: Path, iteration: int) -> SimpleNamespace:
 # ── prepare_state / save_notes ────────────────
 
 
-class TestPrepareWorktree:
-    def test_copies_notes_and_reference_to_worktree(self, git_project):
+class TestPrepareCopy:
+    def test_copies_notes_and_reference_to_copy(self, git_project):
         wt = _fake_copy(git_project, 1)
 
         ah = git_project / ".autohelix"
@@ -222,7 +278,7 @@ class TestPrepareWorktree:
         assert not (wt_ah / "review.md").exists()
         assert not (wt_ah / "reviews").exists()
 
-    def test_prepare_worktree_copies_agent_state_only(self, git_project):
+    def test_prepare_copy_copies_agent_state_only(self, git_project):
         wt = _fake_copy(git_project, 1)
 
         ah = git_project / ".autohelix"
@@ -249,7 +305,7 @@ class TestPrepareWorktree:
         assert not (wt_ah / "iterations").exists()
         assert not (wt_ah / "runs").exists()  # no group
 
-    def test_prepare_worktree_no_autohelix_dir(self, git_project):
+    def test_prepare_copy_no_autohelix_dir(self, git_project):
         wt = _fake_copy(git_project, 1)
 
         # Ensure .autohelix doesn't exist in main (remove if created by sandbox)
@@ -284,7 +340,7 @@ class TestSaveNotes:
     def test_saves_notes_back(self, git_project):
         wt = _fake_copy(git_project, 1)
 
-        # Create notes in worktree
+        # Create notes in copy_dir
         wt_notes = wt.working_dir / ".autohelix-iteration" / "notes"
         wt_notes.mkdir(parents=True)
         (wt_notes / "iter1.md").write_text("new notes\n")
@@ -298,10 +354,10 @@ class TestSaveNotes:
         assert (git_project / ".autohelix" / "iterations" / "001" / "notes").readlink() == Path("../../.internal/notes/1")
         assert (git_project / ".autohelix" / "iterations" / "001" / "notes" / "iter1.md").read_text() == "new notes\n"
 
-    def test_save_notes_no_worktree_notes(self, git_project):
+    def test_save_notes_no_copy_notes(self, git_project):
         wt = _fake_copy(git_project, 1)
 
-        # No notes in worktree — should not raise
+        # No notes in copy_dir — should not raise
         save_notes(RunPaths(git_project), wt, 1)
         assert not os.path.lexists(git_project / ".autohelix" / "notes")
 
@@ -344,27 +400,23 @@ class TestSaveNotes:
         assert not list(paths.iteration_dir(2).glob(".*.link"))
 
 
-# ── Sandbox: ensure_editable_files_ready ─────────────────────────────────
+# ── The one clean-checkout check (runs.require_clean) [01-4, 01-2] ────
 
 
-class TestEnsureEditableFilesReady:
-    def test_passes_with_clean_editable_files(self, git_project):
-        # hello.py exists and is committed
-        ensure_editable_files_ready(Repo(git_project), git_project, ["hello.py"])
+class TestRequireClean:
+    def test_passes_on_a_clean_checkout(self, git_project):
+        require_clean(git_project)
 
-    def test_raises_on_missing_pattern(self, git_project):
-        with pytest.raises(RuntimeError, match="No files found"):
-            ensure_editable_files_ready(Repo(git_project), git_project, ["nonexistent*.py"])
-
-    def test_raises_on_uncommitted_changes(self, git_project):
+    def test_refuses_uncommitted_changes_to_tracked_files(self, git_project):
         (git_project / "hello.py").write_text("dirty\n")
+        with pytest.raises(RuntimeError, match="Uncommitted changes in tracked files"):
+            require_clean(git_project)
 
-        with pytest.raises(RuntimeError, match="Uncommitted changes"):
-            ensure_editable_files_ready(Repo(git_project), git_project, ["hello.py"])
-
-    def test_empty_editable_is_noop(self, git_project):
-        # Should not raise
-        ensure_editable_files_ready(Repo(git_project), git_project, [])
+    def test_untracked_files_are_ignored(self, git_project):
+        # Also inside what would be editable: the config itself needn't be committed.
+        (git_project / "autohelix.yaml").write_text("goal: g\n")
+        (git_project / "new_module.py").write_text("x = 1\n")
+        require_clean(git_project)
 
 
 # ── Sandbox: resolve_editable ──────────────────────────────────────────

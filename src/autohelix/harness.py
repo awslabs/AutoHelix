@@ -21,43 +21,36 @@ from pathlib import Path
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
-from rich.table import Table
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import (ConfigError, MetricGate, config_changes, find_config, inlined, load_config,
-                              parse_config, run_command, template_path)
+from autohelix.config import ConfigError, MetricGate, config_changes, find_config, load_config, run_command
 from autohelix.costs import summarize_costs
 from autohelix import terminal
 from autohelix.display import LiveDisplay, clean
 from autohelix.terminal import LiveRow, Row, budget_text
 from autohelix.history import History, IterationResult
-from autohelix.runs import (RunPaths, RunLock, RunState, select_run, reconcile, land, git,
+from autohelix.runs import (RunPaths, RunState, select_run, reconcile, land, git,
                             claim_copies, config_relative, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
                             WHY_LIMIT,
                             imported_run, is_live, target_ahead, target_ahead_refusal,
-                            write_json, write_text)
+                            write_json)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
-                              run_observe_entry, run_stop_checks, scope_warning)
+                              run_observe_entry, run_stop_checks, scope_warning, StopCheckResult)
+from autohelix.events import iteration_fields
 from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_stop_request
-from autohelix.usage_log import ENV as USAGE_ENV, read_usage
-from autohelix.formatting import format_cap, format_cost, format_total_cost
+from autohelix.usage_log import ENV as USAGE_ENV, append_usage, read_usage, superseded_marker
+from autohelix.formatting import clean_block, format_cap, format_cost, format_duration, format_total_cost
+from autohelix.iteration_time import format_limit
 from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
                                        uses_old_layout)
 from autohelix.run_log import RunLog
-from autohelix.sandbox import ensure_clean_working_tree, ensure_editable_files_ready
-from autohelix.workspace import (path_in_scope, SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, CandidateRejected,
-                                 Repo, Scope)
-from autohelix.state import (
-    GitExcludeError,
-    ensure_git_exclude_entry,
-    ensure_runtime_ignored,
-)
-
-
+from autohelix.workspace import (path_in_scope, SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, OPENCODE_PLUGIN,
+                                 CandidateRejected, GitExcludeError, Repo, Scope, ensure_git_exclude_entry,
+                                 ensure_runtime_ignored)
 
 
 class AutoHelixRunError(RuntimeError):
@@ -157,27 +150,15 @@ def _terminate_interrupts():
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
 
+def _call_env(folders: dict) -> dict[str, str]:
+    """The variables of one command call (`IterationWorkspace.call_folder`): its scratch
+    and transcript folders, its call name and the `autohelix` launcher first on PATH."""
+    return {"AUTOHELIX_SCRATCH": str(folders["scratch"]), "AUTOHELIX_LOG_DIR": str(folders["logs"]),
+            "AUTOHELIX_CALL": folders["call"], "PATH": command_path(folders["bin"])}
+
+
 def _tail(output: str, lines: int = 15) -> str:
     return "\n".join(output.strip().splitlines()[-lines:])
-
-
-def _format_time(seconds: int) -> str:
-    """Format seconds into a human-readable duration, omitting zero units.
-
-    e.g. 7205 -> '2h 5s', 120 -> '2m', 45 -> '45s', 0 -> '0s'.
-    """
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    parts = []
-    if h > 0:
-        parts.append(f"{h}h")
-    if m > 0:
-        parts.append(f"{m}m")
-    if s > 0:
-        parts.append(f"{s}s")
-    return " ".join(parts) if parts else "0s"
-
 
 
 class Harness:
@@ -187,7 +168,7 @@ class Harness:
                  config_file: Path | None = None, *, new: bool = False,
                  run_id: str | None = None, name: str | None = None,
                  land_mode: str | None = None, create: bool = True, group: str | None = None,
-                 import_run: str | None = None, why: str | None = None):
+                 import_run: str | None = None, why: str | None = None, check_only: bool = False):
         """Own one run: `run_id`, a new one (`new`, as `autohelix run`), or the config's
         most recently active run (as `autohelix resume`; created if there is none,
         unless `create` is false).
@@ -202,12 +183,17 @@ class Harness:
         agent copy shows that run's state read-only, and the baseline's observe entries
         get its last outputs as `$AUTOHELIX_PREVIOUS`. `why` is the new run's note
         (`run --why`). A resume refuses, before writing anything, when its target branch
-        moved past its tip and it lands automatically (`runs.target_ahead`)."""
+        moved past its tip and it lands automatically (`runs.target_ahead`).
+
+        `check_only` (`run --check`): make every check up to the first write (config,
+        template, clean checkout, preflight) and stop there; the object is good for
+        nothing else."""
         # Launched from a git hook or `rebase -x`, inherited GIT_DIR and friends would send
         # every git call (ours, and the agent's, checks' and judges') to another repository.
         # The CLI does the same in `cli.main`; this covers the Harness as a library.
         for key in SCRUBBED_GIT_ENV:
             os.environ.pop(key, None)
+        self._ran = False  # one segment per Harness (`run`)
         self.project_path = Path(project_path).resolve()
         # `config_file` is the source file, as run.json names it (naming, messages); the run
         # loads its stored copy (`RunPaths.config`), which judges and the report read too.
@@ -237,16 +223,15 @@ class Harness:
             if not isinstance(source, str):
                 raise RuntimeError(f"Run {short_id(import_run)}'s run.json names no config file; it can't be imported.")
             if source != (used := config_relative(self.project_path, config_file)):
-                self.console.print(f"[yellow]Run {short_id(import_run)} used {source}; this run uses {used}.[/yellow]",
-                                   highlight=False)
+                self._warn(f"Run {short_id(import_run)} used {source}; this run uses {used}.")
         if creating:
-            self.config, self._raw_config = load_config(self.project_path, config_file=config_file)
+            self.config = load_config(self.project_path, config_file=config_file)
         else:
-            self.config, self._raw_config = self._run_config(planned)
-        errors = [issue for issue in self.config.validate(self._raw_config) if issue.level == "error"]
+            self.config = self._run_config(planned)
+        errors = [issue for issue in self.config.validate() if issue.level == "error"]
         if errors:
             for error in errors:
-                self.console.print(f"[red]Error:[/red] {error.message}")
+                terminal.show(self.console, error.message, Text("Error: ", style="red"))
             if creating:
                 raise SystemExit(f"Config validation failed. Edit {config_relative(self.project_path, config_file)} "
                                  "and try again.")
@@ -264,6 +249,10 @@ class Harness:
                 if is_live(planned):  # said first: the advice (`--land manual`) would lead straight to it
                     raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
                 raise RuntimeError(target_ahead_refusal(planned, data, count))
+        if check_only:  # nothing written; the scope advice a run prints at its start too
+            if warning := scope_warning(self.config):
+                self._warn(warning)
+            return
         # The first writes: the local excludes, before .autohelix/ exists.
         ensure_runtime_ignored(self.project_path)
         try:  # best effort: only runtime state must be ignored
@@ -282,7 +271,7 @@ class Harness:
         )
         if self.paths.run_id != (planned and planned.run_id):
             try:  # a new run (or, raced, another than planned): from now on, its stored copy
-                self.config, self._raw_config = self._run_config(
+                self.config = self._run_config(
                     self.paths, check=self.paths.run_id in existing)  # one just created matches its file
             except BaseException:
                 self._ownership.close()
@@ -298,12 +287,14 @@ class Harness:
                             else f"{short} leaves group {self.run_info['group']}."))
         self.land_mode = land_mode or self.run_info.get("land") or "auto"
         for level, text in notices:
-            self.console.print(f"[yellow]{text}[/yellow]" if level == "warn" else f"[dim]{text}[/dim]", highlight=False)
+            if level == "warn":
+                self._warn(text)
+            else:
+                terminal.show(self.console, text, style="dim")
         try:
             self.history = History(self.project_path, self.paths.run_id)
             tip, warning = reconcile(self.paths, self.run_info, self.history, self.land_mode)
             self.run_state = RunState(self.paths, self.run_info, tip)
-            write_text(self.paths.current, self.paths.run_id + "\n")
             self.repo = Repo(self.project_path)
             self.run_status = RunStatus(self.project_path, self.paths.run_id)
             self.segment_log = SegmentLog(self.paths.segments)
@@ -312,11 +303,10 @@ class Harness:
             self._land_attempted = False
             self._segment_started = False
             self._segment: int | None = None  # this segment's number (segments.jsonl, status, stop requests)
-            self._usage_starts: set = set()
             self._segment_target_tip: str | None = None
             self._agent_logs = {}
             if warning:
-                self.console.print(f"[yellow]{warning}[/yellow]")
+                self._warn(warning)
 
             self._time_left_script: Path | None = None
             self._claude_settings_path: Path | None = None
@@ -340,30 +330,32 @@ class Harness:
 
     def _run_config(self, paths: RunPaths, check: bool = True):
         """A run's stored config (`load_run_config`). With `check`, refuses, before
-        anything is spent, when the file it came from parses differently now
-        (`config_changes`); a deleted file, or a deleted prompt template (the other
-        keys still compared), continues from the stored copy."""
+        anything is spent, when the file it came from parses differently now, or its
+        template's text differs (`config_changes`); a deleted file, or a deleted prompt
+        template (the other settings still compared), continues from the stored copy."""
         data = paths.read_identity()
-        config, raw = load_run_config(paths, data)
+        config = load_run_config(paths, data)
         source = self.project_path / data["config_path"]
         short = short_id(paths.run_id)
         if not check:
-            return config, raw
+            return config
         if not source.is_file():
-            self.console.print(f"[dim]{data['config_path']} is gone; run {short} continues "
-                               "with the config it stored when it started.[/dim]", highlight=False)
-            return config, raw
+            terminal.show(self.console, f"{data['config_path']} is gone; run {short} continues "
+                          "with the config it stored when it started.", style="dim")
+            return config
         try:
-            current = parse_config(source, self.project_path)
-            template = current.get("prompt_template")
-            if isinstance(template, str) and template.strip() and not template_path(source, template).exists():
-                self.console.print(f"[dim]{template} is gone; run {short} continues with the prompt template "
-                                   "it stored when it started.[/dim]", highlight=False)
-                current = {**current, "prompt_template": raw.get("prompt_template")}
+            current = load_config(self.project_path, source)
+            if (current.prompt_template is not None and current.prompt_template == config.prompt_template
+                    and not current.prompt_template.exists()):
+                terminal.show(self.console, f"{config_relative(self.project_path, current.prompt_template)} is gone; "
+                              f"run {short} continues with the prompt template it stored when it started.",
+                              style="dim")
+                current.prompt_template_text = config.prompt_template_text
+            if current._parse_errors and current._parse_errors != config._parse_errors:
+                changed = f"it no longer reads: {current._parse_errors[0]}"
             else:
-                current = inlined(source, current)
-            keys = config_changes(raw, current)
-            changed = f"changed: {', '.join(keys)}" if keys else None
+                keys = config_changes(config, current)
+                changed = f"changed: {', '.join(keys)}" if keys else None
         except ConfigError as e:
             changed = f"it no longer reads: {e}"
         if changed:
@@ -372,7 +364,7 @@ class Harness:
                 f"config it started with. To apply the new config, start a new run that continues from "
                 f"this one: `{run_command(data['config_path'])} --import {short}`. To continue this run, "
                 "restore the file.")
-        return config, raw
+        return config
 
     def _metric_label(self, name: str) -> str:
         """Format metric name with direction arrow."""
@@ -424,7 +416,7 @@ class Harness:
     def _check_metric_gate(self, gate: MetricGate, item: dict, metrics: dict[str, float], records) -> str | None:
         """Compare one metric gate with the last accepted iteration and record it in
         `item`. Returns the rejection reason, or None if it passes."""
-        direction = self.config.metric_directions().get(gate.metric, "higher")
+        direction = self.config.metric_directions()[gate.metric]
         value, reference = metrics.get(gate.metric), metric_reference(records, gate.metric)
         failure = metric_gate_failure(gate, direction, value, reference)
         item.update(passed=failure is None, value=value, reference=reference)
@@ -490,16 +482,12 @@ class Harness:
                 self._live_display = None
 
     def _warn(self, message: str) -> None:
-        """A `!` line whose continuation lines stay indented under the message."""
-        grid = Table.grid(padding=(0, 1))
-        grid.add_column(no_wrap=True)
-        grid.add_column()
-        grid.add_row(Text("  !", style="yellow"), Text(clean(message)))
-        self.console.print(grid)
+        """A warning (`terminal.warning`: `  ! message`, wrapped under itself)."""
+        terminal.warn(self.console, message)
 
     def _status(self, message: str) -> None:
         """Print a status message."""
-        self.console.print(f"[dim]{message}[/dim]")
+        terminal.show(self.console, message, style="dim")
 
     def _copy_bin(self, name: str) -> Path | None:
         """Copy a helper script from the package bin/ into .autohelix/.internal/bin/.
@@ -550,26 +538,22 @@ class Harness:
 
         return time_left
 
-    def _install_opencode_timer_plugin(self, worktree_path: Path) -> None:
-        """Drop the opencode time-left plugin into the worktree's .opencode/plugin/.
+    def _install_opencode_timer_plugin(self, copy_path: Path) -> None:
+        """Drop the opencode time-left plugin into the copy as `workspace.OPENCODE_PLUGIN`.
 
         opencode auto-loads project-local plugins from .opencode/plugin/*.js. The
         plugin appends time_left.sh output to each tool result — the opencode
-        analog of Claude's PostToolUse time hook. It lives in the worktree (never
-        installed for the agent call) and reads $AUTOHELIX_TIME_LEFT_SCRIPT from the agent env.
+        analog of Claude's PostToolUse time hook — and reads $AUTOHELIX_TIME_LEFT_SCRIPT
+        from the agent env. The snapshot leaves that one file out by pathspec, as it
+        does `.autohelix-iteration/`; the project's own `.opencode/` files are untouched.
         """
         src = Path(__file__).parent / "bin" / "opencode_timer_pertool.js"
         if not src.exists():
             return
-        plugin_dir = worktree_path / ".opencode" / "plugin"
+        plugin = copy_path / OPENCODE_PLUGIN
         try:
-            plugin_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, plugin_dir / "opencode_timer_pertool.js")
-            # Mark the whole .opencode/ tree as gitignored within the worktree so
-            # scope enforcement (revert_out_of_scope, which keys off
-            # --exclude-standard) treats this harness-managed tooling like
-            # .autohelix-iteration/ and doesn't flag/delete it as an out-of-scope change.
-            (worktree_path / ".opencode" / ".gitignore").write_text("*\n")
+            plugin.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, plugin)
         except OSError:
             pass
 
@@ -616,21 +600,22 @@ class Harness:
             self._warn(text)
             self.log.warn(text)
 
-    def build_prompt(self, iteration: int, worktree_dir: Path, members=(), rejected_diff: str = "",
+    def build_prompt(self, iteration: int, copy_dir: Path, members=(), rejected_diff: str = "",
                      imported=None, head: str | None = None) -> str:
         """Build the prompt for the agent using the template; `members` are the other
         runs of the group, as `group_members` returns them, `imported` the run this one
         imports (`runs.imported_run`), if any; `head` the commit the copy's code is."""
         template = load_template(self.config)
         variables = build_prompt_variables(
-            self.config, self.history, iteration, worktree_dir,
+            self.config, self.history, iteration, copy_dir,
             group=self.run_info.get("group"), members=members, rejected_diff=rejected_diff, imported=imported,
             head=head,
         )
-        return render_template(template, variables)
+        template_file = self.config.prompt_template
+        return render_template(template, variables, *([template_file.name] if template_file else []))
 
-    def run_agent(self, worktree_path: Path, prompt: str, iteration: int) -> AgentRunResult:
-        """Run the configured agent in the worktree."""
+    def run_agent(self, copy_path: Path, prompt: str, iteration: int) -> AgentRunResult:
+        """Run the configured agent in its copy."""
         iteration_folder(self.paths, iteration)
         prompt_path = self.paths.prompt(iteration)
         log_path = self.paths.agent_log(iteration)
@@ -643,13 +628,13 @@ class Harness:
         prompt_path.write_text(prompt)
 
         # opencode time-budget injection: drop the per-tool timer plugin into the
-        # worktree so opencode auto-loads it (the analog of Claude's PostToolUse
+        # copy so opencode auto-loads it (the analog of Claude's PostToolUse
         # time hook). Only when an iteration deadline is set.
         if (
             self.config.agent.timeout is not None
             and self.config.agent.backend.lower() == "opencode"
         ):
-            self._install_opencode_timer_plugin(worktree_path)
+            self._install_opencode_timer_plugin(copy_path)
 
         if self.verbose:
             print(f"  Prompt: {prompt_path}")
@@ -665,6 +650,10 @@ class Harness:
                 str(self.config.agent.timeout)
                 if self.config.agent.timeout is not None
                 else None
+            ),
+            # The budget as the time-left hint says it (1h30m, as the config spells it).
+            "AUTOHELIX_ITERATION_BUDGET_TEXT": (
+                format_limit(self.config.agent.timeout) if self.config.agent.timeout is not None else None
             ),
             "AUTOHELIX_TIME_LEFT_SCRIPT": (
                 str(self._time_left_script)
@@ -688,12 +677,12 @@ class Harness:
         require_notes = self.config.agent.require_notes
         if require_notes is not None:
             notes_file = (
-                worktree_path / ITERATION_DIR / "notes" / f"iter-{iteration}.md"
+                copy_path / ITERATION_DIR / "notes" / f"iter-{iteration}.md"
             )
             # Retry counter lives under runtime/state/ so it never clutters
             # the agent's notes dir. Reset here so each iteration starts fresh.
             retry_file = (
-                worktree_path / ITERATION_DIR / "runtime" / "state" / f"iter-{iteration}.retries"
+                copy_path / ITERATION_DIR / "runtime" / "state" / f"iter-{iteration}.retries"
             )
             try:
                 retry_file.parent.mkdir(parents=True, exist_ok=True)
@@ -720,23 +709,19 @@ class Harness:
             display.handle_event(event)
 
         try:
-            # Export the hook env whenever anything needs it. require_notes wires
-            # a Claude Stop hook via AUTOHELIX_CLAUDE_SETTINGS, which lives in this
-            # dict — so gating only on agent.timeout would make require_notes a
-            # silent no-op when set on its own.
-            if deadline_env:
-                for key, value in deadline_env.items():
-                    previous_env[key] = os.environ.get(key)
-                    if value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = value
+            # The backends read their hook settings from the environment (None: unset).
+            for key, value in deadline_env.items():
+                previous_env[key] = os.environ.get(key)
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
             shown = (Live(display, console=self.console, refresh_per_second=10) if self.verbose
                      else self._showing(row))
             with shown:
                 result = self.agent.run(
-                    worktree_path=worktree_path,
+                    copy_path=copy_path,
                     prompt=prompt,
                     iteration=iteration,
                     log_path=log_path,
@@ -750,7 +735,7 @@ class Harness:
                 display.flush()
 
             if result.error and self.verbose:  # otherwise the run's error says it, once
-                self.console.print(Text(f"Agent error: {clean(result.error)}", style="red"), highlight=False)
+                terminal.show(self.console, result.error, Text("Agent error: ", style="red"), style="red")
             if self.verbose:
                 self.console.print()
             return result
@@ -758,13 +743,11 @@ class Harness:
             self._status("Interrupted - stopping agent...")
             raise
         finally:
-            # Mirror the export guard above so the env is always restored.
-            if deadline_env:
-                for key, value in previous_env.items():
-                    if value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = value
+            for key, value in previous_env.items():  # always restored
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def _live_call(self, role, log):
         calls = list(self.run_status.data.get("calls", []))
@@ -825,7 +808,8 @@ class Harness:
                     self._complete_record(result, attempt.started_at, attempt.monotonic, attempt.evaluation)
                     # Failures before the agent call don't consume the iteration.
                     if attempt.agent_attempted:
-                        workspace.record(result)
+                        if workspace.record(result):
+                            self.segment_log.iteration(ended_at=result.ended_at, **iteration_fields(result))
             except BaseException as e:
                 if failure is None:
                     failure = e
@@ -835,7 +819,7 @@ class Harness:
                 try:
                     workspace.close()
                 finally:
-                    self.run_status.note(worktree=None)
+                    self.run_status.note(copy=None)
 
         if failure:
             raise failure
@@ -854,14 +838,14 @@ class Harness:
             self._status("Creating agent copy...")
         agent_copy = workspace.agent_copy()
         if self.verbose:
-            self.console.print(f"  Working dir: {agent_copy.working_dir}")
-        self.run_status.note(worktree=str(agent_copy.working_dir))
+            terminal.show(self.console, str(agent_copy.working_dir), "  Working dir: ")
+        self.run_status.note(copy=str(agent_copy.working_dir))
         prompt = self.build_prompt(iteration, agent_copy.working_dir, workspace.members,
                                    rejected_diff=workspace.rejected_diff, imported=workspace.imported,
                                    head=workspace.base)
         workspace.write_prompt(prompt)
         if self.verbose:
-            self.console.print(Panel(prompt.strip(), title="[bold]Agent Prompt[/bold]", border_style="dim"))
+            self.console.print(Panel(Text(clean_block(prompt.strip())), title="[bold]Agent Prompt[/bold]", border_style="dim"))
             self.console.print()
             self._status("Running agent...")
         with self._watch_checkout():
@@ -892,7 +876,7 @@ class Harness:
         metrics = evaluation.metrics
         if self.verbose:
             for name, value in metrics.items():
-                self.console.print(f"  {self._metric_label(name)} [cyan]{value}[/cyan]")
+                self.console.print(Text(f"  {clean(self._metric_label(name))} ").append(clean(value), style="cyan"))
         if evaluation.rejection:
             return self._rejected(iteration, attempt, evaluation.rejection, metrics=metrics,
                                   failure_output=evaluation.failure_output)
@@ -911,7 +895,7 @@ class Harness:
         # handled by the caller) keep the recorded acceptance.
         if self.config.stop:
             try:
-                result.stop, _ = self._check_stop(workspace, iteration, metrics)
+                result.stop, _ = self._check_stop(workspace, iteration, metrics, result)
             except Exception as e:  # noqa: BLE001 - acceptance already happened
                 self._warn(f"Stop check failed: {e}")
                 self.log.info(f"iter {iteration} stop check failed — {e}")
@@ -923,14 +907,14 @@ class Harness:
         attempt is frozen only to be kept (`checking=False`), never checked."""
         workspace.freeze(Scope(self.repo.prefix, tuple(self.config.editable), tuple(self.config.frozen_patterns())),
                          pinned=(lambda: self.run_status.phase("preparing checks")) if checking else None)
-        self.run_status.note(worktree=None)
+        self.run_status.note(copy=None)
         reverted = self._discarded(workspace)
         if reverted and self.verbose:
-            self.console.print(f"  [yellow]![/yellow] Discarded {len(reverted)} change(s) outside editable scope:")
+            self._warn(f"Discarded {len(reverted)} change(s) outside editable scope:")
             for f in reverted[:5]:
-                self.console.print(f"    [dim]{f}[/dim]")
+                terminal.show(self.console, f, "    ", style="dim")
             if len(reverted) > 5:
-                self.console.print(f"    [dim]... and {len(reverted) - 5} more[/dim]")
+                terminal.show(self.console, f"... and {len(reverted) - 5} more", "    ", style="dim")
 
     def _discarded(self, workspace: IterationWorkspace) -> list[str]:
         """The out-of-scope paths dropped at freeze, relative to the project."""
@@ -976,7 +960,7 @@ class Harness:
                        "AUTOHELIX_OBSERVATIONS": None, "AUTOHELIX_METRICS": None}
         records = self.history.load()  # the reference for metric gates: the last accepted iteration
         where = "baseline" if baseline else f"iter {iteration}"
-        notes: list[str] = []  # printed once the live display is gone, whatever happens
+        notes: list[Text] = []  # printed once the live display is gone, whatever happens
 
         def verify(command: str) -> None:
             # Checks are read-only: one command must not alter what a later one validates.
@@ -986,18 +970,15 @@ class Harness:
                 changed = ["its copy was removed or replaced"]
             if changed:
                 raise CandidateRejected(f"checks modified candidate files: {command} ({', '.join(changed[:5])})")
-            if violation := self._integrity_violation(iteration):
-                raise CandidateRejected(violation)
 
         positions = {id(gate): index for index, gate in enumerate(self.config.gates)}
         current: dict = {}  # the running command's call folders; the gate item of the one that just ran
 
         @contextmanager
-        def gate_call(_command: str):
-            with workspace.call_folder() as folders:
+        def gate_call(spec):
+            with workspace.call_folder(f"{RunPaths.GATES}/{positions[id(spec)] + 1}") as folders:
                 current["folders"] = folders
-                yield {"AUTOHELIX_SCRATCH": str(folders["scratch"]), "AUTOHELIX_PREVIOUS": None,
-                       "AUTOHELIX_LOG_DIR": str(folders["logs"]), "PATH": command_path(folders["bin"])}
+                yield {**_call_env(folders), "AUTOHELIX_PREVIOUS": None}
 
         def gate_result(spec, result) -> None:
             index = positions[id(spec)]
@@ -1005,6 +986,8 @@ class Harness:
             item = current["item"] = evaluation.gates[index]
             item.update(passed=result.passed, return_code=result.return_code,
                         duration_s=None if result.duration_s is None else round(result.duration_s, 3))
+            if result.timed_out:
+                item["timed_out"] = True
             if not result.passed:
                 item["output"] = _tail(result.output)
             self.log.info(f"{where} gate: {spec.text} — {'passed' if result.passed else 'FAILED'}")
@@ -1041,7 +1024,7 @@ class Harness:
                 elif self.config.observe:
                     row.set("observe")
                     if not baseline:
-                        self.run_status.phase("benchmark")
+                        self.run_status.phase("observe")
                         self.log.info(f"iter {iteration} observe started")
                     try:
                         self._observe(workspace, iteration, checks, evaluation, command_env, records,
@@ -1052,22 +1035,19 @@ class Harness:
             # The row shows the outcome (`_print_row`); details with --verbose.
             if self.verbose and not baseline:
                 for r in evaluation.constraints:
-                    mark = "[green]✓[/green]" if r.passed else "[red]✗[/red]"
-                    self.console.print(f"  {mark} {self._gate_text(r.command)}", highlight=False)
+                    mark = Text("  ").append("✓ " if r.passed else "✗ ", style="green" if r.passed else "red")
+                    terminal.show(self.console, self._gate_text(r.command), mark)
                     if not r.passed:
-                        self.console.print(Panel(r.output[:2000], title="Gate output", border_style="red"))
+                        self.console.print(Panel(Text(clean_block(r.output[:2000])), title="Gate output", border_style="red"))
             if self.verbose:
-                for note in notes:
-                    self.console.print(note, highlight=False)
+                terminal.print_lines(self.console, notes)
         workspace.remove(checks)
         if evaluation.metrics and not baseline:
             self.log.info(f"iter {iteration} observe: "
                           + ", ".join(f"{k}={v:g}" for k, v in evaluation.metrics.items()))
-        if violation := self._integrity_violation(iteration):
-            raise CandidateRejected(violation)
 
     def _observe(self, workspace: IterationWorkspace, iteration: int, checks, evaluation: _Evaluation,
-                 command_env: dict, records, *, verify, notes: list[str]) -> None:
+                 command_env: dict, records, *, verify, notes: list[Text]) -> None:
         """Observe entries in order (see `_evaluate`), each with its own call folder and,
         as `$AUTOHELIX_PREVIOUS`, a copy of its output from the last accepted iteration
         in which it succeeded; in a run that imports another (`run --import`), until the
@@ -1083,7 +1063,6 @@ class Harness:
         baseline = iteration == 0
         where = "baseline" if baseline else f"iter {iteration}"
         gates = [(index, gate) for index, gate in enumerate(self.config.gates) if isinstance(gate, MetricGate)]
-        declared = self.config.metric_names()
         imported = imported_run(self.paths, self.run_info)
         imported_history = History(self.project_path, imported[0].run_id) if imported else None
         for entry in self.config.observe:
@@ -1102,17 +1081,16 @@ class Harness:
                 except Exception as e:  # noqa: BLE001 - another run's history never stops this one
                     self.log.warn(f"No $AUTOHELIX_PREVIOUS for {entry.name} from the imported run: {e}")
                     previous = None
-            with workspace.call_folder(previous=previous) as folders:
-                env = {**command_env, "AUTOHELIX_SCRATCH": str(folders["scratch"]),
-                       "AUTOHELIX_PREVIOUS": str(folders["previous"]) if "previous" in folders else None,
-                       "AUTOHELIX_LOG_DIR": str(folders["logs"]), "PATH": command_path(folders["bin"])}
+            with workspace.call_folder(f"{RunPaths.OBSERVE}/{entry.name}", previous=previous) as folders:
+                env = {**command_env, **_call_env(folders),
+                       "AUTOHELIX_PREVIOUS": str(folders["previous"]) if "previous" in folders else None}
                 result = run_observe_entry(entry, checks.working_dir, project_path=self.project_path,
                                            extra_env=env)
                 record = result.record()
                 evaluation.observe.append(record)  # before captures: a capture problem can't lose it
                 # Stored before anything can reject: a rejected iteration keeps its output.
                 problems = self._store(
-                    iteration, folders,
+                    folders,
                     lambda stage: self.history.stage_output(stage, result.stdout, result.stderr,
                                                             checks.working_dir, entry.capture),
                     lambda stage: self.history.install_observation(iteration, entry.name, stage))
@@ -1125,8 +1103,8 @@ class Harness:
                 for name, error in result.errors.items():
                     self.log.info(f"{where} observe {entry.name}: metric '{name}' missing — {error}")
             else:
-                notes.append(f"  [yellow]![/yellow] observe {entry.name} failed ({result.error}); "
-                             "its metrics are missing")
+                notes += terminal.warning(f"observe {entry.name} failed ({result.error}); its metrics are missing",
+                                          self.console.width)
                 self.log.info(f"{where} observe {entry.name} failed — {result.error}")
             try:
                 verify(entry.command)
@@ -1135,14 +1113,13 @@ class Harness:
                 raise
             if baseline:
                 continue
-            # Metric gates waiting for this entry, in gates list order; a gate on a
-            # metric nobody declares (not a valid config) is checked after the last entry.
-            last = entry is self.config.observe[-1]
+            # Metric gates waiting for this entry, in gates list order (a gate's metric is
+            # always declared: `config._parse_gates`).
             for index, gate in gates:
-                if not (gate.metric in entry.metrics or last and gate.metric not in declared):
+                if gate.metric not in entry.metrics:
                     continue
                 if failure := self._check_metric_gate(gate, evaluation.gates[index], evaluation.metrics, records):
-                    notes.append(f"  [red]✗[/red] {failure}")
+                    notes += terminal.hanging(Text("  ").append("✗ ", style="red"), failure, self.console.width)
                     self.log.info(f"iter {iteration} {failure}")
                     evaluation.rejection = failure
                     return
@@ -1175,58 +1152,31 @@ class Harness:
     def _relative_log(self, path):
         return self.paths.relative_log(path)
 
-    def _store(self, iteration: int, folders: dict, fill, install):
+    @staticmethod
+    def _store(folders: dict, fill, install):
         """Store one command's output: `fill(stage)` writes it into a fresh `output/` in
         the command's call folder (made after the command and its process group ended),
         the transcripts its `ask`/`review` calls left in its `logs/` join it
         (`IterationWorkspace.move_transcripts`), then `install(stage)` puts it in place in
-        run state, replacing whatever is there, and returns where. The calls' usage
-        records then name the stored transcripts (`_point_usage_logs`). Returns what
-        `fill` returned."""
+        run state (the call's folder, `iterations/NNN/<call>/`, where the calls' usage
+        records name them), replacing whatever is there. Returns what `fill` returned."""
         stage = IterationWorkspace.stage_folder(folders)
         filled = fill(stage)
-        moved = IterationWorkspace.move_transcripts(folders, stage)
-        target = install(stage)
-        self._point_usage_logs(iteration, folders["logs"],
-                               {recorded: str(target / name) for recorded, name in moved.items()})
+        IterationWorkspace.move_transcripts(folders, stage)
+        install(stage)
         return filled
 
     def _store_command_output(self, iteration: int, folders: dict, command: str, result, target) -> None:
         """A gate's or stop command's output (`History.stage_command_output`), installed
         at `target()` (`History.gate_dir` / `stop_dir`). A failure to store it is logged,
         never fatal: the command's outcome counts either way."""
-        def install(stage: Path) -> Path:
-            folder = target()
-            self.history.install(folder, stage)
-            return folder
-
         try:
-            self._store(iteration, folders,
+            self._store(folders,
                         lambda stage: self.history.stage_command_output(stage, command, result.stdout,
                                                                         result.stderr),
-                        install)
+                        lambda stage: self.history.install(target(), stage))
         except Exception as e:  # noqa: BLE001 - evidence, not the outcome
             self.log.warn(f"Could not store the output of {command!r} (iteration {iteration}): {e}")
-            try:  # its calls' transcripts weren't stored
-                self._point_usage_logs(iteration, folders["logs"], {})
-            except Exception:  # noqa: BLE001 - readers drop logs outside the run anyway
-                pass
-
-    def _point_usage_logs(self, iteration: int, logs: Path, stored: dict[str, str]) -> None:
-        """This attempt's usage records whose `log` is in a command's private `logs/`
-        folder: point them at the stored transcript, or at nothing (None) if it wasn't
-        stored. Calls kept from an earlier attempt (`_usage_starts`) are left alone: an
-        earlier call folder may have had the same path."""
-        folder = os.path.realpath(logs)
-
-        def point(record: dict) -> None:
-            value = record.get("log")
-            if (record.get("id") in self._usage_starts or not isinstance(value, str)
-                    or not os.path.isabs(value) or os.path.dirname(os.path.normpath(value)) != folder):
-                return
-            record["log"] = stored.get(os.path.normpath(value))
-
-        self._rewrite_usage(self.paths.usage(iteration), point)
 
     def _complete_record(self, result, started_at, iter_start, evaluation: _Evaluation | None = None):
         result.started_at = started_at
@@ -1241,91 +1191,47 @@ class Harness:
             call["usage"]["wall_clock_ms"] = int((time.monotonic() - iter_start) * 1000)
             call["log"] = self._relative_log(self._agent_logs.get(result.iteration))
         commands = []
-        for record in read_usage(self.paths.usage(result.iteration)):
-            usage = dict(record)
-            log = usage.pop("log", None)
-            commands.append({"role": "command", "usage": usage, "log": self._relative_log(log)})
+        for usage in read_usage(self.paths.usage(result.iteration)):
+            log = self._relative_log(self.paths.usage_log(result.iteration, usage))  # stored, else None
+            usage.pop("log", None)
+            usage.pop("attempt", None)
+            commands.append({"role": "command", "usage": usage, "log": log})
         result.calls = agents + commands
-
-    def _integrity_violation(self, iteration: int) -> str | None:
-        """A judge call in this attempt changed the files it judged (sticky)."""
-        for usage in read_usage(self.paths.usage(iteration)):
-            if usage.get("id") not in self._usage_starts and usage.get("integrity_violation"):
-                return f"a judge call changed the files it judged ({usage.get('source', 'judge')})"
-        return None
 
     def _start_command_usage(self, iteration: int, moved: Path | None = None) -> None:
         """Start an empty usage file for the commands this iteration runs. A baseline
-        retry keeps the earlier attempts' calls, which still count toward its cost; their
-        logs moved with the earlier attempt's folder to `moved` (`History.supersede`),
-        so their `log` paths are rewritten to point there."""
+        retry keeps the earlier attempts' calls, which still count toward its cost: a
+        `superseded` marker says their transcripts moved with the earlier attempt's
+        folder to `moved` (`History.supersede`; none if it wasn't kept)."""
         path = self.paths.usage(iteration)
         path.parent.mkdir(parents=True, exist_ok=True)
         previous = next((r for r in self.history.load() if r.iteration == iteration), None)
         if previous is None or previous.accepted:
             path.write_text("")
-        elif moved is not None:
-            self._move_usage_logs(path, self.paths.iteration_dir(iteration), moved)
-        self._usage_starts = {r.get("id") for r in read_usage(path)}
-
-    def _move_usage_logs(self, path: Path, folder: Path, moved: Path) -> None:
-        """Point the `log` of each usage record in `path` that was inside `folder` at the
-        same file in `moved` (absolute stays absolute, relative to the run folder stays
-        relative)."""
-        def moved_log(record: dict) -> None:
-            value = record.get("log")
-            if not isinstance(value, str) or not value:
-                return
-            absolute = os.path.isabs(value)
-            full = os.path.normpath(value if absolute else os.path.join(self.paths.run_dir, value))
-            base = os.path.normpath(folder)
-            if not full.startswith(base + os.sep):
-                return
-            target = os.path.join(moved, os.path.relpath(full, base))
-            record["log"] = target if absolute else os.path.relpath(target, self.paths.run_dir)
-
-        self._rewrite_usage(path, moved_log)
-
-    @staticmethod
-    def _rewrite_usage(path: Path, change) -> None:
-        """Rewrite a usage file (if anything changed), `change(record)` editing each
-        record with a `log` in place; other lines are kept as they are."""
-        try:
-            text = path.read_text()
-        except FileNotFoundError:
-            return
-        lines = []
-        for line in text.splitlines():
-            try:
-                record = json.loads(line)
-            except ValueError:
-                record = None
-            if isinstance(record, dict) and "log" in record:
-                change(record)
-                line = json.dumps(record)
-            lines.append(line + "\n")
-        if "".join(lines) != text:
-            write_text(path, "".join(lines))
+        elif read_usage(path):
+            append_usage(superseded_marker(moved.name if moved is not None else ""), path)
 
     def _command_env(self, iteration: int) -> dict[str, str]:
         """Variables for every command the harness runs (checks, metrics, stop):
-        where to record model usage, and which config to read. `$AUTOHELIX_LOG_DIR` is
-        set per call (its call folder's `logs/`)."""
+        where to record model usage, and which config to read. `$AUTOHELIX_LOG_DIR` and
+        `$AUTOHELIX_CALL` are set per call (`_call_env`)."""
         return {
             USAGE_ENV: str(self.paths.usage(iteration)),
             "AUTOHELIX_CONFIG": str(self.paths.config),  # the run's stored copy
-            "AUTOHELIX_LOG_DIR": None,  # per call: the call folder's private logs/
+            "AUTOHELIX_LOG_DIR": None,  # per call (`_call_env`)
+            "AUTOHELIX_CALL": None,
             "AUTOHELIX_RUN_ID": self.paths.run_id,
             "AUTOHELIX_RUN_DIR": str(self.paths.run_dir),
             "AUTOHELIX_ITERATION": str(iteration),
         }
 
     def _check_stop(self, workspace: IterationWorkspace, iteration: int,
-                    metrics: dict[str, float]) -> tuple[dict[str, str] | None, list]:
-        """Run the stop commands in a fresh copy of the accepted tip. Returns (stop,
-        errors): stop is {"command", "reason"} if one exited 0; errors are the results
-        that exited with anything other than 0 or 1 (or timed out). Changing the
-        files or a judge violation is an error.
+                    metrics: dict[str, float], record: IterationResult) -> tuple[dict[str, str] | None, list]:
+        """Run the stop commands in a fresh copy of the accepted tip, each recorded in
+        `record.stops` as it ends (like a gate: outcome, return code, timed out). Returns
+        (stop, errors): stop is {"command", "reason"} if one exited 0; errors are the
+        results that exited with anything other than 0 or 1 (or timed out). Changing
+        the files or a judge violation is an error.
 
         Each command also gets `$AUTOHELIX_OBSERVATIONS`, a copy (made for that call)
         of the accepted iteration's `iterations/NNN/observe/` (empty if it observed
@@ -1342,15 +1248,16 @@ class Harness:
         current: dict = {}  # the running command's call folders
 
         @contextmanager
-        def stop_call(_command: str):
-            with workspace.call_folder(observations=observations) as folders:
+        def stop_call(spec):
+            with workspace.call_folder(f"{RunPaths.STOP}/{positions[id(spec)]}", observations=observations) as folders:
                 current["folders"] = folders
-                yield {"AUTOHELIX_SCRATCH": str(folders["scratch"]),
-                       "AUTOHELIX_OBSERVATIONS": str(folders["observations"]),
-                       "AUTOHELIX_LOG_DIR": str(folders["logs"]), "PATH": command_path(folders["bin"])}
+                yield {**_call_env(folders), "AUTOHELIX_OBSERVATIONS": str(folders["observations"])}
+
+        record.stops = []
 
         def stop_result(spec, result) -> None:  # stored while its call folder still exists
             position = positions[id(spec)]
+            record.stops.append(StopCheckResult.of(spec, result).record(spec.text))
             self._store_command_output(iteration, current["folders"], spec.command, result,
                                        lambda: self.history.stop_dir(iteration, position))
 
@@ -1366,16 +1273,8 @@ class Harness:
         finally:
             workspace.remove(stop)
         errors = [r for r in results if r.error]
-        for r in errors:
-            code = ("timed out" if r.output.startswith("Timeout after")
-                    else "could not run" if r.return_code == -1 else f"exited {r.return_code}")
-            self._warn(f"Stop command {code}: {r.command}")
-            tail = "\n".join(r.output.strip().splitlines()[-5:])
-            if tail:
-                self.console.print(f"[dim]{tail}[/dim]", highlight=False)
-            self.log.info(f"iter {iteration} stop command error ({code}): {r.command}")
-        if violation := self._integrity_violation(iteration):
-            raise AutoHelixRunError(violation)
+        for r in errors:  # shown under the iteration's row (`terminal.Table._notes`, from `record.stops`)
+            self.log.info(f"iter {iteration} stop command error ({r.problem()}): {r.command}")
         fired = next((r for r in results if r.stop), None)
         if fired is None:
             return None, errors
@@ -1392,6 +1291,7 @@ class Harness:
             self.history.update(baseline)
         else:
             self.history.append(baseline)
+        self.segment_log.iteration(ended_at=baseline.ended_at, **iteration_fields(baseline))
 
     def _capture_baseline(self) -> dict[str, str] | None:
         """Evaluate A in a checks copy and check stop commands.
@@ -1459,12 +1359,13 @@ class Harness:
             if self.config.stop:
                 # A broken stop command fails here, before anything is recorded, so a
                 # typo surfaces before the first iteration is paid for.
-                baseline.stop, errors = self._check_stop(workspace, 0, metrics)
+                baseline.stop, errors = self._check_stop(workspace, 0, metrics, baseline)
                 if errors:
                     self.log.info("baseline FAILED — stop command error")
+                    tail = "\n".join(errors[0].output.strip().splitlines()[-5:])
                     raise AutoHelixRunError(
-                        f"Stop command failed on the baseline: {errors[0].command} "
-                        "(expected exit 0 to stop or 1 to continue)"
+                        f"Stop command {errors[0].problem()} on the baseline: {errors[0].command} "
+                        "(expected exit 0 to stop or 1 to continue)" + (f"\n{tail}" if tail else "")
                     )
             self._complete_record(baseline, started_at, time.monotonic(), evaluation)
             self._write_baseline(baseline)
@@ -1480,7 +1381,7 @@ class Harness:
         finally:
             workspace.close()
 
-    def run(self, budget: Budget | None = None, report: bool = True) -> None:
+    def run(self, budget: Budget | None = None, report: bool = True) -> str:
         """Run the optimization loop for `budget` (default: `DEFAULT_ITERATIONS` more),
         recording live status in .internal/status.json.
 
@@ -1488,9 +1389,30 @@ class Harness:
         iteration, writes the run summary unless `report=False` (`--no-report`).
         However a started run stops, it then saves report.html. SIGTERM ends it as
         Ctrl-C does (`_terminate_interrupts`).
+
+        A Harness runs one segment: a second call raises (a new Harness redoes the
+        start's checks, as each `run`/`resume` command does).
+
+        Returns "finished" when the segment ended politely (a budget, a stop
+        condition, `autohelix stop`), "interrupted" when an interrupt in the loop
+        ended it (recorded and landed; one in the baseline or the summary
+        propagates). Raises `AutoHelixRunError`, already shown in the ending
+        (`autohelix_reported`), when the agent kept failing or auto landing failed.
         """
+        if self._ran:
+            raise RuntimeError("A Harness runs one segment; make a new one for the next (as `resume` does).")
+        self._ran = True
         with _terminate_interrupts():
             self._run_segment(budget, report)
+        if self._interrupted_at is not None:
+            return "interrupted"
+        stop = self.run_status.data.get("stop_reason") or {}
+        failure = self._land_error or (stop.get("kind") == "agent" and stop.get("detail"))
+        if failure:
+            error = AutoHelixRunError(f"auto landing failed: {failure}" if failure is self._land_error else failure)
+            error.autohelix_reported = True
+            raise error
+        return "finished"
 
     def _run_segment(self, budget: Budget | None, report: bool) -> None:
         outcome = "finished"
@@ -1501,24 +1423,16 @@ class Harness:
         self._landed_count: int | None = None  # commits auto landing put on the target (None: none landed)
         self._files: list[tuple[str, str]] = []
         self._interrupted_at: int | None = None
+        self._land_error: Exception | None = None  # why auto landing failed (`run` then raises)
+        self._segment_checked = False  # past the start's checks: from there the segment lands
         self._segment_first = 1
         try:
-            if self._ownership._file.closed:
-                self._ownership = RunLock(self.paths.lock)
-                self.run_info = self.paths.read_identity()
-                tip, warning = reconcile(self.paths, self.run_info, self.history, self.land_mode)
-                self.run_state.data = self.run_info
-                self.run_state.expected_tip = tip
             self._land_attempted = False
             if self._run(budget or Budget()) and report:
-                from autohelix.report import write_report
-
-                self.run_status.phase("report")
-                if write_report(self.config, self.project_path, self.console, run_id=self.paths.run_id, _owned=True):
-                    self._files.append(("summary", terminal.shown_path(self.paths.report)))
+                self._summary()
         except KeyboardInterrupt:
             outcome = "interrupted"
-            self._note_interrupt_request()  # in the baseline or the report (the loop notes its own)
+            self._note_interrupt_request()  # in the baseline (the loop notes its own)
             raise
         except BaseException:
             outcome = "failed"
@@ -1548,6 +1462,26 @@ class Harness:
                 finally:
                     self.close()
 
+    def _summary(self) -> None:
+        """The run summary, after the loop and its landing: how the segment ended stands
+        whatever happens here (a failure or Ctrl-C ends only the summary, said in a line).
+        None after the agent failed 3 times in a row: a fourth call would most likely fail
+        too, and there is nothing new to summarise."""
+        if (self.run_status.data.get("stop_reason") or {}).get("kind") == "agent":
+            return
+        from autohelix.report import write_report
+
+        self.run_status.phase("report")
+        later = "`autohelix report` writes it"
+        try:
+            if write_report(self.config, self.project_path, self.console, run_id=self.paths.run_id, _owned=True):
+                self._files.append(("summary", terminal.shown_path(self.paths.report)))
+        except KeyboardInterrupt:
+            self._warn(f"Summary interrupted; {later}.")
+        except Exception as e:  # noqa: BLE001 - the segment's outcome stands
+            self.log.warn(f"Summary failed: {e}")
+            self._warn(f"Summary failed: {clean(str(e), 300)}; {later}.")
+
     def _end_segment_log(self, error: BaseException | None) -> None:
         """This segment's end record in segments.jsonl: how it ended (the status's state
         and stop reason, the error it failed with), the run's last iteration and how
@@ -1576,23 +1510,19 @@ class Harness:
         """Readiness checks for a first start, run before any run state exists: a run
         starts from a commit, so tracked files must be clean."""
         require_clean(self.project_path)
-        ensure_editable_files_ready(Repo(self.project_path), self.project_path, self.config.editable)
         if not self._preflight():
             raise RuntimeError("Preflight checks failed. Fix the issues above before running.")
         self._preflight_done = True
 
     def _preflight(self) -> bool:
-        """Print preflight warnings and errors; False if there are errors."""
-        issues = preflight_check(self.config, self._raw_config, self.project_path)
+        """Print preflight warnings and errors; False if there are errors (the caller
+        then raises, saying the checks failed)."""
+        issues = preflight_check(self.config, self.project_path)
         for w in (i for i in issues if i.level == "warning"):
             self._warn(w.message)
         errors = [i for i in issues if i.level == "error"]
         for e in errors:
-            self.console.print(f"  [red]FAIL[/red] {e.message}")
-        if errors:
-            self.console.print(
-                "\n[red]Preflight checks failed.[/red] Fix the issues above before running."
-            )
+            terminal.show(self.console, e.message, Text("  ").append("FAIL ", style="red"))
         return not errors
 
     def _target_tip(self) -> str | None:
@@ -1604,8 +1534,8 @@ class Harness:
         """Auto-land at segment end; in every mode, refuse/warn if the target moved.
         Keeps what landed for the ending (`_landing`: `N commits on <branch>`, `N
         commits on autohelix/<id> (manual landing)`, `failed: …`; `_landed_count`)."""
-        if not self._segment_started or self._land_attempted:
-            return
+        if not self._segment_checked or self._land_attempted:
+            return  # a start that was refused (its checks failed) lands nothing
         self._land_attempted = True
         target = self.run_info.get("target_branch")
         # An interrupt (Ctrl-C, `stop --now`, a second one) waits for the landing: once
@@ -1631,6 +1561,7 @@ class Harness:
                                                       "manual landing")
             except Exception as e:
                 self._landing = terminal.not_landed(e)
+                self._land_error = e
                 self.log.warn(f"auto-land: {e}")
 
     def _commits_between(self, old: str | None, new: str) -> int:
@@ -1655,6 +1586,32 @@ class Harness:
         start_iter = self.history.get_last_iteration() + 1
         self._segment_first = start_iter  # the ending lists what this segment landed
         max_iter = budget.last_iteration(start_iter - 1)
+        needs_baseline = not any(r.iteration == 0 and r.accepted for r in self.history.load())
+
+        # The segment starts as soon as the run lock is held (before anything can refuse):
+        # `autohelix stop` and `wait` then see it, and a start that fails is a recorded
+        # segment that failed. Status records the iteration and cost caps as run totals
+        # (spent before this segment plus its own), the time cap as this segment's.
+        cost_before = summarize_costs(self.history.cost_usages).cost_usd or 0
+        self._segment_records = len(self.history.load())  # the end record counts what it adds
+        # A stop request no segment answered (its own ended first): gone before the status
+        # says running, the only time `autohelix stop` writes one.
+        clear_stop_request(self.paths)
+        # The number its start record gets: in the status, so a stop request names this segment.
+        self._segment = self.segment_log.next_number()
+        # Set before the first write: from here the segment's ending writes its end record.
+        self._segment_started = True
+        self.run_status.start(
+            max_iterations=max_iter, run_id=self.paths.run_id, segment=self._segment,
+            max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
+            max_time_seconds=budget.time_seconds, segment_started_at=segment_started_at)
+        # Records an earlier segment wrote but never logged (it died in between): theirs,
+        # before this start.
+        self.segment_log.catch_up(self.history.load())
+        self.segment_log.start(segment=self._segment, started_at=segment_started_at,
+                               start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
+                               budget={**asdict(budget), "default": budget.default})
+        self._segment_target_tip = self._target_tip()
 
         # Again at each segment: the ignore rules may have changed since this Harness was
         # created (a long-lived programmatic one).
@@ -1663,14 +1620,12 @@ class Harness:
         except GitExcludeError as e:
             raise AutoHelixRunError(str(e)) from e
 
-        needs_baseline = not any(r.iteration == 0 and r.accepted for r in self.history.load())
         if needs_baseline:
-            ensure_clean_working_tree(self.repo, self.project_path)
+            require_clean(self.project_path)  # also a resumed run whose baseline was never accepted
             if git(self.project_path, "rev-parse", "HEAD").stdout.strip() != self.run_state.expected_tip:
                 raise AutoHelixRunError("Baseline checkout moved since this run started. Restore its original commit, "
                                         f"or start a new run with `{run_command(self.run_info['config_path'])}` "
                                         f"(and `autohelix delete {short_id(self.paths.run_id)}` this one).")
-            ensure_editable_files_ready(self.repo, self.project_path, self.config.editable)
 
         # Show header
         self._print_header(budget, start_iter)
@@ -1696,34 +1651,16 @@ class Harness:
         # Run preflight checks before the baseline (silent on success); a first
         # start already ran them before allocating the run.
         if needs_baseline and not self._preflight_done and not self._preflight():
-            return False
+            raise AutoHelixRunError("Preflight checks failed. Fix the issues above before running.")
+        self._segment_checked = True
 
-        # Status records the iteration and cost caps as run totals (spent before this
-        # segment plus its own), the time cap as this segment's, counted from its start.
-        cost_before = summarize_costs(self.history.cost_usages).cost_usd or 0
-        self._segment_records = len(self.history.load())  # the end record counts what it adds
-        # A stop request no segment answered (its own ended first): gone before the status
-        # says running, the only time `autohelix stop` writes one.
-        clear_stop_request(self.paths)
-        # The number its start record gets: in the status, so a stop request names this segment.
-        self._segment = self.segment_log.next_number()
-        # Set before the first write: from here the segment's ending writes its end record.
-        self._segment_started = True
-        self.run_status.start(
-            max_iterations=max_iter, run_id=self.paths.run_id, segment=self._segment,
-            max_cost_usd=None if budget.cost_usd is None else round(cost_before + budget.cost_usd, 6),
-            max_time_seconds=budget.time_seconds, segment_started_at=segment_started_at)
-        self.segment_log.start(segment=self._segment, started_at=segment_started_at,
-                               start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
-                               budget={**asdict(budget), "default": budget.default})
-        self._segment_target_tip = self._target_tip()
-        flags = [self.run_info.pop("archived", None), self.run_info.pop("lifecycle", None)]
+        archived = self.run_info.pop("archived", None)
         for key, value in self._identity_changes.items():  # `resume --land` / `--group`
             if value is None:
                 self.run_info.pop(key, None)
             else:
                 self.run_info[key] = value
-        if any(flags) or self._identity_changes:
+        if archived or self._identity_changes:
             write_json(self.paths.identity, self.run_info)  # resuming brings an archived run back
 
         # Capture baseline on first run
@@ -1736,11 +1673,17 @@ class Harness:
         spent = (summarize_costs(self.history.cost_usages).cost_usd or 0) - cost_before
 
         cost_unknown = False  # some of this segment's charges are unavailable
-        # With --cost the only bound, an unknown charge means it may never be reached.
+        # Whether the main agent's cost was known in one of this segment's iterations
+        # (None: no agent call yet). With --cost the only bound, unknown charges and an
+        # agent never priced mean the backend can't price: --cost may never be reached.
+        # Priced judges don't count (they alone would take long to reach the cap). One
+        # unknown after a priced agent call (a timeout) only warns; three agent failures
+        # in a row stop the segment anyway.
+        priced: bool | None = None
         cost_only = budget.cost_usd is not None and max_iter is None and budget.time_seconds is None
 
         def out_of_budget() -> dict | None:
-            if cost_only and cost_unknown:
+            if cost_only and cost_unknown and priced is False:
                 return {"kind": "budget", "budget": "cost",
                         "detail": "cost unknown: --cost can't bound this segment (add -n or --time)"}
             if budget.cost_usd is not None and spent >= budget.cost_usd:
@@ -1748,7 +1691,7 @@ class Harness:
                         "detail": f"cost budget reached ({format_cap(budget.cost_usd)} this segment)"}
             if budget.time_seconds is not None and time.monotonic() - segment_start >= budget.time_seconds:
                 return {"kind": "budget", "budget": "time",
-                        "detail": f"time budget reached ({_format_time(budget.time_seconds)} this segment)"}
+                        "detail": f"time budget reached ({format_limit(budget.time_seconds)} this segment)"}
             return None
 
         config_name = config_relative(self.project_path, self.config_file)
@@ -1762,8 +1705,7 @@ class Harness:
             nonlocal cost_warning_shown, cost_unknown
             cost_unknown = True
             if budget.cost_usd is not None and not cost_warning_shown:
-                self.console.print("           [yellow]! cost unknown; --cost counts known costs only[/yellow]",
-                                   highlight=False)
+                terminal.warn(self.console, "cost unknown; --cost counts known costs only", indent=terminal.INDENT)
                 cost_warning_shown = True
 
         if start_iter == 1 and needs_baseline:
@@ -1806,6 +1748,11 @@ class Harness:
                     break
                 if result.cost.incomplete:
                     warn_unknown_cost()
+                if any(call["role"] == "agent" for call in result.calls):
+                    if summarize_costs([result.usage]).cost_usd is not None:
+                        priced = True
+                    elif result.agent_error is None:  # a failed call says nothing about pricing
+                        priced = bool(priced)
                 spent += result.cost.cost_usd or 0
             self.run_status.note(stop_reason=stop_reason)
             self.log.info(f"run stopped — {stop_reason['detail']}")
@@ -1852,7 +1799,7 @@ class Harness:
         accepted = sum(1 for r in iterations if r.accepted)
         seconds = sum(r.usage.get("wall_clock_ms", r.usage.get("duration_ms", 0)) for r in iterations) / 1000
         self.log.info(f"run complete — {accepted} accepted, {len(iterations) - accepted} rejected, "
-                      f"{format_total_cost(self.history.cost_usages)}, {_format_time(int(seconds))}")
+                      f"{format_total_cost(self.history.cost_usages)}, {format_duration(seconds)}")
 
     def _print_ending(self, error: BaseException | None) -> None:
         """The end block (`terminal.Table.ending`): how the segment ended, each metric's

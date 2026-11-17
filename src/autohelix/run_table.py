@@ -27,7 +27,7 @@ from autohelix.terminal import Row, Table
 
 WORDS = {"crashed": "stopped unexpectedly", "idle": "not started"}  # others as they are (dashboard.js)
 # The status's phase names, in the words the run's live row uses.
-PHASES = {"preparing checks": "gates", "checks": "gates", "benchmark": "observe", "stop check": "stop",
+PHASES = {"preparing checks": "gates", "checks": "gates", "observe": "observe", "stop check": "stop",
           "report": "summary"}
 STATE_STYLES = {"stopped unexpectedly": "#d77a7a", "interrupted": "yellow", "failed": "#d77a7a"}
 
@@ -108,10 +108,10 @@ def _iterations(run: dict) -> str:
 
 
 def _config_file(run: dict, unless_named: bool = False) -> str:
-    """The run's config file, marked when the run has no stored copy (an old run) or it
-    is invalid; with `unless_named`, "" when the run is named after it (the dashboard)."""
+    """The run's config file, marked when its stored copy can't be read; with
+    `unless_named`, "" when the run is named after it (the dashboard)."""
     file = run["config_file"] or ""
-    flag = " (not stored)" if run.get("config_missing") else " (invalid)" if run.get("config_invalid") else ""
+    flag = " (invalid)" if run.get("config_invalid") else ""
     named = unless_named and not flag and file.rsplit("/", 1)[-1] in (f"{run.get('name')}.yaml", "autohelix.yaml")
     return file + flag if file and not named else ""
 
@@ -177,7 +177,7 @@ class Saved:
         from autohelix.runs import load_run_config
 
         try:
-            config = load_run_config(paths)[0]
+            config = load_run_config(paths)
         except Exception:  # noqa: BLE001 - `view` shows what the payload has
             config = None
         try:
@@ -227,7 +227,7 @@ def _live_what(run: dict) -> str:
     """The live row's words for a running run: the phase (`agent`, `gates`), an observe
     entry's name (`observe · bench`), `stopping` once `autohelix stop` asked."""
     status = run["status"]
-    entry = status.get("entry") if status.get("phase") == "benchmark" and isinstance(status.get("entry"), str) else ""
+    entry = status.get("entry") if status.get("phase") == "observe" and isinstance(status.get("entry"), str) else ""
     return " · ".join(filter(None, [_phase(run), clean(entry), "stopping" if run.get("stop_requested") else ""]))
 
 
@@ -259,7 +259,7 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
     fields += [("Group", run.get("group") or ""), ("Notes", _notes(run))]
     head = terminal.header(title, fields, width, show_mark=False)
     if saved.rows is None:  # no column header over no rows
-        head.append(Text("  ! The run's history can't be read: no iterations to show.", style="yellow"))
+        head += terminal.warning("The run's history can't be read: no iterations to show.", width)
     else:
         head += table.heading()
     rows = [table.add(row) for row in saved.rows or []]

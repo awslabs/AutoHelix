@@ -18,20 +18,16 @@ from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History, IterationResult
 from autohelix.prompt_template import build_prompt_variables, load_template, render_template, unknown_variables
 from autohelix.workspace import ITERATION_DIR
-
-
-def _git(cwd, *args, check=True, env=None) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=check,
-                          env={**os.environ, **(env or {})}).stdout.strip()
+from tests.helpers import git, latest_run
 
 
 @pytest.fixture
 def repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "T")
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "user.email", "t@t")
+    git(repo, "config", "user.name", "T")
     (repo / ".gitignore").write_text(".autohelix/\n")
     return repo
 
@@ -49,17 +45,17 @@ def _configure(project, repo, settings=None, **sections):
     config = {"goal": "Harden", "agent": {"backend": "mock", "settings": {
         "change_file": "hello.py", "change_content": "# iteration {iteration}", **(settings or {})}}, **sections}
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "config")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "config")
 
 
 def _refs(repo, owner):
     paths = getattr(owner, "paths", owner)  # a Harness or RunPaths
-    return _git(repo, "for-each-ref", "--format=%(refname)", paths.rejected_refs).split()
+    return git(repo, "for-each-ref", "--format=%(refname)", paths.rejected_refs).split()
 
 
 class Agent:
-    """Stands in for Harness.run_agent: `act(worktree, iteration)` changes the copy and
+    """Stands in for Harness.run_agent: `act(copy_dir, iteration)` changes the copy and
     may return an AgentRunResult; else the mock agent runs. Records each copy's
     rejected.patch and prompt."""
 
@@ -67,35 +63,35 @@ class Agent:
         self.harness, self.original, self.act, self.seen = harness, harness.run_agent, act, {}
         harness.run_agent = self
 
-    def __call__(self, worktree, prompt, iteration):
-        patch = worktree / ITERATION_DIR / "rejected.patch"
+    def __call__(self, copy_dir, prompt, iteration):
+        patch = copy_dir / ITERATION_DIR / "rejected.patch"
         self.seen[iteration] = {"patch": patch.read_bytes() if patch.exists() else None, "prompt": prompt,
-                                "worktree": worktree}
+                                "copy": copy_dir}
         if patch.exists():
-            self.seen[iteration]["applied"] = _apply_in_probe(worktree, patch)
-        result = self.act(worktree, iteration) if self.act else None
-        return result if result is not None else self.original(worktree, prompt, iteration)
+            self.seen[iteration]["applied"] = _apply_in_probe(copy_dir, patch)
+        result = self.act(copy_dir, iteration) if self.act else None
+        return result if result is not None else self.original(copy_dir, prompt, iteration)
 
 
-def _apply_in_probe(worktree, patch):
+def _apply_in_probe(copy_dir, patch):
     """Apply rejected.patch with `git apply` in a copy of the agent's copy; returns the
     tree the probe's files hash to (the harness's material left out), or the error."""
-    copy_root = worktree
+    copy_root = copy_dir
     while not (copy_root / ".git").exists():
         copy_root = copy_root.parent
     probe = copy_root.parent / f"probe-{time.monotonic_ns()}"
     subprocess.run(["cp", "-Rp", str(copy_root), str(probe)], check=True)
-    cwd = probe / worktree.relative_to(copy_root)
+    cwd = probe / copy_dir.relative_to(copy_root)
     try:
         result = subprocess.run(["git", "apply", str(cwd / ITERATION_DIR / "rejected.patch")], cwd=cwd,
                                 capture_output=True, text=True)
         if result.returncode:
             return f"apply failed: {result.stderr}"
         index = {"GIT_INDEX_FILE": str(probe.parent / f"{probe.name}.index")}
-        state = (worktree.relative_to(copy_root) / ITERATION_DIR).as_posix()
-        _git(probe, "add", "-A", "--", ".", env=index)
-        _git(probe, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", state, env=index)
-        return _git(probe, "write-tree", env=index)
+        state = (copy_dir.relative_to(copy_root) / ITERATION_DIR).as_posix()
+        git(probe, "add", "-A", "--", ".", env=index)
+        git(probe, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", state, env=index)
+        return git(probe, "write-tree", env=index)
     finally:
         subprocess.run(["rm", "-rf", str(probe)], check=True)
 
@@ -117,7 +113,7 @@ def test_invalid_utf8_output_is_kept_and_background_children_still_die(tmp_path)
 
 def test_latest_is_the_last_written_of_tied_records(tmp_path):
     (tmp_path / ".autohelix").mkdir()
-    history = History(tmp_path)
+    history = History(tmp_path, latest_run(tmp_path).run_id)
     history.append(IterationResult(iteration=0, accepted=False, reason="baseline failed: x"))
     history.append(IterationResult(iteration=0, accepted=True, metrics={"speed": 1.0}, reason="baseline"))
     assert history.latest().accepted and history.latest(before=0) is None
@@ -134,7 +130,7 @@ def test_latest_is_the_last_written_of_tied_records(tmp_path):
 def test_patches_apply_whatever_the_git_config(repo, sub):
     for key, value in [("color.ui", "always"), ("color.diff", "always"), ("diff.noprefix", "true"),
                        ("diff.mnemonicPrefix", "true"), ("diff.relative", "true")]:
-        _git(repo, "config", key, value)
+        git(repo, "config", key, value)
     project = _project(repo, sub)
     seen = repo.parent / "candidate.diff"
     _configure(project, repo, gates=[f'cp .autohelix-iteration/candidate.diff {seen}; '
@@ -142,7 +138,7 @@ def test_patches_apply_whatever_the_git_config(repo, sub):
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness)
     harness.run(Budget(until=2), report=False)
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [r.accepted for r in records] == [True, False, True]
     prefix = f"{sub}/" if sub else ""
     candidate = seen.read_text()
@@ -159,7 +155,7 @@ def test_observe_entry_that_modifies_the_candidate_is_recorded_failed(repo):
     project = _project(repo)
     _configure(project, repo, observe=[{"name": "bench", "command": '[ "$AUTOHELIX_ITERATION" = 0 ] || echo x >> hello.py'}])
     Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
-    record = History(project).load()[-1]
+    record = History(project, latest_run(project).run_id).load()[-1]
     assert not record.accepted and record.reason.startswith("checks modified candidate files: ")
     assert record.observe[0]["ok"] is False and record.observe[0]["error"] == record.reason
 
@@ -171,19 +167,19 @@ def test_every_kind_of_change_round_trips_through_rejected_patch(repo):
     project = _project(repo, files={"tool.sh": "echo tool\n", "old.txt": "going\n"})
     _configure(project, repo, gates=['[ "$AUTOHELIX_ITERATION" != 1 ]'])
 
-    def act(worktree, iteration):
+    def act(copy_dir, iteration):
         if iteration == 1:
-            (worktree / "img.bin").write_bytes(bytes(range(256)) * 4)
-            os.symlink("hello.py", worktree / "link")
-            os.chmod(worktree / "tool.sh", 0o755)
-            (worktree / "old.txt").unlink()
+            (copy_dir / "img.bin").write_bytes(bytes(range(256)) * 4)
+            os.symlink("hello.py", copy_dir / "link")
+            os.chmod(copy_dir / "tool.sh", 0o755)
+            (copy_dir / "old.txt").unlink()
 
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness, act)
     harness.run(Budget(until=2), report=False)
-    rejected = History(project).load()[1]
+    rejected = History(project, latest_run(project).run_id).load()[1]
     assert not rejected.accepted
-    listing = _git(repo, "ls-tree", rejected.tree)
+    listing = git(repo, "ls-tree", rejected.tree)
     assert "120000" in listing and "100755" in listing and "img.bin" in listing and "old.txt" not in listing
     patch = agent.seen[2]["patch"]
     assert b"GIT binary patch" in patch and b"deleted file mode" in patch and b"new mode 100755" in patch
@@ -197,22 +193,22 @@ def test_a_too_large_rejected_change_is_named_not_written(repo, monkeypatch):
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness)
     harness.run(Budget(until=2), report=False)
-    rejected = History(project).load()[1]
+    rejected = History(project, latest_run(project).run_id).load()[1]
     seen = agent.seen[2]
     assert seen["patch"] is None
     command = f"git diff {rejected.base} {rejected.tree}"
     assert f"too large for a patch file; see them with `{command}`" in seen["prompt"]
     # The copy reaches the rejected tree through its alternates (copy removed by now: use the repo's objects).
-    assert "+# iteration 1" in _git(repo, *command.split()[1:])
+    assert "+# iteration 1" in git(repo, *command.split()[1:])
 
 
 def test_a_stale_kept_tree_under_an_accepted_number_is_removed(repo):
     project = _project(repo)
     _configure(project, repo)
     harness = Harness(project, verbose=False, land_mode="manual")
-    _git(repo, "update-ref", harness.paths.rejected_ref(1), _git(repo, "rev-parse", "HEAD^{tree}"))
+    git(repo, "update-ref", harness.paths.rejected_ref(1), git(repo, "rev-parse", "HEAD^{tree}"))
     harness.run(Budget(until=1), report=False)
-    assert History(project).load()[-1].accepted and _refs(repo, harness) == []
+    assert History(project, latest_run(project).run_id).load()[-1].accepted and _refs(repo, harness) == []
 
 
 def test_a_timed_out_agent_is_kept_and_rejected_unchecked(repo, tmp_path):
@@ -220,18 +216,18 @@ def test_a_timed_out_agent_is_kept_and_rejected_unchecked(repo, tmp_path):
     ran = tmp_path / "gate-ran"
     _configure(project, repo, gates=[f'[ "$AUTOHELIX_ITERATION" = 0 ] || touch {ran}'])
 
-    def act(worktree, iteration):
-        (worktree / "hello.py").write_text("half done\n")
+    def act(copy_dir, iteration):
+        (copy_dir / "hello.py").write_text("half done\n")
         return AgentRunResult(success=False, exit_code=-1, error="timed out after 1s")
 
     harness = Harness(project, verbose=False, land_mode="manual")
     Agent(harness, act)
     harness.run(Budget(until=1), report=False)
-    record = History(project).load()[-1]
+    record = History(project, latest_run(project).run_id).load()[-1]
     assert record.reason == "Iteration 1 agent failed: timed out after 1s"
     assert not record.accepted and record.gates == [] and not ran.exists()
     assert _refs(repo, harness) == [record.rejected_ref]
-    assert _git(repo, "show", f"{record.tree}:hello.py") == "half done"
+    assert git(repo, "show", f"{record.tree}:hello.py") == "half done"
 
 
 def test_a_failed_agent_that_replaced_its_material_by_a_symlink(repo, tmp_path):
@@ -241,30 +237,30 @@ def test_a_failed_agent_that_replaced_its_material_by_a_symlink(repo, tmp_path):
     elsewhere.mkdir()
     (elsewhere / "commit_summary.txt").write_text("planted summary\n")
 
-    def act(worktree, iteration):
-        state = worktree / ITERATION_DIR
+    def act(copy_dir, iteration):
+        state = copy_dir / ITERATION_DIR
         subprocess.run(["rm", "-rf", str(state)], check=True)
         os.symlink(elsewhere, state)
-        (worktree / "hello.py").write_text("changed\n")
+        (copy_dir / "hello.py").write_text("changed\n")
         return AgentRunResult(success=False, exit_code=1, error="crashed")
 
     harness = Harness(project, verbose=False, land_mode="manual")
     Agent(harness, act)
     harness.run(Budget(until=1), report=False)
-    record = History(project).load()[-1]
+    record = History(project, latest_run(project).run_id).load()[-1]
     assert record.summary is None and record.rejected_ref
-    assert ITERATION_DIR not in _git(repo, "ls-tree", "--name-only", record.tree).split()
+    assert ITERATION_DIR not in git(repo, "ls-tree", "--name-only", record.tree).split()
 
 
 def test_delete_leaves_runs_whose_id_shares_a_prefix(repo):
     project = _project(repo)
     _configure(project, repo)
-    tree = _git(repo, "rev-parse", "HEAD^{tree}")
+    tree = git(repo, "rev-parse", "HEAD^{tree}")
     first, second = runs.RunPaths(project, "20261112-0300-ab"), runs.RunPaths(project, "20261112-0300-ab-cd")
     for paths in (first, second):
         paths.run_dir.mkdir(parents=True)
         for n in (1, 2):
-            _git(repo, "update-ref", paths.rejected_ref(n), tree)
+            git(repo, "update-ref", paths.rejected_ref(n), tree)
     runs.delete(first, force=True)
     assert _refs(repo, first) == []
     assert _refs(repo, second) == [second.rejected_ref(1), second.rejected_ref(2)]
@@ -273,10 +269,10 @@ def test_delete_leaves_runs_whose_id_shares_a_prefix(repo):
 # --- 9, 10, 11: prompt wording, agent-written text, custom templates -------------------
 
 
-def _seed(worktree, records):
+def _seed(copy_dir, records):
     """The iteration folders seeding would put in the copy: the record, failing gates', observe entries'."""
     for record in records:
-        folder = worktree / ".autohelix-iteration" / "iterations" / f"{record['iteration']:03d}"
+        folder = copy_dir / ".autohelix-iteration" / "iterations" / f"{record['iteration']:03d}"
         folder.mkdir(parents=True, exist_ok=True)
         for k, gate in enumerate(record.get("gates") or [], start=1):
             if gate.get("passed") is False and gate.get("kind", "command") == "command":
@@ -287,16 +283,16 @@ def _seed(worktree, records):
 
 def _render(tmp_path, records, iteration=2, patch=False):
     (tmp_path / ".autohelix").mkdir(parents=True, exist_ok=True)
-    history = History(tmp_path)
+    history = History(tmp_path, latest_run(tmp_path).run_id)
     for record in records:
         history.append(IterationResult(**record))
-    worktree = tmp_path / "copy"
-    (worktree / ITERATION_DIR).mkdir(parents=True, exist_ok=True)
+    copy_dir = tmp_path / "copy"
+    (copy_dir / ITERATION_DIR).mkdir(parents=True, exist_ok=True)
     if patch:
-        (worktree / ITERATION_DIR / "rejected.patch").write_text("diff\n")
-    _seed(worktree, records)
+        (copy_dir / ITERATION_DIR / "rejected.patch").write_text("diff\n")
+    _seed(copy_dir, records)
     config = Config(goal="g")
-    return render_template(load_template(config), build_prompt_variables(config, history, iteration, worktree))
+    return render_template(load_template(config), build_prompt_variables(config, history, iteration, copy_dir))
 
 
 BASELINE = {"iteration": 0, "accepted": True, "reason": "baseline"}
@@ -330,22 +326,21 @@ def test_summary_is_cleaned_and_capped_for_record_and_commit(repo):
     project = _project(repo)
     _configure(project, repo)
 
-    def act(worktree, iteration):
-        (worktree / ITERATION_DIR / "commit_summary.txt").write_text("\x1b[31mred\x1b[0m " + "w" * 500 + "\nmore\n")
+    def act(copy_dir, iteration):
+        (copy_dir / ITERATION_DIR / "commit_summary.txt").write_text("\x1b[31mred\x1b[0m " + "w" * 500 + "\nmore\n")
 
     harness = Harness(project, verbose=False, land_mode="manual")
     Agent(harness, act)
     harness.run(Budget(until=1), report=False)
-    record = History(project).load()[-1]
+    record = History(project, latest_run(project).run_id).load()[-1]
     assert record.summary.startswith("red ww") and len(record.summary) == 200 and record.summary.endswith("…")
-    assert _git(repo, "show", "-s", "--format=%s", record.commit) == record.summary
+    assert git(repo, "show", "-s", "--format=%s", record.commit) == record.summary
 
 
 def test_unknown_template_variables():
     template = ("{{ goal }} {{ constraints }} {% for g in gates %}{{ g.text }}{% endfor %} {{ range(2) }} "
                 "{% if history_summary %}{% endif %}{% set local = 1 %}{{ local }}")
     assert unknown_variables(template) == ["constraints", "history_summary"]
-    assert unknown_variables("{% if") == []
 
 
 def test_a_custom_template_with_old_variables_warns_at_run_start(repo, capsys):
@@ -371,7 +366,7 @@ def test_status_names_the_running_observe_entry(repo):
 
     harness.run_status.note = note
     harness.run(Budget(until=1), report=False)
-    assert ("benchmark", "first") in seen and ("benchmark", "second") in seen
+    assert ("observe", "first") in seen and ("observe", "second") in seen  # the phase was "benchmark"
     assert seen[-1][1] is None
 
 
@@ -384,14 +379,14 @@ def test_frozen_discards_are_said_apart(repo):
     (project / "fixtures" / "data.txt").write_text("fixed\n")
     _configure(project, repo, scope={"editable": ["hello.py", "fixtures/"], "frozen": ["fixtures/"]})
 
-    def act(worktree, iteration):
-        (worktree / "fixtures" / "data.txt").write_text("edited\n")
-        (worktree / "notes.txt").write_text("not editable\n")
+    def act(copy_dir, iteration):
+        (copy_dir / "fixtures" / "data.txt").write_text("edited\n")
+        (copy_dir / "notes.txt").write_text("not editable\n")
 
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness, act)
     harness.run(Budget(until=2), report=False)
-    record = History(project).load()[1]
+    record = History(project, latest_run(project).run_id).load()[1]
     assert record.discarded == ["fixtures/data.txt", "notes.txt"]
     assert record.discarded_frozen == ["fixtures/data.txt"]
     prompt = agent.seen[2]["prompt"]
@@ -406,7 +401,7 @@ def test_a_rejection_that_changed_nothing_keeps_no_tree(repo):
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness)
     harness.run(Budget(until=2), report=False)
-    record = History(project).load()[1]
+    record = History(project, latest_run(project).run_id).load()[1]
     assert not record.accepted and record.discarded == ["elsewhere.txt"]
     assert record.rejected_ref is None and _refs(repo, harness) == []
     assert agent.seen[2]["patch"] is None and "rejected.patch" not in agent.seen[2]["prompt"]
@@ -476,14 +471,57 @@ def test_run_start_warnings_wrap_under_their_label(repo, capsys):
     assert all(not line.strip() or line.startswith("  ") for line in out.splitlines()[:12])
 
 
+def test_a_preflight_failure_keeps_a_long_path_whole(repo, capsys):
+    """The FAIL line wraps at spaces (`terminal.show`): an agent command's path wider
+    than the screen is printed whole, never split across lines."""
+    project = _project(repo)
+    command = "/opt/" + "a-very-long-folder-name/" * 5 + "claude"
+    _configure(project, repo, agent={"backend": "claude", "command": command})
+    with pytest.raises(RuntimeError, match="Preflight checks failed"):
+        Harness(project, verbose=False).run(Budget(until=1), report=False)
+    out = capsys.readouterr().out
+    [line] = [line for line in out.splitlines() if "FAIL" in line]
+    assert line.startswith("  FAIL Agent command") and f"'{command}'" in out.split()
+    assert all(not part.strip() or part.startswith("       ") for part in out.split(line, 1)[1].splitlines()[:2])
+
+
+def test_harness_warnings_use_the_one_warning_form(repo, capsys):
+    """`Harness._warn` is `terminal.warning`: `  ! ` then the message wrapped under
+    itself, a word never broken."""
+    project = _project(repo)
+    _configure(project, repo)
+    harness = Harness(project, verbose=False)
+    capsys.readouterr()
+    long = "autohelix/" + "x" * 100
+    harness._warn(f"Branch {long} has moved on; see the run's notes")
+    assert capsys.readouterr().out.splitlines() == [
+        "  ! Branch", f"    {long}", "    has moved on; see the run's notes"]
+
+
+def test_verbose_output_prints_gate_output_and_goal_as_text(repo, capsys):
+    """`--verbose` shows the prompt, the gate's output and the metrics in panels and
+    lines: text there is never read as Rich markup (`[/red]` would raise) and its escape
+    sequences are removed."""
+    project = _project(repo)
+    _configure(project, repo, gates=['[ "$AUTOHELIX_ITERATION" = 0 ] || { printf "[/red] \\033[2Jboom [bold]x"; exit 1; }'],
+               observe=[{"name": "bench", "command": "echo '##autohelix[speed=3]'", "metrics": {"speed": "higher"}}])
+    config = project / "autohelix.yaml"
+    config.write_text(config.read_text().replace("goal: Harden", "goal: Harden [/bold] it"))
+    git(repo, "commit", "-qam", "goal")
+    Harness(project, verbose=True, land_mode="manual").run(Budget(until=1), report=False)
+    out = capsys.readouterr().out
+    assert "[/red] boom [bold]x" in out and "\x1b[2J" not in out
+    assert "Harden [/bold] it" in out and "speed" in out
+
+
 # --- agent failures continue the loop ---------------------------------------------------
 
 
 def _failing(iterations, error="crashed"):
     """An `act` that fails the agent call on the given iterations (after editing hello.py)."""
-    def act(worktree, iteration):
+    def act(copy_dir, iteration):
         if iteration in iterations:
-            (worktree / "hello.py").write_text(f"attempt {iteration}\n")
+            (copy_dir / "hello.py").write_text(f"attempt {iteration}\n")
             return AgentRunResult(success=False, exit_code=1, error=error)
     return act
 
@@ -496,7 +534,7 @@ def test_a_timeout_then_an_accept_with_its_patch(repo):
     harness = Harness(project, verbose=False, land_mode="manual")
     agent = Agent(harness, _failing({1}, error="timed out after 30 minutes"))
     harness.run(Budget(until=2), report=False)
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, False), (2, True)]
     timed_out = records[1]
     assert timed_out.agent_error == "timed out after 30 minutes" and timed_out.gates == []
@@ -512,12 +550,14 @@ def test_three_agent_failures_in_a_row_stop_the_run_and_land_accepted_work(repo)
     _configure(project, repo, scope={"editable": ["hello.py"]})
     harness = Harness(project, verbose=False)  # auto landing
     Agent(harness, _failing({2, 3, 4}))
-    harness.run(Budget(until=10), report=False)
-    records = History(project).load()
+    with pytest.raises(AutoHelixRunError, match="the agent failed 3 times in a row: crashed") as raised:
+        harness.run(Budget(until=10), report=False)  # an error (the CLI exits 1), shown in the ending
+    assert raised.value.autohelix_reported
+    records = History(project, latest_run(project).run_id).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True), (2, False), (3, False), (4, False)]
-    reason = read_run_status(project)["stop_reason"]
+    reason = read_run_status(project, latest_run(project).run_id)["stop_reason"]
     assert reason["kind"] == "agent" and reason["detail"] == "the agent failed 3 times in a row: crashed"
-    assert _git(repo, "show", "main:hello.py").endswith("# iteration 1")  # iteration 1 landed
+    assert git(repo, "show", "main:hello.py").endswith("# iteration 1")  # iteration 1 landed
 
 
 def test_failures_that_are_not_consecutive_dont_stop_the_run(repo):
@@ -528,6 +568,6 @@ def test_failures_that_are_not_consecutive_dont_stop_the_run(repo):
     harness = Harness(project, verbose=False, land_mode="manual")
     Agent(harness, _failing({1, 3, 4}))
     harness.run(Budget(until=4), report=False)
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [r.accepted for r in records] == [True, False, True, False, False]
-    assert read_run_status(project)["stop_reason"]["detail"] == "iteration budget reached (4)"
+    assert read_run_status(project, latest_run(project).run_id)["stop_reason"]["detail"] == "iteration budget reached (4)"

@@ -3,7 +3,6 @@
 
 """Run gate, observe and stop commands; compare metric gates."""
 
-import glob as globmod
 import logging
 import math
 import os
@@ -19,9 +18,11 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from autohelix.agents.runner import _kill_process_group
+from autohelix.agents.runner import _kill_process_group, end_group
+from autohelix.agents import command_path
 from autohelix.config import DEFAULT_CHECK_TIMEOUT, CommandSpec, Config, MetricGate, ObserveEntry
-from autohelix.sandbox import build_worktree_env
+from autohelix.sandbox import build_copy_env
+from autohelix.workspace import git_env, path_in_scope, run_git
 
 # Progress callback type: (phase, command, elapsed_seconds | None)
 
@@ -43,9 +44,7 @@ def scope_warning(config: Config) -> str | None:
             "set scope.editable (and scope.frozen) to protect them.")
 
 
-def preflight_check(
-    config: Config, raw_config: dict, project_path: Path
-) -> list[PreflightIssue]:
+def preflight_check(config: Config, project_path: Path) -> list[PreflightIssue]:
     """Run preflight validation checks on a project.
 
     Checks config validity, agent availability, and scope patterns.
@@ -54,30 +53,39 @@ def preflight_check(
     issues: list[PreflightIssue] = []
 
     # 1. Config validation
-    config_issues = config.validate(raw_data=raw_config)
+    config_issues = config.validate()
     for ci in config_issues:
         issues.append(PreflightIssue(level=ci.level, message=ci.message))
 
-    # 2. Check agent command exists (skip for mock agent which is built-in)
-    agent_type = config.agent.backend.lower()
-    if agent_type != "mock":
-        default_cmds = {"claude": "claude", "codex": "codex", "opencode": "opencode"}
-        agent_cmd = config.agent.command or default_cmds.get(agent_type, agent_type)
-        if not shutil.which(agent_cmd):
-            issues.append(PreflightIssue(
-                level="error",
-                message=f"Agent command '{agent_cmd}' not found in PATH",
-            ))
+    # 2. Every agent the config runs (main agent, `ask:` and `review:` judges) can start:
+    # its command resolved as the backend resolves it (mock is built in).
+    missing: dict[str, list[str]] = {}
+    for who, backend, command in config.agent_commands():
+        if backend != "mock" and not shutil.which(path := command_path(backend, command)):
+            missing.setdefault(f"{backend}\0{path}", []).append(who)
+    for key, whos in missing.items():
+        backend, path = key.split("\0")
+        users = "" if whos == ["agent"] else " (used by " + ", ".join(
+            "the agent" if who == "agent" else f"`{who}`" for who in whos) + ")"
+        issues.append(PreflightIssue(
+            level="error",
+            message=(f"Agent command '{path}' not found in PATH{users}; install {backend}, or set "
+                     f"agent.command or AUTOHELIX_{backend.upper()}_CMD"),
+        ))
 
-    # 3. Scope patterns that match nothing (no scope at all: `scope_warning`, at run start)
-    for label, patterns in [("editable", config.editable), ("frozen", config.frozen)]:
-        for pattern in patterns:
-            matches = globmod.glob(str(project_path / pattern), recursive=True)
-            if not matches:
-                issues.append(PreflightIssue(
-                    level="warning",
-                    message=f"scope.{label} '{pattern}' matches no files",
-                ))
+    # 3. Scope patterns that match no committed file, with the matcher the harness uses
+    # (no scope at all: `scope_warning`, at run start). Editable ones may name files the
+    # agent is to create, so warnings only.
+    if config.editable or config.frozen:
+        listed = run_git(["git", "ls-files", "-z"], cwd=project_path, capture_output=True, env=git_env())
+        files = os.fsdecode(listed.stdout).split("\0") if listed.returncode == 0 else []
+        for label, patterns in [("editable", config.editable), ("frozen", config.frozen)]:
+            for pattern in patterns:
+                if not any(path_in_scope(path, [pattern]) for path in files if path):
+                    issues.append(PreflightIssue(
+                        level="warning",
+                        message=f"scope.{label} '{pattern}' matches no committed file",
+                    ))
 
     return issues
 
@@ -100,9 +108,10 @@ class CommandResult:
 # the agent runner's grace (3 s) plus 2 s to stop it on SIGTERM; wait longer.
 CHECK_KILL_GRACE = 8
 
-# Per-command variables: a context manager given the command, yielding the variables to
-# add for that one call (a value of None unsets the variable) and cleaning up after it.
-PerCommand = Callable[[str], AbstractContextManager]
+# Per-command variables: a context manager given the command's spec, yielding the
+# variables to add for that one call (a value of None unsets the variable) and cleaning
+# up after it.
+PerCommand = Callable[[CommandSpec], AbstractContextManager]
 
 
 def _command_env(project_path: Path | None, cwd: Path, timeout: int,
@@ -110,7 +119,7 @@ def _command_env(project_path: Path | None, cwd: Path, timeout: int,
     """Environment for a check command: sys.path remapped to the copy, harness-provided
     variables (None removes one, so a variable can't leak in from the harness's own
     environment), and the command's deadline (for tools that run their own agents)."""
-    env = build_worktree_env(project_path, cwd) if project_path else os.environ.copy()
+    env = build_copy_env(project_path, cwd) if project_path else os.environ.copy()
     for key, value in (extra_env or {}).items():
         if value is None:
             env.pop(key, None)
@@ -128,25 +137,6 @@ class _Execution:
     timed_out: bool = False
     error: str | None = None  # could not start
     duration_s: float = 0.0
-
-
-def _end_group(proc) -> None:
-    """SIGKILL whatever is left of a command's process group (its own session, from
-    `start_new_session`), also after the shell itself exited: a background child must not
-    keep running, and writing files, once the harness has checked them. A child that
-    starts a session of its own escapes this (until commands run in a sandbox).
-
-    PID reuse: once the shell is reaped, its PID (the group's id) is free again only
-    when no member of the group is left; a new process could then take it as its own
-    group id before this kill, a narrow race. Closing it means not reaping the shell
-    until after the kill (waitid with WNOWAIT, then reading the pipes ourselves instead
-    of `communicate`), which `subprocess` doesn't offer; left as is."""
-    if not isinstance(getattr(proc, "pid", None), int):
-        return
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except OSError:  # nothing left
-        pass
 
 
 def _text(data) -> str:
@@ -198,7 +188,7 @@ def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str]) -> _Exe
                     # Kill the whole process group, not just the /bin/sh wrapper,
                     # so a timed-out pytest/benchmark doesn't keep running detached.
                     _kill_process_group(proc, grace=CHECK_KILL_GRACE)
-                    _end_group(proc)
+                    end_group(proc)
                     stdout, stderr = _drain(proc)
                     return _Execution(-1, stdout, stderr, timed_out=True, duration_s=time.monotonic() - start)
         return _Execution(proc.returncode, _text(stdout), _text(stderr), duration_s=time.monotonic() - start)
@@ -210,7 +200,7 @@ def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str]) -> _Exe
         return _Execution(-1, error=str(e), duration_s=time.monotonic() - start)
     finally:
         if proc is not None:
-            _end_group(proc)
+            end_group(proc)
 
 
 def run_command(
@@ -244,7 +234,7 @@ def run_command(
 
 
 @contextmanager
-def _no_extra(_command: str):
+def _no_extra(_spec: CommandSpec):
     yield {}
 
 
@@ -266,7 +256,7 @@ def run_gate_commands(
     while its `per_command` context is still open, and before `after_command`."""
     results = []
     for c in commands:
-        with (per_command or _no_extra)(c.command) as added:
+        with (per_command or _no_extra)(c) as added:
             result = run_command(
                 c.command, cwd, timeout=c.timeout, project_path=project_path,
                 extra_env={**(extra_env or {}), **added},
@@ -290,14 +280,43 @@ class StopCheckResult:
     return_code: int
     output: str
     reason: str  # the last non-empty stdout line (unless just true/false/null), or the command itself
+    timed_out: bool = False
+    duration_s: float | None = None
+
+    @classmethod
+    def of(cls, spec: CommandSpec, r: "CommandResult") -> "StopCheckResult":
+        lines = [line.strip() for line in r.stdout.splitlines() if line.strip()]
+        # `jq -e` prints the value it tested: true/false/null says nothing, the command does.
+        last = lines[-1] if lines else None
+        return cls(command=spec.command, return_code=r.return_code, output=r.output,
+                   reason=last if last and last not in ("true", "false", "null") else spec.command,
+                   timed_out=r.timed_out, duration_s=r.duration_s)
 
     @property
     def stop(self) -> bool:
-        return self.return_code == 0
+        return self.return_code == 0 and not self.timed_out
 
     @property
     def error(self) -> bool:
-        return self.return_code not in (0, 1)
+        return self.timed_out or self.return_code not in (0, 1)
+
+    @property
+    def outcome(self) -> str:
+        """"stop", "continue" or "error", as the iteration record has it."""
+        return "stop" if self.stop else "error" if self.error else "continue"
+
+    def problem(self) -> str:
+        """An error's kind, for messages: `timed out`, `could not run`, `exited 2`."""
+        return ("timed out" if self.timed_out else "could not run" if self.return_code == -1
+                else f"exited {self.return_code}")
+
+    def record(self, text: str) -> dict:
+        """The record's item for this command (`IterationResult.stops`), like a gate's."""
+        item = {"text": text, "outcome": self.outcome, "return_code": self.return_code,
+                "duration_s": None if self.duration_s is None else round(self.duration_s, 3)}
+        if self.timed_out:
+            item["timed_out"] = True
+        return item
 
 
 def run_stop_checks(
@@ -313,21 +332,15 @@ def run_stop_checks(
     each command's result as `run_gate_commands`' does (its context still open)."""
     results: list[StopCheckResult] = []
     for c in config.stop:
-        with (per_command or _no_extra)(c.command) as added:
+        with (per_command or _no_extra)(c) as added:
             r = run_command(
                 c.command, cwd, timeout=c.timeout, project_path=project_path,
                 extra_env={**(extra_env or {}), **added},
             )
             if on_result:
                 on_result(c, r)
-        lines = [line.strip() for line in r.stdout.splitlines() if line.strip()]
-        # `jq -e` prints the value it tested: true/false/null says nothing, the command does.
-        last = lines[-1] if lines else None
-        results.append(StopCheckResult(
-            command=c.command, return_code=r.return_code, output=r.output,
-            reason=last if last and last not in ("true", "false", "null") else c.command,
-        ))
-        if r.return_code == 0:
+        results.append(StopCheckResult.of(c, r))
+        if results[-1].stop:
             break
     return results
 
@@ -350,53 +363,6 @@ def parse_structured_metrics(output: str) -> dict[str, float]:
         if math.isfinite(value):  # 1e999 is not a measurement; treat it as not produced
             results[match.group(1)] = value
     return results
-
-
-def parse_metric_output(
-    output: str,
-    metric_name: str | None = None,
-    allow_unnamed_fallback: bool = True,
-) -> float | None:
-    """Extract a numeric value from command output.
-
-    Recognized formats (in priority order):
-    - ##autohelix[name=1234] (structured protocol, recommended)
-    - "<metric_name>: 1234" or "<metric_name>=1234" (if metric_name provided)
-
-    Returns None if no value can be parsed. Metric commands should print
-    their result as: ##autohelix[name=value]
-
-    `allow_unnamed_fallback`: when a single structured metric is reported, use it
-    regardless of its name. Only safe when exactly one metric is *declared* —
-    otherwise the lone emitted value would be fabricated for every declared
-    metric (e.g. declaring throughput+latency but emitting only throughput would
-    record both as the same number). Callers with multiple declared metrics
-    should pass False.
-    """
-    # First, try the structured ##autohelix[key=value] protocol
-    structured = parse_structured_metrics(output)
-    if metric_name and metric_name in structured:
-        return structured[metric_name]
-    # If only one structured metric was reported, use it regardless of name
-    if allow_unnamed_fallback and len(structured) == 1:
-        return next(iter(structured.values()))
-
-    # A structured line for this name that isn't a finite number reports nothing; the
-    # name match below would read "1" out of "##autohelix[speed=1e999]".
-    if metric_name and f"##autohelix[{metric_name}=" in output:
-        return None
-
-    # Then, try to match the metric name from config (e.g., "throughput: 1234")
-    if metric_name:
-        pattern = rf"(?:{re.escape(metric_name)})[:\s=]+([0-9.]+)"
-        match = re.search(pattern, output, re.MULTILINE | re.IGNORECASE)
-        if match:
-            try:
-                return float(match.group(1))
-            except ValueError:
-                pass
-
-    return None
 
 
 @dataclass
@@ -457,26 +423,20 @@ def run_observe_entry(
     if run.return_code != 0:
         return failed(f"exited {run.return_code}", run.return_code)
 
+    # Only `##autohelix[name=value]` lines on stdout count, matched by name: a
+    # `name: value` line or a structured line under another name is not the metric.
     values: dict[str, float] = {}
     errors: dict[str, str] = {}
-    # The unnamed-metric fallback is only safe when a single metric is
-    # declared; with several, it would copy the lone emitted value into
-    # every declared name (see parse_metric_output).
-    allow_unnamed_fallback = len(mc.metrics) == 1
     structured = parse_structured_metrics(run.stdout)
+    others = sorted(set(structured) - set(mc.metrics))
     for name in mc.metrics:
-        if mc.review is not None:  # the review's prose can't carry a number
-            value = structured.get(name)
-        else:
-            value = parse_metric_output(
-                output, metric_name=name, allow_unnamed_fallback=allow_unnamed_fallback
-            )
-        if value is not None:
-            values[name] = value
+        if name in structured:
+            values[name] = structured[name]
         else:
             errors[name] = (
-                f"Could not parse metric value from output. "
-                f"Recommended: print '##autohelix[{name}=<number>]' from your benchmark script."
+                f"Could not read metric {name!r}: print '##autohelix[{name}=<number>]' on stdout"
+                + (f" (it reported {', '.join(others)})" if others else "")
+                + "."
             )
     if mc.review is not None and errors:  # a review that leaves a declared number out fails
         return failed(f"did not report {', '.join(errors)}", run.return_code)

@@ -1,6 +1,6 @@
 """Integration tests for the full AutoHelix loop.
 
-These tests exercise the complete harness: worktree creation, agent execution,
+These tests exercise the complete harness: copy creation, agent execution,
 constraint checking, and merging/rejection.
 
 Tests marked with @pytest.mark.slow actually invoke Claude and take longer.
@@ -18,6 +18,7 @@ from autohelix.config import Config, load_config
 from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.runs import RunPaths
+from tests.helpers import latest_run
 
 
 @pytest.fixture
@@ -69,7 +70,7 @@ class TestMockAgentIntegration:
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
 
         # Should have baseline + 1 iteration
@@ -83,7 +84,7 @@ class TestMockAgentIntegration:
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=3))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
 
         # Should have baseline + 3 iterations
@@ -115,7 +116,7 @@ class TestMockAgentIntegration:
 
         harness.run(Budget(until=1))  # no error: a failed agent call is a rejection
 
-        results = History(integration_project).load()
+        results = History(integration_project, latest_run(integration_project).run_id).load()
         assert [result.iteration for result in results] == [0, 1]
         assert not results[-1].accepted and results[-1].cost.incomplete
         assert results[-1].reason == "Iteration 1 agent failed: API Error: invalid model"
@@ -159,7 +160,7 @@ observe:
         ):
             harness.run(Budget(until=1))
 
-        records = History(integration_project).load()
+        records = History(integration_project, latest_run(integration_project).run_id).load()
         assert len(records) == 1 and records[0].iteration == 0 and not records[0].accepted
 
     def _commit_config(self, project, text, files=()):
@@ -193,7 +194,7 @@ observe:
     metrics: {speed: higher}
 """, files=[("bench.py", self.BENCH)])
         Harness(integration_project, verbose=False).run(Budget(until=2), report=False)
-        records = History(integration_project).load()
+        records = History(integration_project, latest_run(integration_project).run_id).load()
         assert [(r.iteration, r.accepted, r.metrics.get("speed")) for r in records] == [
             (0, True, 100), (1, True, 97), (2, True, 94)]
 
@@ -214,7 +215,7 @@ observe:
     metrics: {speed: higher}
 """, files=[("bench.py", self.BENCH)])
         Harness(integration_project, verbose=False).run(Budget(until=1), report=False)
-        [_, record] = History(integration_project).load()
+        [_, record] = History(integration_project, latest_run(integration_project).run_id).load()
         assert not record.accepted
         assert record.reason == "metric gate: speed 97 does not improve on 100"
 
@@ -236,7 +237,7 @@ agent:
                 harness.run(Budget(until=1), report=False)
         else:
             harness.run(Budget(until=1), report=False)
-            assert [r.accepted for r in History(integration_project).load()] == [True, True]
+            assert [r.accepted for r in History(integration_project, latest_run(integration_project).run_id).load()] == [True, True]
 
     def test_constraint_failure_rejects(self, integration_project):
         """A failing constraint should reject the iteration."""
@@ -267,7 +268,7 @@ gates:
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
 
         # Iteration should be rejected
@@ -302,7 +303,7 @@ gates:
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
 
         assert results[1].accepted is False
@@ -334,7 +335,7 @@ scope:
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
 
         # Iteration should be accepted
@@ -373,7 +374,7 @@ scope:
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
 
         assert len(results) == 2
@@ -403,7 +404,7 @@ gates:
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         assert history.load()[-1].reason == "Iteration 1 agent failed: Mock failure"
         assert [result.iteration for result in history.load()] == [0, 1]
 
@@ -480,7 +481,7 @@ gates:
         harness = Harness(real_agent_project, verbose=True)
         harness.run(Budget(until=1))
 
-        history = History(real_agent_project)
+        history = History(real_agent_project, latest_run(real_agent_project).run_id)
         results = history.load()
 
         # Should have completed (accepted or rejected based on agent's work)
@@ -526,7 +527,7 @@ gates:
         monkeypatch.setattr("autohelix.checks.shutil.which", lambda command: "/mock/codex")
         Harness(integration_project).run(Budget(until=1), report=False)
         Harness(integration_project).run(Budget(until=2), report=False)
-        iterations = [r for r in History(integration_project).load() if r.iteration > 0]
+        iterations = [r for r in History(integration_project, latest_run(integration_project).run_id).load() if r.iteration > 0]
         assert len(iterations) == 2
         assert all(r.accepted for r in iterations)
         assert all(r.usage["cost_usd"] == pytest.approx(0.01) for r in iterations)
@@ -573,7 +574,7 @@ gates:
         harness.run_iteration = patched_run_iteration
         harness.run(Budget(until=10, cost_usd=0.10))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
         iterations = [r for r in results if r.iteration > 0]
 
@@ -612,7 +613,7 @@ gates:
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=10, time_seconds=5))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
         iterations = [r for r in results if r.iteration > 0]
 
@@ -624,7 +625,7 @@ gates:
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=2))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
         iterations = [r for r in results if r.iteration > 0]
         assert len(iterations) == 2
@@ -658,7 +659,7 @@ gates:
         harness.run_iteration = patched_run_iteration
         harness.run(Budget(iterations=100, cost_usd=0.10, time_seconds=3600))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
         iterations = [r for r in results if r.iteration > 0]
 
@@ -694,7 +695,7 @@ gates:
         harness.run_iteration = patched_run_iteration
         harness.run(Budget(until=10, cost_usd=0.10))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
         iterations = [r for r in results if r.iteration > 0]
         assert len(iterations) == 1
@@ -729,7 +730,7 @@ gates:
         harness.run_iteration = patched_run_iteration
         harness.run(Budget(until=3, cost_usd=1.0))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
         iterations = [r for r in results if r.iteration > 0]
         # All 3 iterations should complete (cost never reaches $1)
@@ -770,14 +771,14 @@ gates:
         harness1.run_iteration = patched_run_iteration1
         harness1.run(Budget(until=2, cost_usd=0.15))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results1 = history.load()
         iters1 = [r for r in results1 if r.iteration > 0]
         assert len(iters1) == 2
 
         # Patch the history file to include cost_usd (the monkey-patch sets it
         # after history.append writes, so the JSONL doesn't have it yet)
-        history_path = RunPaths(integration_project).history
+        history_path = latest_run(integration_project).history
         lines = history_path.read_text().splitlines()
         updated = []
         for line in lines:
@@ -805,7 +806,7 @@ gates:
         iters2 = [r for r in results2 if r.iteration > 0]
         # $0.05 each: iterations 3, 4 and 5 reach $0.15 this segment
         assert len(iters2) == 5
-        status = json.loads(RunPaths(integration_project).status.read_text())
+        status = json.loads(latest_run(integration_project).status.read_text())
         assert status["max_cost_usd"] == pytest.approx(0.25)
         assert status["stop_reason"]["detail"] == "cost budget reached ($0.15 this segment)"
 
@@ -821,7 +822,7 @@ gates:
         harness1.run(Budget(until=2))
 
         # 14s + 5s recorded before: the first by wall_clock_ms, the second by duration_ms only.
-        history_path = RunPaths(integration_project).history
+        history_path = latest_run(integration_project).history
         updated = []
         for line in history_path.read_text().splitlines():
             entry = json.loads(line)
@@ -834,15 +835,15 @@ gates:
                         call["usage"].pop("wall_clock_ms", None)
             updated.append(json.dumps(entry))
         history_path.write_text("\n".join(updated) + "\n")
-        records = History(integration_project).load()
+        records = History(integration_project, latest_run(integration_project).run_id).load()
         assert [record_seconds(r) for r in records if r.iteration > 0] == [14, 5]
         before = sum(record_seconds(r) for r in records)
 
         # 40s of --time is plenty for two mock iterations, whatever ran before.
         harness2 = Harness(integration_project, verbose=False)
         harness2.run(Budget(until=4, time_seconds=40))
-        assert [r.iteration for r in History(integration_project).load() if r.iteration > 0] == [1, 2, 3, 4]
-        status = json.loads(RunPaths(integration_project).status.read_text())
+        assert [r.iteration for r in History(integration_project, latest_run(integration_project).run_id).load() if r.iteration > 0] == [1, 2, 3, 4]
+        status = json.loads(latest_run(integration_project).status.read_text())
         assert status["max_time_seconds"] == 40 and before >= 19
         assert status["max_iterations"] == 4 and status["max_cost_usd"] is None
 
@@ -851,7 +852,7 @@ gates:
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
         iterations = [r for r in results if r.iteration > 0]
         assert len(iterations) == 1
@@ -876,7 +877,7 @@ gates:
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=3))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
         iterations = [r for r in results if r.iteration > 0]
         assert len(iterations) == 3
@@ -910,7 +911,7 @@ gates:
         harness.run_iteration = patched_run_iteration
         harness.run(Budget(until=10, cost_usd=0.30))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
         iterations = [r for r in results if r.iteration > 0]
         # 0.1 + 0.1 + 0.1 = 0.30000000000000004 >= 0.30, stops after 3
@@ -939,10 +940,10 @@ gates:
         harness1 = Harness(integration_project, verbose=False)
         harness1.run(Budget(until=2))
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
 
         # Patch history entries to have wall_clock_ms=0 (simulating crashed iterations)
-        history_path = RunPaths(integration_project).history
+        history_path = latest_run(integration_project).history
         lines = history_path.read_text().splitlines()
         updated = []
         for line in lines:
@@ -998,7 +999,7 @@ gates:
         harness.run_iteration = patched_run_iteration
         harness.run(Budget(cost_usd=0.10))  # --cost alone: no iteration cap
 
-        history = History(integration_project)
+        history = History(integration_project, latest_run(integration_project).run_id)
         results = history.load()
         iterations = [r for r in results if r.iteration > 0]
 
@@ -1007,31 +1008,13 @@ gates:
         assert all(not r.accepted for r in iterations)
 
 
-class TestFormatTime:
-    def test_seconds_only(self):
-        from autohelix.harness import _format_time
-        assert _format_time(45) == "45s"
+class TestFormatLimit:
+    """A limit (`--time`, `agent.timeout`) is spelled as the config spells it, in the
+    stop line too: harness.py's own `_format_time` ("2m 5s") was a third format."""
 
-    def test_minutes_and_seconds(self):
-        from autohelix.harness import _format_time
-        assert _format_time(125) == "2m 5s"
-
-    def test_hours_minutes_seconds(self):
-        from autohelix.harness import _format_time
-        assert _format_time(7265) == "2h 1m 5s"
-
-    def test_exact_hour(self):
-        from autohelix.harness import _format_time
-        assert _format_time(3600) == "1h"
-
-    def test_exact_minutes(self):
-        from autohelix.harness import _format_time
-        assert _format_time(120) == "2m"
-
-    def test_hours_and_seconds_skips_zero_minutes(self):
-        from autohelix.harness import _format_time
-        assert _format_time(7205) == "2h 5s"
-
-    def test_zero(self):
-        from autohelix.harness import _format_time
-        assert _format_time(0) == "0s"
+    @pytest.mark.parametrize("seconds, text", [
+        (45, "45s"), (125, "2m5s"), (7265, "2h1m5s"), (3600, "1h"), (120, "2m"), (7205, "2h5s"), (0, "0s"),
+    ])
+    def test_format_limit(self, seconds, text):
+        from autohelix.iteration_time import format_limit
+        assert format_limit(seconds) == text

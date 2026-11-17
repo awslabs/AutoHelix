@@ -10,10 +10,9 @@
 // Appending to it injects the time-remaining line into the model's context after
 // each tool runs — the same idea, and the same wording, as the Claude hook.
 //
-// AutoHelix drops this file into <worktree>/.opencode/plugin/ for an iteration
+// AutoHelix drops this file into <copy>/.opencode/plugin/ for an iteration
 // when agent.timeout is set, and exports these env vars to the agent:
 //   AUTOHELIX_TIME_LEFT_SCRIPT  path to time_left.sh (the shared, tiered message)
-//   AUTOHELIX_RUN_DIR           the run's state folder (its logs/ holds the audit log)
 //
 // Single source of truth: we shell out to time_left.sh rather than reimplement
 // the tiers, so opencode and Claude inject identical text.
@@ -22,33 +21,6 @@
 // On any failure we leave output.output untouched.
 
 import { execFileSync } from "child_process"
-import fs from "fs"
-import path from "path"
-
-function auditLogPath() {
-  if (process.env.AUTOHELIX_HOOK_AUDIT_LOG) return process.env.AUTOHELIX_HOOK_AUDIT_LOG
-  const run = process.env.AUTOHELIX_RUN_DIR
-  if (run) {
-    try {
-      const dir = path.join(run, "logs")
-      fs.mkdirSync(dir, { recursive: true })
-      return path.join(dir, "opencode_plugin_audit.log")
-    } catch (e) {
-      /* fall through */
-    }
-  }
-  return null
-}
-
-function audit(line) {
-  const log = auditLogPath()
-  if (!log) return
-  try {
-    fs.appendFileSync(log, new Date().toISOString() + " opencode_timer: " + line + "\n")
-  } catch (e) {
-    /* never let logging kill the run */
-  }
-}
 
 export const AutoHelixTimer = async () => {
   return {
@@ -59,10 +31,8 @@ export const AutoHelixTimer = async () => {
         const msg = execFileSync("bash", [script], { encoding: "utf8", timeout: 5000 }).trim()
         if (msg) {
           output.output = output.output + "\n\n[" + msg + "]"
-          audit("injected: " + msg)
         }
       } catch (e) {
-        audit("error: " + (e && e.message ? e.message : String(e)))
         /* never let the timer kill the run */
       }
     },

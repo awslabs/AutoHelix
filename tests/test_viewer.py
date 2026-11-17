@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -13,42 +14,113 @@ import pytest
 from autohelix.agents import AgentRunResult
 from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.run_status import RunStatus, read_run_status
+from autohelix.runs import RunLock
 from autohelix.viewer import make_server
 from autohelix.runs import RunPaths, short_id
 from tests.test_integration import integration_project  # noqa: F401  (fixture)
+from tests.helpers import latest_run
 
 
 # ---------- run status ----------
 
 def test_run_status_lifecycle(tmp_path, run_paths):
-    status = RunStatus(tmp_path)
+    status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
+    status.lock = RunLock(latest_run(tmp_path).lock)  # a running segment holds the run's lock
     status.phase("agent", 1)  # Before start: ignored, writes nothing.
-    assert read_run_status(tmp_path) is None
+    assert read_run_status(tmp_path, latest_run(tmp_path).run_id) is None
 
     status.start(max_iterations=3)
     status.phase("agent", 2)
-    data = read_run_status(tmp_path)
+    data = read_run_status(tmp_path, latest_run(tmp_path).run_id)
     assert (data["state"], data["iteration"], data["phase"]) == ("running", 2, "agent")
 
     status.stop("interrupted")
     status.stop("finished")  # First stop wins.
-    assert read_run_status(tmp_path)["state"] == "interrupted"
+    assert read_run_status(tmp_path, latest_run(tmp_path).run_id)["state"] == "interrupted"
 
 
 def test_dead_process_reads_as_crashed(tmp_path, run_paths):
-    status = RunStatus(tmp_path)
+    status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
     status.start()
     data = json.loads(status.path.read_text())
     proc = subprocess.Popen(["true"])
     proc.wait()
     data["pid"] = proc.pid  # A pid that has exited.
     status.path.write_text(json.dumps(data))
-    assert read_run_status(tmp_path)["state"] == "crashed"
+    assert read_run_status(tmp_path, latest_run(tmp_path).run_id)["state"] == "crashed"
+
+
+def test_a_running_status_is_running_only_while_its_lock_is_held(tmp_path, run_paths):
+    """Liveness comes from the run lock, not the pid: a reused pid (any live process,
+    another user's too) used to keep a dead run "running" forever."""
+    status = RunStatus(tmp_path, run_paths.run_id)
+    status.start()
+    sleeper = subprocess.Popen(["sleep", "30"])
+    try:
+        data = json.loads(status.path.read_text())
+        data["pid"] = sleeper.pid  # alive, but not the run's process
+        status.path.write_text(json.dumps(data))
+        assert read_run_status(tmp_path, run_paths.run_id)["state"] == "crashed"  # nobody holds the lock
+        data["pid"] = 1  # a root process: the pid probe's PermissionError counted it alive
+        status.path.write_text(json.dumps(data))
+        assert read_run_status(tmp_path, run_paths.run_id)["state"] == "crashed"
+        # Another process holding the lock: running, whatever the pid.
+        run_paths.lock.parent.mkdir(parents=True, exist_ok=True)
+        holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time; f = open(sys.argv[1], 'a+'); "
+                                   "fcntl.flock(f, fcntl.LOCK_EX); print('held', flush=True); time.sleep(30)",
+                                   str(run_paths.lock)], stdout=subprocess.PIPE, text=True)
+        try:
+            assert holder.stdout.readline() == "held\n"
+            assert read_run_status(tmp_path, run_paths.run_id)["state"] == "running"
+        finally:
+            holder.kill()
+            holder.wait()
+        assert read_run_status(tmp_path, run_paths.run_id)["state"] == "crashed"
+        # This process holding the lock (a resume reading the segment it continues): only
+        # its own pid is running.
+        with RunLock(run_paths.lock):
+            assert read_run_status(tmp_path, run_paths.run_id)["state"] == "crashed"
+            data["pid"] = os.getpid()
+            status.path.write_text(json.dumps(data))
+            assert read_run_status(tmp_path, run_paths.run_id)["state"] == "running"
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+def test_the_liveness_probe_creates_no_lock_file(tmp_path, run_paths):
+    status = RunStatus(tmp_path, run_paths.run_id)
+    status.start()
+    assert read_run_status(tmp_path, run_paths.run_id)["state"] == "crashed"
+    assert not run_paths.lock.exists()
+
+
+def test_a_probe_holding_a_free_lock_for_a_moment_doesnt_refuse_the_run(tmp_path, run_paths):
+    """`is_live` takes a free lock briefly; `RunLock` (resume, land, delete) tries again
+    for a moment instead of saying the run is running. A lock held longer refuses."""
+    import fcntl
+    import threading
+
+    run_paths.lock.parent.mkdir(parents=True, exist_ok=True)
+    run_paths.lock.touch()
+    probe = open(run_paths.lock)
+    fcntl.flock(probe, fcntl.LOCK_EX)  # what the probe does, held across RunLock's first try
+    timer = threading.Timer(0.02, probe.close)
+    timer.start()
+    try:
+        with RunLock(run_paths.lock):
+            pass
+    finally:
+        timer.join()
+    with open(run_paths.lock) as holder:
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        with pytest.raises(RuntimeError, match="is running"):
+            RunLock(run_paths.lock)
 
 
 def test_harness_records_finished_run(integration_project):  # noqa: F811
     Harness(integration_project).run(Budget(until=1))
-    data = read_run_status(integration_project)
+    data = read_run_status(integration_project, latest_run(integration_project).run_id)
     assert data["state"] == "finished"
     assert data["iteration"] == 1
 
@@ -62,12 +134,12 @@ def test_harness_records_failed_run(integration_project, monkeypatch):  # noqa: 
     monkeypatch.setattr(harness, "run_agent", broken)
     with pytest.raises(AutoHelixRunError):
         harness.run(Budget(until=1))
-    assert read_run_status(integration_project)["state"] == "failed"
+    assert read_run_status(integration_project, latest_run(integration_project).run_id)["state"] == "failed"
     # A failed agent call is a rejected iteration: the run finishes normally.
     harness = Harness(integration_project)
     monkeypatch.setattr(harness, "run_agent", lambda *a, **k: AgentRunResult(success=False, exit_code=1))
     harness.run(Budget(until=2))
-    assert read_run_status(integration_project)["state"] == "finished"
+    assert read_run_status(integration_project, latest_run(integration_project).run_id)["state"] == "finished"
 
 
 # ---------- viewer server ----------
@@ -75,14 +147,23 @@ def test_harness_records_failed_run(integration_project, monkeypatch):  # noqa: 
 @pytest.fixture
 def viewer(integration_project):  # noqa: F811
     Harness(integration_project).run(Budget(until=2))
-    root = RunPaths(integration_project).run_dir
+    root = latest_run(integration_project).run_dir
     (root / "notes" / "iter-2.md").write_text("Tried **the obvious** thing.\n\n<script>alert(1)</script>")
     server = make_server(integration_project, port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    yield f"http://127.0.0.1:{server.server_port}"
+    yield Viewer(f"http://127.0.0.1:{server.server_port}", latest_run(integration_project).run_id)
     server.shutdown()
     server.server_close()
+
+
+class Viewer(str):
+    """The server's base URL; `.api` is the run's routes, `/api/run/<id>` (the only ones)."""
+
+    def __new__(cls, base: str, run_id: str):
+        url = super().__new__(cls, base)
+        url.api = f"{base}/api/run/{run_id}"
+        return url
 
 
 def get(url, host=None):
@@ -95,7 +176,7 @@ def get(url, host=None):
 
 
 def test_state_lists_iterations_and_status(viewer):
-    status, body = get(viewer + "/api/state")
+    status, body = get(viewer.api + "/state")
     state = json.loads(body)
     assert status == 200
     assert [r["iteration"] for r in state["iterations"]] == [0, 1, 2]
@@ -112,7 +193,7 @@ def test_state_lists_iterations_and_status(viewer):
 
 
 def test_iteration_detail_has_notes_and_diff(viewer):
-    detail = json.loads(get(viewer + "/api/iteration/2")[1])
+    detail = json.loads(get(viewer.api + "/iteration/2")[1])
     assert "<strong>the obvious</strong>" in detail["notes"]
     assert "<script>" not in detail["notes"]  # Raw HTML is escaped, not rendered.
     assert "Modified in iteration 2" in detail["diff"]
@@ -127,52 +208,54 @@ def test_static_assets_served(viewer):
 
 
 def test_rejects_non_loopback_host(viewer):
-    assert get(viewer + "/api/state", host="attacker.example")[0] == 403
+    assert get(viewer.api + "/state", host="attacker.example")[0] == 403
     # SSH forwards may use any local port; only the host name matters.
-    assert get(viewer + "/api/state", host="localhost:9999")[0] == 200
+    assert get(viewer.api + "/state", host="localhost:9999")[0] == 200
 
 
 def test_no_arbitrary_file_routes(viewer):
     for path in ("/history.jsonl", "/../autohelix.yaml", "/api/iteration/..%2fhistory", "/api/file"):
         assert get(viewer + path)[0] == 404
+    for path in ("/iteration/..%2fhistory", "/file", "/history.jsonl"):
+        assert get(viewer.api + path)[0] == 404
 
 
 def test_read_only(viewer):
-    request = urllib.request.Request(viewer + "/api/state", data=b"{}", method="POST")
+    request = urllib.request.Request(viewer.api + "/state", data=b"{}", method="POST")
     with pytest.raises(urllib.error.HTTPError) as error:
         urllib.request.urlopen(request)
     assert error.value.code == 501
 
 
 def test_notes_list_and_note_route(viewer):
-    state = json.loads(get(viewer + "/api/state")[1])
+    state = json.loads(get(viewer.api + "/state")[1])
     assert "iter-2.md" in state["notes_files"]
-    note = json.loads(get(viewer + "/api/notes/iter-2.md")[1])
+    note = json.loads(get(viewer.api + "/notes/iter-2.md")[1])
     assert "<strong>the obvious</strong>" in note["html"]
-    assert get(viewer + "/api/notes/..%2Fhistory.jsonl")[0] == 404
-    assert get(viewer + "/api/notes/missing.md")[0] == 404
+    assert get(viewer.api + "/notes/..%2Fhistory.jsonl")[0] == 404
+    assert get(viewer.api + "/notes/missing.md")[0] == 404
 
 
 def test_artifacts_listed_and_served_safely(viewer, integration_project):  # noqa: F811
-    obs = RunPaths(integration_project).observe_entry(2, "bench")
+    obs = latest_run(integration_project).observe_entry(2, "bench")
     obs.mkdir(parents=True, exist_ok=True)
     (obs / "page.html").write_text("<script>alert(1)</script>")
     (obs / "plot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-    sections = json.loads(get(viewer + "/api/iteration/2")[1])["observe"]
+    sections = json.loads(get(viewer.api + "/iteration/2")[1])["observe"]
     assert {"bench/page.html", "bench/plot.png"} <= {a["path"] for a in sections[0]["files"]}
 
-    request = urllib.request.Request(viewer + "/api/artifact/2/bench/page.html")
+    request = urllib.request.Request(viewer.api + "/artifact/2/bench/page.html")
     with urllib.request.urlopen(request) as response:
         assert response.headers["Content-Type"].startswith("text/plain")  # never rendered as HTML
-    with urllib.request.urlopen(viewer + "/api/artifact/2/bench/plot.png") as response:
+    with urllib.request.urlopen(viewer.api + "/artifact/2/bench/plot.png") as response:
         assert response.headers["Content-Type"] == "image/png"
-    assert get(viewer + "/api/artifact/2/..%2F..%2Fhistory.jsonl")[0] == 404
-    assert get(viewer + "/api/artifact/2/bench/../../../history.jsonl")[0] == 404
+    assert get(viewer.api + "/artifact/2/..%2F..%2Fhistory.jsonl")[0] == 404
+    assert get(viewer.api + "/artifact/2/bench/../../../history.jsonl")[0] == 404
 
 
 def test_diff_is_relative_to_baseline(viewer):
-    one = json.loads(get(viewer + "/api/iteration/1")[1])["diff"]
-    two = json.loads(get(viewer + "/api/iteration/2")[1])["diff"]
+    one = json.loads(get(viewer.api + "/iteration/1")[1])["diff"]
+    two = json.loads(get(viewer.api + "/iteration/2")[1])["diff"]
     assert "Modified in iteration 1" in one and "Modified in iteration 2" not in one
     assert "+# Modified in iteration 1" in two and "+# Modified in iteration 2" in two
 
@@ -181,7 +264,7 @@ def test_running_iteration_shows_copy_diff(viewer, integration_project):  # noqa
     from autohelix.runs import ensure_copies
     from autohelix.workspace import Copy, Repo
 
-    paths = RunPaths(integration_project)
+    paths = latest_run(integration_project)
     ensure_copies(paths.copies)
     copy = Copy.create(Repo(integration_project), paths.copies / "iter-3-agent",
                        files="HEAD", head="HEAD")
@@ -190,7 +273,7 @@ def test_running_iteration_shows_copy_diff(viewer, integration_project):  # noqa
     (copy.path / "brand_new.py").write_text("NEW = 1\n")  # untracked: plain git diff would miss it
     (copy.path / ".autohelix-iteration" / "notes").mkdir(parents=True)  # the harness's material
     (copy.path / ".autohelix-iteration" / "notes" / "iter-3.md").write_text("SEEDED NOTE\n")
-    diff = json.loads(get(viewer + "/api/iteration/3")[1])["diff"]
+    diff = json.loads(get(viewer.api + "/iteration/3")[1])["diff"]
     assert '+print("work in progress")' in diff
     assert "+NEW = 1" in diff
     assert "SEEDED NOTE" not in diff and ".autohelix-iteration" not in diff
@@ -202,11 +285,11 @@ def test_viewer_index_is_private_and_one_per_run(viewer, integration_project):  
     from autohelix.runs import ensure_copies
     from autohelix.workspace import Copy, Repo, _private_index_dir
 
-    paths = RunPaths(integration_project)
+    paths = latest_run(integration_project)
     ensure_copies(paths.copies)
     for n in (3, 4):
         copy = Copy.create(Repo(integration_project), paths.copies / f"iter-{n}-agent", files="HEAD", head="HEAD")
-        get(viewer + f"/api/iteration/{n}")
+        get(viewer.api + f"/iteration/{n}")
         copy.remove()
     # Removed at process exit with the harness indexes; an earlier iteration's is dropped.
     run = hashlib.sha256(os.fsencode(paths.copies)).hexdigest()[:16]
@@ -217,13 +300,13 @@ def test_viewer_index_is_private_and_one_per_run(viewer, integration_project):  
                                            ("agent", False), ("between iterations", False)])
 def test_frozen_candidate_diff_only_once_this_iteration_froze(viewer, integration_project, phase, shown):  # noqa: F811
     # As if a segment were live: the pin holds iteration 2's tree; iteration 3 has no copy yet.
-    paths = RunPaths(integration_project)
+    paths = latest_run(integration_project)
     tree = subprocess.run(["git", "rev-parse", f"{paths.ref}^{{tree}}"], cwd=integration_project,
                           capture_output=True, text=True, check=True).stdout.strip()
     subprocess.run(["git", "update-ref", paths.pin, tree], cwd=integration_project, check=True)
     status = json.loads(paths.status.read_text())
     paths.status.write_text(json.dumps({**status, "iteration": 3, "phase": phase}))
-    diff = json.loads(get(viewer + "/api/iteration/3")[1])["diff"]
+    diff = json.loads(get(viewer.api + "/iteration/3")[1])["diff"]
     assert (diff is not None and "Modified in iteration 2" in diff) is shown
 
 
@@ -235,9 +318,9 @@ def test_long_logs_are_clipped_visibly(tmp_path, monkeypatch, run_paths):
     line = json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}})
     log.write_text("\n".join([json.dumps({"type": "system", "subtype": "init"})] + [line] * 8) + "\n")
     from autohelix.history import History, IterationResult
-    History(tmp_path).append(IterationResult(1, True, calls=[{"role": "agent", "usage": {},
+    History(tmp_path, latest_run(tmp_path).run_id).append(IterationResult(1, True, calls=[{"role": "agent", "usage": {},
                                                            "log": str(log.relative_to(run_paths.run_dir))}]))
-    detail = viewer_module.RunData(tmp_path).iteration(1)
+    detail = viewer_module.RunData(tmp_path, latest_run(tmp_path).run_id).iteration(1)
     assert len(detail["agent"]) == 5  # status events are skipped, oldest results dropped
     assert all(e["kind"] == "tool_result" for e in detail["agent"])
     assert detail["agent_clipped"] is True
@@ -248,19 +331,19 @@ def test_idle_connection_does_not_block_other_requests(viewer):
     host, port = viewer.removeprefix("http://").split(":")
     idle = socket.create_connection((host, int(port)))  # like a browser preconnect that sends nothing
     try:
-        assert get(viewer + "/api/state")[0] == 200
+        assert get(viewer.api + "/state")[0] == 200
     finally:
         idle.close()
 
 
 def test_tampered_commit_is_never_passed_to_git(viewer, integration_project):  # noqa: F811
-    history = RunPaths(integration_project).history
+    history = latest_run(integration_project).history
     rows = [json.loads(line) for line in history.read_text().splitlines()]
     rows[1]["commit"] = "--output=PWNED"
     history.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    (RunPaths(integration_project).copies / "iter-9").mkdir(parents=True)
-    get(viewer + "/api/iteration/9")
-    get(viewer + "/api/iteration/2")
+    (latest_run(integration_project).copies / "iter-9").mkdir(parents=True)
+    get(viewer.api + "/iteration/9")
+    get(viewer.api + "/iteration/2")
     assert not list(integration_project.rglob("PWNED*"))
 
 
@@ -270,8 +353,8 @@ def test_preflight_failure_is_not_recorded_as_a_run(integration_project):  # noq
     subprocess.run(["git", "commit", "-qam", "Use a missing agent"], cwd=integration_project, check=True)
     with pytest.raises(RuntimeError, match="Preflight checks failed"):
         Harness(integration_project)
-    assert read_run_status(integration_project) is None
-    assert not (RunPaths(integration_project).current).exists()
+    assert read_run_status(integration_project, latest_run(integration_project).run_id) is None
+    assert not list(RunPaths(integration_project).runs.glob("*/run.json"))
 
 
 def _snapshot(page: str) -> dict:
@@ -283,7 +366,7 @@ def test_stopped_run_saves_static_page(integration_project):  # noqa: F811
     (integration_project / "hello.py").write_text('print("</script><b>")\n')  # text that must not break out
     subprocess.run(["git", "commit", "-qam", "tricky"], cwd=integration_project)
     Harness(integration_project).run(Budget(until=2))
-    page = RunPaths(integration_project).report_html.read_text()
+    page = latest_run(integration_project).report_html.read_text()
     for ref in ('src="/viewer.js"', 'href="/viewer.css"', 'src="/logo-light.svg"', 'href="/logo-light.svg"'):
         assert ref not in page  # everything is inlined
     data = _snapshot(page)
@@ -305,7 +388,7 @@ def test_interrupted_run_still_saves_static_page(integration_project, monkeypatc
     harness = Harness(integration_project)
     monkeypatch.setattr(harness, "run_iteration", lambda n: (_ for _ in ()).throw(KeyboardInterrupt))
     harness.run(Budget(until=1))
-    page = RunPaths(integration_project).report_html.read_text()
+    page = latest_run(integration_project).report_html.read_text()
     state = _snapshot(page)["routes"]["/api/state"]
     assert state["status"]["state"] == "interrupted"
     assert state["report"] is None
@@ -351,11 +434,11 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
         assert runs[second.paths.run_id]["landing"] == {"commits": 1, "fast_forward": False}
         assert runs[first.paths.run_id]["landing"]["commits"] == 0
 
-        # Each run has its own page and routes, independent of `current`.
+        # Each run has its own page and routes.
         assert b"viewer.js" in get(base + f"/run/{first.paths.run_id}/")[1]
         state = json.loads(get(base + f"/api/run/{first.paths.run_id}/state")[1])
         assert state["run_id"] == first.paths.run_id and len(state["iterations"]) == 3
-        assert json.loads(get(base + "/api/state")[1])["run_id"] == second.paths.run_id
+        assert get(base + "/api/state")[0] == 404  # no unprefixed "default run" routes
         detail = json.loads(get(base + f"/api/run/{first.paths.run_id}/iteration/2")[1])
         assert "Modified in iteration 2" in detail["diff"]
 
@@ -464,14 +547,17 @@ def test_dashboard_json_and_once(measured_project):
 
 def test_view_json_and_once(measured_project):
     project, first, second, gone = measured_project
-    data = json.loads(_cli("view", first, "-p", project, "--json").output)
+    data = json.loads(_cli("view", first, "-p", project, "--json").stdout)
     assert data["project"] == "test_project"
     run = data["run"]
     assert run["id"] == first and run["goal"] == "Test the integration"
     assert [(r["iteration"], r["accepted"], r["metrics"]) for r in run["iterations"]] == [
         (0, True, {"speed": 100}), (1, True, {"speed": 110}), (2, True, {"speed": 120})]
-    # The default run is the selected one.
-    assert json.loads(_cli("view", "-p", project, "--json").output)["run"]["id"] == RunPaths(project).run_id
+    # Without an id: the most recently active run that isn't archived (not `gone`, the last
+    # one started), named on stderr.
+    chosen = _cli("view", "-p", project, "--json")
+    assert json.loads(chosen.stdout)["run"]["id"] == second
+    assert f"Run {short_id(second)} (the most recently active run" in chosen.stderr
 
     text = _cli("view", first, "-p", project, "--once").output
     lines = [line.rstrip() for line in text.splitlines()]

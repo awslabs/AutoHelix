@@ -7,23 +7,17 @@ import os
 import subprocess
 
 import pytest
-from click.testing import CliRunner
 
 from autohelix import workspace
-from autohelix.cli import main
 from autohelix.harness import Budget, Harness
 from autohelix.runs import RunLock, RunPaths, archive, git, short_id
-from tests.test_runs import configure
-
-
-def cli(project, *args):
-    return CliRunner().invoke(main, [*args, "-p", str(project)])
+from tests.helpers import cli, configure, latest_run
 
 
 def started(project, *args):
     result = cli(project, "run", "-n", "1", "--no-report", *args)
     assert result.exit_code == 0, result.output
-    return RunPaths(project), result
+    return latest_run(project), result
 
 
 def identity(paths):
@@ -52,7 +46,7 @@ def watch_agent(harness, monkeypatch, seen):
 
 
 def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, monkeypatch):
-    configure(project, observe=[{"name": "bench", "command": "echo score: 3.5", "metrics": {"score": "higher"}}],
+    configure(project, observe=[{"name": "bench", "command": "echo '##autohelix[score=3.5]'", "metrics": {"score": "higher"}}],
               agent={"backend": "mock", "settings": {"change_file": "code.py", "change_content": "# {iteration}",
                                                   "notes_content": "tried {iteration}"}})
     first = Harness(project, new=True, group="g")
@@ -294,7 +288,9 @@ def test_a_broken_member_doesnt_stop_another_run(project):
     assert result.exit_code == 0, result.output
 
 
-def test_unchanged_notes_are_hard_links_and_a_removed_notes_folder_stays_removed(project, monkeypatch):
+def test_notes_versions_are_copies_and_a_removed_notes_folder_stays_removed(project, monkeypatch):
+    """An unchanged note used to be a hard link to the previous version's: editing the
+    latest in place rewrote every earlier version."""
     from autohelix import iteration
 
     paths, _ = started(project)
@@ -306,7 +302,10 @@ def test_unchanged_notes_are_hard_links_and_a_removed_notes_folder_stays_removed
     (notes / "keep.md").write_text("same\n")
     (notes / "new.md").write_text("new\n")
     iteration.save_notes(paths, copy, 2)
-    assert os.stat(paths.notes_versions / "1" / "keep.md").st_ino == os.stat(paths.notes / "keep.md").st_ino
+    assert os.stat(paths.notes_versions / "1" / "keep.md").st_ino != os.stat(paths.notes / "keep.md").st_ino
+    with open(paths.notes / "keep.md", "a") as latest:  # an edit in place, as `echo >>` makes
+        latest.write("edited\n")
+    assert (paths.notes_versions / "1" / "keep.md").read_text() == "same\n"
     assert (paths.notes / "new.md").read_text() == "new\n"
     import shutil
     shutil.rmtree(notes)

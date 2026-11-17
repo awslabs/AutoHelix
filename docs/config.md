@@ -10,7 +10,8 @@ commented template there.
 repo, and every path (`capture:` files, the patterns in `scope.editable` and
 `scope.frozen`) is resolved there. Use relative paths (`src/`, `tests/`,
 `results/log.json`); absolute paths point outside the copy and will either be
-silently ignored, discard all the agent's work as out of scope, or crash the run.
+silently ignored or crash the run (in `scope:`, an absolute path or a `..`
+component is a config error).
 (The one exception is long-lived outputs you deliberately keep outside the repo,
 such as a model checkpoint directory, which are meant to live at a fixed absolute
 path.) Untracked files such as a virtualenv or downloaded data aren't in the copy;
@@ -72,10 +73,14 @@ How a launch goes is not in the config either: how long (`autohelix run -n 10
 summary (`--no-report`, see [Report](#report)).
 
 Top-level keys: `goal`, `prompt_template`, `agent`,
-`scope`, `gates`, `observe` and `stop`. An unknown key is a warning
-(a possible typo); a key of the old format is an error that names its
-replacement (see [Old → new](#old--new)). `autohelix run` lists every error and
-starts nothing until they are fixed.
+`scope`, `gates`, `observe` and `stop`. An unknown key is an error (a
+misspelt `stop:` or `gates:` would otherwise do nothing); a key of the old
+format is an error that names its replacement (see [Old → new](#old--new)).
+`goal:` must be a string (`|` for several lines), `agent.command`, `model`,
+`reasoning_effort` and `backend` strings (arguments go in `extra_args`), and
+`auto_memory` `true` or `false`. `autohelix run` lists every error and starts
+nothing until they are fixed; `autohelix run --check` makes the same checks
+without starting (see [`run --check`](cli.md#autohelix-run)).
 
 `gates:`, `observe:` and `stop:` are lists; a single string or mapping counts
 as a list of one.
@@ -122,22 +127,28 @@ gates:
     yes: Every public function keeps its name and signature.   # optional
     no: A public function was removed, renamed or changed.     # optional
     # timeout: 15m
-    # agent: {backend: codex, model: gpt-5.5, reasoning_effort: high, timeout: 10m}
+    # agent: {backend: codex, model: gpt-5.5, reasoning_effort: high}
 ```
 
 - `ask: <question>` becomes `autohelix ask [flags] -- "<question>"`: flags first,
   then `--`, so a question starting with `-` stays a question.
 - `yes:` and `no:` say what each answer means (`--yes`, `--no`).
 - `agent:` takes only `backend` (`claude` or `codex`), `model`,
-  `reasoning_effort`, `timeout` and `command`; they become flags. Unset ones come
+  `reasoning_effort` and `command`; they become flags. Unset ones come
   from the top-level `agent:`, except that naming another backend drops the
   top-level `model`, `reasoning_effort` and `command` (they belong to the other
   backend). OpenCode has no read-only mode: with `agent.backend: opencode` at the
-  top level, every `ask:` entry needs its own `agent.backend`.
-- The judge's own time limit is 600 seconds unless set. `timeout:` is the whole
-  command's deadline and also bounds the judge; `agent.timeout` alone sets the
-  judge's limit and makes the command's deadline a minute longer. `agent.timeout`
-  must be shorter than `timeout:`.
+  top level, every `ask:` entry needs its own `agent.backend`, and an `autohelix
+  ask` a script runs needs `--agent claude` or `--agent codex`.
+- `timeout:` is the command's deadline (default 10m, at least 1m: the judge
+  keeps 30s of it for its usage and its copy), which also bounds the judge. An
+  entry's `agent.timeout` is an error naming `timeout:`.
+- The judge works in its **own fresh copy of exactly the candidate**, as a
+  review does, with the complete change as `.autohelix-iteration/candidate.diff`
+  (named in its prompt): not the checks copy, so files earlier gates wrote
+  aren't in front of it. A gate whose output should be judged writes it to
+  `$AUTOHELIX_SCRATCH` and names it by absolute path in an `autohelix ask` of
+  its own.
 
 **`metric:` entries** run nothing. They compare a number from an `observe:`
 entry with the **last accepted iteration**, the code being built on:
@@ -239,18 +250,19 @@ viewer's sections, so renaming an entry starts its history afresh. Metric names
   the copy, and a top-level `stdout.txt` or `stderr.txt` are config errors.
 - `timeout:` default 30m.
 
-**Metric extraction.** The recommended form is a structured line on stdout, one
-per metric:
+**Metric extraction.** A metric is read only from a structured line on stdout,
+one per metric, matched by name (the last one wins):
 
 ```
 ##autohelix[throughput=1234.5]
 ##autohelix[latency=0.003]
 ```
 
-Command entries also accept `name: value` or `name=value` lines matching a
-declared name, and, when only one metric is declared, a lone structured line
-with another name. A command without `metrics:` still runs and its output is
-kept for the agent.
+Nothing else counts: a `speed: 5` line, anything on stderr, or a structured
+line under another name (`##autohelix[sped=5]` for `speed`) leaves the metric
+unreported, and the entry's record says how to print it. A non-finite value
+(`inf`, `nan`) reports nothing. A command without `metrics:` still runs and its
+output is kept for the agent.
 
 ### Review entries
 
@@ -269,7 +281,7 @@ observe:
       For each PRD.md item, give done / partial / missing with file:line evidence.
       Report `missing`: the number of items that are not fully done.
     previous: true            # = --previous
-    metrics: {missing: lower} # = --metric missing:lower
+    metrics: {missing: lower} # = --metric missing (the direction is for the metric gate)
     # timeout: 30m
     # agent: {backend: codex, model: gpt-5.5}
 ```
@@ -284,9 +296,8 @@ observe:
   number). A review that leaves a declared number out fails. What a number means
   is up to the prompt.
 - `agent:` as for [`ask:` entries](#gates): `backend`, `model`,
-  `reasoning_effort`, `timeout`, `command`.
-- `timeout:` the command's deadline (default 30m), which also bounds the review;
-  `agent.timeout` alone makes it a minute longer.
+  `reasoning_effort`, `command`.
+- `timeout:` the command's deadline (default 30m, at least 1m), which also bounds the review.
 
 Review numbers are noisy and gameable: fine for display and `stop:`, not
 recommended for gates.
@@ -370,6 +381,7 @@ started is killed. Each gets:
 | `AUTOHELIX_ITERATION` | The iteration number (0 for the baseline) |
 | `AUTOHELIX_RUN_ID`, `AUTOHELIX_RUN_DIR` | The run's id and its `.autohelix/runs/<id>/` folder |
 | `AUTOHELIX_LOG_DIR` | A private folder for this command where `autohelix ask` and `review` write their transcripts; after the command ended they are moved to its stored output (`ask*.log`, `review*.log` only) |
+| `AUTOHELIX_CALL` | Where this command's output is stored in the iteration's folder: `gates/<k>`, `observe/<name>` or `stop/<k>`; `ask`/`review` record it with their transcript's name |
 | `AUTOHELIX_USAGE_FILE` | Where model calls record their cost (see [Cost Tracking](#cost-tracking)) |
 | `AUTOHELIX_COMMAND_DEADLINE` | The command's deadline, in Unix seconds |
 | `AUTOHELIX_PREVIOUS` | Observe commands only: see [Previous output](#previous-output) |
@@ -393,8 +405,15 @@ in order until one exits:
   printed to stdout is recorded as the reason (`speedup 10.3 ≥ 10`), so print one.
 - **1**: keep going.
 - **anything else, or a timeout**: an error. On the baseline it stops the run
-  before the first iteration (fix the command and run again); later it prints a
-  warning and the run continues.
+  before the first iteration (fix the command and run again); later the run
+  continues, and the iteration's row (in `run` and `view`) and the web view mark
+  the failed command.
+
+Each command's outcome (`stop`, `continue` or `error`), exit code and whether it
+timed out are recorded in the iteration's `stops` (as gates are in `gates`).
+Python exits 1 on an uncaught exception, which reads as "keep going": a script
+should catch its own errors and exit 2 (`sys.exit(0 if done else 1)` inside a
+`try`), or use `jq -e`.
 
 On top of the [command environment](#command-environment), stop commands get:
 
@@ -441,6 +460,16 @@ Controls which files the agent's changes are kept for:
 - Both together: editable minus frozen (`editable: [src/, tests/]`,
   `frozen: [tests/acceptance/]`).
 
+An entry is a path relative to the project folder, or a glob. A path covers
+itself and, for a folder, everything inside it (`src`, `src/`). In a glob, `*`
+and `?` match within one folder (`*.py` is only the top-level files, not
+`tests/test_x.py`), `[abc]` is a character class, `**/` matches zero or more
+folders (`tests/**/*.py` covers `tests/test_a.py` and `tests/unit/test_b.py`),
+and a final `**` everything below. A glob that names a folder covers what is
+inside it (`src/*` covers `src/pkg/a.py`). A leading `./` is ignored (`./src/` is
+`src/`); `.` is the whole project; an absolute path or a `..` component is a
+config error.
+
 Changes outside the scope are discarded when the agent's copy is frozen, before
 any gate runs, so gates check exactly the tree that would be accepted. Nothing
 is written back into the agent's copy. Discarded paths are recorded with the
@@ -455,8 +484,14 @@ the config it started with: [CLI → Config files](cli.md#config-files)). Script
 the config calls are code: list them under `frozen:` if they must not change.
 
 With no scope, the agent may edit the tests and benchmarks that gate it; a run
-whose config has gate or observe commands but no scope warns at start. Patterns
-that match no file are warnings.
+whose config has gate or observe commands but no scope warns at start. A pattern
+that matches no committed file is a warning, not an error: an editable one may
+name a file or folder the agent is to create (`editable: [solver.py, results/]`).
+
+A git repository inside the copy (one the agent cloned or `git init`ed) rejects
+the iteration, inside the scope or not: "nested git repository at vendor/lib:
+remove its .git or clone outside the project". An agent that wants to read
+another repository clones it outside its copy (under `/tmp`, say).
 
 ## Agent
 
@@ -469,7 +504,7 @@ that match no file are warnings.
 | `model` | The model (default: the backend's) |
 | `reasoning_effort` | e.g. `low`, `medium`, `high`, `xhigh` |
 | `timeout` | A duration per iteration; unset means no limit (see below) |
-| `command` | The backend's executable (default `claude`, `codex`, `opencode` on `PATH`) |
+| `command` | The backend's executable (default: `$AUTOHELIX_CLAUDE_CMD`, `$AUTOHELIX_CODEX_CMD` or `$AUTOHELIX_OPENCODE_CMD`, else `claude`, `codex`, `opencode` on `PATH`); `run` checks before starting that every agent the config runs (the main agent, each `ask:` and `review:` entry's judge) can be found |
 | `settings` | Codex only: `-c key=value` pass-through |
 | `extra_args` | Extra CLI arguments for the main agent |
 | `auto_memory` | Claude Code's built-in memory; off by default for self-contained iterations |
@@ -478,7 +513,8 @@ that match no file are warnings.
 `ask:` and `review:` calls keep their own independent, read-only defaults and
 use only `backend`, `model`, `reasoning_effort` and `command` from here, never
 `settings`, `extra_args` or `auto_memory`. They don't use `agent.timeout` either:
-`ask` defaults to 600 seconds, a review to its command's deadline.
+an entry's `timeout:` bounds its judge (`ask` defaults to 10 minutes, a review to
+30).
 
 **`agent.timeout`** is a hard kill: at the deadline the agent is stopped, even
 mid-step, and the iteration is rejected unchecked (its tree is still kept, see
@@ -522,9 +558,12 @@ name or landing mode.
 
 `prompt_template:` is optional: a [Jinja2](https://jinja.palletsprojects.com/)
 file that replaces the built-in agent prompt, as a path relative to the config
-file (so it is versioned with it). A run stores the template's text with its
-config when it starts, so editing the template changes later runs, not this
-one. Most configs need only `goal:`. The
+file (so it is versioned with it). A template that doesn't parse is a config
+error naming the file and line, and one that fails to render (say `{{
+last.gates.x.y }}`) stops the run with an error naming the file, before its
+agent call. A run stores the template's text with its config when it starts, so
+editing the template changes later runs, not this one. Most configs need only
+`goal:`. The
 variables a template gets are a documented contract; see
 [Concepts → Prompt](concepts.md#prompt). `.autohelix/prompt.md` is no longer
 read; a run warns while it exists.
@@ -532,7 +571,8 @@ read; a run warns while it exists.
 ## Report
 
 When a run finishes after at least one iteration (a stop condition is met, or
-the iteration, cost or time budget is reached), one more agent call reads the
+the iteration, cost or time budget is reached, but not after the agent failed 3
+times in a row), one more agent call reads the
 run's history, notes, logs and commits and writes a short summary
 to `.autohelix/runs/<id>/report.md`: what was achieved, which changes
 mattered, what didn't work, what to try next, and anything worth checking
@@ -540,11 +580,15 @@ before relying on the results. An interrupted run gets no summary; run
 [`autohelix report`](cli.md#autohelix-report) to write one. Pass `--no-report`
 to `run` or `resume` to skip it; it counts for that command only, not stored
 with the run like `--land`, so pass it to each `resume` too (a `report:` key
-is an error naming the flag). The call uses the same agent backend and model
-as the run, with a
+is an error naming the flag). The call uses the run's agent settings (backend,
+command, model, `reasoning_effort`, `settings`, `extra_args`), with a
 timeout of `agent.timeout` capped at 15 minutes. Its time and cost are shown
-next to the summary in `autohelix view` and `report.html`; the cost is not
-counted against `--cost`.
+next to the summary in `autohelix view` and `report.html`, and every summary's
+cost is counted in the run's total (the end block, `view`, `dashboard`, the run
+page) and in the segment's: it runs after the loop, so `--cost` doesn't stop
+it, but the next segment's `--cost` starts after it. A summary that fails says
+why (with its log, `logs/report.log`) and a Ctrl-C during it ends only the
+summary: the segment's outcome and exit code stay as they were.
 
 ## Old → new
 
@@ -729,7 +773,9 @@ Controls Claude Code's built-in memory system for the main agent:
 - Defaults to off for reproducible, self-contained iterations; set
   `agent.auto_memory: true` to opt in.
 - `ask` and `review` calls always run without it.
-- Disabled via `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`; ignored for non-Claude backends.
+- Disabled via `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`; with `auto_memory: true` an
+  inherited `CLAUDE_CODE_DISABLE_AUTO_MEMORY` is removed from the agent's
+  environment. Ignored for non-Claude backends.
 
 ## Cost Tracking
 
@@ -743,7 +789,7 @@ Iteration costs include the optimization agent and model calls made by the
 commands the harness runs (`ask:` gates and `review:` entries, or
 `autohelix ask` and `autohelix review` anywhere in `gates:`, `observe:` or
 `stop:`). Run totals and `--cost` also include the baseline's commands;
-report generation remains separate. History's `calls` list records each
+run totals also count every summary call (see [Report](#report)). History's `calls` list records each
 attempted agent call and command model call with its role, usage and log path.
 Records from earlier versions may list `reviewer` calls; they count the same way.
 
@@ -771,7 +817,7 @@ For subscription and Bedrock users, these are API-equivalent amounts, not
 subscription charges or provider bills. The normal display uses the same
 **Cost** label for every backend; provenance is saved in history:
 
-- `cost_model` and, when available, `cost_provider` identify the model and provider.
+- `cost_model` identifies the model priced.
 - `cost_basis: openai_standard_api` identifies Standard pricing at ordinary
   context lengths, with 30-minute cache writes.
 - `cost_rates` saves the rates per million tokens, cache-write lifetime, and
@@ -781,9 +827,11 @@ subscription charges or provider bills. The normal display uses the same
 
 The snapshot was verified on November 6, 2026. It supports listed GPT-6 models
 and common GPT-5 Codex models; unknown names and expiring promotional prices are
-not guessed. The model normally comes from the matching Codex session metadata,
-so omitted `agent.model` works when that metadata is available. For ephemeral
-sessions, an unambiguous explicit `agent.model` can provide the model instead.
+not guessed. The model priced is the one Codex's JSON output names, else
+`agent.model`; with neither, the cost is unavailable ("set agent.model").
+AutoHelix doesn't read Codex's session files or guess from `extra_args`: a model
+chosen there (`-m`, a profile) is priced as `agent.model` says, so set
+`agent.model` to the model you run.
 
 Estimates exclude speed-tier and regional premiums, per-request long-context
 surcharges, separately billed tools, and usage outside the captured thread.

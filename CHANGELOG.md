@@ -98,7 +98,7 @@ Added:
   console, `view` and the viewer. `scope.editable` and `scope.frozen` can be combined (editable minus
   frozen). A run with gate or observe commands but no scope warns.
 - **The prompt is a documented contract**: `goal`, `title`, `iteration`,
-  `worktree`, `history`, `gates`, `observe`, `stop`, `editable`, `frozen`,
+  `copy`, `history`, `gates`, `observe`, `stop`, `editable`, `frozen`,
   `notes_path`, `hints`, `rejected_patch`, `rejected_diff`, `discarded`,
   `discarded_frozen`, `last` (the latest iteration's outcome, gate results and
   observations), `time_limit`, `group`, `group_runs`, `imported`. A custom template using
@@ -238,13 +238,85 @@ Added:
   as given, first iteration) and an end record (time, how it ended, the stop
   reason, iterations recorded, the last one, the error of a failed one).
 
+### Design-review fixes
+
+A review of everything since 0.1.1, then its agreed fixes.
+
+Breaking:
+
+- **Metrics come only from `##autohelix[name=value]` lines** on stdout, by
+  name. The `name: value` fallback and the lone-number rule are gone: a
+  command that printed `speed: 42` reports nothing (a gated metric then
+  fails). The algotune and kernelbench templates print structured lines.
+- **Configs fail early.** An unknown top-level key, a wrongly typed agent
+  value or a goal that isn't a string is an error, and a `prompt_template:`
+  that doesn't parse is a config error. A stored config that used to load
+  with a warning can now refuse to resume.
+- **Exit codes:** `run` and `resume` exit 0 when they did what was asked or
+  stopped politely (budget, `stop:`, `autohelix stop`), 1 on errors (also a
+  resume whose checks fail, a refused landing, and no run to resume; there is
+  no exit 3), and 130 when interrupted (Ctrl-C, SIGTERM, `stop --now`).
+- **No current-run pointer.** `land`, `hint`, `view` and `report` without an
+  id take the running run, else the most recently active non-archived one,
+  and always name it. `resume` takes a run id or a config name
+  (`resume perf`). Commands find the project from a subfolder.
+- An `ask:` or `review:` entry's `timeout:` must be at least 1m, and
+  `agent.timeout` on such an entry is an error (an `ask:` gate's deadline
+  defaults to 10m). `ask` / `review --timeout` take durations (`90s`, `10m`).
+- Scope patterns: a leading `./` is stripped, absolute paths and `..` are
+  errors; `*` stays within a folder and `**/` matches zero or more folders,
+  the same everywhere. An editable pattern that matches no committed file is
+  a warning, not an error.
+- The prompt template variable `worktree` is now `copy` (`worktree` is an
+  error naming it). The status file's `benchmark` phase is now `observe`.
+- `mock` is no longer listed as a backend (tests still use it).
+
+Added:
+
+- `autohelix run --check`: every check `run` makes before it writes
+  anything, then exits. The setup skill uses it.
+- `autohelix review --metric NAME`.
+- Installed skills say which AutoHelix version wrote them, and suggest
+  `skill install --force` when `autohelix --version` differs.
+- CI runs `pytest -n auto` on Linux and macOS, with Python 3.11, 3.12 and the
+  newest.
+
+Changed:
+
+- `ask` judges its own fresh copy of the candidate, like `review`, and its
+  prompt names `.autohelix-iteration/candidate.diff`; outputs a gate wants
+  judged go to `$AUTOHELIX_SCRATCH`. One write guard for both.
+- Stop commands are recorded like gates (return code, timed out).
+- Cost: every run summary's cost is counted in the run's and the segment's
+  totals; Codex cost is priced from the model Codex reports, else
+  `agent.model`, else shown as unavailable; a `--cost`-only segment stops on
+  unknown cost only if nothing was priced.
+- `autohelix wait` reads one event log per run (`segments.jsonl`), and a
+  run counts as live while its lock is held, not by pid.
+- One warning form (`  ! message`) and line wrapping that never breaks inside
+  a word (paths, branch names) on every screen.
+
+Fixed:
+
+- `agent.timeout` now kills an agent whose child closed its output but kept
+  running (and a grandchild that keeps writing).
+- Agent output in the live panels is sanitised (terminal escape sequences).
+- No run summary after the agent failed three times; a failed summary shows
+  its error and doesn't relabel the segment.
+- `auto_memory: true` also drops an inherited `CLAUDE_CODE_DISABLE_AUTO_MEMORY`.
+- "Not a git repository" is recognised in any locale (git's messages are read
+  in English).
+- A nested git repository is rejected with "nested git repository at X:
+  remove its .git or clone outside the project".
+- Rich markup in a goal (`[/bold]`) no longer crashes `--verbose`.
+
 ### Changed (breaking)
 
 - **Runs.** Each `autohelix run` starts a new run, with its own id and state
   in `.autohelix/runs/<id>/` (ids sort by start: `20261111-1432-k3f9`, with
   the config file's name in the middle; commands accept the last part,
   `k3f9`). `autohelix resume [<id>]` continues one (`-n` more iterations,
-  `--until` up to an iteration; exit 3 when there is none); `run` never
+  `--until` up to an iteration; exit 1 when there is none); `run` never
   refuses, but warns about a run of the same config that is live or has
   unlanded commits. State from earlier versions is refused: move or delete
   `.autohelix/` first. There is no migration.

@@ -6,45 +6,63 @@ import pytest
 
 from autohelix.checks import (
     CHECK_KILL_GRACE,
-    parse_metric_output,
+    metric_gate_failure,
+    metric_reference,
     parse_structured_metrics,
     run_command,
     run_observe_entry,
 )
-from autohelix.config import ObserveEntry
+from autohelix.config import MetricGate, ObserveEntry
+from autohelix.history import IterationResult
 
 
-class TestParseMetricOutput:
-    def test_metric_name_match(self):
-        assert parse_metric_output("throughput: 1234.5", "throughput") == 1234.5
+def _observe(tmp_path, script, metrics):
+    """Run a real command entry (`sh -c script`) and return its result."""
+    import shlex
 
-    def test_metric_name_case_insensitive(self):
-        assert parse_metric_output("Throughput: 500", "throughput") == 500.0
+    entry = ObserveEntry(name="bench", command=f"sh -c {shlex.quote(script)}", metrics=metrics)
+    return run_observe_entry(entry, cwd=tmp_path)
 
-    def test_metric_name_with_equals(self):
-        assert parse_metric_output("throughput=99.9", "throughput") == 99.9
 
-    def test_no_fallback_for_unlabeled_numbers(self):
-        """Noisy output with embedded numbers should NOT be parsed."""
-        assert parse_metric_output("some text 123 more text 456") is None
+class TestOnlyStructuredLinesAreMetrics:
+    """A metric is read only from `##autohelix[name=value]` on stdout, by name."""
 
-    def test_no_fallback_for_version_strings(self):
-        """Python version strings should not be grabbed as metric values."""
-        assert parse_metric_output("Python 3.10.12\nRunning tests...") is None
+    @pytest.mark.parametrize("line", [
+        "throughput: 1234.5", "Throughput: 500", "throughput=99.9",
+        "loss: 1.5e-05",  # used to read 1.5
+        "val_throughput: 0.99",  # used to be taken for `throughput`
+    ])
+    def test_a_name_value_line_is_not_a_metric(self, tmp_path, line):
+        result = _observe(tmp_path, f"echo '{line}'", {"throughput": "higher"})
+        assert result.ok and result.values == {}
+        assert "##autohelix[throughput=<number>]" in result.errors["throughput"]
 
-    def test_no_numbers(self):
-        assert parse_metric_output("no numbers here") is None
+    def test_a_structured_line_under_another_name_is_not_the_metric(self, tmp_path):
+        """A lone line with another name (a typo, a sub-tool's metric) used to be taken
+        for the one declared metric; the error names what was reported instead."""
+        result = _observe(tmp_path, "echo '##autohelix[sped=5]'; echo '##autohelix[time=3]'",
+                          {"speed": "higher"})
+        assert result.values == {}
+        assert "(it reported sped, time)" in result.errors["speed"]
 
-    def test_empty_string(self):
-        assert parse_metric_output("") is None
+    def test_stderr_is_not_read(self, tmp_path):
+        result = _observe(tmp_path, "echo '##autohelix[speed=7]' >&2", {"speed": "higher"})
+        assert result.values == {} and "speed" in result.errors
 
-    def test_multiline_with_metric_name(self):
-        output = "Running benchmark...\nspeed: 999\nDone."
-        assert parse_metric_output(output, "speed") == 999.0
+    def test_full_float_syntax_and_the_last_line_wins(self, tmp_path):
+        result = _observe(
+            tmp_path,
+            "echo 'loss: 9'; echo '##autohelix[loss=1]'; echo '##autohelix[loss=1.5e-05]';"
+            " echo '##autohelix[delta=-3]'",
+            {"loss": "lower", "delta": "higher"},
+        )
+        assert result.values == {"loss": 1.5e-05, "delta": -3.0}
+        assert result.errors == {}
 
-    def test_metric_name_preferred_over_common_label(self):
-        output = "speed: 100\ncustom_score: 200"
-        assert parse_metric_output(output, "custom_score") == 200.0
+    def test_a_non_finite_value_reports_nothing(self, tmp_path):
+        result = _observe(tmp_path, "echo '##autohelix[speed=1e999]'; echo 'speed: 1'",
+                          {"speed": "higher"})
+        assert result.values == {} and "speed" in result.errors
 
 
 class TestParseStructuredMetrics:
@@ -68,7 +86,6 @@ class TestParseStructuredMetrics:
     def test_non_finite_values_are_not_produced(self):
         output = "##autohelix[speed=1e999]\n##autohelix[lat=-1e999]\n##autohelix[ok=2]"
         assert parse_structured_metrics(output) == {"ok": 2.0}
-        assert parse_metric_output("##autohelix[speed=1e999]", "speed") is None
 
     def test_no_structured_lines(self):
         assert parse_structured_metrics("speed: 42\nno structured output here") == {}
@@ -79,23 +96,6 @@ class TestParseStructuredMetrics:
     def test_malformed_line_ignored(self):
         output = "##autohelix[bad]\n##autohelix[speed=100]"
         assert parse_structured_metrics(output) == {"speed": 100.0}
-
-
-class TestParseMetricOutputStructured:
-    """Tests that structured ##autohelix protocol takes priority."""
-
-    def test_structured_preferred_over_heuristic(self):
-        output = "speed: 50\n##autohelix[speed=100]"
-        assert parse_metric_output(output, "speed") == 100.0
-
-    def test_structured_single_metric_no_name(self):
-        """A single structured metric is used even without metric_name."""
-        assert parse_metric_output("##autohelix[throughput=999]") == 999.0
-
-    def test_structured_multiple_without_name_returns_none(self):
-        """Multiple structured metrics without matching name returns None."""
-        output = "##autohelix[a=1]\n##autohelix[b=2]\nspeed: 50"
-        assert parse_metric_output(output) is None
 
 
 class TestRunObservableErrorMessage:
@@ -133,8 +133,8 @@ class TestRunObservable:
 
     @patch("autohelix.checks.subprocess.Popen")
     def test_missing_metric_not_fabricated_when_multiple_declared(self, mock_popen):
-        # Two metrics declared but only one emitted: the unnamed-metric fallback
-        # must NOT copy throughput's value into latency.
+        # Two metrics declared but only one emitted: throughput's value is not
+        # copied into latency.
         proc = MagicMock()
         proc.communicate.return_value = ("##autohelix[throughput=1500]", "")
         proc.returncode = 0
@@ -216,3 +216,112 @@ class TestNoTerminalInput:
         result = run_observe_entry(entry, cwd=tmp_path, timeout=10)
         assert result.values == {"x": 1.0}
         assert result.stdout.split()[:2] == ["no-tty", "read-to-end"]
+
+
+def _example_metrics():
+    """(example, metric) for every command observe entry of the bundled examples'
+    configs (templates' `{placeholders}` filled in)."""
+    import re as _re
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parent.parent / "examples"
+    for path in sorted([*root.glob("*/autohelix.yaml"), *root.glob("*/templates/autohelix.yaml.tmpl")]):
+        text = _re.sub(r"\{(\w+)\}", "x", path.read_text())
+        example = path.relative_to(root).parts[0]
+        for entry in (yaml.safe_load(text) or {}).get("observe") or []:
+            if isinstance(entry, dict) and "command" in entry:
+                for metric in entry.get("metrics") or {}:
+                    yield example, metric
+
+
+@pytest.mark.parametrize(("example", "metric"), list(_example_metrics()))
+def test_every_example_prints_its_metrics_as_structured_lines(example, metric):
+    """Only `##autohelix[name=value]` lines are metrics: each example's scripts print one
+    per declared metric (algotune's benchmark used to rely on a `speedup:` line)."""
+    from pathlib import Path
+
+    folder = Path(__file__).resolve().parent.parent / "examples" / example
+    sources = "".join(p.read_text(errors="replace") for p in folder.rglob("*")
+                      if p.is_file() and p.suffix in {".py", ".sh", ".tmpl"})
+    assert f"##autohelix[{metric}=" in sources or (
+        example == "workflow-optimization" and "##autohelix[{name}=" in sources)
+
+
+# --- metric gates (moved from test_config.py, beside the code they test) ---
+
+def _record(iteration, metrics, accepted=True, commit="c"):
+    return IterationResult(iteration=iteration, accepted=accepted, metrics=metrics,
+                           commit=None if iteration == 0 else commit)
+
+
+class TestMetricGateReference:
+    def test_reference_is_the_tip_commit_record(self):
+        records = [_record(0, {"s": 10}), _record(1, {"s": 12}), _record(2, {"s": 30}, accepted=False),
+                   _record(3, {"s": 11})]
+        assert metric_reference(records, "s") == 11
+
+    def test_baseline_until_a_commit(self):
+        assert metric_reference([_record(0, {"s": 10}), _record(1, {"s": 9}, accepted=False)], "s") == 10
+
+    def test_accepted_no_op_does_not_re_measure(self):
+        records = [_record(0, {"s": 10}), _record(1, {"s": 12}), _record(2, {"s": 15}, commit=None)]
+        assert metric_reference(records, "s") == 12
+
+    def test_no_fallback_when_the_tip_record_lacks_the_metric(self):
+        records = [_record(0, {"s": 10, "t": 1}), _record(1, {"s": 12, "t": 2}), _record(2, {"s": 13})]
+        assert metric_reference(records, "t") is None
+        assert metric_reference(records, "u") is None
+
+
+class TestMetricGateFailure:
+    def regress(self, pct):
+        return MetricGate("s", "regress", pct)
+
+    def improve(self, pct):
+        return MetricGate("s", "improve", pct)
+
+    def test_regress(self):
+        assert metric_gate_failure(self.regress(5), "higher", 96, 100) is None
+        assert metric_gate_failure(self.regress(5), "higher", 95, 100) is None  # exactly at the bound
+        assert "5.1% worse than 100" in metric_gate_failure(self.regress(5), "higher", 94.9, 100)
+        assert metric_gate_failure(self.regress(5), "lower", 105, 100) is None
+        assert metric_gate_failure(self.regress(5), "lower", 106, 100)
+        assert metric_gate_failure(self.regress(0), "higher", 99.99, 100)
+        assert metric_gate_failure(self.regress(0), "higher", 100, 100) is None
+
+    def test_improve(self):
+        assert metric_gate_failure(self.improve(0), "higher", 100.01, 100) is None
+        assert "does not improve" in metric_gate_failure(self.improve(0), "higher", 100, 100)
+        assert metric_gate_failure(self.improve(5), "higher", 105, 100) is None
+        assert metric_gate_failure(self.improve(5), "higher", 1.05, 1.0) is None  # float noise at the bound
+        assert "by only 4.0%" in metric_gate_failure(self.improve(5), "higher", 104, 100)
+        assert metric_gate_failure(self.improve(10), "lower", 0.9, 1.0) is None
+        assert metric_gate_failure(self.improve(10), "lower", 0.95, 1.0)
+
+    def test_negative_reference_uses_its_absolute_value(self):
+        assert metric_gate_failure(self.regress(10), "higher", -1.05, -1.0) is None
+        assert metric_gate_failure(self.regress(10), "higher", -1.2, -1.0)
+        assert metric_gate_failure(self.improve(10), "higher", -0.9, -1.0) is None
+
+    def test_near_zero(self):
+        assert metric_gate_failure(self.regress(50), "lower", 0, 0) is None
+        assert metric_gate_failure(self.regress(50), "lower", 0.001, 0)  # no worse than 0
+        assert metric_gate_failure(self.improve(50), "lower", -0.001, 0) is None  # any strict improvement
+        assert metric_gate_failure(self.improve(50), "lower", 0, 0)
+        assert metric_gate_failure(self.improve(0), "lower", 0, 1) is None  # count 1 -> 0
+
+    def test_non_finite_values_fail(self):
+        for value in (float("inf"), float("-inf"), float("nan")):
+            assert "not a finite number" in metric_gate_failure(self.regress(5), "higher", value, 100)
+            assert "not a finite number" in metric_gate_failure(self.improve(0), "lower", value, 100)
+
+    def test_non_finite_references_are_none(self):
+        assert metric_reference([_record(0, {"s": float("inf")})], "s") is None
+        records = [_record(0, {"s": 10}), _record(1, {"s": float("nan")})]
+        assert metric_reference(records, "s") is None
+
+    def test_missing_value_fails_and_missing_reference_passes(self):
+        assert "was not measured" in metric_gate_failure(self.regress(5), "higher", None, 100)
+        assert metric_gate_failure(self.improve(5), "higher", 1, None) is None

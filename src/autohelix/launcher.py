@@ -4,7 +4,7 @@
 """The `autohelix` executable for commands the harness runs.
 
 Gate, observe and stop commands run with the project's sources remapped onto
-the candidate's copy (`sandbox.build_worktree_env`), so a plain `autohelix`
+the candidate's copy (`sandbox.build_copy_env`), so a plain `autohelix`
 there would import candidate code first (a planted `yaml.py` or `click.py`
 could print `##autohelix[missing=0]` from inside `autohelix review`). The
 harness puts a launcher first on those commands' PATH instead: it runs the

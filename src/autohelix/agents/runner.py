@@ -65,6 +65,26 @@ def _kill_process_group(process: subprocess.Popen, grace: float = 3) -> None:
         pass
 
 
+def end_group(proc) -> None:
+    """SIGKILL whatever is left of a process group (its own session, from
+    `start_new_session`), also after its leader (the shell, the agent) exited: a
+    background child must not keep running, and writing files, once the harness has
+    moved on. A child that starts a session of its own escapes this (until commands
+    run in a sandbox).
+
+    PID reuse: once the shell is reaped, its PID (the group's id) is free again only
+    when no member of the group is left; a new process could then take it as its own
+    group id before this kill, a narrow race. Closing it means not reaping the shell
+    until after the kill (waitid with WNOWAIT, then reading the pipes ourselves instead
+    of `communicate`), which `subprocess` doesn't offer; left as is."""
+    if not isinstance(getattr(proc, "pid", None), int):
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:  # nothing left
+        pass
+
+
 def run_process(
     cmd: list[str],
     cwd: Path,
@@ -99,15 +119,24 @@ def run_process(
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
             line_buffer = ""
 
+            # After end of file (the child closed its output, maybe still
+            # running), the pipe is no longer selected: wait for the process
+            # instead, so the deadline still applies and nothing spins.
+            output_closed = False
             while True:
-                ready, _, _ = select.select([stdout_fd], [], [], 1.0)
-                if ready:
-                    chunk = os.read(stdout_fd, 4096)
-                    if not chunk:
-                        if process.poll() is not None:
-                            break
-                        continue
-                    else:
+                if output_closed:
+                    try:
+                        process.wait(timeout=1.0)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
+                else:
+                    ready, _, _ = select.select([stdout_fd], [], [], 1.0)
+                    if ready:
+                        chunk = os.read(stdout_fd, 4096)
+                        if not chunk:
+                            output_closed = True
+                            continue
                         text = decoder.decode(chunk)
                         log_file.write(text)
                         log_file.flush()
@@ -116,15 +145,18 @@ def run_process(
                             line, line_buffer = line_buffer.split("\n", 1)
                             if line.strip():
                                 line_callback(line)
-                elif process.poll() is not None:
-                    break
+                    elif process.poll() is not None:
+                        break
 
                 elapsed = int(time.monotonic() - start)
                 now = time.monotonic()
-                if process.poll() is None and deadline is not None and now >= deadline:
+                # Whatever is still running: also a grandchild writing to the pipe
+                # after the process itself exited.
+                if deadline is not None and now >= deadline:
                     log_file.write("[autohelix] Timeout\n")
                     log_file.flush()
                     _kill_process_group(process)
+                    end_group(process)
                     return ProcessRunResult(exit_code=124, timed_out=True)
                 if process.poll() is None and now >= next_heartbeat:
                     log_file.write(f"[autohelix] Heartbeat: {elapsed}s\n")
@@ -139,8 +171,13 @@ def run_process(
             if line_buffer.strip():
                 line_callback(line_buffer)
 
-            return ProcessRunResult(exit_code=process.wait())
+            exit_code = process.wait()
+            # A background child (silent, or holding the pipe open) must not
+            # outlive a normal exit either.
+            end_group(process)
+            return ProcessRunResult(exit_code=exit_code)
     except KeyboardInterrupt:
         if process is not None:
             _kill_process_group(process)
+            end_group(process)
         raise

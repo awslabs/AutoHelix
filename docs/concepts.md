@@ -82,8 +82,9 @@ when the copy is made; no stash, no remote). This means:
   generated code should be accepted, generating it is the agent's job.
 - In a checks copy, plain `git diff` shows changes to tracked files; new files show as
   untracked. The complete change is in `.autohelix-iteration/candidate.diff`; that is
-  the only harness material a checks copy gets (no notes, history or prompt). A review's
-  copy gets the same, plus `previous.md` with `previous: true`.
+  the only harness material a checks copy gets (no notes, history or prompt). A judge's
+  (`ask`) or review's own copy gets the same, a review's also `previous.md` with
+  `previous: true`.
 - Accepted commits advance the run's hidden `refs/autohelix/<id>` first.
 - A process-held per-run lock lets only one process write a run at a time.
 - PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo), and
@@ -95,7 +96,9 @@ when the copy is made; no stash, no remote). This means:
   absolute path. Copies sit outside the project, so lookups in parent directories
   (Node's `node_modules`, a `.venv` beside the project) don't find your project's.
 - **Submodule changes are not supported.** Submodules appear as empty directories in a
-  copy; changing one, or writing inside one, rejects the iteration.
+  copy; changing one, or writing inside one, rejects the iteration. So does a git
+  repository of its own the agent creates or clones into the copy ("nested git
+  repository at X: remove its .git or clone outside the project").
 
 Copies live in
 `${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/<project>-<hash>/<id>/` and are deleted
@@ -285,11 +288,11 @@ observe:
   agent. List them last: a metric gate failure skips the entries after it, so
   their cost isn't spent on an iteration already rejected.
 - A review is **feedback**, not a gate. A failed review (no valid answer, a
-  timeout) is recorded and shown to the next agent, and the run continues. A
-  reviewer that changes the files it reviews rejects the iteration.
-- Read-only has three layers: the backend's read-only mode, a fingerprint of
-  the copy before and after the call (a change is a sticky
-  `integrity_violation` that rejects the iteration), and its own fresh copy.
+  timeout) is recorded and shown to the next agent, and the run continues; so
+  is a reviewer that changes the files it reviews (its call fails; the change
+  was in its own copy).
+- Read-only: the backend's read-only mode, one write guard around each call
+  (a change fails the call), and its own fresh copy.
 
 ## Progress tracking
 
@@ -357,7 +360,7 @@ The variables a template gets are a stable, documented contract:
 | `goal` | The config's goal, whole |
 | `title` | Its first line, cut to about 80 characters |
 | `iteration` | This iteration's number (the baseline is 0) |
-| `worktree` | The agent's working directory (its copy) |
+| `copy` | The agent's working directory (its copy) |
 | `history` | The last iterations, one line each; empty if none |
 | `gates` | Every gate in list order: `{text, kind}`, `kind` being `command` or `metric`; a metric gate's text says what it compares ("speed: at most 5% worse than the last accepted iteration"). Elsewhere (console header, `view --json`, the `gates` of history records) a metric gate goes by its short text, `speed regress 5%` or `speed improve 0%` |
 | `observe` | Every observe entry: `{name, kind, metric_labels}`, `kind` being `command` (with `command`) or `review` (with `prompt`, on one line); `metric_labels` like `speed (↑)` |
@@ -379,6 +382,7 @@ one. Remove `prompt_template:` to return to it. A run warns when a custom
 template uses variables not in this table (such as the old `constraints` or
 `history_summary`; they render empty), and when it still names `.autohelix/`
 paths in the agent's copy (they are now `.autohelix-iteration/`).
+A template naming `worktree`, `copy`'s old name, is a config error.
 Agent-written text in the variables (summaries, discarded paths, errors,
 failure output) has its control characters removed; summaries are cut to 200
 characters.
@@ -388,7 +392,7 @@ characters.
 Editing the template is also how you can keep an evaluation *out of the agent's view*, useful for measuring generalization without the agent optimizing against the eval itself. Two prompt-only levers:
 
 - **Don't list the eval command.** Drop the `observe` (or `gates`) loop from your `prompt_template:` file. The command still runs and its metric still gates and ranks the run; it just isn't named in the prompt. Its output is still in the agent's copy under `.autohelix-iteration/iterations/NNN/`: an observe entry's `observe/<name>/` (a review's transcript included), and a *failing* gate's whole `gates/<k>/` folder (`command.txt`, so the gate's command verbatim, stdout, stderr, and an `ask:` gate's judge transcript; passing gates' output is not copied). A gate's command is in every record too (`record.json`, `history.jsonl`), so leaving a gate out of the prompt doesn't hide its command. So keep what it prints minimal, and prefer an observe entry or a gate that says little when it fails.
-- **Fence the agent into its copy.** Add an explicit instruction to only read and write inside `{{ worktree }}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in scope to reverse-engineer.
+- **Fence the agent into its copy.** Add an explicit instruction to only read and write inside `{{ copy }}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in scope to reverse-engineer.
 
 This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence: in testing, Claude declined to read an out-of-copy eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: copies live outside the project, but the agent runs as you, so one that is determined (or explicitly told to cheat) can still reach the project and anything else on disk by absolute path. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
 
@@ -402,7 +406,8 @@ harness keeps for itself is in `.internal/` folders:
 .autohelix/
 ├── runs/<id>/
 │   ├── run.json                # identity (base commit, target branch, config file), archived flag
-│   ├── config.yaml             # the run's config, stored when it started (the stored copy inlines the template)
+│   ├── config.yaml             # the run's config, stored verbatim when it started
+│   ├── prompt_template.md      # its prompt_template's text, stored with it (only with one)
 │   ├── history.jsonl           # one record per iteration: the index and the source of truth
 │   ├── hints.md
 │   ├── report.md  report.html  # the run summary; the one-file run page
@@ -410,11 +415,11 @@ harness keeps for itself is in `.internal/` folders:
 │   ├── iterations/
 │   │   ├── 000/                # the baseline
 │   │   └── 001/ ...            # one folder per iteration (below)
-│   ├── logs/                   # run logs per segment, report.log, hook audit
+│   ├── logs/                   # run logs per segment, report.log
 │   └── .internal/              # status.json, segments.jsonl, stop.json (autohelix stop), usage/,
 │                               # notes versions notes/<n>/, superseded attempts attempts/,
 │                               # report.json, the copies path
-└── .internal/                  # the current run's id, lock files, helper scripts (bin/)
+└── .internal/                  # lock files, helper scripts (bin/)
 ```
 
 Every iteration's folder has the same parts; those that don't apply are absent:
@@ -438,15 +443,24 @@ of truth (`jq` on it for numbers across iterations; see
 retried baseline, reuses its number: the earlier attempt's folder is moved to
 `.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
 
-`.internal/segments.jsonl` records every segment (one `run` or `resume`
-command) that started, append-only, two JSON lines each, linked by `segment`
-(1, 2, … in the run) and told apart by `event`:
+`.internal/segments.jsonl` is the run's event log (what [`autohelix
+wait`](cli.md#autohelix-wait) reads): every segment (one `run` or `resume`
+command) that started (as soon as the command held the run's lock, before its
+checks: a start they refuse is a segment that failed), append-only, JSON lines
+linked by `segment` (1, 2, … in the run) and told apart by `event`:
 
 - `"event": "start"`: `started_at` (epoch seconds), `budget` as given
   (`iterations`, `until`, `cost_usd`, `time_seconds`, each `null` when unset,
   and `default`: no budget flag, so the default `-n 1` applied),
   `start_iteration` (the first iteration it may run, `0` when it captures the
   baseline), `pid` and `host`;
+- `"event": "iteration"`, one per record once it is final (after its stop
+  commands; a failed or retried baseline too): `ended_at` and the fields of
+  `wait`'s [`iteration` event](cli.md#events) (`iteration`, `accepted`,
+  `reason`, `summary`, `metrics`, `commit`, `cost_usd`, `cost_incomplete`,
+  `agent_error`). A record whose process was killed before its line (or one
+  recovered from a published commit) gets it at the next `resume`, with the
+  previous segment's number, just before the new start;
 - `"event": "end"`: `ended_at`, `state` (`finished`, `interrupted` or
   `failed`), `stop_reason` (as in `status.json`: why the loop ended, kept when
   Ctrl-C or an error comes later, during landing or the report; `null` only when
@@ -511,10 +525,10 @@ A run is a line of work: `autohelix run` starts one, `autohelix resume` continue
 one (by default the config's most recently active), `autohelix stop` ends a
 running one after its current iteration, `archive` sets one aside and `delete`
 removes it. **A run keeps its config**: it stores it as `config.yaml`
-when it starts, and every segment, `view`, `dashboard`, `report` and the judges
+(and its prompt template as `prompt_template.md`) when it starts, and every segment, `view`, `dashboard`, `report` and the judges
 (`$AUTOHELIX_CONFIG`) use that copy. `resume` refuses before spending anything
-when the config file's parsed config differs from it (comments and formatting
-don't count; the prompt template's text does): `autohelix run <config> --import
+when the config file's parsed config differs from it (comments, formatting and
+other spellings of the same value don't count; the prompt template's text does): `autohelix run <config> --import
 <id>` applies the new config in a new run, or restore the file to continue. A
 deleted config file isn't a change. `run --import <id>` starts a new run (code
 from your checkout, its own config, budgets, baseline and notes) whose agents
@@ -549,7 +563,7 @@ If you reset the target behind accepted run code, resuming that run with auto
 landing would reapply that code: `autohelix archive` it (or `delete` it) so a bare
 `resume` passes it over.
 Only first valid baseline capture requires a clean checkout, and every readiness
-check (clean checkout, editable patterns, preflight) runs before a first start
+check (clean checkout, preflight) runs before a first start
 allocates a run. The baseline, stop commands and summary run in copies of the
 accepted code. Agents can still reach the project, its `.git`, other runs and
 `~/.gitconfig` through absolute paths: main-checkout inspection is best effort and
@@ -559,7 +573,9 @@ for cooperative agents, not a filesystem security boundary.
 Archive retains evidence, unlanded commits and rejected trees, and leaves code
 intact. Delete removes the run directory, its ref and its
 `refs/autohelix-rejected/<id>/` refs, while lock files remain outside that
-directory. Runs abandoned by earlier versions read as archived. Legacy top-level
+directory. A run folder missing a file every release writes (its stored
+`config.yaml`) was made by a development build: it is refused, with the advice
+to delete it. Legacy top-level
 history must be moved or deleted before run; there is no automatic migration.
 
 ## Cost Tracking
@@ -578,7 +594,9 @@ Failed main-agent calls consume their iteration number and resume at the next on
 setup failures before a call do not. Baseline retry calls stay in iteration 0.
 `calls` is the sole persisted usage representation; log paths are relative to the
 run directory.
-Report generation has its own separately recorded cost.
+Every run summary's call is counted in the run's totals too, recorded in
+`.internal/usage/summary.jsonl` (one per call; one that never returned stays
+unknown).
 
 What's available depends on the backend:
 

@@ -2,7 +2,6 @@
 iteration, the end block (outcome, metrics, totals, what landed, next commands, files),
 and errors in the end block. Whole screens: test_snapshots.py."""
 
-import subprocess
 
 import pytest
 import yaml
@@ -15,10 +14,7 @@ from autohelix.display import clean
 from autohelix.harness import Budget
 from autohelix.terminal import Row, Table, budget_text
 from autohelix.runs import RunPaths, short_id
-
-
-def _git(cwd, *args) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+from tests.helpers import git, latest_run
 
 
 CONFIG = {
@@ -122,11 +118,95 @@ def test_a_row_without_values_says_why_in_their_place():
     assert row.plain.rstrip().endswith("pytest -q failed (exit 1)") and row.plain.index("pytest") < 40
 
 
-def test_a_long_reason_goes_under_the_row_and_is_cut_to_the_width():
+def test_a_long_reason_goes_under_the_row_wrapped_at_spaces_only():
+    """Not cut with an ellipsis: wrapped under the time column, a word wider than the
+    room (a path) on a line of its own, whole."""
+    path = "src/" + "x" * 200 + ".py"
     lines = _rows(60, {"goal": "g", "observe": [{"name": "b", "command": "c", "metrics": {"speed": "higher"}}]}).add(
-        Row(1, False, {"speed": 3.0}, reason="metric gate: " + "x" * 200))
-    assert len(lines) == 2 and all(len(line.plain) <= 60 for line in lines)
-    assert lines[1].plain.startswith(" " * terminal.INDENT + "xxx") and lines[1].plain.endswith("…")
+        Row(1, False, {"speed": 3.0}, reason=f"metric gate: speed fell after the change to {path} and more"))
+    under = [line.plain for line in lines[1:]]
+    assert all(line.startswith(" " * terminal.INDENT) and not line[terminal.INDENT].isspace() for line in under)
+    assert " ".join(line.strip() for line in under) == f"speed fell after the change to {path} and more"
+    assert [line.strip() for line in under if len(line) > 60] == [path]
+    assert "…" not in "".join(under)
+
+
+@pytest.mark.parametrize("text, width, lines", [
+    ("one two three", 7, ["one two", "three"]),
+    ("see autohelix/20261116-0905-fixes-j294 now", 12, ["see", "autohelix/20261116-0905-fixes-j294", "now"]),
+    ("a-long-hyphenated-branch-name", 5, ["a-long-hyphenated-branch-name"]),
+    ("first\nsecond line", 80, ["first", "second line"]),
+    ("tabs\tand   spaces \x1b[31mred", 80, ["tabs and spaces red"]),
+    ("", 10, [""]),
+    (None, 10, [""]),
+])
+def test_wrap_breaks_lines_at_spaces_only(text, width, lines):
+    """The one wrap helper: never inside a word (a branch name, a path), not even at a
+    hyphen; a word wider than the width has its own line; line breaks kept, text cleaned."""
+    assert terminal.wrap(text, width) == lines
+
+
+def test_a_warning_is_the_same_on_every_screen():
+    """`  ! message`: the `!` yellow, the message wrapped under itself, never cut."""
+    path = "/very/long/" + "p" * 90 + "/notes"
+    lines = terminal.warning(f"Could not remove {path}: busy", 40)
+    assert [line.plain for line in lines] == ["  ! Could not remove", f"    {path}:", "    busy"]
+    assert [(span.start, span.end, span.style) for span in lines[0].spans] == [(2, 4, "yellow")]
+    assert [line.plain for line in terminal.warning("x", 40, indent=10)] == [" " * 10 + "! x"]
+
+
+def test_hanging_keeps_the_prefix_style_and_indents_under_the_text():
+    from rich.text import Text
+
+    lines = terminal.hanging(Text("Error: ", style="red"), "the config names a-missing-file and more", 28, "bold")
+    assert [line.plain for line in lines] == ["Error: the config names", "       a-missing-file and", "       more"]
+    assert lines[0].spans[0].style == "red" and all(line.spans[-1].style == "bold" for line in lines)
+
+
+def test_a_prefix_leaving_too_little_room_stands_on_its_own_line():
+    """Under 20 columns beside the prefix: the text goes under the prefix's start,
+    so no line is wider than the screen."""
+    from rich.text import Text
+
+    prefix = Text("  Error: the summary agent could not be run:", style="red")
+    lines = terminal.hanging(prefix, "its command exited 2 after the copy was made", 50)
+    assert [line.plain for line in lines] == [prefix.plain, "  its command exited 2 after the copy was made"]
+    assert lines[0].spans[0].style == "red" and all(line.cell_len <= 50 for line in lines)
+
+
+def test_a_reason_under_a_row_takes_at_most_three_lines():
+    """An agent's whole error (a backend's stack trace) under its row: three lines,
+    the last ending in ` …`, words dropped, not split."""
+    error = " ".join(f"word{i}" for i in range(200))
+    lines = _rows(60).add(Row(1, False, {}, agent_error=error))
+    under = [line.plain for line in lines[1:]]
+    assert len(under) == terminal.REASON_LINES and under[-1].endswith(" …")
+    assert all(word.startswith("word") or word in ("failed:", "…") for line in under for word in line.split()[1:])
+    assert all(len(line) <= 60 for line in under)
+
+
+def test_a_warning_keeps_its_own_line_breaks():
+    """A message with git's multi-line stderr: one line each, under the message."""
+    lines = terminal.warning("Could not land: git failed:\nfatal: bad ref\n\nhint: retry", 80)
+    assert [line.plain for line in lines] == ["  ! Could not land: git failed:", "    fatal: bad ref", "    ",
+                                              "    hint: retry"]
+
+
+def test_a_wrapped_header_field_keeps_a_long_path_whole():
+    """A field read whole (a path, a problem) wraps at spaces; a path wider than the
+    room is neither cut nor split."""
+    path = "/Users/someone/" + "deep/" * 20 + "autohelix.yaml"
+    lines = terminal.header([("t", None)], [("Config", f"{path} (exists)", None)], 60, show_mark=False)
+    shown = [line.plain for line in lines[1:-1]]
+    assert shown == [f"  Config     {path}", "             (exists)"]
+
+
+def test_the_end_block_wraps_an_error_without_breaking_a_branch_name():
+    table = _rows(50)
+    branch = "autohelix/20261116-0905-fixes-j294"
+    lines = table.outcome_lines(("Error", f"landing failed: {branch} is not an ancestor of main", terminal.RED))
+    words = [word for line in lines for word in line.plain.split()]
+    assert branch in words and "…" not in "".join(line.plain for line in lines)
 
 
 def test_metric_gate_rejection_names_the_iteration_it_compares_with():
@@ -168,9 +248,9 @@ def test_clean_strips_control_characters():
 def project(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
-    _git(project, "init", "-q", "-b", "main")
-    _git(project, "config", "user.email", "t@t")
-    _git(project, "config", "user.name", "T")
+    git(project, "init", "-q", "-b", "main")
+    git(project, "config", "user.email", "t@t")
+    git(project, "config", "user.name", "T")
     (project / "hello.py").write_text('print("hello")\n')
     (project / ".gitignore").write_text(".autohelix/\n")
     (project / ".autohelix").mkdir()
@@ -181,14 +261,14 @@ def _configure(project, settings=None, **sections):
     config = {"goal": "Test the console", "agent": {"backend": "mock", "settings": {
         "change_file": "hello.py", "change_content": "# iteration {iteration}", **(settings or {})}}, **sections}
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    _git(project, "add", "-A")
-    _git(project, "commit", "-qm", "config")
+    git(project, "add", "-A")
+    git(project, "commit", "-qm", "config")
 
 
 def _run(project, *args):
     # The width is fixed: the ending's `next` line wraps by it (one command per line under 80+).
     result = CliRunner(env={"COLUMNS": "80"}).invoke(main, ["run", "--path", str(project), "--no-report", "-n", "1", *args])
-    run_id = RunPaths(project).run_id
+    run_id = latest_run(project).run_id
     return result, short_id(run_id), run_id
 
 
@@ -239,7 +319,8 @@ def test_ending_when_landing_fails(project, monkeypatch):
     monkeypatch.setattr(autohelix.harness, "land", refuse)
     _configure(project, scope={"editable": ["hello.py"]})
     result, short, _ = _run(project)
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output  # a landing that failed is an error
+    assert "Error" not in result.output  # said once, on the landing line
     ending = _ending(result.output)
     start = next(i for i, line in enumerate(ending) if line.startswith("  landing "))
     end = next(i for i, line in enumerate(ending) if line.startswith("  next "))
@@ -252,8 +333,10 @@ def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):
     result, _, _ = _run(project)
     assert result.exit_code == 1
     ending = _ending(result.output)
-    message = "Stop command failed on the baseline: echo broken; exit 3 (expected exit 0 to stop or 1 to continue)"
-    assert ending[0].startswith("  Error      Stop command failed on the baseline: echo broken;")
+    # The exit code and the command's last output lines, which used to be printed apart.
+    message = ("Stop command exited 3 on the baseline: echo broken; exit 3 (expected exit 0 to stop or 1 to "
+               "continue) broken")
+    assert ending[0].startswith("  Error      Stop command exited 3 on the baseline: echo broken;")
     totals = next(i for i, line in enumerate(ending) if line.startswith("  run "))
     assert " ".join(" ".join(ending[:totals]).split()) == f"Error {message}"  # wrapped, not cut
     assert [line.split()[0] for line in ending[totals:]] == ["run", "landed", "next", "page"]
@@ -264,7 +347,7 @@ def test_agent_failures_show_in_the_row_and_three_in_a_row_stop_the_run(project)
     _configure(project, settings={"should_fail": True}, scope={"editable": ["hello.py"]})
     # The width is fixed: the ending's `next` line wraps by it (one command per line under 80+).
     result = CliRunner(env={"COLUMNS": "80"}).invoke(main, ["run", "--path", str(project), "--no-report", "-n", "5"])
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output  # an error, said on the ending's first line
     rows = [line.rstrip() for line in result.output.splitlines() if line.startswith("  ✗ ")]
     assert len(rows) == 3 and all(row.endswith("agent failed: Mock failure") for row in rows)
     assert "  Stopped    the agent failed 3 times in a row: Mock failure" in result.output.splitlines()

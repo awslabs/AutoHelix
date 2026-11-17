@@ -5,8 +5,7 @@
 
 `parse_duration_string` holds the one duration grammar, used by every config
 duration (`agent.timeout`, entry `timeout:`) and `--time` through
-config.parse_duration; this module's parse_duration is the optional variant
-(None/empty/zero mean unset).
+config.parse_duration.
 """
 
 from __future__ import annotations
@@ -48,31 +47,6 @@ def parse_duration_string(s: str) -> int:
         seen_units.add(u)
         total += int(amount) * _UNIT_SECONDS[u]
     return total
-
-
-def parse_duration(value: str | int | float | None) -> int | None:
-    """Parse an optional duration to seconds; None/empty/zero mean "unset".
-
-    Accepts None/empty as unset, numbers as seconds, and strings like "30m",
-    "1h", "1h30m", "2h15m30s", or "45s".
-    """
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        raise ValueError(f"Duration must be a string or number, got bool ({value})")
-    if isinstance(value, (int, float)):
-        if not (value == value) or value in (float("inf"), float("-inf")):
-            raise ValueError(f"Duration must be finite, got {value}")
-        secs = int(value)
-        return secs if secs > 0 else None
-
-    s = str(value).strip()
-    if not s:
-        return None
-    if s.isdigit():
-        return int(s) or None
-    total = parse_duration_string(s)
-    return total if total > 0 else None
 
 
 def format_limit(seconds: int) -> str:

@@ -5,12 +5,11 @@
 
 import json
 import os
-import shutil
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback
+from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, command_path
 from autohelix.agents.runner import format_timeout_seconds, run_process
-from autohelix.sandbox import build_worktree_env
+from autohelix.sandbox import build_copy_env
 
 
 class ClaudeCodeAgent:
@@ -34,18 +33,7 @@ class ClaudeCodeAgent:
         self._structured_output = None
 
     def _command_path(self) -> str:
-        if self.config.command:
-            return self.config.command
-
-        env_command = os.environ.get("AUTOHELIX_CLAUDE_CMD")
-        if env_command:
-            return env_command
-
-        resolved_claude = shutil.which("claude")
-        if resolved_claude:
-            return resolved_claude
-
-        return "claude"
+        return command_path("claude", self.config.command)
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [
@@ -279,7 +267,7 @@ class ClaudeCodeAgent:
 
     def run(
         self,
-        worktree_path: Path,
+        copy_path: Path,
         prompt: str,
         iteration: int,
         log_path: Path,
@@ -298,16 +286,19 @@ class ClaudeCodeAgent:
         self._final_text = None
         self._structured_output = None
 
-        # Build env with remapped PYTHONPATH for worktree
-        env = build_worktree_env(project_path, worktree_path) if project_path else None
-        if not self.config.auto_memory:
-            env = env or os.environ.copy()
+        # Build env with remapped PYTHONPATH for the copy
+        env = build_copy_env(project_path, copy_path) if project_path else None
+        # auto_memory decides, whatever the harness's own environment says.
+        env = env or os.environ.copy()
+        if self.config.auto_memory:
+            env.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
+        else:
             env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
 
         try:
             result = run_process(
                 cmd=self._build_command(prompt),
-                cwd=worktree_path,
+                cwd=copy_path,
                 log_path=log_path,
                 line_callback=lambda line: self._handle_line(line, event_callback),
                 heartbeat_seconds=self.heartbeat_seconds,

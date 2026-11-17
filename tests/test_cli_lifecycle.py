@@ -6,25 +6,19 @@ import socket
 import time
 
 import pytest
-from click.testing import CliRunner
 
-from autohelix.cli import main
 from autohelix.harness import Budget, Harness
 from autohelix.history import History, record_seconds
-from autohelix.runs import (PROJECT_RECORD, RunLock, RunPaths, copies_base, git, project_key, short_id,
+from autohelix.runs import (PROJECT_RECORD, RunLock, RunPaths, copies_base, git, project_key, project_runs, short_id,
                             sweep_copies)
-from tests.test_runs import configure
-
-
-def cli(project, *args):
-    return CliRunner().invoke(main, [*args, "-p", str(project)])
+from tests.helpers import cli, configure, latest_run
 
 
 def started(project, *args):
     """`autohelix run` once; returns the new run's paths."""
     result = cli(project, "run", "-n", "1", "--no-report", *args)
     assert result.exit_code == 0, result.output
-    return RunPaths(project)
+    return latest_run(project)
 
 
 def iterations(paths):
@@ -35,7 +29,7 @@ def test_run_always_starts_a_new_run_and_points_at_the_previous_one(project):
     first = started(project)
     result = cli(project, "run", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
-    second = RunPaths(project)
+    second = latest_run(project)
     assert second.run_id != first.run_id
     short = short_id(first.run_id)
     assert f"Previous run for this config: {short} (`autohelix resume {short}`" in result.output
@@ -57,7 +51,7 @@ def test_run_warns_but_starts_beside_a_live_run(project):
         result = cli(project, "run", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     assert f"{short_id(first.run_id)} is also running for this config" in result.output
-    assert RunPaths(project).run_id != first.run_id
+    assert latest_run(project).run_id != first.run_id
 
 
 def test_resume_continues_the_most_recently_active_run(project):
@@ -71,7 +65,7 @@ def test_resume_continues_the_most_recently_active_run(project):
     result = cli(project, "resume", "-n", "2", "--no-report")
     assert result.exit_code == 0, result.output
     assert iterations(first) == [0, 1, 2, 3, 4] and iterations(second) == [0, 1]
-    assert RunPaths(project).run_id == first.run_id
+    assert latest_run(project).run_id == first.run_id
 
 
 def test_resume_until_is_a_total_and_n_with_until_is_refused(project):
@@ -84,9 +78,9 @@ def test_resume_until_is_a_total_and_n_with_until_is_refused(project):
     assert result.exit_code == 2 and "not both" in result.output
 
 
-def test_resume_with_nothing_to_resume_exits_3(project):
+def test_resume_with_nothing_to_resume_exits_1(project):
     result = cli(project, "resume")
-    assert result.exit_code == 3
+    assert result.exit_code == 1
     assert "No run to resume for autohelix.yaml; start one with `autohelix run`." in result.output
 
 
@@ -122,16 +116,18 @@ def test_archive_undo_and_archive_refuses_a_live_run(project):
     assert "archived" not in paths.read_identity()
 
 
-def test_an_abandoned_run_reads_as_archived(project):
+def test_only_the_archived_flag_archives_a_run(project):
     paths = started(project)
     data = paths.read_identity()
-    data["lifecycle"] = "abandoned"  # written before archive existed
+    data["lifecycle"] = "abandoned"  # a development build's key: no meaning
     paths.identity.write_text(json.dumps(data))
-    assert cli(project, "resume").exit_code == 3
+    assert json.loads(cli(project, "dashboard", "--json").output)["runs"][0]["archived"] is False
+    assert cli(project, "archive", short_id(paths.run_id)).exit_code == 0
+    assert paths.read_identity()["lifecycle"] == "abandoned"  # left alone
     assert json.loads(cli(project, "dashboard", "--json").output)["runs"][0]["archived"] is True
 
 
-def test_delete_refuses_unlanded_commits_unless_forced_and_repoints_current(project):
+def test_delete_refuses_unlanded_commits_unless_forced(project):
     first = started(project)
     second = started(project, "--land", "manual")
     short = short_id(second.run_id)
@@ -142,9 +138,12 @@ def test_delete_refuses_unlanded_commits_unless_forced_and_repoints_current(proj
     assert result.exit_code == 0, result.output
     assert not second.run_dir.exists()
     assert git(project, "rev-parse", "--verify", second.ref, check=False).returncode != 0
-    assert RunPaths(project).run_id == first.run_id
+    assert [p.run_id for p, _ in project_runs(project)] == [first.run_id]
+    view = cli(project, "view", "--json")  # the run without an id is now the remaining one
+    assert json.loads(view.stdout)["run"]["id"] == first.run_id
     assert cli(project, "delete", short_id(first.run_id)).exit_code == 0  # landed: no --force needed
-    assert RunPaths(project).run_id is None
+    assert project_runs(project) == []
+    assert not (RunPaths(project).project_internal / "current").exists()
 
 
 def test_ids_sort_by_start_and_commands_accept_the_suffix(project, tmp_path, monkeypatch):
@@ -154,7 +153,7 @@ def test_ids_sort_by_start_and_commands_accept_the_suffix(project, tmp_path, mon
     paths = started(project, "perf")
     assert paths.run_id.startswith(time.strftime("%Y%m%d-")) and paths.run_id.split("-")[2] == "perf"
     result = cli(project, "view", short_id(paths.run_id), "--json")
-    assert result.exit_code == 0 and json.loads(result.output)["run"]["id"] == paths.run_id
+    assert result.exit_code == 0 and json.loads(result.stdout)["run"]["id"] == paths.run_id
     result = cli(project, "view", "perf", "--json")
     assert result.exit_code == 1 and "names aren't ids" in result.output
     (tmp_path / "bench").mkdir()
@@ -256,7 +255,7 @@ def begun(project, *args):
     """`autohelix run` with these budget flags only; returns the new run's paths."""
     result = cli(project, "run", "--no-report", *args)
     assert result.exit_code == 0, result.output
-    return RunPaths(project)
+    return latest_run(project)
 
 
 def test_budget_flags_are_validated(project):
@@ -265,14 +264,14 @@ def test_budget_flags_are_validated(project):
                           (["--time", "0"], "not a duration"), (["-n", "0"], "-n")):
         result = cli(project, "run", *args)
         assert result.exit_code == 2 and message in result.output, (args, result.output)
-    assert not RunPaths(project).run_id  # refused before a run exists
+    assert not latest_run(project).run_id  # refused before a run exists
 
 
 def test_without_a_budget_flag_one_iteration(project):
     """A bare `run` is one checked attempt; loops are typed."""
     result = cli(project, "run", "--no-report")
     assert result.exit_code == 0, result.output
-    paths = RunPaths(project)
+    paths = latest_run(project)
     assert "Budget     1 iteration (default)" in result.output
     assert iterations(paths) == [0, 1] and status(paths)["max_iterations"] == 1
     result = cli(project, "resume", "--no-report")
@@ -369,7 +368,7 @@ def test_non_finite_budgets_are_usage_errors(project):
     for args in (["--cost", "inf"], ["--cost", "1e400"], ["--cost", "nan"]):
         result = cli(project, "run", *args)
         assert result.exit_code == 2 and "positive finite number" in result.output, (args, result.output)
-    assert not RunPaths(project).run_id
+    assert not latest_run(project).run_id
 
 
 def test_cost_alone_with_an_unknown_cost_stops_before_the_next_iteration(project):
@@ -383,6 +382,70 @@ def test_cost_alone_with_an_unknown_cost_stops_before_the_next_iteration(project
         "detail": "cost unknown: --cost can't bound this segment (add -n or --time)"}
     paths = begun(project, "--cost", "1", "-n", "2")  # another bound: it goes on, counting known costs
     assert iterations(paths) == [0, 1, 2]
+
+
+def test_cost_alone_goes_on_past_an_unknown_cost_once_a_charge_was_priced(project, monkeypatch):
+    """A backend that prices (a timed-out call aside) is bounded by --cost: an unknown
+    charge only warns."""
+    from autohelix.agents.mock import MockAgent
+
+    real = MockAgent.run
+
+    def run(self, *args, **kwargs):
+        result = real(self, *args, **kwargs)
+        if kwargs.get("iteration") == 2:
+            result.usage.pop("cost_usd", None)  # as a killed call's
+        return result
+
+    monkeypatch.setattr(MockAgent, "run", run)
+    result = cli(project, "run", "--no-report", "--cost", "0.25")
+    assert result.exit_code == 0, result.output
+    assert "cost unknown; --cost counts known costs only" in result.output
+    paths = latest_run(project)
+    assert iterations(paths) == [0, 1, 2, 3, 4]  # $0.10 + unknown + $0.10 + $0.10
+    assert status(paths)["stop_reason"]["detail"] == "cost budget reached ($0.25 this segment)"
+
+
+def test_cost_alone_stops_when_only_the_judges_are_priced(project, monkeypatch):
+    """Priced `ask:` judges don't make an agent that can't price bounded by --cost."""
+    from autohelix.agents.mock import MockAgent
+
+    real = MockAgent.run
+
+    def run(self, *args, **kwargs):
+        result = real(self, *args, **kwargs)
+        if not self.config.read_only:
+            result.usage.pop("cost_usd", None)  # the main agent can't price; its judges can
+        return result
+
+    monkeypatch.setattr(MockAgent, "run", run)
+    configure(project, gates=["ask: Is it fine?"])
+    result = cli(project, "run", "--no-report", "--cost", "5")
+    assert result.exit_code == 0, result.output
+    paths = latest_run(project)
+    assert iterations(paths) == [0, 1]
+    assert status(paths)["stop_reason"]["detail"] == "cost unknown: --cost can't bound this segment (add -n or --time)"
+
+
+def test_cost_alone_goes_on_after_a_failed_first_agent_call(project, monkeypatch):
+    """A failed call without usage (an API error) says nothing about pricing: it used to
+    stop the segment "cost unknown" before the agent's priced calls had their chance."""
+    from autohelix.agents import AgentRunResult
+    from autohelix.agents.mock import MockAgent
+
+    real = MockAgent.run
+
+    def run(self, *args, **kwargs):
+        if kwargs.get("iteration") == 1:
+            return AgentRunResult(success=False, exit_code=1, error="API error")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(MockAgent, "run", run)
+    result = cli(project, "run", "--no-report", "--cost", "0.15")
+    assert result.exit_code == 0, result.output
+    paths = latest_run(project)
+    assert iterations(paths) == [0, 1, 2, 3]  # failed (unknown) + $0.10 + $0.10
+    assert status(paths)["stop_reason"]["detail"] == "cost budget reached ($0.15 this segment)"
 
 
 def test_until_already_reached_runs_nothing(project):
@@ -431,9 +494,16 @@ def test_each_segment_that_started_is_in_the_segment_log(project):
     assert first["started_at"] <= first["ended_at"] <= second["started_at"] <= second["ended_at"]
     assert second["started_at"] == status(paths)["segment_started_at"]
     assert second["pid"] == os.getpid() and second["host"] == socket.gethostname()
-    # Append-only: a start and an end record each.
-    events = [json.loads(line)["event"] for line in paths.segments.read_text().splitlines()]
-    assert events == ["start", "end", "start", "end"]
+    # Append-only: a start record, an iteration record per final record, an end record.
+    lines = [json.loads(line) for line in paths.segments.read_text().splitlines()]
+    assert [(r["segment"], r["event"], r.get("iteration")) for r in lines] == [
+        (1, "start", None), (1, "iteration", 0), (1, "iteration", 1), (1, "end", None),
+        (2, "start", None), (2, "iteration", 2), (2, "iteration", 3), (2, "end", None)]
+    records = {r.iteration: r for r in History(project, paths.run_id).load()}
+    for line in lines[1:3] + lines[5:7]:
+        record = records[line["iteration"]]
+        assert (line["ended_at"], line["accepted"], line["commit"]) == (record.ended_at, record.accepted,
+                                                                        record.commit)
     # --until already reached: no segment, nothing written.
     assert cli(project, "resume", "--until", "3").exit_code == 0
     assert len(segments(paths)) == 2

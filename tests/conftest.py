@@ -1,5 +1,5 @@
 """Shared fixtures: a run layout for file-only observer tests, and a committed
-project with a mock-agent config for run tests (`tests.test_runs.configure` edits it)."""
+project with a mock-agent config for run tests (`tests.helpers.configure` edits it)."""
 
 import pytest
 import yaml
@@ -14,7 +14,6 @@ def run_paths(tmp_path):
         "schema": SCHEMA, "id": "test", "config_path": "autohelix.yaml",
         "base_commit": "0" * 40, "target_branch": None,
     })
-    write_text(paths.current, "test\n")
     return paths
 
 
@@ -25,6 +24,10 @@ def project(tmp_path):
     git(project, "init", "-q")
     git(project, "config", "user.email", "test@example.com")
     git(project, "config", "user.name", "Test")
+    # No background `git maintenance` after commits: it leaves lock files in .git
+    # that tests comparing the repository's files before and after would see.
+    git(project, "config", "maintenance.auto", "false")
+    git(project, "config", "gc.auto", "0")
     (project / "code.py").write_text("print('baseline')\n")
     (project / "autohelix.yaml").write_text(yaml.safe_dump({
         "goal": "Make a checked change",

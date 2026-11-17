@@ -13,6 +13,7 @@ from autohelix.config import load_config
 from autohelix.history import History, IterationResult
 from autohelix.report import WRITE_TO, build_report_prompt, read_report_info
 from autohelix.runs import RunPaths, git, write_json
+from tests.helpers import latest_run
 
 
 @pytest.fixture
@@ -49,7 +50,7 @@ def project(tmp_path, run_paths):
     git(tmp_path, "update-ref", "--create-reflog", run_paths.ref, tip)
 
     # Add some history
-    history = History(tmp_path)
+    history = History(tmp_path, latest_run(tmp_path).run_id)
     history.append(IterationResult(iteration=0, accepted=True, metrics={"speed": 100}))
     history.append(IterationResult(iteration=1, accepted=True, metrics={"speed": 200}, commit="abc123"))
     history.append(IterationResult(iteration=2, accepted=False, metrics={}, reason="constraints failed"))
@@ -64,7 +65,15 @@ class TestReportCommand:
 
         result = runner.invoke(main, ["report", "-p", str(tmp_path)])
         assert result.exit_code == 1
-        assert "No iterations" in result.output
+        assert "No runs in" in result.output  # nothing to report on
+
+    def test_a_run_without_iterations_exits(self, runner, tmp_path):
+        (tmp_path / "autohelix.yaml").write_text("goal: test\n")
+        paths = RunPaths(tmp_path, "test-1234")
+        write_json(paths.identity, {"schema": 2, "id": paths.run_id})
+        result = runner.invoke(main, ["report", "-p", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "Run 1234 has no iterations yet. Nothing to report." in result.output
 
     @staticmethod
     def _agent(writes: str | None, also=None):
@@ -84,14 +93,14 @@ class TestReportCommand:
         with patch("autohelix.agents.create_agent", return_value=self._agent("# Summary\nGood run.")):
             result = runner.invoke(main, ["report", "-p", str(project)])
         assert result.exit_code == 0, result.output
-        assert (RunPaths(project).report).read_text() == "# Summary\nGood run."
-        info = read_report_info(project)
+        assert (latest_run(project).report).read_text() == "# Summary\nGood run."
+        info = read_report_info(project, latest_run(project).run_id)
         assert info["last_iteration"] == 3 and info["cost_usd"] == 0.28 and info["seconds"] >= 0
-        assert not (RunPaths(project).report_draft).exists()
+        assert not (latest_run(project).report_draft).exists()
 
     def test_errors_when_agent_changes_files(self, runner, project):
         def change(**kwargs):
-            (kwargs["worktree_path"] / "autohelix.yaml").write_text("goal: changed\n")
+            (kwargs["copy_path"] / "autohelix.yaml").write_text("goal: changed\n")
         touch = change
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok", also=touch)):
             result = runner.invoke(main, ["report", "-p", str(project)])
@@ -99,7 +108,7 @@ class TestReportCommand:
         assert "autohelix.yaml" in result.output
 
     def test_timeout_is_capped(self, runner, project):
-        config = RunPaths(project).config
+        config = latest_run(project).config
         config.write_text(config.read_text() + "agent:\n  timeout: 10h\n")
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok")) as create:
             runner.invoke(main, ["report", "-p", str(project)])
@@ -112,10 +121,10 @@ class TestReportCommand:
         assert result.exit_code == 0, result.output
         assert create.call_args[0][0].backend == "claude"
         assert "Make it faster" in self._agent_prompt(create)
-        RunPaths(project).config.unlink()
+        latest_run(project).config.unlink()
         result = runner.invoke(main, ["report", "-p", str(project)])
         assert result.exit_code == 1
-        assert "Run test has no stored config (started by an older AutoHelix); its report can't be written." in (
+        assert "Run test has no stored config: it was made by a development version of AutoHelix." in (
             " ".join(result.output.split()))
 
     @staticmethod
@@ -123,7 +132,7 @@ class TestReportCommand:
         return create.return_value.run.call_args.kwargs["prompt"]
 
     def test_keeps_old_report_when_agent_writes_nothing(self, runner, project):
-        report = RunPaths(project).report
+        report = latest_run(project).report
         report.write_text("old")
         with patch("autohelix.agents.create_agent", return_value=self._agent(None)):
             result = runner.invoke(main, ["report", "-p", str(project)])
@@ -133,8 +142,8 @@ class TestReportCommand:
 
 class TestBuildReportPrompt:
     def _prompt(self, project):
-        config, _ = load_config(project)
-        return build_report_prompt(config, project, Path("/tmp/draft.md"))
+        config = load_config(project)
+        return build_report_prompt(config, project, Path("/tmp/draft.md"), latest_run(project).run_id)
 
     def test_goal_coverage_and_output(self, project):
         prompt = self._prompt(project)
@@ -147,7 +156,7 @@ class TestBuildReportPrompt:
         prompt = self._prompt(project)
         for path in ("history.jsonl", "notes/", "agent.log", "config.yaml"):
             assert path in prompt
-        assert f"`{RunPaths(project).read_identity()['base_commit']}`" in prompt
+        assert f"`{latest_run(project).read_identity()['base_commit']}`" in prompt
 
     def test_where_to_look_matches_the_layout(self, project):
         prompt = self._prompt(project)
@@ -155,7 +164,7 @@ class TestBuildReportPrompt:
                      "observe/<name>/", "review.log", "rejected.patch", "iterations/NNN/notes/",
                      ".internal/notes/<N>/", ".internal/attempts/NNN-<k>/", "logs/"):
             assert text in prompt, text
-        paths = RunPaths(project)  # the names it uses are RunPaths'
+        paths = latest_run(project)  # the names it uses are RunPaths'
         run, folder = paths.run_dir, paths.iteration_dir(1)
         assert [p.relative_to(folder).as_posix() for p in (
             paths.record(1), paths.prompt(1), paths.agent_log(1), paths.gate_dir(1, 2), paths.stop_dir(1, 2),
@@ -165,7 +174,7 @@ class TestBuildReportPrompt:
             ".internal/notes", ".internal/attempts/001-2", "logs"]
 
     def test_no_accepted_iterations(self, project):
-        history = History(project)
+        history = History(project, latest_run(project).run_id)
         history.history_path.write_text("")
         history.append(IterationResult(iteration=1, accepted=False, metrics={}))
         assert "No iteration was accepted" in self._prompt(project)

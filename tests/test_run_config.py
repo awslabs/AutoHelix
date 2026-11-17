@@ -1,19 +1,18 @@
-"""One config per run: the stored copy, the loader's stored form, resume's comparison,
-and the config and template files always frozen."""
+"""One config per run: the stored copy (the config verbatim, its template beside it),
+resume's comparison of parsed configs, and the config and template files always frozen."""
 
 import stat
 
 import pytest
 import yaml
-from click.testing import CliRunner
 
-from autohelix.cli import main
-from autohelix.config import config_changes, inlined, load_config, stored_config_text
+from autohelix.config import config_changes, load_config
 from autohelix.harness import Budget, Harness
 from autohelix.history import History
 from autohelix.prompt_template import load_template
-from autohelix.runs import RunPaths, git, short_id
+from autohelix.runs import RunPaths, git, load_run_config, short_id
 from autohelix.workspace import Scope
+from tests.helpers import cli, latest_run
 
 CONFIG = """\
 # Why this goal: setup's reasoning, as comments.
@@ -32,10 +31,6 @@ def commit(project, message="change"):
     git(project, "commit", "-qm", message)
 
 
-def cli(project, *args):
-    return CliRunner().invoke(main, [*args, "-p", str(project)])
-
-
 @pytest.fixture
 def started(project):
     """The shared project with a commented config, and one finished run of it (landing
@@ -45,7 +40,7 @@ def started(project):
     commit(project, "config")
     result = cli(project, "run", "-n", "1", "--no-report", "--land", "manual")
     assert result.exit_code == 0, result.output
-    return RunPaths(project)
+    return latest_run(project)
 
 
 # --- the stored copy ---
@@ -55,60 +50,63 @@ def test_a_config_without_template_is_stored_verbatim(started):
     assert started.config.read_text() == CONFIG
 
 
-def test_the_template_line_is_replaced_and_comments_kept(tmp_path):
-    (tmp_path / "prompts").mkdir()
-    (tmp_path / "prompts" / "p.md").write_text("  Indented first line\n{{ goal }}\n\n")
-    config = tmp_path / "c.yaml"
-    config.write_text("# keep me\ngoal: g  # and me\nprompt_template: prompts/p.md  # gone\nstop: ['false']\n")
-    text = stored_config_text(config)
-    assert text.startswith("# keep me\ngoal: g  # and me\nprompt_template:  # stored when the run started\n")
-    assert text.endswith("stop: ['false']\n")
-    assert yaml.safe_load(text) == {"goal": "g", "stop": ["false"], "prompt_template": {
-        "file": "prompts/p.md", "text": "  Indented first line\n{{ goal }}\n\n"}}
-    assert yaml.safe_load(text) == inlined(config)
-
-
 @pytest.mark.parametrize("template", ["no newline", "", "a\r\nb\r\n", "\n\n  x\n", "# h\n- k: 'v'\n"])
-def test_awkward_templates_round_trip(tmp_path, template):
-    (tmp_path / "p.md").write_bytes(template.encode())
-    config = tmp_path / "c.yaml"
-    config.write_text("goal: g\nprompt_template: p.md")
-    assert yaml.safe_load(stored_config_text(config))["prompt_template"]["text"] == (tmp_path / "p.md").read_text()
+def test_a_config_with_a_template_is_stored_verbatim_and_its_template_beside_it(project, template):
+    """Any template text, stored as its own file: nothing spliced into the config."""
+    (project / "prompts").mkdir()
+    (project / "prompts" / "p.md").write_bytes(template.encode())
+    source = "# keep me\n" + CONFIG + "prompt_template: prompts/p.md  # a comment\n"
+    (project / "autohelix.yaml").write_text(source)
+    commit(project, "template")
+    harness = Harness(project, new=True)
+    paths = harness.paths
+    harness.close()
+    assert paths.config.read_text() == source
+    assert paths.template.read_text() == (project / "prompts" / "p.md").read_text()  # the text the prompt reads
+    assert stat.S_IMODE(paths.template.stat().st_mode) == 0o444
+    config = load_run_config(paths)
+    assert load_template(config) == (project / "prompts" / "p.md").read_text()
+    assert config.prompt_template == (project / "prompts" / "p.md").resolve()
+    assert config.protected == ["autohelix.yaml", "prompts/p.md"]
 
 
-@pytest.mark.parametrize("source", ["{goal: g, prompt_template: p.md}\n", "goal: g\nprompt_template:\n  p.md\n"])
-def test_a_template_line_that_cannot_be_replaced_falls_back_to_a_dump(tmp_path, source):
-    (tmp_path / "p.md").write_text("line one\nline two\n")
-    config = tmp_path / "c.yaml"
-    config.write_text(source)
-    text = stored_config_text(config)
-    assert text.startswith("# stored when the run started from c.yaml")
-    assert yaml.safe_load(text) == {"goal": "g", "prompt_template": {"file": "p.md", "text": "line one\nline two\n"}}
+def test_a_config_without_template_stores_no_template(started):
+    assert not started.template.exists()
 
 
-# --- the loader's stored form ---
+# --- loading a stored copy ---
 
 
-def test_the_stored_form_gives_the_template_text(tmp_path):
+def test_the_stored_template_text_is_the_template(tmp_path):
     source = tmp_path / "autohelix.yaml"
     stored = tmp_path / "stored.yaml"
-    stored.write_text("goal: g\nprompt_template:\n  file: prompts/p.md\n  text: 'Hi {{ goal }}'\n")
-    config, _ = load_config(tmp_path, stored, source=source)
+    stored.write_text("goal: g\nprompt_template: prompts/p.md\n")
+    config = load_config(tmp_path, stored, source=source, template_text="Hi {{ goal }}")
     assert load_template(config) == "Hi {{ goal }}"
     assert config.prompt_template == (tmp_path / "prompts" / "p.md").resolve()  # next to the source
     assert not [i for i in config.validate() if i.level == "error"]  # the file needn't exist
     assert config.protected == ["autohelix.yaml", "prompts/p.md"]
 
 
-@pytest.mark.parametrize("template, error", [
-    ({"file": "p.md", "text": "t", "extra": 1}, "Unknown key prompt_template.extra (known: file, text)"),
-    ({"file": "p.md", "text": 3}, "a stored prompt_template needs file: (its path) and text: (its contents)"),
-    ({"text": "t"}, "a stored prompt_template needs file:"),
-])
-def test_a_malformed_stored_form_is_a_config_error(tmp_path, template, error):
-    (tmp_path / "c.yaml").write_text(yaml.safe_dump({"goal": "g", "prompt_template": template}))
-    config, _ = load_config(tmp_path, tmp_path / "c.yaml")
-    assert any(error in i.message for i in config.validate() if i.level == "error")
+def test_a_mapping_as_prompt_template_is_a_config_error(tmp_path):
+    """The old stored form, `{file, text}` inlined into config.yaml, is no longer read."""
+    (tmp_path / "c.yaml").write_text(yaml.safe_dump({"goal": "g", "prompt_template": {"file": "p.md", "text": "t"}}))
+    config = load_config(tmp_path, tmp_path / "c.yaml")
+    assert "prompt_template must be a path to a template file" in [
+        i.message for i in config.validate() if i.level == "error"]
+
+
+def test_a_run_whose_template_was_not_stored_refuses(project):
+    (project / "prompt.md").write_text("Do it: {{ goal }}\n")
+    (project / "autohelix.yaml").write_text(CONFIG + "prompt_template: prompt.md\n")
+    commit(project, "template")
+    assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
+    paths = latest_run(project)
+    paths.template.unlink()
+    with pytest.raises(RuntimeError, match=rf"has no stored copy of its prompt_template: it was made by a "
+                                           rf"development version .*\(`autohelix delete --force "
+                                           rf"{short_id(paths.run_id)}`"):
+        load_run_config(paths)
 
 
 def test_protected_names_are_shown_plain_and_matched_escaped(tmp_path):
@@ -118,12 +116,12 @@ def test_protected_names_are_shown_plain_and_matched_escaped(tmp_path):
     (tmp_path / "outside.md").write_text("t")
     (project / "a.yaml").write_text("goal: g\nprompt_template: p[1].md\n")
     (project / "b.yaml").write_text("goal: g\nprompt_template: ../outside.md\n")
-    config = load_config(project, project / "a.yaml")[0]
+    config = load_config(project, project / "a.yaml")
     assert config.protected == config.frozen_names() == ["a.yaml", "p[1].md"]
     assert config.frozen_patterns() == ["a.yaml", "p[[]1].md"]
     assert not Scope(frozen=tuple(config.frozen_patterns())).allows("p[1].md")
     assert Scope(frozen=tuple(config.frozen_patterns())).allows("p1.md")
-    config = load_config(project, project / "b.yaml")[0]
+    config = load_config(project, project / "b.yaml")
     assert config.protected == ["b.yaml"]
     assert config.frozen_patterns() == ["b.yaml"] and config.frozen == []
 
@@ -134,7 +132,7 @@ def test_a_symlinked_config_and_template_are_frozen_as_named_and_as_resolved(tmp
     (tmp_path / "real" / "t.md").write_text("t")
     (tmp_path / "autohelix.yaml").symlink_to("real/c.yaml")
     (tmp_path / "p.md").symlink_to("real/t.md")
-    config = load_config(tmp_path, tmp_path / "autohelix.yaml")[0]
+    config = load_config(tmp_path, tmp_path / "autohelix.yaml")
     # The template's path resolves next to the config's target (real/../p.md), itself a link.
     assert config.protected == ["autohelix.yaml", "real/c.yaml", "p.md", "real/t.md"]
     scope = Scope(frozen=tuple(config.frozen_patterns()))
@@ -177,15 +175,15 @@ def test_a_template_edit_refuses(project):
     (project / "autohelix.yaml").write_text(CONFIG + "prompt_template: prompt.md\n")
     commit(project, "template")
     assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
-    paths = RunPaths(project)
-    assert "prompt_template:  # stored when the run started\n  file: prompt.md\n" in paths.config.read_text()
+    paths = latest_run(project)
+    assert paths.template.read_text() == "Do it: {{ goal }}\n"
     assert "Do it: Make a checked change" in paths.prompt(1).read_text()
     (project / "prompt.md").write_text("Do it differently: {{ goal }}\n")
     refused(paths, cli(project, "resume", "-n", "1", "--no-report"), "prompt_template")
     (project / "prompt.md").unlink()
     (project / "prompt.md").mkdir()  # there, but unreadable: a change too
     result = cli(project, "resume", "-n", "1", "--no-report")
-    assert result.exit_code == 1 and "it no longer reads: Cannot read prompt_template prompt.md" in result.output
+    assert result.exit_code == 1 and "it no longer reads: Cannot read prompt_template " in result.output
     (project / "prompt.md").rmdir()
     (project / "prompt.md").write_text("Do it: {{ goal }}\n")  # restored
     assert cli(project, "resume", "-n", "1", "--no-report").exit_code == 0
@@ -196,7 +194,7 @@ def test_a_deleted_template_continues_but_other_keys_are_compared(project):
     (project / "autohelix.yaml").write_text(CONFIG + "prompt_template: prompt.md\n")
     commit(project, "template")
     assert cli(project, "run", "-n", "1", "--no-report", "--land", "manual").exit_code == 0
-    paths = RunPaths(project)
+    paths = latest_run(project)
     git(project, "rm", "-q", "prompt.md")
     commit(project, "drop template")
     (project / "autohelix.yaml").write_text(CONFIG.replace("Make a checked change", "Other") + "prompt_template: prompt.md\n")
@@ -209,18 +207,18 @@ def test_a_deleted_template_continues_but_other_keys_are_compared(project):
     assert "Do it: Make a checked change" in paths.prompt(2).read_text()
 
 
-@pytest.mark.parametrize("edit, changed", [
-    ("gates: []\nscope: {editable: null}\nstop:\n", None),
-    ("prompt_template: ./prompt.md\n", None),
-    # a default written out is a change: the message names it
-    ('observe: [{name: bench, command: "true", timeout: 1800}]\n', "observe"),
+@pytest.mark.parametrize("edit", [
+    "gates: []\nscope: {editable: null}\nstop:\n",
+    "prompt_template: ./prompt.md\n",
+    # a default written out, another spelling of the same value: the harness sees the same config
+    'observe: [{name: bench, command: "true", timeout: 1800}]\n',
+    'observe: [{name: bench, command: "true", timeout: 30m}]\n',
 ])
-def test_empty_values_and_path_spellings_are_not_changes(project, edit, changed):
+def test_other_spellings_of_the_same_config_resume(project, edit):
     (project / "prompt.md").write_text("Do it: {{ goal }}\n")
     (project / "autohelix.yaml").write_text(CONFIG + "prompt_template: prompt.md\n")
     commit(project, "template")
     assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
-    paths = RunPaths(project)
     text = CONFIG + "prompt_template: prompt.md\n"
     if edit.startswith("prompt_template"):
         text = text.replace("prompt_template: prompt.md\n", edit)
@@ -230,18 +228,35 @@ def test_empty_values_and_path_spellings_are_not_changes(project, edit, changed)
         text += edit
     (project / "autohelix.yaml").write_text(text)
     result = cli(project, "resume", "-n", "1", "--no-report")
-    if changed:
-        refused(paths, result, changed)
-    else:
-        assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, result.output
 
 
-def test_config_changes_normalizes_nested_empties():
-    assert config_changes({"scope": {"editable": None}, "gates": [], "goal": "g"}, {"goal": "g"}) == []
-    assert config_changes({"agent": {"settings": {}}}, {"agent": None}) == []
-    assert config_changes({"prompt_template": {"file": "a/./p.md", "text": "t"}},
-                          {"prompt_template": {"file": "a/p.md", "text": "t"}}) == []
-    assert config_changes({"agent": {"timeout": "10m"}}, {"agent": {"timeout": 600}}) == ["agent"]
+def parsed(tmp_path, text, template=None):
+    (tmp_path / "c.yaml").write_text(text)
+    if template is not None:
+        (tmp_path / "p.md").write_text(template)
+    return load_config(tmp_path, tmp_path / "c.yaml")
+
+
+def test_config_changes_compares_what_the_harness_uses(tmp_path):
+    """Parsed configs: the old raw-YAML comparison counted each of these as a change."""
+    def changes(a, b):
+        return config_changes(parsed(tmp_path, a), parsed(tmp_path, b))
+
+    assert changes("goal: g\ngates: [pytest]\n", "goal: g\ngates: [{command: pytest, timeout: 1800}]\n") == []
+    assert changes("goal: g\nagent: {timeout: 10m}\n", "goal: g\nagent: {timeout: 600, backend: claude}\n") == []
+    assert changes("goal: g\nscope: {editable: null}\ngates: []\n", "goal: g\n") == []
+    assert changes("goal: g\nagent: {timeout: 10m}\n", "goal: g\nagent: {timeout: 11m}\n") == ["agent"]
+    assert changes("goal: g\nscope: {editable: [src/]}\n", "goal: h\nscope: {editable: [./src/]}\n") == ["goal"]
+    assert changes("goal: g\nscope: {frozen: [a]}\n", "goal: g\nscope: {frozen: [b]}\n") == ["scope.frozen"]
+
+
+def test_config_changes_compares_the_template_texts(tmp_path):
+    stored = parsed(tmp_path, "goal: g\nprompt_template: p.md\n", "one")
+    stored.prompt_template_text = "one"  # as a run's stored copy has it
+    assert config_changes(stored, parsed(tmp_path, "goal: g\nprompt_template: ./p.md\n", "one")) == []
+    assert config_changes(stored, parsed(tmp_path, "goal: g\nprompt_template: p.md\n", "two")) == ["prompt_template"]
+    assert config_changes(stored, parsed(tmp_path, "goal: g\n")) == ["prompt_template"]
 
 
 def test_a_deleted_config_continues_from_the_stored_copy(started):
@@ -266,12 +281,13 @@ def test_a_new_run_is_not_compared_with_a_file_edited_while_it_started(project, 
     (project / "autohelix.yaml").write_text(CONFIG)
     commit(project, "config")
 
-    def store_then_edit(config):
-        text = stored_config_text(config)
-        config.write_text(CONFIG.replace("Make a checked change", "Edited meanwhile"))
-        return text
+    real = runs.template_text
 
-    monkeypatch.setattr(runs, "stored_config_text", store_then_edit)
+    def store_then_edit(config):  # called right after the config's text is read
+        (project / "autohelix.yaml").write_text(CONFIG.replace("Make a checked change", "Edited meanwhile"))
+        return real(config)
+
+    monkeypatch.setattr(runs, "template_text", store_then_edit)
     harness = Harness(project, new=True)
     assert harness.config.goal == "Make a checked change"  # its stored copy
     harness.close()
@@ -279,8 +295,8 @@ def test_a_new_run_is_not_compared_with_a_file_edited_while_it_started(project, 
 
 def test_a_run_without_a_stored_config_refuses(started):
     started.config.unlink()
-    with pytest.raises(RuntimeError, match=r"has no stored config .* `autohelix run --import "
-                                           rf"{short_id(started.run_id)}`"):
+    with pytest.raises(RuntimeError, match=r"has no stored config: it was made by a development version .*\("
+                                           rf"`autohelix delete --force {short_id(started.run_id)}`"):
         Harness(started.project, run_id=started.run_id)
 
 

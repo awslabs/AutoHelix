@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from autohelix.config import load_config, run_command, stored_config_text
+from autohelix.config import ENTRY_NAME, load_config, project_configs, run_command, template_text
 
 SCHEMA = 2
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
@@ -62,7 +62,9 @@ _ITERATION = re.compile(r"[0-9]{3,}")
 _ATTEMPT = re.compile(r"[0-9]{3,}-[1-9][0-9]*")
 _POSITION = re.compile(r"[1-9][0-9]*")
 _TRANSCRIPT = re.compile(r"(ask|review)(-[0-9]+)?\.log")  # `judge._log_path`'s names
-_CALL_FOLDER = re.compile(r"iter-(0|[1-9][0-9]*)-call-[1-9][0-9]*")  # `RunPaths.call_folder_name`
+# A command call's place in its iteration folder (`$AUTOHELIX_CALL`): `gates/<k>`, `stop/<k>`, `observe/<name>`.
+_CALL = re.compile(rf"(?:gates|stop)/[1-9][0-9]*|observe/{ENTRY_NAME.pattern}")
+_CALL_FOLDER = re.compile(rf"iter-(0|[1-9][0-9]*)-((?:gates|stop)-[1-9][0-9]*|observe-{ENTRY_NAME.pattern})")
 
 
 def is_transcript(name: str) -> bool:
@@ -78,13 +80,13 @@ def _at(parts: list, index: int) -> str:
 class RunPaths:
     """The sole definition of project and per-run state paths.
 
-    Without an explicit id, observers follow current. The root remains useful
-    for project setup, but observers must not treat it as a run without an id.
+    Without an id, only the project's paths (`root`, `runs`, `locks`, ...) mean
+    anything; which run a command acts on is `default_run`'s choice, never a pointer.
 
     A run's folder holds what people read (run.json, config.yaml, history.jsonl, hints.md,
     report.md/.html, the `notes` link, `iterations/NNN/`, `logs/`); everything the
     harness keeps for itself is in its `.internal/`, and the project's own
-    (the current-run pointer, locks, helper scripts) in `.autohelix/.internal/`.
+    (locks, helper scripts) in `.autohelix/.internal/`.
     """
 
     project: Path
@@ -92,23 +94,14 @@ class RunPaths:
 
     def __post_init__(self):
         object.__setattr__(self, "project", Path(self.project).resolve())
-        run_id = self.run_id
-        if run_id in (None, "current"):
-            try:
-                run_id = self.current.read_text().strip()
-            except FileNotFoundError:
-                run_id = None
-        if run_id is not None and not _ID.fullmatch(run_id):
-            raise RuntimeError(f"Invalid run id: {run_id!r}")
-        object.__setattr__(self, "run_id", run_id)
+        if self.run_id is not None and not _ID.fullmatch(self.run_id):
+            raise RuntimeError(f"Invalid run id: {self.run_id!r}")
 
     # The project's state.
     @property
     def root(self): return self.project / ".autohelix"
     @property
     def project_internal(self): return self.root / ".internal"
-    @property
-    def current(self): return self.project_internal / "current"  # the current run's id
     @property
     def locks(self): return self.project_internal / "locks"
     @property
@@ -126,6 +119,8 @@ class RunPaths:
     @property
     def config(self): return self.run_dir / "config.yaml"  # the run's config, stored when it started
     @property
+    def template(self): return self.run_dir / "prompt_template.md"  # its prompt_template's text, if it has one
+    @property
     def history(self): return self.run_dir / "history.jsonl"
     @property
     def hints(self): return self.run_dir / "hints.md"
@@ -138,7 +133,7 @@ class RunPaths:
     @property
     def iterations(self): return self.run_dir / "iterations"
     @property
-    def logs(self): return self.run_dir / "logs"  # run logs per segment, report.log, hook audit
+    def logs(self): return self.run_dir / "logs"  # run logs per segment, report.log
 
     # One run's internal files.
     @property
@@ -146,7 +141,7 @@ class RunPaths:
     @property
     def status(self): return self.internal / "status.json"
     @property
-    def segments(self): return self.internal / "segments.jsonl"  # one line per segment (`run_status.SegmentLog`)
+    def segments(self): return self.internal / "segments.jsonl"  # the run's event log (`run_status.SegmentLog`)
     @property
     def stop_request(self): return self.internal / "stop.json"  # `autohelix stop`'s request (`run_status`)
     @property
@@ -164,11 +159,17 @@ class RunPaths:
     @property
     def attempts(self): return self.internal / "attempts"  # superseded iteration folders
 
+    @property
+    def summary_usage(self): return self.internal / "usage" / "summary.jsonl"  # every summary call's usage
+
     def usage(self, iteration: int) -> Path:
         """`$AUTOHELIX_USAGE_FILE` for the commands one iteration runs."""
         return self.internal / "usage" / f"{self.iteration_name(iteration)}.jsonl"
 
-    # One iteration's folder.
+    # One iteration's folder: these names in it.
+    RECORD, PROMPT, AGENT_LOG, NOTES = "record.json", "prompt.md", "agent.log", "notes"
+    GATES, OBSERVE, STOP, REJECTED_PATCH = "gates", "observe", "stop", "rejected.patch"
+
     @staticmethod
     def iteration_name(iteration: int) -> str:
         """`000`, `001`, ...: three digits, so listings sort in order (past 999 the width grows)."""
@@ -179,35 +180,35 @@ class RunPaths:
 
     def record(self, iteration: int) -> Path:
         """The iteration's record, pretty-printed: derived from history.jsonl, written last."""
-        return self.iteration_dir(iteration) / "record.json"
+        return self.iteration_dir(iteration) / self.RECORD
 
     def prompt(self, iteration: int) -> Path:
-        return self.iteration_dir(iteration) / "prompt.md"
+        return self.iteration_dir(iteration) / self.PROMPT
 
     def agent_log(self, iteration: int) -> Path:
-        return self.iteration_dir(iteration) / "agent.log"
+        return self.iteration_dir(iteration) / self.AGENT_LOG
 
     def iteration_notes(self, iteration: int) -> Path:
         """A link to the notes version saved with the iteration, if one was."""
-        return self.iteration_dir(iteration) / "notes"
+        return self.iteration_dir(iteration) / self.NOTES
 
     def observe_dir(self, iteration: int) -> Path:
-        return self.iteration_dir(iteration) / "observe"
+        return self.iteration_dir(iteration) / self.OBSERVE
 
     def observe_entry(self, iteration: int, name: str) -> Path:
         return self.observe_dir(iteration) / name
 
     def gate_dir(self, iteration: int, position: int) -> Path:
         """The output of the gate at 1-based `position` in `gates:`."""
-        return self.iteration_dir(iteration) / "gates" / str(position)
+        return self.iteration_dir(iteration) / self.GATES / str(position)
 
     def stop_dir(self, iteration: int, position: int) -> Path:
         """The output of the stop command at 1-based `position` in `stop:`."""
-        return self.iteration_dir(iteration) / "stop" / str(position)
+        return self.iteration_dir(iteration) / self.STOP / str(position)
 
     def rejected_patch(self, iteration: int) -> Path:
         """A rejected attempt's change (`base..tree`), when it had one under the size limit."""
-        return self.iteration_dir(iteration) / "rejected.patch"
+        return self.iteration_dir(iteration) / self.REJECTED_PATCH
 
     def attempt_dir(self, iteration: int, k: int) -> Path:
         """Where the k-th superseded attempt at an iteration's folder is kept."""
@@ -218,9 +219,41 @@ class RunPaths:
         return list(path.relative_to(self.run_dir).parts)
 
     @staticmethod
-    def call_folder_name(iteration: int, k: int) -> str:
-        """`iter-N-call-K`: the k-th command call folder of an iteration, in the copies folder."""
-        return f"iter-{iteration}-call-{k}"
+    def call_folder_name(iteration: int, call: str) -> str:
+        """`iter-N-gates-2`, `iter-N-observe-bench`, `iter-N-stop-1`: the folder, in the
+        copies folder, of the command whose output goes to `call` (`gates/2`, ...) of
+        iteration N."""
+        return f"iter-{iteration}-{call.replace('/', '-')}"
+
+    def usage_log(self, iteration: int, usage: dict):
+        """Where the transcript of a usage record of `iteration` is, as the `log` value
+        readers take (`relative_log`, `live_transcript`). A record with a `call` (an
+        `ask`/`review` in a command the harness ran) names its transcript by file name in
+        that call's folder: the stored one (`iterations/NNN/<call>/<log>`, or in the
+        earlier attempt `read_usage` puts it in, `.internal/attempts/NNN-k/...`) if it is
+        there, else the call folder's `logs/` it is being written to (`live_transcript`,
+        while the iteration runs). Any other record's `log` is passed on as it is."""
+        call, log = usage.get("call"), usage.get("log")
+        if call is None:
+            return log
+        if not (isinstance(call, str) and _CALL.fullmatch(call) and isinstance(log, str) and is_transcript(log)):
+            return None
+        attempt = usage.get("attempt")
+        if attempt is not None:  # an earlier attempt's call
+            folder = self.attempts / attempt if (isinstance(attempt, str) and _ATTEMPT.fullmatch(attempt)
+                                                 and attempt.rsplit("-", 1)[0] == self.iteration_name(iteration)
+                                                 ) else None
+        else:
+            folder = self.iteration_dir(iteration)
+        stored = folder / call / log if folder else None
+        if stored is not None and os.path.lexists(stored):
+            return str(stored.relative_to(self.run_dir))
+        if attempt is not None:
+            return None
+        try:
+            return str(self.copies / self.call_folder_name(iteration, call) / "logs" / log)
+        except RuntimeError:  # no copies folder recorded
+            return None
 
     def copies_under(self, base: Path) -> Path:
         return base / project_key(self.project) / self.run_id
@@ -285,19 +318,19 @@ class RunPaths:
             rest = parts[len(attempts) + 1:]
         else:
             return False
-        if rest == [self.agent_log(0).name]:
+        if rest == [self.AGENT_LOG]:
             return True
         if len(rest) != 3 or not is_transcript(rest[2]):
             return False
         kind, name = rest[0], rest[1]
-        if kind in (self.gate_dir(0, 1).parent.name, self.stop_dir(0, 1).parent.name):
+        if kind in (self.GATES, self.STOP):
             return bool(_POSITION.fullmatch(name))
-        return kind == self.observe_dir(0).name and not name.startswith(".")
+        return kind == self.OBSERVE and not name.startswith(".")
 
     def live_transcript(self, value, running: int | None) -> list[str] | None:
         """A judge or review transcript a running call is writing, named by untrusted
-        metadata (a usage record's `log` before its command ended): an absolute path
-        `<copies>/iter-N-call-K/logs/<ask|review>(-n).log`, N being the `running`
+        metadata (`usage_log` before its command ended): an absolute path
+        `<copies>/iter-N-<call>/logs/<ask|review>(-n).log`, N being the `running`
         iteration (from the run status). Returns its parts below `copies`, else None;
         no other name, folder or iteration."""
         if not self.run_id or running is None or not isinstance(value, str) or not os.path.isabs(value):
@@ -457,8 +490,8 @@ def sweep_copies(project: Path) -> None:
             if not _ID.fullmatch(entry.name) or not entry.is_dir():
                 continue
             try:
-                lock = RunLock(RunPaths(project, entry.name).lock)
-            except RuntimeError:  # live
+                lock = RunLock(RunPaths(project, entry.name).lock, retries=())
+            except RuntimeError:  # live (a probe's moment aside: swept next time)
                 continue
             with lock:
                 remove_copies(entry, warn=lambda message: None)
@@ -506,20 +539,41 @@ def claim_copies(paths: "RunPaths", warn=None) -> Path:
     return root
 
 
-class RunLock:
-    """Nonblocking, process-held ownership; the persistent inode is never removed."""
+_HELD: set[str] = set()  # the run locks this process holds (`held_here`)
 
-    def __init__(self, path: Path, *, blocking=False):
+
+def held_here(path: Path) -> bool:
+    """Whether this process holds the run lock at `path` (a `RunLock`)."""
+    return os.path.realpath(path) in _HELD
+
+
+LOCK_RETRIES = (0.01, 0.02, 0.04, 0.08)  # seconds between nonblocking tries: outlast an `is_live` probe
+
+
+class RunLock:
+    """Nonblocking, process-held ownership; the persistent inode is never removed. A
+    held lock is tried again for a moment (`LOCK_RETRIES`): an observer's `is_live`
+    probe takes a free lock for microseconds. `retries=()` tries once (a sweep that
+    skips running runs)."""
+
+    def __init__(self, path: Path, *, blocking=False, retries=LOCK_RETRIES):
         path.parent.mkdir(parents=True, exist_ok=True)
         self._file = path.open("a+")
-        try:
-            fcntl.flock(self._file, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-        except BlockingIOError:
-            self._file.close()
-            raise RuntimeError(f"Run {short_id(path.stem)} is running.") from None
+        for pause in (*retries, None):
+            try:
+                fcntl.flock(self._file, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+                break
+            except BlockingIOError:
+                if pause is None:
+                    self._file.close()
+                    raise RuntimeError(f"Run {short_id(path.stem)} is running.") from None
+                time.sleep(pause)
+        self._key = os.path.realpath(path)
+        _HELD.add(self._key)
 
     def close(self):
         if not self._file.closed:
+            _HELD.discard(self._key)
             fcntl.flock(self._file, fcntl.LOCK_UN)
             self._file.close()
 
@@ -584,15 +638,26 @@ class NoRunToResume(RuntimeError):
 
 
 def is_archived(data: dict) -> bool:
-    return bool(data.get("archived")) or data.get("lifecycle") == "abandoned"  # pre-archive runs
+    return bool(data.get("archived"))
 
 
 def is_live(paths: RunPaths) -> bool:
-    """Whether a process holds the run's lock (a brief probe: advisory)."""
+    """Whether a process holds the run's lock (a brief probe: advisory). A run that never
+    ran has no lock file, and the probe doesn't create one; it opens the file read-only
+    (observers need no write access) and takes the lock only when nobody holds it. A
+    lock that can't be opened counts as held."""
     try:
-        RunLock(paths.lock).close()
-    except RuntimeError:
+        fd = os.open(paths.lock, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return False
+    except OSError:
         return True
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:  # BlockingIOError: held
+        return True
+    finally:
+        os.close(fd)  # releases the probe's lock
     return False
 
 
@@ -638,7 +703,7 @@ def imported_run(paths: RunPaths, data: dict) -> tuple[RunPaths, dict] | None:
     stop this run."""
     source = data.get("import")
     source = source.get("run") if isinstance(source, dict) else None
-    if not isinstance(source, str) or not _ID.fullmatch(source):  # a real id, never the `current` alias
+    if not isinstance(source, str) or not _ID.fullmatch(source):  # a real id
         return None
     try:
         other = RunPaths(paths.project, source)
@@ -715,6 +780,72 @@ def resolve_run(project: Path, value: str) -> str:
                        "part, e.g. k3f9 (names aren't ids); `autohelix dashboard` lists runs.")
 
 
+def resolve_runs(project: Path, values) -> list[str]:
+    """Several run ids as typed, all resolved before anything acts on them: an unknown
+    one refuses the whole command (RuntimeError). A run named twice counts once."""
+    return list(dict.fromkeys(resolve_run(project, value) for value in values))
+
+
+def how_to_start(project: Path) -> str:
+    """How to start a first run here, by the configs there are (lowercase, a sentence end)."""
+    configs = project_configs(project)
+    if not configs:
+        return "write a config with `autohelix setup`, then `autohelix run`."
+    if len(configs) == 1:
+        return f"start one with `{run_command(configs[0])}`."
+    return f"start one with `autohelix run [CONFIG]` (configs: {', '.join(configs)})."
+
+
+class NoRun(RuntimeError):
+    """No run for a command without a run id to act on (`default_run`)."""
+
+
+def no_run(project: Path) -> str:
+    """The one message for "no run to act on": none at all, or every one archived."""
+    project = Path(project).resolve()
+    if project_runs(project):
+        return (f"No run to act on in {project}: every run is archived. Name one (`autohelix dashboard --json` "
+                f"lists them), or {how_to_start(project)}")
+    return f"No runs in {project}; {how_to_start(project)}"
+
+
+def default_run(project: Path) -> tuple[RunPaths, dict, str]:
+    """The run a command given no run id acts on (`land`, `hint`, `view`, `report`): the
+    one running run, else the most recently active run that isn't archived. Returns it
+    with why it was chosen ("running", "most recently active") for the caller to say.
+    RuntimeError when several runs are running (name one), NoRun when there is none."""
+    runs = project_runs(project)
+    live = [(p, d) for p, d in runs if is_live(p)]
+    if len(live) > 1:
+        raise RuntimeError(f"Several runs are running: {', '.join(short_id(p.run_id) for p, _ in live)}; "
+                           "name one.")
+    if live:
+        return (*live[0], "running")
+    for paths, data in runs:
+        if not is_archived(data):
+            return paths, data, "most recently active"
+    raise NoRun(no_run(project))
+
+
+def find_project(path) -> Path:
+    """The project a command that reads runs acts on, from `path` (`--path`, default the
+    current folder): that folder when it has runs (`.autohelix/runs/`), else the nearest
+    folder above it, up to the top of its git checkout, that has; else `path` itself."""
+    start = Path(path).resolve()
+    if RunPaths(start).runs.is_dir():
+        return start
+    top = git(start, "rev-parse", "--show-toplevel", check=False)
+    if top.returncode:
+        return start
+    top_path = Path(top.stdout.strip()).resolve()
+    for folder in start.parents:
+        if not folder.is_relative_to(top_path):
+            break
+        if RunPaths(folder).runs.is_dir():
+            return folder
+    return start
+
+
 def _ago(seconds: float) -> str:
     for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
         if seconds >= size:
@@ -783,7 +914,8 @@ def _owned(paths: RunPaths) -> tuple[dict, RunLock, list[tuple[str, str]]]:
 
 def require_clean(project: Path) -> None:
     """A run starts from a commit: refuse uncommitted changes in tracked files."""
-    dirty = git(project, "status", "--porcelain", "--untracked-files=no").stdout
+    # Read-only: no opportunistic index refresh (a check like `run --check` writes nothing).
+    dirty = git(project, "--no-optional-locks", "status", "--porcelain", "--untracked-files=no").stdout
     if dirty:
         raise RuntimeError("Uncommitted changes in tracked files. Commit them before starting a run:\n" + dirty)
 
@@ -792,20 +924,28 @@ def no_run_to_resume(config_path: str) -> str:
     return f"No run to resume for {config_path}; start one with `{run_command(config_path)}`."
 
 
-def not_stored(paths: RunPaths, data: dict) -> str:
-    """For a run started before runs stored their config: it can only be continued by a new run."""
-    short = short_id(paths.run_id)
-    return (f"Run {short} has no stored config (it was started by an older AutoHelix); continue it in a new "
-            f"run: `{run_command(data['config_path'])} --import {short}`.")
+def development_run(paths: RunPaths, missing: str) -> str:
+    """For a run folder without a file every released version writes (`missing`): it
+    was made by a development build, and is not read."""
+    return (f"Run {short_id(paths.run_id)} has no {missing}: it was made by a development version of AutoHelix. "
+            f"Delete it (`autohelix delete --force {short_id(paths.run_id)}`).")
 
 
 def load_run_config(paths: RunPaths, data: dict | None = None):
-    """The run's own config (`load_config` of its stored copy; the file it came from,
-    as run.json names it, is the `source`). RuntimeError (`not_stored`) without one."""
+    """The run's own config (`load_config` of its stored copy, with its stored template
+    text, `RunPaths.template`; the file it came from, as run.json names it, is the
+    `source`). RuntimeError (`development_run`) without one."""
     data = data if data is not None else paths.read_identity()
     if not paths.config.is_file():
-        raise RuntimeError(not_stored(paths, data))
-    return load_config(paths.project, paths.config, source=paths.project / data["config_path"])
+        raise RuntimeError(development_run(paths, "stored config"))
+    try:
+        text = paths.template.read_text()
+    except FileNotFoundError:
+        text = None
+    config = load_config(paths.project, paths.config, source=paths.project / data["config_path"], template_text=text)
+    if config.prompt_template is not None and text is None:
+        raise RuntimeError(development_run(paths, "stored copy of its prompt_template"))
+    return config
 
 
 def new_run_name(config: Path, name: str | None) -> str | None:
@@ -829,7 +969,13 @@ def _resumable(project: Path, config_path: str) -> list[RunPaths]:
     (an empty run, `run` typed by mistake and interrupted, must not shadow the real one,
     but is resumed when it is all there is), then by activity."""
     candidates = [p for p, d in project_runs(project, config_path) if not is_archived(d)]
-    candidates.sort(key=has_baseline, reverse=True)  # stable: by activity within each
+    def baseline(paths: RunPaths) -> bool:
+        try:
+            return has_baseline(paths)
+        except RuntimeError:  # a corrupt history: that run's own resume says so, not every other's
+            return False
+
+    candidates.sort(key=baseline, reverse=True)  # stable: by activity within each
     return candidates
 
 
@@ -897,7 +1043,8 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
         # Refused first starts must not leave an identity, owned ref or pointer.
         if ready is not None:
             ready()
-        stored = stored_config_text(config)
+        stored = config.read_text()  # verbatim; its template's text beside it (`RunPaths.template`)
+        template = template_text(load_config(project, config))
         base = git(project, "rev-parse", "HEAD").stdout.strip()
         target = git(project, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip().removeprefix("refs/heads/") or None
         notices = _new_run_notices(project, config_path, target, group, imported, base, land_mode)
@@ -932,8 +1079,12 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
                     **({"import": {"run": imported}} if imported else {}),
                     **({"why": why} if why else {})}
             try:
-                write_text(paths.config, stored)  # first: a readable run (run.json) has its config
-                os.chmod(paths.config, 0o444)  # never edited: a run keeps the config it started with
+                # First: a readable run (run.json) has its config. Never edited: a run keeps
+                # the config it started with.
+                for path, text in ((paths.config, stored), (paths.template, template)):
+                    if text is not None:
+                        write_text(path, text)
+                        os.chmod(path, 0o444)
                 write_json(paths.identity, data)
             except BaseException:
                 lock.close()
@@ -946,7 +1097,7 @@ def repair_history(paths: RunPaths) -> None:
     without a record.json: its folder is incomplete), and rewrite the record.json of
     iterations whose record.json is missing or differs from history.jsonl (a process
     killed between the two writes)."""
-    from autohelix.history import stale_records, write_records
+    from autohelix.history import stale_records, valid_record, write_records
 
     path = paths.history
     if not path.exists():
@@ -964,8 +1115,7 @@ def repair_history(paths: RunPaths) -> None:
             write_records(paths, records, mode="replace",
                           iterations=stale_records(paths, records) | ({int(torn[1])} if torn else set()))
             return
-        if (not isinstance(record, dict) or type(record.get("iteration")) is not int
-                or record["iteration"] < 0 or type(record.get("accepted")) is not bool):
+        if not valid_record(record):
             raise RuntimeError(f"Invalid history record {index + 1}: {path}")
         records.append(record)
     stale = stale_records(paths, records)
@@ -1058,7 +1208,10 @@ def land(paths: RunPaths, data: dict, expected_tip: str, into: str | None = None
     if not target:
         raise RuntimeError("This run started detached; land requires --into <branch>.")
     ref = f"refs/heads/{target}"
-    old = git(paths.project, "rev-parse", "--verify", ref).stdout.strip()
+    found = git(paths.project, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}", check=False)
+    if found.returncode:
+        raise RuntimeError(f"No branch {target}; create it first (git branch {target} <base>).")
+    old = found.stdout.strip()
     if git(paths.project, "merge-base", "--is-ancestor", expected_tip, old, check=False).returncode == 0:
         return
     hint = f"Run {paths.run_id} remains available: git merge autohelix/{paths.run_id}"
@@ -1090,7 +1243,6 @@ def archive(paths: RunPaths, *, undo: bool = False, why: str | None = None) -> N
     back. `why` (archive only) replaces the archive note, `archive_why`; undo keeps it."""
     with RunLock(paths.lock):
         data = paths.read_identity()
-        data.pop("lifecycle", None)
         if undo:
             data.pop("archived", None)
         else:
@@ -1098,6 +1250,26 @@ def archive(paths: RunPaths, *, undo: bool = False, why: str | None = None) -> N
             if why:
                 data["archive_why"] = why
         write_json(paths.identity, data)
+
+
+def set_options(paths: RunPaths, *, land_mode: str | None = None, group: str | None = None) -> list[str]:
+    """`resume --land` / `--group` with nothing to run: store them now, under the run's
+    lock (a run that is running refuses), and say what changed (nothing: [])."""
+    with RunLock(paths.lock):
+        data = paths.read_identity()
+        changed = []
+        if land_mode and (data.get("land") or "auto") != land_mode:
+            data["land"] = land_mode
+            changed.append(f"landing set to {land_mode}")
+        if group is not None and (data.get("group") or "") != group:
+            changed.append(f"joins group {group}" if group else f"leaves group {data['group']}")
+            if group:
+                data["group"] = group
+            else:
+                data.pop("group", None)
+        if changed:
+            write_json(paths.identity, data)
+        return changed
 
 
 def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
@@ -1129,29 +1301,12 @@ def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
         if tip.returncode == 0:
             git(paths.project, "update-ref", "--no-deref", "-d", paths.ref, tip.stdout.strip())
         shutil.rmtree(paths.run_dir)
-    current = paths.current
-    try:
-        pointed = current.read_text().strip()
-    except OSError:
-        return
-    if pointed == paths.run_id:  # follow the most recently active remaining run
-        remaining = project_runs(paths.project)
-        remaining.sort(key=lambda item: is_archived(item[1]))  # stable: activity order within each
-        if remaining:
-            write_text(current, remaining[0][0].run_id + "\n")
-        else:
-            current.unlink(missing_ok=True)
 
 
 def run_tip(paths: RunPaths, data: dict | None = None) -> str:
-    """Read accepted code even after an earlier `abandon` removed a fully landed ref."""
+    """The run's accepted code: its ref, else (no ref yet) its base commit."""
     result = git(paths.project, "rev-parse", "--verify",
                  paths.ref if paths.run_id else "HEAD", check=False)
     if result.returncode == 0:
         return result.stdout.strip()
-    from autohelix.history import History
-
-    records = History(paths.project, paths.run_id).load()
-    commit = next((r.commit for r in reversed(records) if r.accepted and r.commit), None)
-    identity = data or paths.read_identity()
-    return identity.get("abandoned_tip") or commit or identity["base_commit"]
+    return (data or paths.read_identity())["base_commit"]

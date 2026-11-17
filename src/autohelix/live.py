@@ -22,7 +22,7 @@ from autohelix import run_table
 from autohelix.display import LiveDisplay
 from autohelix.formatting import clean, format_duration
 from autohelix.replay import LogTail
-from autohelix.terminal import ROOM, earlier_line
+from autohelix.terminal import ROOM, earlier_line, fold
 from autohelix.safe_open import open_run_log
 from autohelix.run_status import read_run_status, running_iteration
 from autohelix.runs import RunPaths
@@ -65,7 +65,7 @@ def _status_line(status: dict | None, now: float | None = None) -> str:
     return f"Running{where} · {run_table.PHASES.get(phase, phase)} · {since}"  # the live row's words
 
 
-def log_for(project: Path, status: dict | None, current: Path | None, run_id: str | None = None) -> tuple[Path, str, float] | None:
+def log_for(project: Path, status: dict | None, current: Path | None, run_id: str) -> tuple[Path, str, float] | None:
     """The log to show for this status: (path, panel title, when it started).
 
     Between the agent and summary phases (checks, merge, …) the panel follows
@@ -75,8 +75,6 @@ def log_for(project: Path, status: dict | None, current: Path | None, run_id: st
     if not status:
         return None
     paths = RunPaths(project, run_id)
-    if not paths.run_id:
-        return None
     logs = paths.logs
     phase, n = status.get("phase"), status.get("iteration")
     phase_start = status.get("phase_started_at", time.time())
@@ -105,14 +103,14 @@ def log_for(project: Path, status: dict | None, current: Path | None, run_id: st
 def transcript_for(paths: RunPaths, status: dict | None) -> tuple[str, str] | None:
     """The running iteration's latest `ask`/`review` call with a log that can be read
     (`RunPaths.readable_log`: its live transcript in the call folder while the command
-    runs, the stored one after): (the usage record's `log`, its source)."""
+    runs, the stored one after): (where it is, `RunPaths.usage_log`; its source)."""
     from autohelix.usage_log import read_usage
 
     n = running_iteration(status)
     if n is None:
         return None
     for usage in reversed(read_usage(paths.usage(n))):
-        value = usage.get("log")
+        value = paths.usage_log(n, usage)
         if paths.readable_log(value, n):
             source = usage.get("source")
             return value, clean(source) if isinstance(source, str) and source else "call"
@@ -122,7 +120,7 @@ def transcript_for(paths: RunPaths, status: dict | None) -> tuple[str, str] | No
 class LogFollower:
     """The log panel: follows the log the run's status points at, replaying what is already there."""
 
-    def __init__(self, project: Path, backend: str | None, console: Console, run_id: str | None = None):
+    def __init__(self, project: Path, backend: str | None, console: Console, run_id: str):
         self.project, self.backend, self.console, self.run_id = project, backend, console, run_id
         self.current: Path | None = None
         self.tail: LogTail | None = None
@@ -230,7 +228,11 @@ def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollowe
         parts = ([Text(clean(data))], [], [])
     else:
         run, saved = data
-        parts = run_table.view_parts(run, saved, width, live=True)
+        head, rows, tail = run_table.view_parts(run, saved, width, live=True)
+        # `fit` counts one terminal line per item: a word wider than the screen (a path,
+        # a branch name, left whole by `terminal.wrap`) is folded here, where Rich would.
+        folded = lambda lines: [piece for line in lines for piece in fold(line, width)]  # noqa: E731
+        parts = (folded(head), [folded(row) for row in rows], folded(tail))
     running = bool(status) and status.get("state") == "running"
     # The status line, a spare line so the terminal doesn't scroll, the blank lines under a live run.
     room = height - 2 - ROOM * running
@@ -243,8 +245,8 @@ def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollowe
 
 
 def view(project: Path, backend: str | None = None, console: Console | None = None, *,
-         run_id: str | None = None) -> None:
-    """Follow a run (the current one unless `run_id`) until interrupted, across its segments.
+         run_id: str) -> None:
+    """Follow the run `run_id` until interrupted, across its segments.
     The run is reread when its status or files change (`_changes`), else every
     REREAD_SECONDS; the screen is redrawn REFRESH_PER_SECOND times a second meanwhile."""
     console = console or Console()

@@ -16,23 +16,20 @@ from autohelix.harness import Budget, Harness
 from autohelix.history import History
 from autohelix.iteration import IterationWorkspace
 from autohelix.runs import RunPaths
-
-
-def _git(project, *args) -> str:
-    return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True, check=True).stdout.strip()
+from tests.helpers import git, latest_run
 
 
 @pytest.fixture
 def project(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
-    _git(project, "init")
-    _git(project, "config", "user.email", "test@test.com")
-    _git(project, "config", "user.name", "Test")
+    git(project, "init")
+    git(project, "config", "user.email", "test@test.com")
+    git(project, "config", "user.name", "Test")
     (project / "hello.py").write_text('print("hello")\n')
     (project / ".gitignore").write_text(".autohelix/\n")
-    _git(project, "add", "-A")
-    _git(project, "commit", "-m", "init")
+    git(project, "add", "-A")
+    git(project, "commit", "-m", "init")
     return project
 
 
@@ -48,13 +45,13 @@ def _configure(project, **sections) -> None:
                                                         "change_content": "# iteration {iteration}"}},
               **sections}
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    _git(project, "add", "-A")
-    _git(project, "commit", "-m", "config")
+    git(project, "add", "-A")
+    git(project, "commit", "-m", "config")
 
 
 def _run(project, n: int) -> list:
     Harness(project, verbose=False).run(Budget(until=n), report=False)
-    return History(project).load()
+    return History(project, latest_run(project).run_id).load()
 
 
 def _lines(path) -> list[str]:
@@ -146,7 +143,7 @@ def test_failed_entry_contributes_no_metrics_and_the_run_continues(project, log)
     assert (flaky_dir / "stdout.txt").read_text() == "##autohelix[score=7]\n"
     assert (flaky_dir / "stderr.txt").read_text() == "oops\n"
     assert not (_observe(project, 1) / "other" / "stderr.txt").exists()
-    persisted = json.loads(History(project).history_path.read_text().splitlines()[-1])
+    persisted = json.loads(History(project, latest_run(project).run_id).history_path.read_text().splitlines()[-1])
     assert persisted["observe"][0]["error"] == "exited 2"
 
 
@@ -230,7 +227,7 @@ def test_refused_captures_are_skipped_at_capture_time(tmp_path):
     (root / ".git" / "config").write_text("secret")
     (root / "STDOUT.TXT").write_text("planted")
     stage.mkdir()
-    history = History(tmp_path)
+    history = History(tmp_path, latest_run(tmp_path).run_id)
     problems = history.stage_output(stage, "out\n", "", root, ["../x", ".git/config", "STDOUT.TXT", ".git"])
     assert len(problems) == 4 and all("skipped" in p for p in problems)
     assert sorted(p.name for p in stage.iterdir()) == ["stdout.txt"]
@@ -338,7 +335,7 @@ def test_scratch_is_fresh_private_and_removed_after_each_command(project, log):
     harness = Harness(project, verbose=False)
     copies = harness.run_state.copies_root
     harness.run(Budget(until=1), report=False)
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [r.accepted for r in records] == [True, True]
     assert all(g["passed"] for r in records for g in r.gates)
     assert [o["ok"] for r in records for o in r.observe] == [True, True]
@@ -353,11 +350,11 @@ def test_call_folder_is_removed_on_interrupt(project):
     try:
         workspace = IterationWorkspace(1, harness.run_state, harness.history, harness.repo)
         with pytest.raises(KeyboardInterrupt):
-            with workspace.call_folder() as folders:
+            with workspace.call_folder("gates/1") as folders:
                 (folders["scratch"] / "x").write_text("x")
                 folder = folders["scratch"].parent
                 raise KeyboardInterrupt
-        assert not folder.exists()
+        assert folder.name == "iter-1-gates-1" and not folder.exists()
         workspace.close()
     finally:
         harness.close()
@@ -366,13 +363,13 @@ def test_call_folder_is_removed_on_interrupt(project):
 def test_candidate_base_and_project(project, log):
     record = f'echo "$AUTOHELIX_ITERATION $AUTOHELIX_CANDIDATE $AUTOHELIX_BASE $AUTOHELIX_PROJECT" >> {log}'
     _configure(project, gates=[record], observe=[{"name": "bench", "command": record}])
-    base = _git(project, "rev-parse", "HEAD")
+    base = git(project, "rev-parse", "HEAD")
     harness = Harness(project, verbose=False)
     harness.run(Budget(until=1), report=False)
-    commit = History(project).load()[1].commit
+    commit = History(project, latest_run(project).run_id).load()[1].commit
     assert commit
-    a_tree, t_tree = _git(project, "rev-parse", f"{base}^{{tree}}"), _git(project, "rev-parse", f"{commit}^{{tree}}")
-    assert _git(project, "rev-parse", f"{commit}^") == base
+    a_tree, t_tree = git(project, "rev-parse", f"{base}^{{tree}}"), git(project, "rev-parse", f"{commit}^{{tree}}")
+    assert git(project, "rev-parse", f"{commit}^") == base
     expected = [f"0 {a_tree} {base} {project.resolve()}", f"1 {t_tree} {base} {project.resolve()}"]
     assert _lines(log) == [expected[0]] * 2 + [expected[1]] * 2
 
@@ -410,7 +407,7 @@ def test_failed_command_entry_at_the_baseline_is_a_setup_error(project):
                                   "metrics": {"speed": "higher"}}])
     with pytest.raises(RuntimeError, match=r"observe entry `bench` failed \(exited 1\) and reported no `speed`"):
         Harness(project, verbose=False).run(Budget(until=1), report=False)
-    [record] = History(project).load()
+    [record] = History(project, latest_run(project).run_id).load()
     assert not record.accepted and record.observe[0]["error"] == "exited 1"
 
 
@@ -421,7 +418,7 @@ def test_failed_entry_without_metrics_at_the_baseline_continues(project):
     ])
     harness = Harness(project, verbose=False)
     harness._capture_baseline()
-    [baseline] = History(project).load()
+    [baseline] = History(project, latest_run(project).run_id).load()
     harness.close()
     assert baseline.accepted and baseline.metrics == {"speed": 3}
     assert [(o["name"], o["ok"]) for o in baseline.observe] == [("notes", False), ("bench", True)]
@@ -441,7 +438,7 @@ def test_failed_review_entry_at_the_baseline(project, gated):
                 harness._capture_baseline()
         else:
             harness._capture_baseline()
-            [baseline] = History(project).load()
+            [baseline] = History(project, latest_run(project).run_id).load()
             assert baseline.accepted and baseline.metrics == {}
     finally:
         harness.close()
@@ -473,7 +470,7 @@ def test_an_accepted_no_op_counts_as_previous(project):
     config = yaml.safe_load((project / "autohelix.yaml").read_text())
     config["agent"]["settings"]["change_file"] = "elsewhere.txt"
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    _git(project, "commit", "-qam", "out-of-scope change")
+    git(project, "commit", "-qam", "out-of-scope change")
     records = _run(project, 3)
     assert [(r.accepted, r.commit) for r in records[1:]] == [(True, None)] * 3
     assert _first_lines(project, 3) == ["iter=3", "prev=iter=2"]
@@ -483,7 +480,7 @@ def test_previous_after_resume(project):
     _configure(project, observe=[{"name": "tracker", "command": TRACKER}])
     Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
     Harness(project, verbose=False).run(Budget(until=2), report=False)  # resume: iteration 2
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True), (2, True)]
     assert _first_lines(project, 2) == ["iter=2", "prev=iter=1"]
 
@@ -503,10 +500,10 @@ def test_baseline_retry_clears_observations_and_has_no_previous(project, tmp_pat
     harness = Harness(project, verbose=False)  # resumes the run: a baseline retry
     harness.config.gates = []  # this attempt plants nothing: what's left is the first attempt's
     harness.run(Budget(until=1), report=False)
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [(r.iteration, r.accepted) for r in records][:2] == [(0, True), (1, True)]
     assert sorted(p.name for p in observations.iterdir()) == ["bench"]
-    kept = History(project).paths.attempt_dir(0, 1)
+    kept = History(project, latest_run(project).run_id).paths.attempt_dir(0, 1)
     assert sorted(p.name for p in (kept / "observe").iterdir()) == ["bench", "ghost"]
     assert json.loads((kept / "record.json").read_text())["accepted"] is False  # the failed attempt's record
     first, retry, iteration_1 = _lines(log)
@@ -539,20 +536,20 @@ def test_metric_gate_on_a_later_entry_passes_the_earlier_one(project, log):
     assert [g["passed"] for g in record.gates] == [False, True]
 
 
-def test_ask_integrity_violation_in_a_gate_stops_later_commands(project, log):
+def test_a_judge_writes_in_its_own_copy_not_the_checks_copy(project, log):
+    """An `ask` in a gate judges its own fresh copy: its write fails its call (swallowed
+    here) and never reaches the checks copy later commands run in."""
     _configure(project, gates=[f'[ "$AUTOHELIX_ITERATION" = 0 ] || autohelix ask "Done?" || true',
-                               f'echo "$AUTOHELIX_ITERATION later" >> {log}'],
+                               f'test ! -e planted.md && echo "$AUTOHELIX_ITERATION later" >> {log}'],
                observe=[{"name": "bench", "command": f'echo "$AUTOHELIX_ITERATION bench" >> {log}'}])
     config = yaml.safe_load((project / "autohelix.yaml").read_text())
     config["agent"]["settings"]["judge_change_file"] = "planted.md"
     (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    _git(project, "commit", "-qam", "judge edits")
+    git(project, "commit", "-qam", "judge edits")
     _, record = _run(project, 1)
-    assert not record.accepted
-    assert _lines(log) == ["0 later", "0 bench"]
-    first, second = record.gates
-    assert first["passed"] is False and first["reason"] == record.reason  # it exited 0, but changed files
-    assert second["passed"] is None and record.observe == []
+    assert record.accepted
+    assert _lines(log) == ["0 later", "0 bench", "1 later", "1 bench"]
+    assert [g["passed"] for g in record.gates] == [True, True]
 
 
 def test_gate_that_modifies_the_candidate_is_recorded_failed(project):
@@ -609,5 +606,5 @@ def test_interrupt_during_a_real_command_removes_its_call_folder(project, log):
         harness.close()
     [scratch] = _lines(log)
     assert not os.path.exists(scratch) and not os.path.exists(os.path.dirname(scratch))
-    record = History(project).load()[-1]
+    record = History(project, latest_run(project).run_id).load()[-1]
     assert record.iteration == 1 and record.reason == "interrupted"

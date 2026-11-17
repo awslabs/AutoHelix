@@ -9,7 +9,7 @@ import autohelix.runs as runs
 from autohelix.harness import Budget, Harness
 from autohelix.runs import (COPIES_ENV, RunPaths, claim_copies, delete, copies_base, ensure_copies,
                             git, project_key, remove_copies)
-from tests.test_runs import configure
+from tests.helpers import configure
 
 
 def mode(path):

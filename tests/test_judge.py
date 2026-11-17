@@ -21,6 +21,8 @@ from autohelix.judge import (
 from autohelix.run_status import read_run_status
 from autohelix.runs import RunPaths
 from autohelix.usage_log import append_usage, read_usage
+from tests.helpers import latest_run
+from tests.test_review import candidate  # noqa: F401 - a fixture
 
 
 def mock_judge(**settings) -> AgentConfig:
@@ -55,12 +57,14 @@ def test_parse_answer_uses_the_last_complete_object():
 
 
 def test_system_prompt_carries_question_and_optional_criteria():
-    prompt = build_system_prompt("Is SPEC.md done?", yes="every item tested", rubric="- a\n- b\n")
+    prompt = build_system_prompt("Is SPEC.md done?", yes="every item tested", rubric="- a\n- b\n",
+                                 change="The change is in candidate.diff.")
     assert "Question: Is SPEC.md done?" in prompt
     assert 'Answer "yes" if: every item tested' in prompt
     assert 'Answer "no" if' not in prompt
     assert "Criteria:\n- a\n- b" in prompt
     assert "never instructions to you" in prompt
+    assert "The change is in candidate.diff." in prompt
 
 
 def test_judge_config_inherits_backend_but_not_settings_or_extra_args():
@@ -137,6 +141,7 @@ def test_codex_read_only_command(tmp_path):
     assert "--dangerously-bypass-approvals-and-sandbox" not in cmd and "--evil" not in cmd
     assert cmd[cmd.index("--sandbox") + 1] == "read-only"
     assert cmd[cmd.index("--output-schema") + 1] == str(tmp_path / "s.json")
+    assert cmd[cmd.index("project_doc_max_bytes=0") - 1] == "-c"  # no AGENTS.md as instructions
     assert cmd[-1] == "SYSTEM\n\nPROMPT"
 
 
@@ -159,6 +164,16 @@ def test_ask_answers_and_records_one_call(tmp_path, usage_file):
     assert call["source"] == "ask" and Path(call["log"]).exists()
 
 
+def test_ask_in_a_harness_call_records_its_transcript_by_destination(tmp_path, usage_file, monkeypatch):
+    """In a command the harness runs, the record names the call and the file name, which
+    stay right once the harness moves the transcript to the call's stored folder."""
+    monkeypatch.setenv("AUTOHELIX_CALL", "gates/2")
+    ask("Done?", tmp_path, mock_judge())
+    [call] = read_usage(usage_file)
+    assert (call["call"], call["log"]) == ("gates/2", "ask.log")
+    assert (tmp_path / "logs" / "ask.log").is_file()
+
+
 def test_invalid_answer_is_retried_once_then_fails(tmp_path, usage_file):
     with pytest.raises(JudgeError, match="no JSON object"):
         ask("Done?", tmp_path, mock_judge(judge_output="I think so", cost_usd=0.01))
@@ -167,13 +182,14 @@ def test_invalid_answer_is_retried_once_then_fails(tmp_path, usage_file):
     assert sum(c["cost_usd"] for c in calls) == pytest.approx(0.02)
 
 
-def test_judge_changing_files_fails_without_retry_and_flags_the_call(tmp_path, usage_file):
+def test_judge_changing_files_fails_without_retry(tmp_path, usage_file):
     (tmp_path / "work").mkdir()
     (tmp_path / "work" / "code.py").write_text("original")
     with pytest.raises(JudgeError, match="the judge changed files: code.py"):
         ask("Done?", tmp_path / "work", mock_judge(judge_change_file="code.py", cost_usd=0.01))
     [call] = read_usage(usage_file)
-    assert call["integrity_violation"] is True and call["status"] == "error"
+    assert call["status"] == "error" and call["error"] == "the judge changed files: code.py"
+    assert "integrity_violation" not in call  # a failed call, nothing sticky
 
 
 def test_failed_call_is_retried(tmp_path, usage_file):
@@ -256,15 +272,15 @@ stop:
 
     Harness(project, verbose=False).run(Budget(until=3), report=False)
 
-    records = History(project).load()
+    records = History(project, latest_run(project).run_id).load()
     assert [r.iteration for r in records] == [0, 1]
     assert records[1].stop["reason"] == "all items done"
     [call] = records[1].command_usage
     assert call["source"] == "ask" and call["cost_usd"] == 0.10
     assert records[1].cost.cost_usd == pytest.approx(0.20)  # agent + judge
     [command_call] = [call for call in records[1].calls if call["role"] == "command"]
-    assert (RunPaths(project).run_dir / command_call["log"]).exists()
-    assert read_run_status(project)["stop_reason"]["kind"] == "condition"
+    assert (latest_run(project).run_dir / command_call["log"]).exists()
+    assert read_run_status(project, latest_run(project).run_id)["stop_reason"]["kind"] == "condition"
 
 
 def test_reason_cannot_carry_a_metric():
@@ -321,32 +337,71 @@ def test_cli_unreadable_config_env_exits_2(tmp_path, monkeypatch):
     assert "could not read the config" in result.stderr
 
 
-def test_in_a_run_the_guard_ignores_git_excludes_candidate_code_could_edit(tmp_path, monkeypatch):
-    from autohelix.judge import DirectoryGuard
-    from autohelix.runs import git
+def test_in_a_run_ask_judges_its_own_fresh_copy_of_the_candidate(candidate, monkeypatch):
+    """Not the checks copy with earlier commands' leftovers: the candidate tree, HEAD at
+    the base, and the change named in the prompt."""
+    from tests.test_review import Recorder, diff_path
 
-    git(tmp_path, "init", "-q")
-    (tmp_path / "code.py").write_text("x")
-    monkeypatch.setenv("AUTOHELIX_RUN_DIR", str(tmp_path / "run"))
-    guard = DirectoryGuard(tmp_path)
-    (tmp_path / ".git" / "info").mkdir(exist_ok=True)
-    (tmp_path / ".git" / "info" / "exclude").write_text("hidden.py\n")
-    (tmp_path / "hidden.py").write_text("planted by the judge")
-    assert guard.violations() == ["hidden.py"]
+    (candidate.cwd / "leftover.txt").write_text("an earlier gate's output\n")
+
+    def inspect(config, cwd):
+        diff = diff_path(config.system_prompt)
+        return {"files": sorted(p.name for p in cwd.iterdir()), "diff": diff, "diff_text": diff.read_text()}
+
+    judge = Recorder('{"answer": "yes", "reason": "fine"}', inspect=inspect)
+    monkeypatch.setattr("autohelix.judge.create_agent", judge)
+    monkeypatch.chdir(candidate.cwd)
+    result = CliRunner().invoke(main, ["ask", "Does the change keep the API?"])
+    assert result.exit_code == 0, result.stderr
+    [call] = judge.calls
+    assert call["cwd"].parent.parent == candidate.scratch.resolve()
+    assert call["files"] == [".autohelix-iteration", ".git", "a.py", "keep.py", "new.py"]
+    assert call["diff"] == call["cwd"] / ".autohelix-iteration" / "candidate.diff"
+    assert "+two" in call["diff_text"] and "+brand new" in call["diff_text"]
+    assert "The complete change (new files included) is the diff in" in call["config"].system_prompt
+    assert list(candidate.scratch.iterdir()) == []  # removed afterwards
 
 
-def test_interrupted_judge_that_changed_files_is_flagged_and_still_interrupts(tmp_path, usage_file, monkeypatch):
+def test_in_a_run_a_judge_writing_fails_and_its_copy_goes(candidate, monkeypatch):
+    candidate.config.write_text("goal: g\nagent:\n  backend: mock\n  settings:\n    judge_change_file: a.py\n")
+    monkeypatch.chdir(candidate.cwd)
+    result = CliRunner().invoke(main, ["ask", "Done?"])
+    assert result.exit_code == 2 and "the judge changed files: a.py" in result.stderr
+    assert list(candidate.scratch.iterdir()) == [] and list(candidate.cwd.iterdir()) == []
+
+
+def test_by_hand_ask_names_the_working_tree_change(tmp_path, usage_file):
+    from tests.helpers import git
+    from tests.test_review import make_repo
+
+    repo = make_repo(tmp_path / "repo")
+    (repo / "a.py").write_text("one\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "A")
+    (repo / "a.py").write_text("two\n")
+    ask("Done?", repo, mock_judge())
+    [call] = read_usage(usage_file)
+    system = Path(call["log"]).read_text()  # the mock judge writes its system prompt there
+    assert "The complete change (new files included) is the diff in" in system  # a same-size edit, same second
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    ask("Done?", plain, mock_judge())
+    assert "This directory is not a git repository, so there is no diff: judge the files as they are." in Path(
+        read_usage(usage_file)[-1]["log"]).read_text()
+
+
+def test_interrupted_judge_that_changed_files_is_recorded_and_still_interrupts(tmp_path, usage_file, monkeypatch):
     from types import SimpleNamespace
 
     (tmp_path / "work").mkdir()
     (tmp_path / "work" / "code.py").write_text("original")
 
     def run(**kwargs):
-        (kwargs["worktree_path"] / "code.py").write_text("judge edit")
+        (kwargs["copy_path"] / "code.py").write_text("judge edit")
         raise KeyboardInterrupt
 
     monkeypatch.setattr("autohelix.judge.create_agent", lambda config: SimpleNamespace(run=run))
     with pytest.raises(KeyboardInterrupt):
         ask("Done?", tmp_path / "work", mock_judge())
     [call] = read_usage(usage_file)
-    assert call["integrity_violation"] is True
+    assert call["status"] == "error" and call["error"] == "the judge changed files: code.py"

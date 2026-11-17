@@ -11,7 +11,9 @@ from rich.console import Console
 from autohelix import live as W
 from autohelix.replay import LogTail
 from autohelix.run_status import RunStatus
+from autohelix.runs import RunLock
 from autohelix.safe_open import open_run_log
+from tests.helpers import latest_run
 
 LINE = json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "SECRET-TEXT"}]}}) + "\n"
 
@@ -127,12 +129,12 @@ def test_a_planted_link_on_the_way_to_a_transcript_is_refused(run_paths, tmp_pat
 
 
 def _follow(tmp_path, log):
-    status = RunStatus(tmp_path)
+    status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
     status.start()
     status.phase("agent", 1)
     status.note(log=str(log))
     out = io.StringIO()
-    follower = W.LogFollower(tmp_path, "claude", Console(file=out, width=120))
+    follower = W.LogFollower(tmp_path, "claude", Console(file=out, width=120), "test")
     follower.poll(status.data)
     with Console(file=out, width=120) as console:
         if follower.display is not None:
@@ -170,9 +172,9 @@ def test_web_viewer_reads_only_regular_logs(tmp_path, run_paths, planted):
 
 # ---------- live ask/review transcripts in the running iteration's call folders ----------
 
-def _live(run_paths, name="ask.log", iteration=3, k=2):
-    """A transcript a running call is writing: `<copies>/iter-N-call-K/logs/<name>`."""
-    logs = run_paths.copies / run_paths.call_folder_name(iteration, k) / "logs"
+def _live(run_paths, name="ask.log", iteration=3, call="gates/2"):
+    """A transcript a running call is writing: `<copies>/iter-N-<call>/logs/<name>`."""
+    logs = run_paths.copies / run_paths.call_folder_name(iteration, call) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     return logs / name
 
@@ -195,12 +197,14 @@ def test_a_live_transcript_opens_while_its_iteration_runs(run_paths, name):
 
 
 @pytest.mark.parametrize("where", [
-    "{copies}/iter-3-call-2/logs/stdout.txt", "{copies}/iter-3-call-2/logs/ask.log.bak",
-    "{copies}/iter-3-call-2/scratch/ask.log", "{copies}/iter-3-call-2/ask.log",
-    "{copies}/iter-3-call-2/logs/deep/ask.log", "{copies}/iter-3-agent/logs/ask.log",
-    "{copies}/iter-03-call-2/logs/ask.log", "{copies}/iter-3-call-0/logs/ask.log",
-    "{copies}/../iter-3-call-2/logs/ask.log", "{copies}/iter-3-call-2/logs/../logs/../../x/logs/ask.log",
-    "iter-3-call-2/logs/ask.log",  # relative: never below the copies folder
+    "{copies}/iter-3-gates-2/logs/stdout.txt", "{copies}/iter-3-gates-2/logs/ask.log.bak",
+    "{copies}/iter-3-gates-2/scratch/ask.log", "{copies}/iter-3-gates-2/ask.log",
+    "{copies}/iter-3-gates-2/logs/deep/ask.log", "{copies}/iter-3-agent/logs/ask.log",
+    "{copies}/iter-03-gates-2/logs/ask.log", "{copies}/iter-3-gates-0/logs/ask.log",
+    "{copies}/iter-3-call-2/logs/ask.log", "{copies}/iter-3-checks/logs/ask.log",
+    "{copies}/iter-3-observe-.x/logs/ask.log", "{copies}/iter-3-observe-Bench/logs/ask.log",
+    "{copies}/../iter-3-gates-2/logs/ask.log", "{copies}/iter-3-gates-2/logs/../logs/../../x/logs/ask.log",
+    "iter-3-gates-2/logs/ask.log",  # relative: never below the copies folder
 ])
 def test_other_paths_in_the_copies_folder_are_refused(run_paths, where):
     value = where.format(copies=run_paths.copies)
@@ -237,7 +241,8 @@ def test_planted_live_transcripts_are_refused(run_paths, tmp_path, kind):
 
 
 def _running(tmp_path, iteration=3, phase="checks"):
-    status = RunStatus(tmp_path)
+    status = RunStatus(tmp_path, latest_run(tmp_path).run_id)
+    status.lock = RunLock(latest_run(tmp_path).lock)  # a running segment holds the run's lock
     status.start()
     status.phase(phase, iteration)
     return status
@@ -249,11 +254,12 @@ def test_web_viewer_shows_a_live_transcript_of_the_running_iteration(tmp_path, r
 
     log = _live(run_paths)
     log.write_text(LINE)
-    append_usage({"id": "a", "source": "ask", "status": "started", "log": str(log)}, run_paths.usage(3))
+    append_usage({"id": "a", "source": "ask", "status": "started", "call": "gates/2", "log": "ask.log"},
+                 run_paths.usage(3))
     status = _running(tmp_path)
     data = RunData(tmp_path, run_id="test")
     calls = data.iteration(3)["calls"]
-    assert [(c["log"], c["live_log"]) for c in calls] == [(None, "iter-3-call-2/logs/ask.log")]
+    assert [(c["log"], c["live_log"]) for c in calls] == [(None, "iter-3-gates-2/logs/ask.log")]
     assert any("SECRET-TEXT" in event["text"] for event in calls[0]["events"])
     # Once another iteration runs, the call folder's transcript is no longer read.
     status.phase("agent", 4)
@@ -268,11 +274,12 @@ def test_web_viewer_shows_a_live_stop_transcript_after_the_record(tmp_path, run_
 
     run_paths.history.write_text(json.dumps({"iteration": 3, "accepted": True, "calls": [
         {"role": "command", "log": None, "usage": {"id": "gate"}}]}) + "\n")
-    log = _live(run_paths, k=5)
+    log = _live(run_paths, call="stop/1")
     log.write_text(LINE)
     append_usage({"id": "gate", "source": "ask", "status": "ok", "log": None}, run_paths.usage(3))
-    append_usage({"id": "stop", "source": "ask", "status": "started", "log": str(log)}, run_paths.usage(3))
-    _running(tmp_path, phase="stop check")
+    append_usage({"id": "stop", "source": "ask", "status": "started", "call": "stop/1", "log": "ask.log"},
+                 run_paths.usage(3))
+    status = _running(tmp_path, phase="stop check")  # kept: its lock is the run's liveness
     calls = RunData(tmp_path, run_id="test").iteration(3)["calls"]
     assert [c["usage"].get("id") for c in calls] == ["gate", "stop"]
     assert any("SECRET-TEXT" in event["text"] for event in calls[1]["events"])
@@ -281,23 +288,23 @@ def test_web_viewer_shows_a_live_stop_transcript_after_the_record(tmp_path, run_
 def test_terminal_view_follows_a_live_transcript_then_the_stored_one(tmp_path, run_paths):
     from autohelix.usage_log import append_usage
 
-    log = _live(run_paths)
+    log = _live(run_paths, call="gates/1")
     log.write_text(LINE)
-    append_usage({"id": "a", "source": "ask", "status": "started", "log": str(log)}, run_paths.usage(3))
+    append_usage({"id": "a", "source": "ask", "status": "started", "call": "gates/1", "log": "ask.log"},
+                 run_paths.usage(3))
     status = _running(tmp_path)
     out = io.StringIO()
-    follower = W.LogFollower(tmp_path, "claude", Console(file=out, width=120))
+    follower = W.LogFollower(tmp_path, "claude", Console(file=out, width=120), "test")
     follower.poll(status.data)
     assert follower.current == log and follower.display.title == "Iteration 3 · ask"
     with Console(file=out, width=120) as console:
         console.print(follower.display)
     assert "SECRET-TEXT" in out.getvalue()
-    # The command ended: the record points at the stored copy, which the panel follows.
+    # The command ended and its output was stored: the same record now names the stored
+    # copy (nothing rewritten), which the panel follows.
     stored = run_paths.gate_dir(3, 1) / "ask.log"
     stored.parent.mkdir(parents=True)
     os.rename(log, stored)
-    append_usage({"id": "a", "source": "ask", "status": "ok", "log": "iterations/003/gates/1/ask.log"},
-                 run_paths.usage(3))
     follower.poll(status.data)
     assert str(follower.current) == "iterations/003/gates/1/ask.log"
     out = io.StringIO()

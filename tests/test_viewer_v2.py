@@ -16,10 +16,7 @@ from autohelix import run_table
 from autohelix.live import fit, status_line
 from autohelix.runs import RunPaths, write_json
 from autohelix.viewer import MAX_TEXT, ProjectRuns, RunData, make_server, review_markdown, write_static
-
-
-def git(project, *args):
-    return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True, check=True).stdout.strip()
+from tests.helpers import git, latest_run
 
 
 CONFIG = """\
@@ -130,7 +127,7 @@ def get_json(url):
 # ---------- web API ----------
 
 def test_goal_and_config_in_state(server):
-    state = get_json(server + "/api/state")
+    state = get_json(server + "/api/run/test/state")
     assert state["goal"].startswith("Make the sort faster")
     assert state["config"]["gates"] == ["pytest -q", "speed regress 5%"]
     assert [(o["name"], o["review"]) for o in state["config"]["observe"]] == [("bench", False), ("review", True)]
@@ -143,7 +140,7 @@ def test_goal_and_config_in_state(server):
 
 
 def test_observe_sections_by_entry(server):
-    detail = get_json(server + "/api/iteration/1")
+    detail = get_json(server + "/api/run/test/iteration/1")
     bench, review = detail["observe"]
     assert (bench["name"], bench["review"], bench["ok"], bench["metrics"]) == ("bench", False, True, {"speed": 12.0})
     assert bench["stdout"].endswith("ran 3 times\n") and bench["stderr"] == "warning: slow disk\n"
@@ -160,19 +157,19 @@ def test_observe_sections_by_entry(server):
 
 
 def test_missing_folders(server):
-    baseline = get_json(server + "/api/iteration/0")["observe"]
+    baseline = get_json(server + "/api/run/test/iteration/0")["observe"]
     assert [s["name"] for s in baseline] == ["bench"]
     assert baseline[0]["ran"] and baseline[0]["stdout"] is None  # recorded, nothing stored
-    assert get_json(server + "/api/iteration/2")["observe"] == []
-    assert get_json(server + "/api/iteration/7")["observe"] == []  # a symlinked iteration folder is not read
+    assert get_json(server + "/api/run/test/iteration/2")["observe"] == []
+    assert get_json(server + "/api/run/test/iteration/7")["observe"] == []  # a symlinked iteration folder is not read
 
 
 def test_nested_files_served_only_inside_the_iteration(server):
-    status, body, mime = get(server + "/api/artifact/1/bench/results/deep/log.json")
+    status, body, mime = get(server + "/api/run/test/artifact/1/bench/results/deep/log.json")
     assert (status, body) == (200, b'{"runs": 3}') and mime.startswith("text/plain")
-    status, body, mime = get(server + "/api/artifact/1/bench/results/page.html")
+    status, body, mime = get(server + "/api/run/test/artifact/1/bench/results/page.html")
     assert status == 200 and mime.startswith("text/plain")  # never rendered as HTML
-    assert get(server + "/api/artifact/1/review/stdout.txt")[0] == 200
+    assert get(server + "/api/run/test/artifact/1/review/stdout.txt")[0] == 200
     for path in ("bench/results/link.txt",            # symlink to a file outside
                  "bench/results/outside/secret.txt",  # through a symlinked folder
                  "bench/results/pipe",                # a FIFO (would block a plain open)
@@ -180,32 +177,32 @@ def test_nested_files_served_only_inside_the_iteration(server):
                  "bench/..%2F..%2F..%2F..%2Fsecret.txt", "bench/%2E%2E/%2E%2E/%2E%2E/record.json",
                  "..%2F..%2Frecord.json", "%2Fetc%2Fpasswd", "bench//stdout.txt", "bench/./stdout.txt",
                  "bench/stdout.txt%00", "missing.txt"):
-        assert get(server + f"/api/artifact/1/{path}")[0] == 404, path
-    assert get(server + "/api/artifact/7/bench/stdout.txt")[0] == 404  # iterations/007 is a symlink
+        assert get(server + f"/api/run/test/artifact/1/{path}")[0] == 404, path
+    assert get(server + "/api/run/test/artifact/7/bench/stdout.txt")[0] == 404  # iterations/007 is a symlink
 
 
 def test_gates_pending_while_running(project, server):
     paths = RunPaths(project, "test")
     write_json(paths.status, {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "checks",
                               "phase_started_at": 1, "iteration_started_at": 1})
-    detail = get_json(server + "/api/iteration/3")
+    detail = get_json(server + "/api/run/test/iteration/3")
     assert [(g["text"], g["kind"], g["passed"]) for g in detail["gates"]] == [
         ("pytest -q", "command", None), ("speed regress 5%", "metric", None)]
     assert detail["attempt"] is None
 
 
 def test_attempt_diff(project, server):
-    detail = get_json(server + "/api/iteration/1")
+    detail = get_json(server + "/api/run/test/iteration/1")
     assert detail["attempt"]["tree"] and detail["attempt"]["rejected_ref"] is None
-    diff = get_json(server + "/api/iteration/1/diff")
+    diff = get_json(server + "/api/run/test/iteration/1/diff")
     assert diff["error"] is None
     assert "-    return sorted(xs)" in diff["diff"] and "+    return list(reversed(xs))" in diff["diff"]
     # A rejected attempt whose tree is gone (its ref deleted): said so, not an error page.
-    gone = get_json(server + "/api/iteration/2/diff")
+    gone = get_json(server + "/api/run/test/iteration/2/diff")
     assert gone["diff"] is None and "tree is no longer in the repository" in gone["error"]
-    assert get_json(server + "/api/iteration/2")["attempt"]["rejected_ref"] == "refs/autohelix-rejected/test/2"
-    assert "no starting commit" in get_json(server + "/api/iteration/0/diff")["error"]
-    assert get_json(server + "/api/iteration/9/diff")["error"] == "This iteration has no record yet."
+    assert get_json(server + "/api/run/test/iteration/2")["attempt"]["rejected_ref"] == "refs/autohelix-rejected/test/2"
+    assert "no starting commit" in get_json(server + "/api/run/test/iteration/0/diff")["error"]
+    assert get_json(server + "/api/run/test/iteration/9/diff")["error"] == "This iteration has no record yet."
 
 
 def test_attempt_diff_never_passes_options_to_git(project, server):
@@ -213,8 +210,8 @@ def test_attempt_diff_never_passes_options_to_git(project, server):
     rows = [json.loads(line) for line in paths.history.read_text().splitlines()]
     rows[1]["base"], rows[1]["tree"] = "--output=PWNED", "HEAD~1"
     paths.history.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    assert "no starting commit" in get_json(server + "/api/iteration/1/diff")["error"]
-    assert get_json(server + "/api/iteration/1")["attempt"] is None
+    assert "no starting commit" in get_json(server + "/api/run/test/iteration/1/diff")["error"]
+    assert get_json(server + "/api/run/test/iteration/1")["attempt"] is None
     assert not list(project.rglob("PWNED*"))
 
 
@@ -287,18 +284,18 @@ def test_symlinked_observations_folder_lists_and_serves_nothing(project, server,
     moved = project / "elsewhere"
     obs.rename(moved)
     os.symlink(moved, obs)
-    bench, review = get_json(server + "/api/iteration/1")["observe"]  # still listed: the record names them
+    bench, review = get_json(server + "/api/run/test/iteration/1")["observe"]  # still listed: the record names them
     assert (bench["stdout"], bench["files"], review["html"]) == (None, [], None)
-    assert get(server + "/api/artifact/1/bench/results/deep/log.json")[0] == 404
+    assert get(server + "/api/run/test/artifact/1/bench/results/deep/log.json")[0] == 404
 
 
 def test_symlinked_entry_folder_shows_nothing(project, server):
     obs = RunPaths(project, "test").observe_dir(1)
     (obs / "bench").rename(project / "bench-elsewhere")
     os.symlink(project / "bench-elsewhere", obs / "bench")
-    bench = get_json(server + "/api/iteration/1")["observe"][0]
+    bench = get_json(server + "/api/run/test/iteration/1")["observe"][0]
     assert (bench["stdout"], bench["files"]) == (None, [])
-    assert get(server + "/api/artifact/1/bench/stdout.txt")[0] == 404
+    assert get(server + "/api/run/test/artifact/1/bench/stdout.txt")[0] == 404
 
 
 def test_hard_links_are_not_listed_or_served(project, server):
@@ -306,12 +303,12 @@ def test_hard_links_are_not_listed_or_served(project, server):
     os.link(project / "secret.txt", bench / "results" / "hard.txt")
     (bench / "stdout.txt").unlink()
     os.link(project / "secret.txt", bench / "stdout.txt")
-    detail = get_json(server + "/api/iteration/1")["observe"][0]
+    detail = get_json(server + "/api/run/test/iteration/1")["observe"][0]
     assert "bench/results/hard.txt" not in [f["path"] for f in detail["files"]]
     assert detail["stdout"] is None
-    assert get(server + "/api/artifact/1/bench/results/hard.txt")[0] == 404
-    assert get(server + "/api/artifact/1/bench/stdout.txt")[0] == 404
-    assert get(server + "/api/artifact/1/bench/results/deep/log.json")[0] == 200
+    assert get(server + "/api/run/test/artifact/1/bench/results/hard.txt")[0] == 404
+    assert get(server + "/api/run/test/artifact/1/bench/stdout.txt")[0] == 404
+    assert get(server + "/api/run/test/artifact/1/bench/results/deep/log.json")[0] == 200
 
 
 def test_notes_never_block_on_fifos_or_follow_symlinks(project, server):
@@ -324,12 +321,12 @@ def test_notes_never_block_on_fifos_or_follow_symlinks(project, server):
     os.symlink(project / "secret.txt", version / "iter-2.md")
     (version / "ideas.md").write_text("# Ideas\n")
     os.symlink(".internal/notes/1", paths.notes)
-    state = get_json(server + "/api/state")
+    state = get_json(server + "/api/run/test/state")
     assert state["notes_files"] == ["ideas.md"]
-    assert get_json(server + "/api/iteration/1")["notes"] is None
-    assert get_json(server + "/api/iteration/2")["notes"] is None
-    assert get(server + "/api/notes/iter-1.md")[0] == 404
-    assert "<h1>Ideas</h1>" in get_json(server + "/api/notes/ideas.md")["html"]
+    assert get_json(server + "/api/run/test/iteration/1")["notes"] is None
+    assert get_json(server + "/api/run/test/iteration/2")["notes"] is None
+    assert get(server + "/api/run/test/notes/iter-1.md")[0] == 404
+    assert "<h1>Ideas</h1>" in get_json(server + "/api/run/test/notes/ideas.md")["html"]
     # A running iteration's note, read from the agent's copy.
     ensure_copies(paths.copies)
     notes = paths.copies / "iter-3-agent" / ".autohelix-iteration" / "notes"
@@ -337,10 +334,10 @@ def test_notes_never_block_on_fifos_or_follow_symlinks(project, server):
     os.mkfifo(notes / "iter-3.md")
     write_json(paths.status, {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "agent",
                               "phase_started_at": 1, "iteration_started_at": 1})
-    assert get_json(server + "/api/iteration/3")["notes"] is None
+    assert get_json(server + "/api/run/test/iteration/3")["notes"] is None
     (notes / "iter-3.md").unlink()
     (notes / "iter-3.md").write_text("Working on **it**\n")
-    assert "<strong>it</strong>" in get_json(server + "/api/iteration/3")["notes"]
+    assert "<strong>it</strong>" in get_json(server + "/api/run/test/iteration/3")["notes"]
 
 
 def test_diffs_ignore_the_users_diff_settings(project, server):
@@ -351,12 +348,12 @@ def test_diffs_ignore_the_users_diff_settings(project, server):
                        ("diff.mnemonicPrefix", "true"), ("diff.relative", "true"),
                        ("diff.suppressBlankEmpty", "true")):
         git(project, "config", key, value)
-    attempt = get_json(server + "/api/iteration/1/diff")["diff"]
+    attempt = get_json(server + "/api/run/test/iteration/1/diff")["diff"]
     assert "\x1b" not in attempt and "diff --git a/sort.py b/sort.py" in attempt and "--- a/sort.py" in attempt
 
     paths = RunPaths(project, "test")
     base = json.loads(paths.identity.read_text())["base_commit"]
-    tree = get_json(server + "/api/iteration/1")["attempt"]["tree"]
+    tree = get_json(server + "/api/run/test/iteration/1")["attempt"]["tree"]
     commit = git(project, "commit-tree", tree, "-p", base, "-m", "accepted")
     accepted = RunData(project, run_id="test")._diff(base, commit)
     assert "\x1b" not in accepted and "diff --git a/sort.py b/sort.py" in accepted
@@ -366,7 +363,7 @@ def test_diffs_ignore_the_users_diff_settings(project, server):
     (copy.path / "sort.py").write_text("def sort(xs):\n    return xs\n")
     write_json(paths.status, {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "agent",
                               "phase_started_at": 1, "iteration_started_at": 1})
-    live = get_json(server + "/api/iteration/3")["diff"]
+    live = get_json(server + "/api/run/test/iteration/3")["diff"]
     assert "\x1b" not in live and "diff --git a/sort.py b/sort.py" in live and "+    return xs" in live
     copy.remove()
 
@@ -421,23 +418,35 @@ def test_running_iteration_marks_only_the_entry_running(project, server):
     paths = RunPaths(project, "test")
     paths.observe_entry(3, "bench").mkdir(parents=True)
     (paths.observe_entry(3, "bench") / "stdout.txt").write_text("done\n")
-    status = {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "benchmark",
+    status = {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "observe",
               "phase_started_at": 1, "iteration_started_at": 1}
     write_json(paths.status, status)
-    sections = get_json(server + "/api/iteration/3")["observe"]
+    sections = get_json(server + "/api/run/test/iteration/3")["observe"]
     assert [(s["name"], s["running"]) for s in sections] == [("bench", False)]
     write_json(paths.status, {**status, "entry": "review"})
-    sections = get_json(server + "/api/iteration/3")["observe"]
+    sections = get_json(server + "/api/run/test/iteration/3")["observe"]
     assert [(s["name"], s["running"], s["stdout"]) for s in sections] == [
         ("bench", False, "done\n"), ("review", True, None)]
+
+
+def test_the_stored_template_is_shown_with_the_config(project):
+    """The run's prompt template, stored beside its config.yaml, not the file's current text."""
+    paths = RunPaths(project, "test")
+    assert "template" not in RunData(project, run_id="test").state()["config"]
+    paths.config.write_text(CONFIG + "prompt_template: prompt.md\n")
+    paths.template.write_text("Stored: {{ goal }}\n")
+    (project / "prompt.md").write_text("Edited since\n")
+    config = RunData(project, run_id="test").state()["config"]
+    assert config["text"].endswith("prompt_template: prompt.md\n")
+    assert config["template"] == {"file": "prompt.md", "text": "Stored: {{ goal }}\n"}
 
 
 def test_config_is_parsed_again_only_when_its_file_changes(project, monkeypatch):
     import autohelix.viewer as viewer_module
 
     calls = []
-    real = viewer_module.load_config
-    monkeypatch.setattr(viewer_module, "load_config", lambda *a, **k: calls.append(1) or real(*a, **k))
+    real = viewer_module.load_run_config  # a run's stored copy, with its stored template
+    monkeypatch.setattr(viewer_module, "load_run_config", lambda *a, **k: calls.append(1) or real(*a, **k))
     data = RunData(project, run_id="test")
     data.state()
     data.state()
@@ -468,8 +477,10 @@ def test_gate_and_stop_output_per_item(project, server):
     _stored(paths.stop_dir(1, 2), "autohelix ask -- 'Done?'", "yes\n", transcripts=["ask.log"])
     paths.history.write_text(paths.history.read_text().replace(
         '"iteration": 1, "accepted": true,',
-        '"iteration": 1, "accepted": true, "stop": {"command": "autohelix ask -- \'Done?\'", "reason": "yes"},'))
-    gates = get_json(server + "/api/iteration/2")["gates"]
+        '"iteration": 1, "accepted": true, "stop": {"command": "autohelix ask -- \'Done?\'", "reason": "yes"}, '
+        '"stops": [{"text": "jq", "outcome": "error", "return_code": -1, "timed_out": true}, '
+        '{"text": "ask", "outcome": "stop", "return_code": 0}],'))
+    gates = get_json(server + "/api/run/test/iteration/2")["gates"]
     stored = gates[0]["stored"]
     assert stored["folder"] == "gates/1" and stored["command"] == "pytest -q"
     assert [f["name"] for f in stored["files"]] == ["command.txt", "stdout.txt", "stderr.txt"]
@@ -477,19 +488,23 @@ def test_gate_and_stop_output_per_item(project, server):
     assert stored["transcripts"][0]["log"] == "iterations/002/gates/1/ask.log"
     assert any("Judged: yes" in e["text"] for e in stored["transcripts"][0]["events"])
     assert gates[1]["stored"] is None  # a metric gate runs nothing
-    stops = get_json(server + "/api/iteration/1")["stop"]
+    stops = get_json(server + "/api/run/test/iteration/1")["stop"]
     assert [(s["position"], s["command"], s["stopped"]) for s in stops] == [
         (1, "jq -e '.speed > 20' $AUTOHELIX_METRICS", False), (2, "autohelix ask -- 'Done?'", True)]
+    # each with its recorded outcome, as gates have theirs
+    assert [(s["outcome"], s["return_code"], s["timed_out"]) for s in stops] == [("error", -1, True), ("stop", 0, False)]
+    row = next(r for r in get_json(server + "/api/run/test/state")["iterations"] if r["iteration"] == 1)
+    assert [item["outcome"] for item in row["stops"]] == ["error", "stop"]  # `view --json` too
     assert [t["name"] for t in stops[1]["stored"]["transcripts"]] == ["ask.log"]
-    assert get_json(server + "/api/iteration/2")["stop"] == []
-    status, body, mime = get(server + "/api/output/2/gates/1/stdout.txt")
+    assert get_json(server + "/api/run/test/iteration/2")["stop"] == []
+    status, body, mime = get(server + "/api/run/test/output/2/gates/1/stdout.txt")
     assert (status, body) == (200, b"1 failed\n") and mime.startswith("text/plain")
-    assert get(server + "/api/output/1/stop/1/command.txt")[1] == b"jq -e '.speed > 20' $AUTOHELIX_METRICS\n"
+    assert get(server + "/api/run/test/output/1/stop/1/command.txt")[1] == b"jq -e '.speed > 20' $AUTOHELIX_METRICS\n"
     assert get(server + "/api/run/test/output/2/gates/1/stderr.txt")[1] == b"warning\n"
     for route in ("2/gates/1/ask.log", "2/gates/1/record.json", "2/gates/2/stdout.txt", "2/gates/0/stdout.txt",
                   "2/gates/01/stdout.txt", "2/observe/1/stdout.txt", "2/gates/1/..%2Fstdout.txt",
                   "1/stop/2/stderr.txt", "7/gates/1/stdout.txt"):
-        assert get(server + f"/api/output/{route}")[0] == 404, route
+        assert get(server + f"/api/run/test/output/{route}")[0] == 404, route
 
 
 def test_gate_output_refuses_symlinks_and_hard_links(project, server, tmp_path):
@@ -501,16 +516,16 @@ def test_gate_output_refuses_symlinks_and_hard_links(project, server, tmp_path):
     os.symlink(secret, folder / "stdout.txt")
     os.link(secret, folder / "stderr.txt")
     os.link(project / "sort.py", folder / "ask.log")
-    stored = get_json(server + "/api/iteration/2")["gates"][0]["stored"]
+    stored = get_json(server + "/api/run/test/iteration/2")["gates"][0]["stored"]
     assert stored["files"] == [] and stored["transcripts"] == [] and stored["command"] is None
     for name in ("stdout.txt", "stderr.txt"):
-        assert get(server + f"/api/output/2/gates/1/{name}")[0] == 404
+        assert get(server + f"/api/run/test/output/2/gates/1/{name}")[0] == 404
     # A symlinked gates/ folder shows nothing.
     elsewhere = tmp_path / "elsewhere"
     _stored(elsewhere / "1", "pytest -q", "SECRET")
     os.symlink(elsewhere, paths.iteration_dir(1) / "gates")
-    assert get_json(server + "/api/iteration/1")["gates"][0]["stored"] is None
-    assert get(server + "/api/output/1/gates/1/stdout.txt")[0] == 404
+    assert get_json(server + "/api/run/test/iteration/1")["gates"][0]["stored"] is None
+    assert get(server + "/api/run/test/output/1/gates/1/stdout.txt")[0] == 404
 
 
 def test_running_iteration_shows_finished_gates_output(project, server):
@@ -518,7 +533,7 @@ def test_running_iteration_shows_finished_gates_output(project, server):
     _stored(paths.gate_dir(3, 1), "pytest -q", "3 passed\n")
     write_json(paths.status, {"state": "running", "pid": os.getpid(), "iteration": 3, "phase": "checks",
                               "phase_started_at": 1, "iteration_started_at": 1})
-    gates = get_json(server + "/api/iteration/3")["gates"]
+    gates = get_json(server + "/api/run/test/iteration/3")["gates"]
     assert [(g["passed"], bool(g["stored"])) for g in gates] == [(None, True), (None, False)]
 
 
@@ -526,9 +541,11 @@ def test_snapshot_has_no_gate_or_stop_output(project):
     paths = RunPaths(project, "test")
     _stored(paths.gate_dir(2, 1), "pytest -q", "1 failed\n", transcripts=["ask.log"])
     _stored(paths.stop_dir(1, 1), "true", "")
-    routes = RunData(project).snapshot()
+    routes = RunData(project, latest_run(project).run_id).snapshot()
     assert routes["/api/iteration/2"]["gates"][0]["stored"] is None
-    assert routes["/api/iteration/1"]["stop"] == [{"position": 1, "command": "true", "stopped": False, "stored": None}]
+    assert routes["/api/iteration/1"]["stop"] == [{"position": 1, "command": "true", "stopped": False,
+                                                    "outcome": None, "return_code": None, "timed_out": False,
+                                                    "stored": None}]  # no `stops` in this record
 
 
 def test_stop_checks_name_what_ran_and_flag_one(project, server):
@@ -542,11 +559,11 @@ def test_stop_checks_name_what_ran_and_flag_one(project, server):
     (paths.stop_dir(1, 3) / "command.txt").unlink()  # unreadable: the config's entry, if any
     paths.history.write_text(paths.history.read_text().replace(
         '"iteration": 1, "accepted": true,', '"iteration": 1, "accepted": true, "stop": {"command": "check.sh", "reason": "done"},'))
-    stops = get_json(server + "/api/iteration/1")["stop"]
+    stops = get_json(server + "/api/run/test/iteration/1")["stop"]
     assert [(s["position"], s["command"], s["stopped"]) for s in stops] == [
         (1, "check.sh", True), (2, "check.sh", False), (3, None, False)]
     (paths.stop_dir(1, 2) / "command.txt").unlink()
-    assert get_json(server + "/api/iteration/1")["stop"][1]["command"] == "echo later"
+    assert get_json(server + "/api/run/test/iteration/1")["stop"][1]["command"] == "echo later"
 
 
 def test_a_retried_baseline_ignores_the_earlier_attempts_record(project, server):
@@ -561,16 +578,16 @@ def test_a_retried_baseline_ignores_the_earlier_attempts_record(project, server)
     status = {"state": "running", "pid": os.getpid(), "iteration": 0, "phase": "baseline",
               "phase_started_at": 200.0, "iteration_started_at": 200.0}
     write_json(paths.status, status)
-    detail = get_json(server + "/api/iteration/0")
+    detail = get_json(server + "/api/run/test/iteration/0")
     assert detail["failure_output"] is None and detail["calls"] == []
     assert [(g["passed"], bool(g["stored"])) for g in detail["gates"]] == [(None, True), (None, False)]
-    assert get_json(server + "/api/iteration/0/diff")["error"] == "This iteration has no record yet."
+    assert get_json(server + "/api/run/test/iteration/0/diff")["error"] == "This iteration has no record yet."
     # A record this attempt wrote (it ended after the attempt started) is current.
     records[0].update(accepted=True, reason="baseline", ended_at=300.0)
     paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
-    assert [c["usage"]["id"] for c in get_json(server + "/api/iteration/0")["calls"]] == ["old"]
+    assert [c["usage"]["id"] for c in get_json(server + "/api/run/test/iteration/0")["calls"]] == ["old"]
     # And once nothing runs, the record is shown whatever its times.
     write_json(paths.status, {**status, "state": "finished", "stopped_at": 400.0})
     records[0]["ended_at"] = 100.0
     paths.history.write_text("".join(json.dumps(r) + "\n" for r in records))
-    assert get_json(server + "/api/iteration/0")["gates"][0]["passed"] is True
+    assert get_json(server + "/api/run/test/iteration/0")["gates"][0]["passed"] is True

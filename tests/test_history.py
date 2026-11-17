@@ -279,3 +279,20 @@ class TestUsageField:
         assert result.cost_usages == [{"cost_usd": 0.10}, {}]
         assert result.cost.cost_usd == 0.10
         assert result.cost.incomplete
+
+
+def test_the_cache_sees_a_second_write_in_the_same_mtime_tick(tmp_path):
+    """Keyed on mtime alone, a write within one coarse timestamp tick (some NFS, FAT,
+    HFS+) left a long-lived History, the viewer's, showing the first."""
+    import json as _json
+    import os as _os
+
+    history = History(tmp_path, "20260101-0000-abcd")
+    path = history.history_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps({"iteration": 0, "accepted": True, "summary": "first"}) + "\n")
+    assert history.load()[0].summary == "first"
+    stamp = path.stat()
+    path.write_text(_json.dumps({"iteration": 0, "accepted": True, "summary": "updated!"}) + "\n")
+    _os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    assert history.load()[0].summary == "updated!"

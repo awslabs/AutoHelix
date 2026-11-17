@@ -4,13 +4,11 @@
 """OpenCode CLI backend."""
 
 import json
-import os
-import shutil
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback
+from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, command_path
 from autohelix.agents.runner import format_timeout_seconds, run_process
-from autohelix.sandbox import build_worktree_env
+from autohelix.sandbox import build_copy_env
 
 
 class OpenCodeAgent:
@@ -25,18 +23,7 @@ class OpenCodeAgent:
         self._final_text: str | None = None
 
     def _command_path(self) -> str:
-        if self.config.command:
-            return self.config.command
-
-        env_command = os.environ.get("AUTOHELIX_OPENCODE_CMD")
-        if env_command:
-            return env_command
-
-        resolved = shutil.which("opencode")
-        if resolved:
-            return resolved
-
-        return "opencode"
+        return command_path("opencode", self.config.command)
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [
@@ -48,12 +35,6 @@ class OpenCodeAgent:
             cmd.extend(["--model", self.config.model])
         if self.config.reasoning_effort:
             cmd.extend(["--variant", self.config.reasoning_effort])
-        if self.config.read_only:
-            # OpenCode has no reliable read-only mode or system-prompt flag; the
-            # judge's instructions lead the prompt and nothing else is passed.
-            system = self.config.system_prompt
-            cmd.append(f"{system}\n\n{prompt}" if system else prompt)
-            return cmd
         cmd.extend(self.config.extra_args)
         cmd.append(prompt)
         return cmd
@@ -119,7 +100,7 @@ class OpenCodeAgent:
 
     def run(
         self,
-        worktree_path: Path,
+        copy_path: Path,
         prompt: str,
         iteration: int,
         log_path: Path,
@@ -128,13 +109,13 @@ class OpenCodeAgent:
     ) -> AgentRunResult:
         self._usage = {}
         self._final_text = None
-        # Build env with remapped PYTHONPATH for worktree
-        env = build_worktree_env(project_path, worktree_path) if project_path else None
+        # Build env with remapped PYTHONPATH for the copy
+        env = build_copy_env(project_path, copy_path) if project_path else None
 
         try:
             result = run_process(
                 cmd=self._build_command(prompt),
-                cwd=worktree_path,
+                cwd=copy_path,
                 log_path=log_path,
                 line_callback=lambda line: self._handle_line(line, event_callback),
                 heartbeat_seconds=self.heartbeat_seconds,
@@ -149,7 +130,16 @@ class OpenCodeAgent:
                 error=f"'{command}' not found. Set AUTOHELIX_OPENCODE_CMD or agent.command.",
             )
 
+        error = None
         if result.timed_out:
-            event_callback(AgentEvent(kind=AgentEventKind.WARNING, text=f"Agent {format_timeout_seconds(self.config.timeout)}"))
-        return AgentRunResult(success=result.exit_code == 0, exit_code=result.exit_code, usage=self._usage,
+            error = format_timeout_seconds(self.config.timeout)
+            event_callback(AgentEvent(kind=AgentEventKind.WARNING, text=f"Agent {error}"))
+            # Its finished steps' costs only: the call's cost is unknown (kept apart).
+            if "cost_usd" in self._usage:
+                self._usage["partial_cost_usd"] = self._usage.pop("cost_usd")
+                self._usage.pop("cost_source", None)
+            self._usage["cost_unavailable_reason"] = "OpenCode timed out before reporting its whole cost."
+        elif result.exit_code != 0:
+            error = f"OpenCode exited with status {result.exit_code}"
+        return AgentRunResult(success=error is None, exit_code=result.exit_code, error=error, usage=self._usage,
                               final_text=self._final_text)

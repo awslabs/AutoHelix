@@ -41,14 +41,13 @@ from markdown_it import MarkdownIt
 
 from autohelix.agents import AgentEventKind
 from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained, open_dir as _open_dir, open_file as _open_file, open_run_log
-from autohelix.config import ConfigNotFound, MetricGate, find_config, load_config
+from autohelix.config import ConfigError, MetricGate, load_config, template_text
 from autohelix.costs import summarize_costs
 from autohelix.history import History, record_seconds
-from autohelix.runs import RunPaths, config_relative, git, is_archived, is_transcript, last_activity
+from autohelix.runs import RunPaths, config_relative, git, is_archived, is_transcript, last_activity, load_run_config
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
 from autohelix.run_status import pending_stop, read_run_status, running_iteration
-from autohelix.state import read_stored_config_path
 from autohelix.workspace import ITERATION_DIR
 
 MAX_TEXT = 256 * 1024
@@ -60,7 +59,7 @@ IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
 # Phases after the agent copy is frozen, when the pin holds this iteration's tree.
-FROZEN_PHASES = {"preparing checks", "checks", "benchmark", "review", "accept", "stop check"}
+FROZEN_PHASES = {"preparing checks", "checks", "observe", "review", "accept", "stop check"}
 ASSETS = {
     "/": ("dashboard.html", "text/html; charset=utf-8"),
     "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
@@ -219,9 +218,11 @@ def _note_order(name: str):
 
 
 class RunData:
-    """Reads one project's .autohelix/ directory for the viewer."""
+    """Reads one run's state (`.autohelix/runs/<id>/`) for the viewer."""
 
-    def __init__(self, project: Path, run_id: str | None = None):
+    def __init__(self, project: Path, run_id: str):
+        if not run_id:
+            raise ValueError("RunData reads one named run")
         self.project = project.resolve()
         self.run_id = run_id
         self.paths = RunPaths(self.project, run_id)
@@ -239,17 +240,6 @@ class RunData:
         self._repository = None
         self._configs: dict[Path, tuple[tuple, object, str | None]] = {}  # path -> (stat key, config, text)
 
-    def _refresh_current(self):
-        if self.run_id in (None, "current"):
-            paths = RunPaths(self.project)
-            if paths.run_id != self.paths.run_id:
-                self.paths = paths
-                self.root = paths.run_dir
-                self.history = History(self.project, paths.run_id)
-                self._logs.clear()
-                with self._diff_lock:
-                    self._diffs.clear()
-
     def records(self):
         """The run's history (diffs read it outside the server's lock)."""
         with self._history_lock:
@@ -257,16 +247,8 @@ class RunData:
 
     def _config(self):
         """The run's stored config (`runs/<id>/config.yaml`), parsed again only when it
-        changes. A run without one (started by an older AutoHelix) shows it missing, never
-        its source file; with no run, the project's config if the lookup finds one, else
-        none (None, None)."""
-        if self.paths.run_id:
-            path = read_stored_config_path(self.project, self.paths.run_id)
-        else:
-            try:
-                path = find_config(self.project)
-            except ConfigNotFound:
-                return None, None
+        changes (never its source file)."""
+        path = self.paths.config
         try:
             info = path.stat()
             key = (info.st_mtime_ns, info.st_size, info.st_ino)
@@ -275,7 +257,7 @@ class RunData:
         cached = self._configs.get(path)
         if cached is None or cached[0] != key or key is None:
             try:
-                config = load_config(self.project, config_file=path)[0]
+                config = load_run_config(self.paths)
             except Exception:
                 config = None
             cached = self._configs[path] = (key, config, _read_user_file(path))
@@ -286,14 +268,18 @@ class RunData:
             return None
         cached = self._configs.get(path)
         file = config_relative(self.project, path)
-        if self.paths.run_id and path == self.paths.config:
+        if path == self.paths.config:
             try:  # the file it was stored from, as the run's other pages name it
                 file = self.paths.read_identity()["config_path"]
             except (RuntimeError, KeyError):
                 pass
         summary = {"file": file, "text": cached[2] if cached else _read_user_file(path)}
-        if not path.exists():
-            summary["missing"] = True
+        if config is not None and config.prompt_template is not None:  # stored beside a run's config
+            try:
+                text = template_text(config)
+            except ConfigError:
+                text = None
+            summary["template"] = {"file": config_relative(self.project, config.prompt_template), "text": text}
         if config:
             summary.update(
                 agent=" · ".join(filter(None, [config.agent.backend, config.agent.model])),
@@ -322,16 +308,17 @@ class RunData:
                 "cost": r.cost.cost_usd, "cost_incomplete": r.cost.incomplete,
                 "seconds": (r.usage.get("wall_clock_ms") or 0) / 1000 or None,
                 "gates": r.gates, "observe": r.observe,
+                "stops": [item for item in _field(r, "stops") or [] if isinstance(item, dict)],
                 "discarded": [p for p in _field(r, "discarded") or [] if isinstance(p, str)],
                 "discarded_frozen": [p for p in _field(r, "discarded_frozen") or [] if isinstance(p, str)],
             })
         return rows
 
     def state(self) -> dict:
-        self._refresh_current()
         config, config_path = self._config()
-        records = self.records() if self.paths.run_id else []
-        total_cost = summarize_costs([usage for row in records for usage in row.cost_usages])
+        records = self.records()
+        total_cost = summarize_costs([usage for row in records for usage in row.cost_usages]
+                                     + self.history.summary_usages())
         iterations = self.iterations(records)
         status = read_run_status(self.project, self.paths.run_id)
         return {
@@ -340,10 +327,10 @@ class RunData:
             "directions": config.metric_directions() if config else {},
             "status": status,
             # `autohelix stop` asked the running segment to end, as on the run list.
-            "stop_requested": pending_stop(self.paths, status) if self.paths.run_id else None,
+            "stop_requested": pending_stop(self.paths, status),
             "run_id": self.paths.run_id,
             "config": self._config_summary(config, config_path),
-            "notes_files": sorted(self._notes_files(), key=_note_order) if self.paths.run_id else [],
+            "notes_files": sorted(self._notes_files(), key=_note_order),
             "iterations": iterations,
             "cost": {
                 "cost_usd": total_cost.cost_usd,
@@ -356,14 +343,12 @@ class RunData:
     def _run_notes(self) -> dict:
         """`run_notes` of the run's run.json; all None when it can't be read."""
         try:
-            data = self.paths.read_identity() if self.paths.run_id else {}
+            data = self.paths.read_identity()
         except RuntimeError:
             data = {}
         return run_notes(data)
 
     def _report(self) -> dict | None:
-        if not self.paths.run_id:
-            return None
         html = _markdown(_read_text_at(self.root, self.paths.parts(self.paths.report)))
         return {"html": html, **(read_report_info(self.project, self.paths.run_id) or {})} if html else None
 
@@ -387,8 +372,6 @@ class RunData:
     def changes(self, n: int) -> str | None:
         """Changes vs baseline: an accepted iteration's code against the run's start, or a
         running one's edits so far. Runs git; the server calls it outside its lock."""
-        if not self.paths.run_id:
-            return None
         record = self._record(n)
         base = _object(self.paths.read_identity().get("base_commit"))
         if not base:
@@ -402,15 +385,10 @@ class RunData:
     def iteration(self, n: int, logs: bool = True, diff: bool = True, outputs: bool = True) -> dict:
         """One iteration's card. Without `outputs` (report.html), observe entries keep their
         status and review text but not their stdout, stderr or captured files."""
-        self._refresh_current()
-        if not self.paths.run_id:
-            return {"iteration": n, "failure_output": None, "notes": None, "diff": None, "agent": [],
-                    "calls": [], "agent_clipped": False, "gates": [], "stop": [], "observe": [], "summary": None,
-                    "discarded": [], "attempt": None}
         status = read_run_status(self.project, self.paths.run_id) or {}
         record = self._record(n, status)
         changes = self.changes(n) if diff else None
-        # While an iteration runs, its own notes live in the worktree; a copy in notes/
+        # While an iteration runs, its own notes live in the agent's copy; a copy in notes/
         # may be left over from an earlier, failed attempt at the same iteration. Once it
         # finished, the version saved with it (the last attempt's: `.internal/notes/N-k`
         # after a retry) shows the note as of N, even if the agent later edited or removed it.
@@ -436,7 +414,7 @@ class RunData:
                 calls = list(status.get("calls", [])) if status.get("iteration") == n else []
             # The record's calls, then this iteration's command calls since (stop commands run after it).
             seen = {call["usage"].get("id") for call in calls if isinstance(call.get("usage"), dict)} - {None}
-            calls = calls + [{"role": "command", "log": usage.get("log"), "usage": usage}
+            calls = calls + [{"role": "command", "log": self.paths.usage_log(n, usage), "usage": usage}
                              for usage in read_usage(self.paths.usage(n)) if usage.get("id") not in seen]
         phases = []
         for call in calls:
@@ -511,28 +489,34 @@ class RunData:
         `iterations/NNN/stop/<k>/` folder), in order: `position` (k), `command` (what ran,
         its command.txt; the config's entry at k only if that can't be read: `stop:` may
         have changed since), `stopped` (the first whose command is the one the record says
-        stopped the run: stop commands end at the first that exits 0) and `stored`
-        (`_command_output`)."""
+        stopped the run: stop commands end at the first that exits 0), `stored`
+        (`_command_output`) and, from the record's `stops` item at k, `outcome` (stop,
+        continue, error), `return_code` and `timed_out`."""
         listing = _listing(self.root, self.paths.parts(self.paths.stop_dir(n, 1).parent))
         positions = sorted(int(name) for name, info in listing
                            if stat.S_ISDIR(info.st_mode) and re.fullmatch(r"[1-9][0-9]{0,8}", name))
         specs = config.stop if config else []
         fired = _field(record, "stop")
         fired = fired.get("command") if isinstance(fired, dict) else None
+        items = _field(record, "stops")
+        items = items if isinstance(items, list) else []
         out = []
         for k in positions:
             command = _command_text(self.root, self.paths.stop_dir(n, k), self.paths)
             if command is None and k <= len(specs):
                 command = specs[k - 1].command
             stopped = fired is not None and command == fired and not any(item["stopped"] for item in out)
+            item = items[k - 1] if k <= len(items) and isinstance(items[k - 1], dict) else {}
             out.append({"position": k, "command": command, "stopped": stopped,
+                        "outcome": item.get("outcome"), "return_code": item.get("return_code"),
+                        "timed_out": item.get("timed_out") is True,
                         "stored": self._command_output(self.paths.stop_dir(n, k), logs, outputs)})
         return out
 
     def output(self, n: int, kind: str, k: int, name: str) -> tuple[bytes, str] | None:
         """`/api/output/<n>/<gates|stop>/<k>/<file>`: a gate's or stop command's
         command.txt, stdout.txt or stderr.txt, always as plain text."""
-        if not self.paths.run_id or name not in COMMAND_FILES or kind not in ("gates", "stop"):
+        if name not in COMMAND_FILES or kind not in ("gates", "stop"):
             return None
         folder = self.paths.gate_dir(n, k) if kind == "gates" else self.paths.stop_dir(n, k)
         data = _read_bytes(self.root, [*self.paths.parts(folder), name], MAX_ARTIFACT, single_link=True)
@@ -549,7 +533,7 @@ class RunData:
 
         While the iteration runs (no record yet), entries with a folder have finished
         (their status comes with the record); the one the run status names as running
-        (`entry`, in the benchmark phase) is added, marked `running`.
+        (`entry`, in the observe phase) is added, marked `running`.
 
         Everything is read through descriptors from the run folder down, so a symlinked
         iterations/, NNN/, observe/ or entry folder shows nothing."""
@@ -568,7 +552,7 @@ class RunData:
         if record is None:
             status = read_run_status(self.project, self.paths.run_id) or {}
             if (status.get("state") == "running" and status.get("iteration") == n
-                    and status.get("phase") == "benchmark" and isinstance(status.get("entry"), str)):
+                    and status.get("phase") == "observe" and isinstance(status.get("entry"), str)):
                 running = status["entry"]
                 if running not in names:
                     names.append(running)
@@ -597,7 +581,7 @@ class RunData:
         """`/iteration/<n>/diff`: the attempt's own change, from the commit it started from
         to its frozen tree (kept by the run ref, or `rejected_ref` for a rejected one).
         Runs git; the server calls it outside its lock."""
-        record = self._record(n) if self.paths.run_id else None
+        record = self._record(n)
         if record is None:
             return {"diff": None, "error": "This iteration has no record yet."}
         base, tree = _object(_field(record, "base")), _object(_field(record, "tree"))
@@ -726,15 +710,13 @@ class RunData:
         return [name for name, info in _listing(self.root, folder) if stat.S_ISREG(info.st_mode)] if folder else []
 
     def note(self, name: str) -> dict | None:
-        if not self.paths.run_id or name not in self._notes_files():
+        if name not in self._notes_files():
             return None
         return {"name": name, "html": _markdown(_read_text_at(self.root, [*self._notes_folder(), name]))}
 
     def artifact(self, n: int, parts: list[str]) -> tuple[bytes, str] | None:
         """A file in iterations/NNN/observe/, by its path there (`bench/results/log.json`):
         a regular file with no other hard links (captures are copies)."""
-        if not self.paths.run_id:
-            return None
         data = _read_bytes(self.root, [*self.paths.parts(self.paths.observe_dir(n)), *parts], MAX_ARTIFACT,
                            single_link=True)
         if data is None:
@@ -926,12 +908,12 @@ class ProjectRuns:
         try:
             mtime = path.stat().st_mtime
         except OSError:
-            return {"file": relative, "missing": True}
+            return {"file": relative, "invalid": True}
         cached = self._configs.get(path)
         if cached and cached[0] == mtime:
             return cached[1]
         try:
-            config = load_config(self.project, config_file=path)[0]
+            config = load_config(self.project, config_file=path)
             summary = {"file": relative, "goal": (config.goal.strip() or None) if isinstance(config.goal, str) else None,
                        "title": (config.title or None) if isinstance(config.goal, str) else None,
                        "directions": config.metric_directions()}
@@ -976,9 +958,9 @@ class ProjectRuns:
         config = self._config(paths, data.get("config_path"))
 
         attempts = [r for r in records if r.iteration > 0]
-        cost = summarize_costs([usage for r in records for usage in r.cost_usages])
+        cost = summarize_costs([usage for r in records for usage in r.cost_usages] + history.summary_usages())
         budget = status or {}
-        tip = refs.get(paths.ref) or data.get("abandoned_tip")
+        tip = refs.get(paths.ref)
         target = data.get("target_branch")
         target_tip = refs.get(f"refs/heads/{target}") if target else None
         return {
@@ -988,8 +970,7 @@ class ProjectRuns:
             "created_at": data.get("created_at"),
             "last_activity": last_activity(paths, data, status or {}),
             "config_file": config.get("file"),
-            # The run's stored config, missing (an old run's: never its source file instead) or invalid.
-            "config_missing": bool(config.get("missing")),
+            # The run's stored config can't be read (never its source file instead).
             "config_invalid": bool(config.get("invalid")),
             "goal": config.get("goal"),
             "title": config.get("title"),  # the goal's first line, cut (Config.title)
@@ -1021,7 +1002,7 @@ class ProjectRuns:
         }
 
 
-def write_static(project: Path, *, run_id: str | None = None) -> Path:
+def write_static(project: Path, *, run_id: str) -> Path:
     """Write report.html: the viewer page with this run's data built in."""
     resources = files("autohelix").joinpath("viewer_resources")
     read = lambda name: resources.joinpath(name).read_text(encoding="utf-8")  # noqa: E731
@@ -1049,8 +1030,9 @@ def write_static(project: Path, *, run_id: str | None = None) -> Path:
     return out
 
 
-def make_server(project: Path, port: int = 8765, *, run_id: str | None = None) -> ThreadingHTTPServer:
-    data = RunData(project, run_id)
+def make_server(project: Path, port: int = 8765) -> ThreadingHTTPServer:
+    """The viewer's server: the run list at `/` (`/api/runs`), each run's page at
+    `/run/<id>/` and its data only under `/api/run/<id>/`."""
     dashboard = ProjectRuns(project)
     others: dict[str, RunData] = {}
     # RunData's caches and log tails are not thread-safe. Git diffs run outside the lock
@@ -1062,8 +1044,6 @@ def make_server(project: Path, port: int = 8765, *, run_id: str | None = None) -
         if not dashboard.exists(rid):
             return None
         with lock:
-            if rid == data.paths.run_id:
-                return data  # the default run's, already reading
             if rid not in others:
                 others[rid] = RunData(project, rid)
             return others[rid]
@@ -1132,8 +1112,6 @@ def make_server(project: Path, port: int = 8765, *, run_id: str | None = None) -
             elif match := re.fullmatch(rf"/api/run/({RUN_ID})(/.+)", path):
                 if (rd := run_data(match[1])) and (response := run_route(rd, match[2])):
                     return response
-            elif path.startswith("/api/") and (response := run_route(data, path[4:])):
-                return response
             return 404, {"error": "not found"}
 
     # Threads, so one idle browser connection (e.g. a preconnect) cannot stall the page.

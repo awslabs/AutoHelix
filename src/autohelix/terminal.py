@@ -13,11 +13,11 @@ for real errors (an agent failure, a gate failing at the baseline, a run error).
 from __future__ import annotations
 
 import math
-import textwrap
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from rich.cells import cell_len
 from rich.console import Group
 from rich.text import Text
 
@@ -75,6 +75,86 @@ def field_line(label: str, *parts: tuple[str, str | None], width: int, label_wid
     return cut(_parts(("  ", None), (f"{label:<{label_width or FIELD}}", label_style), *parts), width)
 
 
+# --- wrapping and warnings: the same on every screen ------------------------------
+
+MIN_TEXT = 20  # the fewest columns `hanging` wraps text into beside its prefix
+
+
+def wrap(text, width: int) -> list[str]:
+    """`text` in lines of at most `width` columns, broken at spaces only (its own line
+    breaks kept, each line `clean`ed): a word (a path, a branch name, a command) is never
+    split or cut; one wider than `width` has a line of its own, left whole for the
+    terminal to wrap (`print_lines`)."""
+    lines = []
+    for paragraph in str(text if text is not None else "").splitlines() or [""]:
+        line = ""
+        for word in clean(paragraph).split(" "):
+            if line and cell_len(line) + 1 + cell_len(word) > width:
+                lines.append(line)
+                line = word
+            else:
+                line = f"{line} {word}" if line else word
+        lines.append(line)
+    return lines
+
+
+def hanging(prefix: Text | str, text, width: int, style: str | None = None, most: int | None = None) -> list[Text]:
+    """`prefix` (a label, a mark: styled as given) then `text` in `style`, wrapped
+    (`wrap`) to the rest of `width`, the continuation lines under the text's start. A
+    prefix leaving under `MIN_TEXT` columns stands on its own line, the text under the
+    prefix's start. With `most`, at most that many lines of text, the last ending in
+    ` …` (words dropped, never split). Not cut: print with `print_lines`."""
+    prefix = Text(prefix) if isinstance(prefix, str) else prefix
+    lines = []
+    if width - prefix.cell_len < MIN_TEXT and prefix.plain.strip():
+        lines.append(Text().append_text(prefix))
+        prefix = Text(" " * (len(prefix.plain) - len(prefix.plain.lstrip())))
+    room = max(width - prefix.cell_len, MIN_TEXT)
+    parts = wrap(text, room)
+    if most and len(parts) > most:
+        words = parts[most - 1].split(" ")
+        while len(words) > 1 and cell_len(" ".join(words) + " …") > room:
+            words.pop()
+        parts = parts[:most - 1] + [" ".join(words) + " …"]
+    blank = " " * prefix.cell_len
+    first = not lines
+    return lines + [(Text().append_text(prefix) if first and i == 0 else Text(blank)).append(part, style=style)
+                    for i, part in enumerate(parts)]
+
+
+def fold(line: Text, width: int) -> list[Text]:
+    """`line` in pieces of at most `width` columns (a word wider than the screen split
+    where the terminal would fold it): for screens that count their lines (`live`).
+    Anything but a `Text` (a live row) is returned as it is."""
+    if not isinstance(line, Text) or line.cell_len <= width or width < 1:
+        return [line]
+    offsets, used = [], 0
+    for i, char in enumerate(line.plain):
+        size = cell_len(char)
+        if used + size > width:
+            offsets.append(i)
+            used = 0
+        used += size
+    return list(line.divide(offsets))
+
+
+def warning(message, width: int, indent: int = 2) -> list[Text]:
+    """A warning, the one form on every screen: `  ! message`, the `!` yellow, the
+    message wrapped under itself (`hanging`)."""
+    return hanging(Text(" " * indent).append("! ", style="yellow"), message, width)
+
+
+def warn(console, message, indent: int = 2) -> None:
+    """Print `warning(message)` at the console's width."""
+    print_lines(console, warning(message, console.width, indent))
+
+
+def show(console, text, prefix: Text | str = "", style: str | None = None) -> None:
+    """Print `text` after `prefix`, wrapped at the console's width (`hanging`): what
+    isn't a warning (an error line, a dim note)."""
+    print_lines(console, hanging(prefix, text, console.width, style))
+
+
 def rule(width: int) -> Text:
     return Text("  " + "─" * max(width - 4, 1), style="dim")
 
@@ -127,15 +207,17 @@ def header(title: list[tuple[str, str | None]], fields: list[tuple], width: int,
     to the width, or (label, value, style) to read whole (a path, a problem: style may
     be None), wrapped, the lines under the first unlabelled."""
     lines = [_parts(*title)]
+    whole: set[int] = set()  # the wrapped lines: never cut (a word wider than the room stays whole)
+    room = width - 2 - (MARK_WIDTH + 3) * show_mark
     for label, value, *style in fields:
         if not value:
             continue
         if not style:
             lines.append(_parts((f"{label:<{FIELD}}", "dim"), (clean(value), None)))
             continue
-        room = max(width - 2 - (MARK_WIDTH + 3) * show_mark - FIELD, 20)
-        parts = [part for line in str(value).splitlines() for part in textwrap.wrap(clean(line), room, break_on_hyphens=False) or [""]]
-        lines += [_parts((f"{label if i == 0 else '':<{FIELD}}", "dim"), (part, style[0])) for i, part in enumerate(parts)]
+        wrapped = hanging(Text(f"{label:<{FIELD}}", style="dim"), value, room, style[0])
+        whole.update(range(len(lines), len(lines) + len(wrapped)))
+        lines += wrapped
     if show_mark:
         logo = mark()
         lines += [Text()] * max(len(logo) - len(lines), 0)
@@ -143,7 +225,7 @@ def header(title: list[tuple[str, str | None]], fields: list[tuple], width: int,
                  .append("   ").append_text(line) for i, line in enumerate(lines)]
     else:
         lines = [Text("  ").append_text(line) for line in lines]
-    return [cut(line, width) for line in lines] + [rule(width)]
+    return [line if i in whole else cut(line, width) for i, line in enumerate(lines)] + [rule(width)]
 
 
 def shows_mark(console) -> bool:
@@ -222,6 +304,7 @@ class Row:
     summary: str | None = None
     gates: list = field(default_factory=list)
     observe: list = field(default_factory=list)
+    stops: list = field(default_factory=list)
     discarded: list = field(default_factory=list)
     discarded_frozen: list = field(default_factory=list)
 
@@ -233,8 +316,8 @@ class Row:
         return cls(iteration=record.iteration, accepted=record.accepted, metrics=record.metrics,
                    seconds=wall_ms / 1000 if wall_ms else None, cost=cost.cost_usd, cost_incomplete=cost.incomplete,
                    commit=record.commit, reason=record.reason, agent_error=record.agent_error,
-                   summary=record.summary, gates=record.gates, observe=record.observe, discarded=record.discarded,
-                   discarded_frozen=record.discarded_frozen)
+                   summary=record.summary, gates=record.gates, observe=record.observe, stops=record.stops,
+                   discarded=record.discarded, discarded_frozen=record.discarded_frozen)
 
 
 LABEL = 6  # "✓ 12  "
@@ -248,6 +331,7 @@ WIDE, SPACED, COMPACT = (6, 2), (4, 2), (2, 1)
 REASON_ROOM = 45  # wider only if a typical reason (a metric gate's, ~43) still fits on the row after the values
 SPACED_FROM = 100  # and never narrower (80 columns: always compact)
 ROOM = 2  # blank lines under a live row
+REASON_LINES = 3  # a row's reason or note, wrapped: at most this many lines (an agent's whole error is long)
 
 
 class Table:
@@ -347,8 +431,9 @@ class Table:
             reason = None
         lines.append(cut(line, self.width))
         if reason:
-            lines.append(cut(_parts((" " * INDENT, None), (reason, style)), self.width))
-        lines += [cut(_parts((" " * INDENT, None), (note, style)), self.width) for note, style in self._notes(row)]
+            lines += hanging(" " * INDENT, reason, self.width, style, most=REASON_LINES)
+        for note, style in self._notes(row):
+            lines += hanging(" " * INDENT, note, self.width, style, most=REASON_LINES)
         self._remember(row)
         return lines
 
@@ -386,7 +471,8 @@ class Table:
 
     def _notes(self, row: Row) -> list[tuple[str, str | None]]:
         """Under a row: gates failing at the baseline (red: every iteration will fail
-        them), failed observe entries and metrics an entry didn't report, discarded paths."""
+        them), failed observe entries and metrics an entry didn't report, stop commands
+        that failed (neither 0 nor 1: the condition wasn't checked), discarded paths."""
         notes = []
         if row.iteration == 0:
             notes += [(f"gate fails at the baseline: {clean(gate.get('text'))}", RED) for gate in row.gates
@@ -400,6 +486,12 @@ class Table:
             elif item.get("metric_errors"):
                 missing = ", ".join(clean(name) for name in item["metric_errors"])
                 notes.append((f"observe {clean(item.get('name'))} reported no {missing}", "dim"))
+        for k, item in enumerate(row.stops, start=1):
+            if isinstance(item, dict) and item.get("outcome") == "error":
+                code = item.get("return_code")
+                problem = ("timed out" if item.get("timed_out") is True else "could not run" if code == -1
+                           else f"exited {clean(code)}")
+                notes.append((f"stop command {problem}, not checked: {clean(item.get('text'))} (stop/{k}/)", "yellow"))
         if row.discarded:
             frozen = set(row.discarded_frozen)
             shown = ", ".join(clean(p) + " (frozen)" * (p in frozen) for p in row.discarded[:3])
@@ -420,9 +512,7 @@ class Table:
 
     def _wrapped(self, label: str, text: str, style: str | None, label_style: str, width: int) -> list[Text]:
         """A labelled end-block line wrapped, never cut: an error must be readable whole."""
-        parts = textwrap.wrap(clean(text), max(self.width - 2 - width, 20)) or [""]
-        return [field_line(label if i == 0 else "", (part, style), width=self.width, label_width=width,
-                           label_style=label_style) for i, part in enumerate(parts)]
+        return hanging(_parts(("  ", None), (f"{label:<{width}}", label_style)), text, self.width, style)
 
     def outcome_lines(self, outcome: tuple[str, str, str | None], width: int = 0) -> list[Text]:
         """The end block's first line (`Done`, `Stopped`, `Interrupted`, `Error`: word,
@@ -527,16 +617,18 @@ def rejection(row: Row, gates: list, directions: dict, tip: dict[str, tuple[floa
             if hasattr(gate, "metric") and (text := _metric_rejection(gate, item, tip, directions.get(gate.metric))):
                 return text
         elif item.get("kind") == "command" and not item.get("reason"):
-            return failed_gate(clean(item.get("text")), item.get("return_code"))
+            return failed_gate(clean(item.get("text")), item.get("return_code"), item.get("timed_out") is True)
     reason = clean(row.reason or "rejected")
     for prefix in ("gate failed: ", "metric gate: "):
         reason = reason.removeprefix(prefix)
     return reason
 
 
-def failed_gate(text: str, code) -> str:
-    """A failed command gate: `pytest -q failed (exit 1)`; an `ask:` gate answering
-    no (exit 1) `ask: keeps the API? answered no`."""
+def failed_gate(text: str, code, timed_out: bool = False) -> str:
+    """A failed command gate: `pytest -q failed (exit 1)`, `pytest -q timed out`; an
+    `ask:` gate answering no (exit 1) `ask: keeps the API? answered no`."""
+    if timed_out:
+        return f"{text} timed out"
     if text.startswith("ask:") and code == 1:
         return f"{text} answered no"
     exit_code = isinstance(code, int) and not isinstance(code, bool) and code > 0

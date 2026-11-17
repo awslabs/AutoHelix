@@ -5,18 +5,16 @@ import shlex
 import pytest
 
 from autohelix.agents import AgentConfig
-from autohelix.checks import metric_gate_failure, metric_reference
 from autohelix.config import (Config, CommandSpec, MetricGate, ObserveEntry, KNOWN_TOP_LEVEL_KEYS, goal_title,
                               parse_duration, parse_threshold)
-from autohelix.history import IterationResult
 
 
 def errors(data):
-    return [i.message for i in Config.from_dict(data).validate(data) if i.level == "error"]
+    return [i.message for i in Config.from_dict(data).validate() if i.level == "error"]
 
 
 def warnings(data):
-    return [i.message for i in Config.from_dict(data).validate(data) if i.level == "warning"]
+    return [i.message for i in Config.from_dict(data).validate() if i.level == "warning"]
 
 
 BENCH = {"name": "bench", "command": "python bench.py", "metrics": {"speed": "higher"}}
@@ -69,21 +67,40 @@ class TestConfigFromDict:
             "--command", "/opt/codex x", "--", "Does it keep the 'public' API?",
         ]
 
-    def test_ask_gate_minimal_and_agent_timeout(self):
+    def test_an_ask_gate_without_timeout_has_the_judges_ten_minutes(self):
+        """It used to get the 30-minute command default around a 10-minute judge."""
         plain = Config.from_dict({"goal": "x", "gates": [{"ask": "Done?"}]}).gates[0]
-        assert plain.command == "autohelix ask -- 'Done?'" and plain.timeout == 1800
-        timed = Config.from_dict({"goal": "x", "gates": [
-            {"ask": "Done?", "timeout": "1h", "agent": {"timeout": "5m"}}]}).gates[0]
-        assert shlex.split(timed.command)[2:] == ["--timeout", "300", "--", "Done?"]  # the agent's own limit
+        assert plain.command == "autohelix ask -- 'Done?'" and plain.timeout == 600
+        timed = Config.from_dict({"goal": "x", "gates": [{"ask": "Done?", "timeout": "1h"}]}).gates[0]
+        assert shlex.split(timed.command)[2:] == ["--timeout", "3600", "--", "Done?"]
         assert timed.timeout == 3600
-        assert shlex.split(Config.from_dict({"goal": "x", "gates": [{"ask": "Done?", "timeout": 90}]})
-                           .gates[0].command)[2:] == ["--timeout", "90", "--", "Done?"]
+        review = Config.from_dict({"goal": "x", "observe": [{"name": "r", "review": "Go"}]}).observe[0]
+        assert review.timeout == 1800 and "--timeout" not in shlex.split(review.command)
 
-    def test_entry_agent_timeout_alone_lengthens_the_command_timeout(self):
-        config = Config.from_dict({"goal": "x", "gates": [{"ask": "Done?", "agent": {"timeout": "40m"}}],
-                                   "observe": [{"name": "r", "review": "Go", "agent": {"timeout": 300}}]})
-        assert config.gates[0].timeout == 40 * 60 + 60
-        assert config.observe[0].timeout == 360
+    @pytest.mark.parametrize("entry", [
+        {"gates": [{"ask": "Done?", "timeout": "1h", "agent": {"timeout": "5m"}}]},
+        {"gates": [{"ask": "Done?", "agent": {"timeout": "40m"}}]},
+        {"observe": [{"name": "r", "review": "Go", "agent": {"timeout": 300}}]},
+    ])
+    def test_an_entry_agent_timeout_is_an_error_naming_timeout(self, entry):
+        """The entry's `timeout:` is its one limit (it bounds the judge too)."""
+        found = errors({"goal": "x", **entry})
+        assert [e for e in found if "agent.timeout` is gone here: the entry's `timeout:` bounds its agent" in e], found
+        assert not [e for e in found if "unknown key" in e]
+
+    @pytest.mark.parametrize("entry", [
+        {"gates": [{"ask": "Done?", "timeout": "30s"}]},
+        {"observe": [{"name": "r", "review": "Go", "timeout": 59}]},
+    ])
+    def test_a_judge_entry_timeout_under_a_minute_is_an_error(self, entry):
+        """In a run the judge keeps 30s for its usage and its copy: a 30s `ask:` failed
+        "no time left" on every iteration."""
+        from autohelix.config import JUDGE_MIN_TIMEOUT
+        from autohelix.judge import COPY_MARGIN, MIN_BUDGET
+
+        assert JUDGE_MIN_TIMEOUT > COPY_MARGIN + MIN_BUDGET
+        assert [e for e in errors({"goal": "x", **entry}) if "must be at least 1m here" in e]
+        assert not errors({"goal": "x", "gates": [{"ask": "Done?", "timeout": "1m"}]})
 
     @pytest.mark.parametrize("question", ["--help", "-n ok?", "--yes", "- dash"])
     def test_questions_and_prompts_starting_with_a_dash_stay_text(self, question):
@@ -151,7 +168,7 @@ class TestConfigFromDict:
         assert entry.capture == [] and entry.timeout == 600
         assert shlex.split(entry.command) == [
             "autohelix", "review", "--previous",
-            "--metric", "missing:lower", "--metric", "done:higher", "--agent", "claude", "--model", "opus",
+            "--metric", "missing", "--metric", "done", "--agent", "claude", "--model", "opus",
             "--timeout", "600", "--", "List items; report `missing`. Don't trust 'STATUS'.",
         ]
         assert Config.from_dict({"goal": "x", "observe": [{"name": "r", "review": "Go"}]}).observe[0].command \
@@ -165,6 +182,19 @@ class TestConfigFromDict:
         config = Config.from_dict({"goal": "x", "scope": {"editable": ["src/"], "frozen": ["src/fixtures/"]}})
         assert (config.editable, config.frozen) == (["src/"], ["src/fixtures/"])
         assert not errors({"goal": "x", "gates": ["t"], "scope": {"editable": ["src/"], "frozen": ["tests/"]}})
+
+    def test_scope_entries_are_normalised(self):
+        """[01-8] `./src/` used to match nothing: every change discarded, `frozen` freezing nothing."""
+        config = Config.from_dict({"goal": "x", "scope": {"editable": ["./src/", "./"], "frozen": "./tests//a.py"}})
+        assert (config.editable, config.frozen) == (["src/", "."], ["tests/a.py"])
+
+    @pytest.mark.parametrize("entry, message", [
+        ("/etc/passwd", "scope.frozen: '/etc/passwd' is an absolute path"),
+        ("../sibling", "scope.frozen: '../sibling' has a `..` component"),
+        ("src/../../x", "scope.frozen: 'src/../../x' has a `..` component"),
+    ])
+    def test_scope_entries_outside_the_project_are_errors(self, entry, message):
+        assert any(message in e for e in errors({"goal": "x", "scope": {"frozen": [entry]}}))
 
     def test_scope_one_side(self):
         assert Config.from_dict({"goal": "x", "scope": {"editable": ["src/"]}}).frozen == []
@@ -265,7 +295,6 @@ class TestEntryErrors:
         ({"metric": "speed", "regress": "-5%"}, "regress: must be a percentage of 0% or more"),
         ({"metric": "nope", "improve": "0%"}, "metric 'nope' is not declared"),
         ({"metric": "speed", "regress": 0.05}, "write the percentage with %, e.g. 0.05%"),
-        ({"ask": "Q?", "timeout": "5m", "agent": {"timeout": "5m"}}, "must be shorter than the entry's timeout"),
         ({"ask": "Q?", "agent": {"backend": "gemini"}}, "(must be claude or codex)"),
         ({"command": ""}, "`command:` must be a non-empty string"),
         ({"command": "x", "timeout": "soon"}, "timeout: 'soon' is not a valid duration"),
@@ -296,7 +325,6 @@ class TestEntryErrors:
         ({"name": "b", "review": "y", "previous": "yes"}, "`previous:` must be true or false"),
         ({"name": "b", "review": "y", "agent": {"backend": "opencode"}}, "OpenCode has no read-only mode"),
         ({"name": "b", "review": "y", "agent": {"auto_memory": True}}, "unknown key `auto_memory`"),
-        ({"name": "b", "review": "y", "timeout": 60, "agent": {"timeout": 90}}, "must be shorter than the entry's"),
         ("python bench.py", "expected a mapping"),
     ])
     def test_observe_entry_errors(self, entry, message):
@@ -373,87 +401,11 @@ class TestDurations:
         assert (config.gates[0].timeout, config.observe[0].timeout, config.stop[0].timeout) == (120, 45, 3600)
 
 
-def _record(iteration, metrics, accepted=True, commit="c"):
-    return IterationResult(iteration=iteration, accepted=accepted, metrics=metrics,
-                           commit=None if iteration == 0 else commit)
-
-
-class TestMetricGateReference:
-    def test_reference_is_the_tip_commit_record(self):
-        records = [_record(0, {"s": 10}), _record(1, {"s": 12}), _record(2, {"s": 30}, accepted=False),
-                   _record(3, {"s": 11})]
-        assert metric_reference(records, "s") == 11
-
-    def test_baseline_until_a_commit(self):
-        assert metric_reference([_record(0, {"s": 10}), _record(1, {"s": 9}, accepted=False)], "s") == 10
-
-    def test_accepted_no_op_does_not_re_measure(self):
-        records = [_record(0, {"s": 10}), _record(1, {"s": 12}), _record(2, {"s": 15}, commit=None)]
-        assert metric_reference(records, "s") == 12
-
-    def test_no_fallback_when_the_tip_record_lacks_the_metric(self):
-        records = [_record(0, {"s": 10, "t": 1}), _record(1, {"s": 12, "t": 2}), _record(2, {"s": 13})]
-        assert metric_reference(records, "t") is None
-        assert metric_reference(records, "u") is None
-
-
-class TestMetricGateFailure:
-    def regress(self, pct):
-        return MetricGate("s", "regress", pct)
-
-    def improve(self, pct):
-        return MetricGate("s", "improve", pct)
-
-    def test_regress(self):
-        assert metric_gate_failure(self.regress(5), "higher", 96, 100) is None
-        assert metric_gate_failure(self.regress(5), "higher", 95, 100) is None  # exactly at the bound
-        assert "5.1% worse than 100" in metric_gate_failure(self.regress(5), "higher", 94.9, 100)
-        assert metric_gate_failure(self.regress(5), "lower", 105, 100) is None
-        assert metric_gate_failure(self.regress(5), "lower", 106, 100)
-        assert metric_gate_failure(self.regress(0), "higher", 99.99, 100)
-        assert metric_gate_failure(self.regress(0), "higher", 100, 100) is None
-
-    def test_improve(self):
-        assert metric_gate_failure(self.improve(0), "higher", 100.01, 100) is None
-        assert "does not improve" in metric_gate_failure(self.improve(0), "higher", 100, 100)
-        assert metric_gate_failure(self.improve(5), "higher", 105, 100) is None
-        assert metric_gate_failure(self.improve(5), "higher", 1.05, 1.0) is None  # float noise at the bound
-        assert "by only 4.0%" in metric_gate_failure(self.improve(5), "higher", 104, 100)
-        assert metric_gate_failure(self.improve(10), "lower", 0.9, 1.0) is None
-        assert metric_gate_failure(self.improve(10), "lower", 0.95, 1.0)
-
-    def test_negative_reference_uses_its_absolute_value(self):
-        assert metric_gate_failure(self.regress(10), "higher", -1.05, -1.0) is None
-        assert metric_gate_failure(self.regress(10), "higher", -1.2, -1.0)
-        assert metric_gate_failure(self.improve(10), "higher", -0.9, -1.0) is None
-
-    def test_near_zero(self):
-        assert metric_gate_failure(self.regress(50), "lower", 0, 0) is None
-        assert metric_gate_failure(self.regress(50), "lower", 0.001, 0)  # no worse than 0
-        assert metric_gate_failure(self.improve(50), "lower", -0.001, 0) is None  # any strict improvement
-        assert metric_gate_failure(self.improve(50), "lower", 0, 0)
-        assert metric_gate_failure(self.improve(0), "lower", 0, 1) is None  # count 1 -> 0
-
-    def test_non_finite_values_fail(self):
-        for value in (float("inf"), float("-inf"), float("nan")):
-            assert "not a finite number" in metric_gate_failure(self.regress(5), "higher", value, 100)
-            assert "not a finite number" in metric_gate_failure(self.improve(0), "lower", value, 100)
-
-    def test_non_finite_references_are_none(self):
-        assert metric_reference([_record(0, {"s": float("inf")})], "s") is None
-        records = [_record(0, {"s": 10}), _record(1, {"s": float("nan")})]
-        assert metric_reference(records, "s") is None
-
-    def test_missing_value_fails_and_missing_reference_passes(self):
-        assert "was not measured" in metric_gate_failure(self.regress(5), "higher", None, 100)
-        assert metric_gate_failure(self.improve(5), "higher", 1, None) is None
-
-
 class TestConfigValidate:
     def test_valid_config_no_issues(self):
         data = {"goal": "optimize sorting", "gates": ["pytest", {"metric": "speed", "regress": "5%"}],
                 "observe": [BENCH], "stop": ["true"]}
-        assert Config.from_dict(data).validate(data) == []
+        assert Config.from_dict(data).validate() == []
 
     def test_known_top_level_keys(self):
         assert KNOWN_TOP_LEVEL_KEYS == {"goal", "agent", "prompt_template", "scope", "gates", "observe", "stop"}
@@ -474,9 +426,44 @@ class TestConfigValidate:
         assert not any("No gates" in w for w in warnings({"goal": "x", "gates": ["pytest"]}))
         assert not any("No gates" in w for w in warnings({"goal": "x", "observe": [BENCH]}))
 
-    def test_unknown_top_level_keys_are_warnings(self):
-        assert any("Unknown config key 'gaol'" in w for w in warnings({"goal": "x", "gaol": "typo", "gates": ["p"]}))
-        assert not any("Unknown config key" in w for w in warnings({"goal": "x", "gates": ["p"], "observe": [BENCH]}))
+    @pytest.mark.parametrize("key", ["gaol", "stops", "gatse", "scopes"])
+    def test_unknown_top_level_keys_are_errors(self, key):
+        """A misspelt `stop:` used to be a warning: the run went to its budget."""
+        found = errors({"goal": "x", "gates": ["p"], key: ["true"]})
+        assert any(f"Unknown config key '{key}' - possible typo?" in e for e in found)
+        assert not any("Unknown config key" in m for m in errors({"goal": "x", "gates": ["p"], "observe": [BENCH]}))
+        assert not any("Unknown config key" in m for m in warnings({"goal": "x", key: 1}))
+
+    @pytest.mark.parametrize("goal", [["make it fast", "keep tests"], {"speed": "up"}, 3])
+    def test_a_goal_that_is_not_a_string_is_an_error(self, goal):
+        """It used to reach the prompt as its Python repr."""
+        config = Config.from_dict({"goal": goal, "gates": ["p"]})
+        assert config.goal == ""
+        assert "goal must be a string (use `|` for several lines)" in errors({"goal": goal, "gates": ["p"]})
+
+    @pytest.mark.parametrize(("agent", "message"), [
+        ({"command": ["claude", "--verbose"]},
+         "agent.command must be a non-empty string, got ['claude', '--verbose'] (put arguments in agent.extra_args)"),
+        ({"model": 4}, "agent.model must be a non-empty string, got 4"),
+        ({"reasoning_effort": ["high"]}, "agent.reasoning_effort must be a non-empty string"),
+        ({"backend": 1}, "agent.backend must be a non-empty string, got 1"),
+        ({"auto_memory": "false"}, "agent.auto_memory must be true or false, got 'false'"),
+        ({"auto_memory": 1}, "agent.auto_memory must be true or false, got 1"),
+    ])
+    def test_agent_values_are_type_checked(self, agent, message):
+        """A list as `command` crashed preflight with a TypeError; a quoted "false" turned
+        auto memory on."""
+        assert any(message in e for e in errors({"goal": "x", "gates": ["p"], "agent": agent}))
+        assert Config.from_dict({"goal": "x", "agent": agent}).agent.auto_memory is False
+
+    @pytest.mark.parametrize(("agent", "message"), [
+        ({"command": ["x", "y"]}, "gates entry 1 agent.command must be a non-empty string"),
+        ({"model": 4}, "gates entry 1 agent.model must be a non-empty string"),
+        ({"backend": ["codex"]}, "gates entry 1 agent.backend must be a non-empty string"),
+    ])
+    def test_ask_entry_agent_values_are_type_checked(self, agent, message):
+        found = errors({"goal": "x", "gates": [{"ask": "Is it good?", "agent": agent}]})
+        assert any(message in e for e in found), found
 
     def test_unknown_agent_backend_is_error(self):
         assert any("Unknown agent backend" in e for e in errors({"goal": "x", "agent": {"backend": "gpt4"}}))

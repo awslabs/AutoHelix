@@ -15,16 +15,13 @@ from autohelix.harness import Harness
 from autohelix.history import History
 from autohelix.runs import NoRunToResume, RunPaths, git, short_id
 from autohelix.viewer import RunData
+from tests.helpers import cli, latest_run
 
 
 def write(path, text="goal: x\n"):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     return path
-
-
-def cli(project, *args):
-    return CliRunner().invoke(main, [*args, "-p", str(project)])
 
 
 def flat(text):
@@ -106,7 +103,7 @@ def test_run_works_without_autohelix_dir_and_names_the_run_after_the_config(fold
     commit(folder_project)
     result = cli(folder_project, "run", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
-    paths = RunPaths(folder_project)
+    paths = latest_run(folder_project)
     assert re.fullmatch(r"\d{8}-\d{4}-perf-[0-9a-z]{4}", paths.run_id)
     assert paths.read_identity()["config_path"] == "autohelix/perf.yaml"
     assert out.read_text() == str(paths.config)  # judges read the run's stored copy
@@ -124,7 +121,7 @@ def test_run_by_name(folder_project):
             "Pick one: `autohelix run <name>`.") in result.output
     result = cli(folder_project, "run", "other", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
-    assert RunPaths(folder_project).read_identity()["config_path"] == "autohelix/other.yaml"
+    assert latest_run(folder_project).read_identity()["config_path"] == "autohelix/other.yaml"
     result = cli(folder_project, "run", "autohelix.yaml")
     assert result.exit_code == 2 and "not a config name" in result.output
     assert "a bare `autohelix run` reads autohelix.yaml" in flat(result.output)
@@ -147,12 +144,12 @@ def test_bare_resume_with_several_configs_asks_for_a_run(folder_project):
     result = cli(folder_project, "resume")
     assert result.exit_code == 1
     assert ("Several configs: autohelix/other.yaml, autohelix/perf.yaml. "
-            "Name a run: `autohelix resume <id>`.") in result.output
+            "Name a run or a config: `autohelix resume <id|name>`.") in result.output
 
 
 def test_bare_resume_without_runs_creates_nothing(folder_project):
     result = cli(folder_project, "resume")
-    assert result.exit_code == 3
+    assert result.exit_code == 1
     assert "No run to resume for autohelix/perf.yaml; start one with `autohelix run perf`." in result.output
     assert_untouched(folder_project)
     (folder_project / "autohelix" / "perf.yaml").unlink()
@@ -171,25 +168,25 @@ def assert_untouched(project):
 def test_resume_id_keeps_its_config_beside_a_root_one(folder_project):
     result = cli(folder_project, "run", "-n", "1", "--no-report", "--land", "manual")
     assert result.exit_code == 0, result.output
-    run_id = RunPaths(folder_project).run_id
+    run_id = latest_run(folder_project).run_id
     write(folder_project / "autohelix.yaml", "goal: ''\nagent: {backend: mock}\n")  # invalid if it were read
     commit(folder_project)
     result = cli(folder_project, "resume", short_id(run_id), "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
-    assert RunPaths(folder_project).read_identity()["config_path"] == "autohelix/perf.yaml"
+    assert latest_run(folder_project).read_identity()["config_path"] == "autohelix/perf.yaml"
     # A bare run takes autohelix.yaml and says what else there is.
     result = cli(folder_project, "run")
     assert "Using autohelix.yaml; autohelix/ also has: perf (`autohelix run perf`)" in result.output
     assert "Config validation failed. Edit autohelix.yaml and try again." in result.output
     result = cli(folder_project, "resume")
-    assert "Using autohelix.yaml; autohelix/ also has: perf (resume their runs by id)" in result.output
-    assert result.exit_code == 3 and "No run to resume for autohelix.yaml" in result.output
+    assert "Using autohelix.yaml; autohelix/ also has: perf (`autohelix resume perf`)" in result.output
+    assert result.exit_code == 1 and "No run to resume for autohelix.yaml" in result.output
 
 
 def test_a_run_whose_config_is_gone_continues_with_its_stored_copy(folder_project):
     result = cli(folder_project, "run", "-n", "1", "--no-report", "--land", "manual")
     assert result.exit_code == 0, result.output
-    run_id = RunPaths(folder_project).run_id
+    run_id = latest_run(folder_project).run_id
     git(folder_project, "mv", "autohelix/perf.yaml", "autohelix/fast.yaml")  # the only config, found by a lookup
     git(folder_project, "commit", "-qm", "rename")
     result = cli(folder_project, "resume", short_id(run_id), "-n", "1", "--no-report")
@@ -197,34 +194,34 @@ def test_a_run_whose_config_is_gone_continues_with_its_stored_copy(folder_projec
     assert (f"autohelix/perf.yaml is gone; run {short_id(run_id)} continues with the config it stored "
             "when it started.") in flat(result.output)
     assert History(folder_project, run_id).get_last_iteration() == 2
-    config = RunData(folder_project).state()["config"]  # the web page's payload
-    assert config["file"] == "autohelix/perf.yaml" and not config.get("missing") and config["text"]
-    listed = json.loads(cli(folder_project, "view", "--json").output)["run"]
-    assert (listed["config_file"], listed["config_missing"], listed["goal"]) == (
+    config = RunData(folder_project, latest_run(folder_project).run_id).state()["config"]  # the web page's payload
+    assert config["file"] == "autohelix/perf.yaml" and "missing" not in config and config["text"]
+    listed = json.loads(cli(folder_project, "view", "--json").stdout)["run"]
+    assert (listed["config_file"], listed["config_invalid"], listed["goal"]) == (
         "autohelix/perf.yaml", False, "Make a checked change")
+    assert "config_missing" not in listed
 
 
 def test_a_run_without_a_stored_config_is_never_given_its_file(folder_project):
     result = cli(folder_project, "run", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
-    paths = RunPaths(folder_project)
+    paths = latest_run(folder_project)
     short = short_id(paths.run_id)
-    paths.config.unlink()  # as a run started before runs stored their config
-    old = (f"Run {short} has no stored config (it was started by an older AutoHelix); continue it in a new "
-           f"run: `autohelix run perf --import {short}`.")
+    paths.config.unlink()  # only a development build made such runs: not read, never its source file
+    refused = (f"Run {short} has no stored config: it was made by a development version of AutoHelix. "
+               f"Delete it (`autohelix delete --force {short}`).")
     result = cli(folder_project, "resume", short)
-    assert result.exit_code == 1 and old in flat(result.output), result.output
+    assert result.exit_code == 1 and refused in flat(result.output), result.output
     result = cli(folder_project, "report", short)
-    assert result.exit_code == 1 and (f"Run {short} has no stored config (started by an older AutoHelix); its "
-                                      "report can't be written.") in flat(result.output), result.output
-    config = RunData(folder_project).state()["config"]
-    assert (config["file"], config.get("missing")) == ("autohelix/perf.yaml", True)
-    listed = json.loads(cli(folder_project, "view", "--json").output)["run"]
-    assert (listed["config_file"], listed["config_missing"], listed["goal"]) == ("autohelix/perf.yaml", True, None)
-    assert "autohelix/perf.yaml (not stored)" in cli(folder_project, "view", "--once").output
+    assert result.exit_code == 1 and refused in flat(result.output), result.output
+    config = RunData(folder_project, latest_run(folder_project).run_id).state()["config"]
+    assert config["file"] == "autohelix/perf.yaml" and "missing" not in config and "agent" not in config
+    listed = json.loads(cli(folder_project, "view", "--json").stdout)["run"]
+    assert (listed["config_file"], listed["config_invalid"], listed["goal"]) == ("autohelix/perf.yaml", True, None)
+    assert "autohelix/perf.yaml (invalid)" in cli(folder_project, "view", "--once").output
     (row,) = json.loads(cli(folder_project, "dashboard", "--json").output)["runs"]
-    assert row["config_missing"] and not row["config_invalid"]
-    assert "autohelix/perf.yaml (not stored)" in cli(folder_project, "dashboard", "--once").output
+    assert row["config_invalid"] and "config_missing" not in row
+    assert "autohelix/perf.yaml (invalid)" in cli(folder_project, "dashboard", "--once").output
 
 
 def test_an_invalid_config_is_named(folder_project):
@@ -254,7 +251,7 @@ def test_a_subproject_with_its_own_config_runs(folder_project):
     commit(folder_project)
     result = cli(sub, "run", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
-    assert RunPaths(sub).read_identity()["config_path"] == "autohelix.yaml"
+    assert latest_run(sub).read_identity()["config_path"] == "autohelix.yaml"
     assert not (folder_project / ".autohelix").exists()
 
 
@@ -321,15 +318,28 @@ def test_a_dirty_tree_is_refused_before_anything_is_written(folder_project):
     assert_untouched(folder_project)
 
 
-def test_readiness_is_checked_before_anything_is_written(folder_project):
+def test_a_scope_config_error_is_reported_before_anything_is_written(folder_project):
     config = folder_project / "autohelix" / "perf.yaml"
     data = yaml.safe_load(config.read_text())
-    data["scope"] = {"editable": ["missing/"]}
+    data["scope"] = {"editable": ["../elsewhere/"]}
     config.write_text(yaml.safe_dump(data))
     commit(folder_project)
     result = cli(folder_project, "run", "perf")
-    assert result.exit_code == 1 and "No files found matching editable pattern 'missing/'" in result.output
+    assert result.exit_code == 1 and "scope.editable: '../elsewhere/' has a `..` component" in flat(result.output)
     assert_untouched(folder_project)
+
+
+def test_an_editable_pattern_matching_nothing_yet_only_warns(folder_project):
+    """[01-2] The agent may be meant to create it: a warning, and the run starts."""
+    config = folder_project / "autohelix" / "perf.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["scope"] = {"editable": ["results/", "*.py"]}
+    config.write_text(yaml.safe_dump(data))
+    commit(folder_project)
+    result = cli(folder_project, "run", "perf", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert "scope.editable 'results/' matches no committed file" in flat(result.output)
+    assert "'*.py' matches" not in flat(result.output)
 
 
 def test_no_run_to_resume_is_refused_before_anything_is_written(folder_project):
@@ -339,7 +349,7 @@ def test_no_run_to_resume_is_refused_before_anything_is_written(folder_project):
     write(folder_project / "autohelix" / "perf.yaml", "goal: ''\nagent: {backend: mock}\n")  # invalid too
     commit(folder_project)
     result = cli(folder_project, "resume")
-    assert result.exit_code == 3 and "No run to resume for autohelix/perf.yaml" in result.output
+    assert result.exit_code == 1 and "No run to resume for autohelix/perf.yaml" in result.output
     assert_untouched(folder_project)
 
 
@@ -362,7 +372,7 @@ def test_an_old_name_key_is_an_error(folder_project):
 def test_a_config_that_is_not_yaml_is_named(folder_project):
     result = cli(folder_project, "run", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
-    run_id = short_id(RunPaths(folder_project).run_id)
+    run_id = short_id(latest_run(folder_project).run_id)
     write(folder_project / "autohelix" / "perf.yaml", "goal: [\n")
     commit(folder_project)
     for args in (("run", "perf"), ("resume", run_id)):
@@ -377,7 +387,7 @@ def test_a_config_that_is_not_yaml_is_named(folder_project):
 
 def test_report_without_runs_creates_nothing(folder_project):
     result = cli(folder_project, "report")
-    assert result.exit_code == 1 and "No iterations run yet" in result.output
+    assert result.exit_code == 1 and "No runs in" in result.output and "start one with `autohelix run perf`" in result.output
     assert_untouched(folder_project)
 
 
