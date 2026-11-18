@@ -95,53 +95,9 @@ def build_prompt_variables(
     imported=None,
     head: str | None = None,
 ) -> dict[str, Any]:
-    """The variables a prompt template gets: a stable, documented contract
-    (`VARIABLES`; agent-written text in them is cleaned of control characters).
-
-    - `goal`: the config's goal, whole; `title`: its first line (`Config.title`).
-    - `iteration`: this iteration's number (the baseline is 0); `copy`: the agent's
-      working directory (its copy), as a string.
-    - `history`: the last iterations, one line each (`History.format_summary`); "" if none.
-    - `gates`: every gate in list order, `{"text", "kind": "command"|"metric"}`; a metric
-      gate's text says what it compares ("speed: at most 5% worse than ...").
-    - `observe`: every observe entry, `{"name", "kind": "command"|"review", "command"
-      (command entries) or "prompt" (review entries, on one line), "metric_labels"}`.
-    - `stop`: the stop commands; `editable`, `frozen`: the scope patterns (`frozen` with
-      the config and template files, always frozen).
-    - `notes_path`: where this iteration's notes go (in the copy).
-    - `hints`: the copy's hints file (`.autohelix-iteration/hints.md`) if there are
-      hints, else "".
-    - `rejected_patch`: `.autohelix-iteration/rejected.patch` if the copy has one (the
-      latest iteration was rejected and its tree was kept), else "".
-    - `rejected_diff`: when that change is too large for the patch file, the `git diff`
-      command that shows it, else "".
-    - `discarded`: the paths whose changes the latest iteration lost to the scope;
-      `discarded_frozen`: those of them that are frozen (the others aren't editable).
-    - `last`: the latest iteration (the baseline before iteration 1), or None:
-      `{"iteration", "accepted", "reason", "summary", "failure_output", "gates": [{"text",
-      "kind", "status": "passed"|"failed"|"pending", "path"}], "observe": [{"name", "ok",
-      "error", "missing" (declared metrics it ran without reporting), "path"}]}`; `path` is
-      the item's output folder in the copy if it has one there, else "": a failed gate's
-      `.autohelix-iteration/iterations/KKK/gates/<k>/` (passing gates' output isn't in the
-      copy), an observe entry's `.autohelix-iteration/iterations/KKK/observe/<name>/`.
-    - `last_accepted`: the latest accepted iteration (the baseline counts), or None:
-      `{"iteration", "path"}`; `path` is its folder in the copy
-      (`.autohelix-iteration/iterations/KKK/`: its record and observations describe the
-      code in the copy), or "".
-    - `recent_iterations`: how many of the latest iterations the copy has folders of
-      (`iteration.SEEDED_ITERATIONS`; the last accepted one is there too).
-    - `time_limit`: `agent.timeout` as a compact duration ("15m"), or "".
-    - `group`: the run's group, or ""; `group_runs`: one line per other run of the
-      group (`describe_member`; `members` as `runs.group_members` returns them).
-    - `imported`: the run this one continues from (`run --import`; `imported` as
-      `runs.imported_run` returns it), if its state is in the copy, else None:
-      `{"id", "short", "path", "description", "same_code"}`; `path` is its state in the
-      copy, `.autohelix-iteration/runs/<id>/` (run.json, history.jsonl, notes/; read-only);
-      its code is at `autohelix/<id>`; `description` is its line as `describe_member`
-      gives it; `same_code` whether its tip's tree is the copy's code (`head`, the
-      iteration's base commit, else this run's tip): False when unknown.
-      Members whose state isn't in the copy (it failed to copy) are left out of `group_runs`.
-    """
+    """The variables a prompt template gets (`VARIABLES`): a stable contract, documented
+    in docs/concepts.md's variable table (a test keeps the two in step). Agent-written
+    text in them is cleaned of control characters."""
     from autohelix.config import MetricGate
     from autohelix.iteration_time import format_limit
     from autohelix.iteration import SEEDED_ITERATIONS
@@ -166,6 +122,7 @@ def build_prompt_variables(
         "frozen": config.frozen_names(),
         "notes_path": str(state / "notes" / f"iter-{iteration}.md"),
         "hints": "",
+        "hints_text": "",
         "rejected_patch": f"{ITERATION_DIR}/rejected.patch" if (state / "rejected.patch").is_file() else "",
         "rejected_diff": rejected_diff,
         "discarded": [clean(path) for path in latest.discarded] if latest else [],
@@ -182,6 +139,7 @@ def build_prompt_variables(
     hints = history.paths.hints
     if hints.exists() and hints.stat().st_size > 0:
         variables["hints"] = f"{ITERATION_DIR}/hints.md"
+        variables["hints_text"] = clean_block(hints.read_text(errors="replace")).strip()
     return variables
 
 
@@ -293,7 +251,7 @@ def _describe_accepted(history, iteration: int, state: Path) -> dict[str, Any] |
 # gets a warning at run start (`unknown_variables`).
 VARIABLES = frozenset({
     "goal", "title", "iteration", "copy", "history", "gates", "observe", "stop", "editable", "frozen",
-    "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted",
+    "notes_path", "hints", "hints_text", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted",
     "recent_iterations", "time_limit", "group", "group_runs", "imported",
 })
 

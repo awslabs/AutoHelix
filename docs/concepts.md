@@ -210,7 +210,8 @@ read-only mode.
 Each iteration's prompt (see [Prompt](#prompt)) always holds the goal, the last
 five iterations (one line each: metrics or the rejection reason, then the
 agent's one-line summary), the gates, observe entries and stop commands, the
-scope, where to read notes and hints, and where to write notes. Then, about the
+scope, the hints sent with `autohelix hint` (their text, newest last), where
+to read notes and iterations, and where to write notes. Then, about the
 latest iteration:
 
 - **After an accepted iteration:** its gate results and where its observations
@@ -226,12 +227,12 @@ latest iteration:
 - **After discarded changes:** the paths that were outside the scope, frozen
   ones said apart from the ones that aren't editable.
 
-With other runs in the copy (an [import](cli.md#continuing-from-another-run) or
-a [group](cli.md#groups)), the reading list becomes one "Where things are"
-block: the run's own notes (editable, numbered from its iteration 1), its own
-iterations, `rejected.patch` when there is one, each other run's state in
-`runs/<id>/` (read-only, the imported one and the group members said apart),
-and their code's refs. Without them the prompt has no such block.
+The reading list, "Where things are", names the run's own notes (editable,
+numbered from its iteration 1) and its own iterations. With other runs in the
+copy (an [import](cli.md#continuing-from-another-run) or a
+[group](cli.md#groups)) it also names each other run's state in `runs/<id>/`
+(read-only, the imported one and the group members said apart) and their
+code's refs.
 
 Observe commands are different: `$AUTOHELIX_PREVIOUS` (and so
 `review --previous`) always comes from the last *accepted* iteration in which
@@ -375,14 +376,17 @@ The variables a template gets are a stable, documented contract:
 | `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files (always frozen) |
 | `notes_path` | Where this iteration's notes go (in the copy) |
 | `hints` | `.autohelix-iteration/hints.md` if there are hints, else empty |
+| `hints_text` | The hints' text (the lines `autohelix hint` added, oldest first), else empty; the built-in prompt shows it under "Hints from the person running this run (newest last)" |
 | `rejected_patch` | `.autohelix-iteration/rejected.patch` if the copy has one, else empty |
 | `rejected_diff` | When the latest rejected change is over 2 MiB (no patch file), the `git diff <tip> <tree>` command that shows it, else empty |
 | `discarded` | The paths whose changes the latest iteration lost to the scope |
 | `discarded_frozen` | Those of them that are frozen (the others aren't editable) |
-| `last` | The latest iteration (the baseline before iteration 1), or none: `{iteration, accepted, reason, summary, failure_output, gates: [{text, kind, status}], observe: [{name, ok, error, missing, path}]}`; `status` is `passed`, `failed` or `pending`, `missing` the declared metrics an entry ran without reporting, and `path` the entry's folder in the copy |
+| `last` | The latest iteration (the baseline before iteration 1), or none: `{iteration, accepted, reason, summary, failure_output, gates: [{text, kind, status, path}], observe: [{name, ok, error, missing, path}]}`; `status` is `passed`, `failed` or `pending`, `missing` the declared metrics an entry ran without reporting, and `path` the item's folder in the copy if it has one there, else empty (a failed gate's `.autohelix-iteration/iterations/KKK/gates/<k>/`, an observe entry's `.autohelix-iteration/iterations/KKK/observe/<name>/`; passing gates' output isn't in the copy) |
+| `last_accepted` | The latest accepted iteration (the baseline counts), or none: `{iteration, path}`, `path` being its folder in the copy (`.autohelix-iteration/iterations/KKK/`: its record and observations describe the code in the copy), or empty |
+| `recent_iterations` | How many of the latest iterations the copy has folders of (5; the last accepted one is there too) |
 | `time_limit` | `agent.timeout` as a compact duration (`15m`), or empty |
-| `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group |
-| `imported` | The run this one continues from (`run --import`), or none: `{id, short, path, description}`, `path` being its state in the copy (`.autohelix-iteration/runs/<id>/`, read-only), `description` its line as in `group_runs`; its code is at `autohelix/<id>`. Not listed in `group_runs`, even when it is in the group |
+| `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group. Members whose state failed to copy are left out |
+| `imported` | The run this one continues from (`run --import`), or none: `{id, short, path, description, same_code}`, `path` being its state in the copy (`.autohelix-iteration/runs/<id>/`, read-only), `description` its line as in `group_runs`, `same_code` whether its tip holds the same tree as the copy's code (false when unknown); its code is at `autohelix/<id>`. Not listed in `group_runs`, even when it is in the group |
 
 A custom template is a copy: it won't pick up future changes to the built-in
 one. Remove `prompt_template:` to return to it. A run warns when a custom

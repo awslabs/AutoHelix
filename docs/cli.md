@@ -890,7 +890,7 @@ Send a hint to a run's agent, picked up at the start of its next iteration.
 autohelix hint "MESSAGE" [-p PATH] [--run RUN_ID]
 ```
 
-The run is `--run RUN_ID`, else the [running or latest run](#which-run-a-command-acts-on); `hint` names it ("Hint added to run k3f9."), adding "(not running; read by its next `autohelix resume k3f9`)" when it isn't running. Appends a timestamped line to `.autohelix/runs/<id>/hints.md`. The agent reads that file (its prompt lists it among what to read before starting) each iteration, so a hint lets you steer a run without stopping it. Run it from a second terminal while `autohelix run` is going. Hints accumulate — the file holds the full history for the run.
+The run is `--run RUN_ID`, else the [running or latest run](#which-run-a-command-acts-on); `hint` names it ("Hint added to run k3f9."), adding "(not running; read by its next `autohelix resume k3f9`)" when it isn't running. Appends a timestamped line to `.autohelix/runs/<id>/hints.md`. Each iteration's prompt holds the hints' text, under "Hints from the person running this run (newest last)", so a hint lets you steer a run without stopping it. Run it from a second terminal while `autohelix run` is going. Hints accumulate — the file holds the full history for the run.
 
 ## `autohelix ask`
 
