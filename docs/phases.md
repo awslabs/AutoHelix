@@ -77,9 +77,8 @@ when the copy is made; no stash, no remote). This means:
 ## Where things live
 
 In the project, `.autohelix/` (gitignored locally; AutoHelix leaves
-`.gitignore` unchanged) holds each run's state in `.autohelix/runs/<id>/`, one
-folder per iteration; what the harness keeps for itself is in `.internal/`
-folders:
+`.gitignore` unchanged) holds each run's state in `.autohelix/runs/<id>/`; what the harness keeps
+for itself is in `.internal/` folders:
 
 ```
 .autohelix/
@@ -122,10 +121,8 @@ of truth (`jq` on it for numbers across iterations; see
 retried baseline, reuses its number: the earlier attempt's folder is moved to
 `.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
 
-`.internal/segments.jsonl` is the run's event log, one line when a segment
-(one `run` or `resume` command) starts, when an iteration's record is final and
-when the segment ends: [`autohelix wait`](cli.md#autohelix-wait) reads it, and
-[CLI → The event log](cli.md#the-event-log) has its format.
+`.internal/segments.jsonl` is the run's event log, read by
+[`autohelix wait`](cli.md#autohelix-wait) ([format](cli.md#the-event-log)).
 
 The copies are outside the project, in
 `${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/<project>-<hash>/<id>/` and are deleted

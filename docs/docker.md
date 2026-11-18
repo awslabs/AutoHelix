@@ -44,19 +44,20 @@ With [Colima](https://github.com/abiosoft/colima), the project must be under you
 
 ## Stopping a run
 
-In the container, `autohelix` is process 1 (`docker/entrypoint.sh` execs it,
-and `docker/run.sh` passes no `--init`). That changes two things:
+A run in a container differs in two ways:
 
-- `autohelix stop --now` can't interrupt it: it refuses, with "Run k3f9's
-  process (1) is not an autohelix process; not interrupted." (or "is running on
-  <host>" when the container's host name isn't this machine's), and asks
-  nothing. Use `autohelix stop` (it ends the run after its current iteration),
-  or Ctrl-C in the terminal that runs the container.
+- `autohelix stop --now` can't interrupt it. In the container `autohelix` is
+  process 1 (`docker/entrypoint.sh` execs it, and `docker/run.sh` passes no
+  `--init`), so `stop --now` refuses, with "Run k3f9's process (1) is not an
+  autohelix process; not interrupted." (or "is running on <host>" when the
+  container's host name isn't this machine's), and asks nothing. Use
+  `autohelix stop` (it ends the run after its current iteration), or Ctrl-C in
+  the terminal that runs the container.
 - A crash may not be detected. AutoHelix tells a crashed run from a running one
   by its lock, and only on the host the run recorded (the container's host
   name). If the container is killed and that name isn't this machine's, the run
   looks running in `view` and `wait` until it is resumed (see
-  [CLI → `autohelix wait`](cli.md#exit-codes-and-limits)).
+  [`autohelix wait`'s limits](cli.md#exit-codes-and-limits)).
 
 ## Env script
 
