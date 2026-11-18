@@ -21,13 +21,13 @@ CONFIG = {
     "goal": "Make sort.py's sort faster without changing its results.",
     "gates": ["pytest -q", {"metric": "speed", "regress": "5%"}],
     "observe": [{"name": "bench", "command": "python bench.py", "metrics": {"speed": "higher"}},
-                {"name": "review", "review": "Review the change for clarity and correctness."}],
+                {"name": "clarity", "review": "Review the change for clarity and correctness."}],
     "stop": ["jq -e '.speed >= 50' \"$AUTOHELIX_METRICS\""],
     "scope": {"editable": ["sort.py"]},
     "agent": {"timeout": "30m"},
 }
 OBSERVED = [{"name": "bench", "ok": True, "error": None, "metrics": {"speed": 10.0}},
-            {"name": "review", "ok": True, "error": None, "metrics": {}}]
+            {"name": "clarity", "ok": True, "error": None, "metrics": {}}]
 RECORDS = [
     {"iteration": 0, "accepted": True, "metrics": {"speed": 10.0}, "reason": "baseline",
      "gates": [{"text": "pytest -q", "kind": "command", "passed": True},
@@ -61,7 +61,7 @@ def main_agent_prompt(tmp_path: Path) -> str:
     (state / "notes").mkdir(parents=True)
     (state / "rejected.patch").write_text("diff --git a/sort.py b/sort.py\n")
     for n in (0, 1):
-        for name in ("bench", "review"):
+        for name in ("bench", "clarity"):
             (state / "iterations" / f"{n:03d}" / "observe" / name).mkdir(parents=True)
     (state / "iterations" / "002" / "gates" / "1").mkdir(parents=True)
     config = Config.from_dict(CONFIG)

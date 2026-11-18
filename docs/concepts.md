@@ -46,7 +46,7 @@ A useful loop answers five questions:
   iteration's folder, `.autohelix/runs/<id>/iterations/NNN/prompt.md` (the agent
   copy, which holds it as `.autohelix-iteration/prompt.md`, is gone once the
   iteration ends), or a sample rendering of the built-in template in
-  [Phases → Prompts](phases.md#the-main-agent). See [Prompt](#prompt).
+  [Phases → The main agent](phases.md#the-main-agent). See [Prompt](#prompt).
 - AutoHelix already retains iteration evidence and agent memory. When findings
   should also be user-facing and revisable, keep them in an editable,
   version-controlled file. The [research example](https://github.com/awslabs/AutoHelix/tree/main/examples/research) uses
@@ -238,7 +238,7 @@ for display and `stop:`; gating on them is not recommended.
 The prompt sent to the agent each iteration is built from a
 [Jinja2](https://jinja.palletsprojects.com/) template: the built-in one
 (`src/autohelix/templates/default_prompt.md`, shown rendered in
-[Phases → Prompts](phases.md#the-main-agent)), so new features reach every
+[Phases → The main agent](phases.md#the-main-agent)), so new features reach every
 project. Most configs only need `goal:`. To replace the whole prompt, point
 `prompt_template:` in the config at a template file (a path relative to the
 config file, so it is versioned with it); copying the built-in template is the
@@ -384,11 +384,6 @@ reports segments from this file as `started`, `ended` and `crashed` events.
 
 The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
 project; see [Phases → Where things live](phases.md#where-things-live).
-
-runs never read a half-saved mix; the iteration's `notes` link keeps pointing at
-that version. Everything else is reference material. A checks copy gets only
-`candidate.diff`; a review's copy `candidate.diff` (and `previous.md` with
-`previous: true`); a stop copy none of it.
 
 A run is a line of work: `autohelix run` starts one, `autohelix resume` continues
 one (by default the config's most recently active), `autohelix stop` ends a

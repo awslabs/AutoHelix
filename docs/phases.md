@@ -55,10 +55,8 @@ when the copy is made; no stash, no remote). This means:
   commands in the checks phase (so build-then-test works) and deleted afterwards. If
   generated code should be accepted, generating it is the agent's job.
 - In a checks copy, plain `git diff` shows changes to tracked files; new files show as
-  untracked. The complete change is in `.autohelix-iteration/candidate.diff`; that is
-  the only harness material a checks copy gets (no notes, history or prompt). A judge's
-  (`ask`) or review's own copy gets the same, a review's also `previous.md` with
-  `previous: true`.
+  untracked. The complete change is in `.autohelix-iteration/candidate.diff` (what
+  each copy gets: [At a glance](#at-a-glance)).
 - Accepted commits advance the run's hidden `refs/autohelix/<id>` first.
 - A process-held per-run lock lets only one process write a run at a time.
 - PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo), and
@@ -76,9 +74,17 @@ when the copy is made; no stash, no remote). This means:
 
 ## Where things live
 
-A run's state is in `.autohelix/runs/<id>/` (layout:
-[Concepts → Runs and run state](concepts.md#runs-and-run-state)); its copies
-are outside the project. Copies live in
+In the project, `.autohelix/` (full layout:
+[Concepts → Runs and run state](concepts.md#runs-and-run-state)):
+
+- `runs/<id>/`: what you read: `run.json`, `config.yaml`, `history.jsonl`,
+  `hints.md`, `notes`, `iterations/NNN/` (each phase's output, as in the
+  table above), `logs/`, `report.md`;
+- `runs/<id>/.internal/`: the harness's own files (status, event log, usage,
+  saved notes versions);
+- `.internal/`: lock files and helper scripts.
+
+The copies are outside the project, in
 `${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/<project>-<hash>/<id>/` and are deleted
 after each phase; the run's folder goes when a segment ends. To put them elsewhere (for
 example on a larger disk), set `AUTOHELIX_COPIES_ROOT` to an absolute path. Each run
@@ -108,13 +114,9 @@ for a cooperative agent, and for candidate code that misbehaves by accident:
   not modules from the candidate's `PYTHONPATH`;
 - a command's background processes are killed when it ends.
 
-The main agent's copy has no config file or prompt template (commands read the
-run's stored config, `$AUTOHELIX_CONFIG`), and its environment doesn't name the
-project or the run folder: `AUTOHELIX_PROJECT` and `AUTOHELIX_RUN_DIR` are for
-gate, observe and stop commands; the agent gets `AUTOHELIX_RUN_ID` and
-`AUTOHELIX_ITERATION`. That is hygiene, so the agent doesn't work in the checkout
-by accident, not a boundary: its copy's `.git` alternates and the copies folder
-still lead to the project.
+The main agent's copy has no config file and its environment doesn't name the
+project (see [Command environment](#command-environment)): hygiene, so the
+agent doesn't work in the checkout by accident.
 
 They are not a security boundary. The agent and candidate code run as you:
 they can still reach the project, its `.git`, other runs and your home folder
@@ -160,10 +162,6 @@ copy (an [import](cli.md#continuing-from-another-run) or a
 (read-only, the imported one and the group members said apart) and their
 code's refs.
 
-Observe commands are different: `$AUTOHELIX_PREVIOUS` (and so
-`review --previous`) always comes from the last *accepted* iteration in which
-the entry succeeded, so a tracker's status moves only with accepted code.
-
 The agent's copy holds no `.autohelix/` (nothing in a copy looks like project
 state). What the harness provides is in `.autohelix-iteration/`, which is never
 part of a candidate (it is left out when the copy is frozen), laid out like the
@@ -190,6 +188,8 @@ passing gates' output and rejected patches; `history.jsonl` covers older
 iterations. Only `notes/` round-trips: when the copy is frozen it is saved as a
 new version, `runs/<id>/.internal/notes/<n>/`, and the `runs/<id>/notes` link
 switches to it in one step, so a note the agent deletes stays deleted and other
+runs never read a half-saved mix; the iteration's `notes` link keeps pointing at
+that version. Everything else in `.autohelix-iteration/` is reference material.
 
 ## Command environment
 
@@ -287,7 +287,7 @@ Gates (must pass — failure means your changes are discarded):
 
 Observed after you finish:
   bench: python bench.py → speed (↑)
-  review: review: Review the change for clarity and correctness.
+  clarity: review: Review the change for clarity and correctness.
 
 Stop conditions (the run ends once one of these exits 0 after an accepted iteration):
   jq -e '.speed >= 50' "$AUTOHELIX_METRICS"
