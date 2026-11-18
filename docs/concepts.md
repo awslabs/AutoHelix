@@ -241,7 +241,7 @@ The prompt sent to the agent each iteration is built from a
 [Phases → The main agent](phases.md#the-main-agent)), so new features reach every
 project. Most configs only need `goal:`. To replace the whole prompt, point
 `prompt_template:` in the config at a template file (a path relative to the
-config file, so it is versioned with it); copying the built-in template is the
+config file, so it lives beside it); copying the built-in template is the
 easiest start. `.autohelix/prompt.md` is no longer read.
 
 The variables a template gets are a stable, documented contract:

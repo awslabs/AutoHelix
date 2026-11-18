@@ -19,6 +19,43 @@ such as a model checkpoint directory, which are meant to live at a fixed absolut
 path.) Untracked files such as a virtualenv or downloaded data aren't in the copy;
 see [Phases → Candidate copies](phases.md#candidate-copies).
 
+## Where configs live
+
+A run doesn't need git to keep its config: it stores the file's text when it
+starts (`.autohelix/runs/<id>/config.yaml`, its prompt template as
+`prompt_template.md`), and `resume`, `view`, `report` and the judges read that
+copy ([CLI → Config files](cli.md#config-files)). Git is for sharing configs, a
+choice per experiment, and both choices are normal:
+
+- **Shared** (a team's benchmark): commit `autohelix.yaml` or `autohelix/` with
+  the project. Commit it before the first `run`: with auto landing, a commit on
+  the branch after the run lands puts the branch past the run's tip, and
+  `resume` refuses (`run` warns when the config isn't committed).
+- **Private**: put `/autohelix/` in `.git/info/exclude` (your clone only) or
+  `.gitignore`. An ignored config is never committed, so it can't move the
+  branch. Scripts the commands run must still be committed in the project,
+  outside `autohelix/`: copies are made from the commit, and an ignored
+  `autohelix/` isn't in them.
+
+For a private history of your configs, either make `autohelix/` its own git
+repository:
+
+```bash
+echo /autohelix/ >> .git/info/exclude
+cd autohelix && git init && git add perf.yaml && git commit -m "perf config"
+```
+
+or make it a symlink into a personal repository of configs:
+
+```bash
+ln -s ~/configs/myproject autohelix
+echo /autohelix >> .git/info/exclude    # no trailing slash: git sees a symlink as a file
+```
+
+AutoHelix follows the link. Two differences: `run.json` names the config by
+its resolved, absolute path, and with auto landing `run` warns "commit
+… first"; the warning doesn't apply to a file outside the project.
+
 ## Full Reference
 
 ```yaml
@@ -568,7 +605,7 @@ name or landing mode.
 
 `prompt_template:` is optional: a [Jinja2](https://jinja.palletsprojects.com/)
 file that replaces the built-in agent prompt, as a path relative to the config
-file (so it is versioned with it). A template that doesn't parse is a config
+file (so it lives beside it). A template that doesn't parse is a config
 error naming the file and line, and one that fails to render (say `{{
 last.gates.x.y }}`) stops the run with an error naming the file, before its
 agent call. A run stores the template's text with its config when it starts, so

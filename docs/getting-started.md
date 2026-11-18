@@ -221,10 +221,10 @@ See the [configuration reference](config.md).
 ### 3. Run
 
 AutoHelix needs a git repository with a commit, and the first baseline needs no
-uncommitted changes to tracked files. Commit the config, and any scripts its
-commands use (iteration copies are made from the commit; see
-[Phases](phases.md)).
-Commit the config before the first `run`: with auto landing, a commit on the branch after the run lands makes `resume` refuse (`run` warns).
+uncommitted changes to tracked files. Commit the config before the first
+`run` (or keep it private: [Where configs live](config.md#where-configs-live)),
+and commit any scripts its commands use (iteration copies are made from the
+commit; see [Phases](phases.md)).
 Preserve unrelated work:
 
 ```bash
@@ -292,8 +292,9 @@ Find `<initial-commit>` with `git log --oneline` (the one before "AutoHelix iter
 ### 5. Several configs
 
 A project can have several loops: one config each, in an `autohelix/` folder
-at the project root, versioned with the project. Commit the configs and any
-scripts their commands use: iteration copies are made from the commit.
+at the project root. Commit the configs, or keep the folder private
+([Where configs live](config.md#where-configs-live)); commit any scripts their
+commands use: iteration copies are made from the commit.
 
 ```
 autohelix/

@@ -3,13 +3,16 @@
 Tips for running AutoHelix on **training/evaluation loops** (post-training a model,
 optimizing a benchmark score) rather than pure code optimization. These are the
 patterns that matter when each iteration trains a model and scores it against a
-benchmark. The `posttrain` example is a full working reference.
+benchmark. The `posttrain` example is a full working reference (it keeps one
+model folder, so it doesn't roll models back; see
+[One folder per iteration](#one-folder-per-iteration)).
 
 ## Layout
 
-- **Write artifacts to a fixed absolute path outside the project.** Models,
-  checkpoints, and eval outputs must go to a fixed *absolute* path outside the repo
-  (e.g. `/data/artifacts/<task>/final_model`). Each phase runs in a fresh copy of the
+- **Write artifacts to an absolute path outside the project.** Models,
+  checkpoints, and eval outputs must go to an *absolute* path outside the repo,
+  one folder per iteration (e.g. `/data/x/$AUTOHELIX_RUN_ID/$AUTOHELIX_ITERATION/model`,
+  [below](#one-folder-per-iteration)). Each phase runs in a fresh copy of the
   code ([Phases](phases.md)). A file the agent writes inside its copy that git ignores is deleted with
   the copy, and checks never see it; any other new file in scope is part of the
   change: checked and, if accepted, committed (a checkpoint saved in the working
@@ -17,7 +20,7 @@ benchmark. The `posttrain` example is a full working reference.
   (`checkpoints/`, `wandb/`, `*.safetensors`, ...) in `.gitignore`. A rejected
   iteration rolls back *code*, not your external artifacts: give each iteration
   its own folder ([One folder per iteration](#one-folder-per-iteration)).
-- **Evaluate from that fixed path.** The eval script should read the model from the
+- **Evaluate from that path.** The eval script should read the model from the
   same absolute artifacts path, independent of the current working directory.
 - **Report the score in a parseable form.** AutoHelix reads the metric from your
   eval command's stdout (an `observe:` entry with `metrics: {score: higher}`). It
@@ -45,18 +48,21 @@ model an accepted iteration produced:
 
 - **The agent** trains into its own iteration's folder, starting from the last
   accepted iteration's. It finds that iteration in
-  `.autohelix-iteration/history.jsonl` (the last record written with each
-  number counts):
+  `.autohelix-iteration/history.jsonl` (a number can appear on more than one
+  line; the last line for it counts). A killed iteration or a retried baseline
+  reuses its number, so clear `$out` first:
 
   <!-- recipe: agent -->
   ```bash
   last=$(jq -s 'group_by(.iteration) | map(last | select(.accepted)) | last | .iteration' \
     .autohelix-iteration/history.jsonl)
-  start=/data/x/$AUTOHELIX_RUN_ID/$last/model   # missing when $last is 0: start from the base model
+  start=/data/x/$AUTOHELIX_RUN_ID/$last/model
   out=/data/x/$AUTOHELIX_RUN_ID/$AUTOHELIX_ITERATION/model
+  rm -rf "$out"
   ```
 
-  Put the path and these lines in the goal, so the agent knows them.
+  When `$last` is `0` (the baseline), `$start` doesn't exist: start from the
+  base model. Put the path and these lines in the goal, so the agent knows them.
 - **Gate and observe commands** evaluate
   `/data/x/$AUTOHELIX_RUN_ID/$AUTOHELIX_ITERATION/model`: both variables are in
   their [environment](phases.md#command-environment), with the values the agent
@@ -76,6 +82,10 @@ What it doesn't:
   from its folder, but it makes no commit, so a `metric:` gate keeps comparing
   with the value measured on the last commit
   ([the reference](config.md#gates)).
+- **Imported runs.** A run started with `run --import` has a new run id, so its
+  first agent finds only its own baseline and starts from the base model. To
+  continue the imported run's models, tell the agent to start from that run's
+  folder (its history is in `.autohelix-iteration/runs/<id>/history.jsonl`).
 
 A loop whose evaluation rebuilds the model from the commit needs none of this:
 the [ml-recipe example](https://github.com/awslabs/AutoHelix/tree/main/examples/ml-recipe)

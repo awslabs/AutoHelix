@@ -176,11 +176,12 @@ config names all three.
 ### Config files
 
 A project's configs live in exactly two places: `autohelix.yaml` at its root,
-or `autohelix/<name>.yaml` for several loops. The `autohelix/` folder is
-versioned, and can also hold prompt templates and helper scripts
-(`autohelix/prompts/perf.md`; `prompt_template:` is relative to the config's
-folder). Commit them: iteration copies are made from the commit, so an
-untracked script a gate runs is missing there. Keep `autohelix/` out of
+or `autohelix/<name>.yaml` for several loops. The `autohelix/` folder can
+also hold prompt templates and helper scripts (`autohelix/prompts/perf.md`;
+`prompt_template:` is relative to the config's folder). Commit the scripts:
+iteration copies are made from the commit, so an untracked script a gate runs
+is missing there. Whether to commit the configs:
+[Configuration → Where configs live](config.md#where-configs-live). Keep `autohelix/` out of
 `scope.editable` (or list it under `frozen:`), so the agent can't edit its own
 gates. `.autohelix/` is the runs' state, kept out of git.
 
@@ -225,9 +226,11 @@ autohelix run [CONFIG] --check
 without it, the run uses `autohelix.yaml`, else the only config in
 `autohelix/` (see [Config files](#config-files)). The project must be a git
 checkout with a commit, and the first baseline needs no uncommitted changes to
-tracked files. Commit the config so it's versioned, and any scripts its
-commands use: iteration copies are made from the commit.
-Commit the config before the first `run`: with auto landing, `run` warns when it isn't ("commit autohelix.yaml first: a commit on main after this run lands makes `resume` refuse").
+tracked files. Commit any scripts its commands use: iteration copies are made
+from the commit. Commit the config before the first `run`, or keep it private
+([Where configs live](config.md#where-configs-live)); with auto landing, `run`
+warns about an uncommitted one ("commit autohelix.yaml first: a commit on main
+after this run lands makes `resume` refuse").
 
 While the segment runs, `run` (and `resume`) keeps the machine from sleeping:
 `caffeinate -i -w <pid>` on macOS, `systemd-inhibit` (idle and sleep) on Linux.
