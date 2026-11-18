@@ -404,11 +404,16 @@ class Table:
                                            for w in self.value_width.values())
 
     def column_header(self) -> Text:
+        """Each metric's name ends where its values end; its arrow hangs into the space
+        after them (the change column, else the next gap: never narrower than the arrow)."""
         gap = " " * self.gap
         line = Text(" " * (2 + LABEL + 2) + f"{'time':>{TIME}}" + f"{gap}{'cost':>{COST}}" * self.show_cost, style="dim")
+        after = (self.sep + CHANGE) * self.show_change  # the space after a metric's values
+        hung = 0  # how much of this gap the previous arrow took
         for name, head in zip(self.directions, self.heads):
-            line.append(f"{gap}{head:>{self.value_width[name]}}" + " " * (self.sep + CHANGE) * self.show_change,
-                        style="dim")
+            arrow = head[len(name):]
+            line.append(" " * (self.gap - hung) + f"{name:>{self.value_width[name]}}" + arrow.ljust(after), style="dim")
+            hung = max(len(arrow) - after, 0)
         return cut(line, self.width)
 
     def heading(self) -> list[Text]:

@@ -391,6 +391,20 @@ def test_the_live_row_shows_the_phase_only_with_room_under_it(project):
     assert after and set(after) == {"\n"}, after
 
 
+@pytest.mark.parametrize("width", [60, 80, 120])
+def test_a_metric_value_ends_under_the_last_letter_of_its_name(width):
+    """The arrow hangs after the name, into the change column (or the next gap when the
+    changes don't fit)."""
+    table = Table({"mbpp_16b": "higher", "mbpp_13b": "higher", "loss": "lower"}, width)
+    head = table.column_header().plain
+    row = table.add(Row(0, True, {"mbpp_16b": 0.7407, "mbpp_13b": 0.7196, "loss": 1.5}))[-1].plain
+    for name, arrow, value in (("mbpp_16b", "↑", "0.7407"), ("mbpp_13b", "↑", "0.7196"), ("loss", "↓", "1.5")):
+        if f"{name} {arrow}" not in head:  # cut at this width
+            continue
+        assert row.index(value) + len(value) == head.index(name) + len(name), (head, row)
+        assert head[head.index(name) + len(name):].startswith(f" {arrow}")
+
+
 @pytest.mark.parametrize("width, spacing", [(80, terminal.COMPACT), (120, terminal.SPACED), (130, terminal.WIDE)])
 def test_columns_are_spaced_when_the_width_allows(width, spacing):
     """Roomier columns where a reason still fits after the values; today's at 80 (with no
@@ -408,7 +422,7 @@ def test_columns_are_spaced_when_the_width_allows(width, spacing):
     assert summary.index("summary") == table.live(1, 72, "agent").plain.index("agent")
     head = table.column_header().plain
     row = table.add(Row(0, True, {"speed": 46.9, "mem_mb": 120}))[-1].plain
-    assert row.index("46.9") + len("46.9") == head.index("speed ↑") + len("speed ↑")
-    assert row.index("120") + len("120") == head.index("mem_mb ↓") + len("mem_mb ↓")
+    assert row.index("46.9") + len("46.9") == head.index("speed ↑") + len("speed")
+    assert row.index("120") + len("120") == head.index("mem_mb ↓") + len("mem_mb")
     live = table.live(1, 72, "agent").plain
     assert live.index("agent") == head.index("time") + len("time") + 2

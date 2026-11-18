@@ -2,6 +2,6 @@
   Project    ~/code/sorting · main @ 4d05f32
   Runs       2 runs · $6.25 spent · 1 archived (not listed; see --json)
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  run           state     iter   speed ↑  landing     cost  activity      goal
-  m2xq perf     running    4/7  35,310.7  2 to land  $0.95  agent 1m 12s  Cut the memory use of sort_list.
-  krp3 sorting  finished   7/7  57,520.8  landed     $2.65  just now      Make sort_list faster in sort.py.
+  run           state     iter     speed ↑  landing     cost  activity      goal
+  m2xq perf     running    4/7  35,310.7    2 to land  $0.95  agent 1m 12s  Cut the memory use of sort_list.
+  krp3 sorting  finished   7/7  57,520.8    landed     $2.65  just now      Make sort_list faster in sort.py.
