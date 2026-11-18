@@ -126,6 +126,29 @@
   it count as unlanded (`1 diverged`: `git merge autohelix/<id>`); an
   auto-landing `resume` refuses such a run, as one whose target moved on. A
   squash merge without `land` stays `diverged`. docs/cli.md has the PR flow.
+  "Has the work" is checked, not assumed: merging the landed tip into the
+  target (or into one of its commits since the landing) changes nothing
+  (`git merge-tree`, git 2.38+). A PR that hasn't merged yet, or a landing on
+  another branch, stays `diverged`, and `land` refuses it.
+
+### The notices at `run` and `resume`
+
+- **`run --import ID` says one thing, about the imported run**: when its
+  accepted commits aren't in the branch you start from, "k3f9's 2 accepted
+  commits aren't in main: land it first (`autohelix land k3f9`, or `git switch
+  -c <branch> autohelix/<id>`) to start from them"; no other-run notices then.
+  `resume`'s config-change refusal says the same for a run with unlanded
+  commits. The fork recipe in docs/cli.md uses `git switch -c`.
+- **A run without an accepted baseline is a disposable attempt**: the baseline
+  error ends "Fix it and run `autohelix run` again (`autohelix delete <id>`
+  removes this attempt)"; the config-change refusal and the "Previous run"
+  notice no longer offer `--import` or `resume` for it.
+- **`run` with auto landing warns about an uncommitted config or prompt
+  template** (untracked or modified, not ignored): "commit autohelix.yaml
+  first: a commit on main after this run lands makes `resume` refuse".
+- **`resume --group NAME` without `--land` on a run that lands automatically**
+  says "<id> still lands automatically; pass `--land manual` for a group" (the
+  landing mode doesn't change as a side effect).
 
 ### Runs keep the machine awake
 

@@ -198,8 +198,10 @@ def test_the_refusal_says_when_the_run_never_accepted_a_change(project):
     git(project, "commit", "-qm", "user work")
     result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report")
     assert result.exit_code == 1, result.output
-    assert (f"(committed since run {short_id(paths.run_id)} started; it hasn't accepted any changes)"
-            in " ".join(result.output.split()))
+    out = " ".join(result.output.split())
+    assert (f"main has 1 commit past run {short_id(paths.run_id)}'s base (committed since it started; "
+            f"it hasn't accepted any changes). A run continues its own code") in out
+    assert "Everything run" not in out  # it accepted nothing
 
 
 def test_a_manual_resume_continues_from_its_own_tip(project):

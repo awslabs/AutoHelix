@@ -226,9 +226,8 @@ without it, the run uses `autohelix.yaml`, else the only config in
 `autohelix/` (see [Config files](#config-files)). The project must be a git
 checkout with a commit, and the first baseline needs no uncommitted changes to
 tracked files. Commit the config so it's versioned, and any scripts its
-commands use: iteration copies are made from the commit. Do it before the first
-`run`: with auto landing, a later commit on the branch makes `resume` refuse
-(see [`resume`](#autohelix-resume)), leaving `run --import` or `--land manual`.
+commands use: iteration copies are made from the commit.
+Commit the config before the first `run`: with auto landing, `run` warns when it isn't ("commit autohelix.yaml first: a commit on main after this run lands makes `resume` refuse").
 
 While the segment runs, `run` (and `resume`) keeps the machine from sleeping:
 `caffeinate -i -w <pid>` on macOS, `systemd-inhibit` (idle and sleep) on Linux.
@@ -353,6 +352,7 @@ as for any rejection. Three failed calls in a row stop the run ("the agent faile
 the command exits 1.
 Setup failures before a call (copy creation, the prompt) do not consume an
 iteration and stop the run with an error. Failed baseline attempts remain iteration 0 and retain their costs.
+A run whose first baseline failed is a disposable attempt: the error ends "Fix it and run `autohelix run` again (`autohelix delete <id>` removes this attempt)", since a fixed config makes a new run (`resume` refuses a changed config).
 
 ### Exit codes
 
@@ -448,7 +448,9 @@ the reason (`autohelix archive m2x7 --why "slower than k3f9"`). Group runs land
 manually by default: with auto landing the first to finish would land and every
 other would diverge from it for good. `resume --group NAME` moves a run into a
 group (from its next iteration) and `resume --group ''` takes it out; archiving
-a run takes it out of its group, and resuming it brings it back.
+a run takes it out of its group, and resuming it brings it back. `--group`
+doesn't change how a run lands: a run that lands automatically says so ("k3f9
+still lands automatically; pass `--land manual` for a group").
 
 ### Continuing from another run
 
@@ -479,9 +481,16 @@ the group is shown once, as imported. Typical uses:
 autohelix run perf --import k3f9
 # Apply an edited config (resume refuses a changed one).
 autohelix run perf --import k3f9
-# Fork from an old run's code: check it out first (or an iteration's commit).
-git checkout autohelix/20261111-1432-perf-k3f9 && autohelix run perf --import k3f9
+# Fork from an old run's code: start a branch at it first (or at an iteration's commit).
+git switch -c perf-fork autohelix/20261111-1432-perf-k3f9 && autohelix run perf --import k3f9
 ```
+
+`run --import` says one thing about the imported run: when its accepted commits
+aren't in the branch you start from, "k3f9's 2 accepted commits aren't in main:
+land it first (`autohelix land k3f9`, or `git switch -c <branch>
+autohelix/<id>`) to start from them" (`git merge autohelix/<id>` instead of
+`land` when main diverged). The config-change refusal of `resume` says the same
+for a run with unlanded commits.
 
 Each continuation is a new run with a new baseline (its code differs), at the
 cost of a chain of runs in `autohelix view`, where each shows what it continues
@@ -566,8 +575,8 @@ landing: `autohelix resume k3f9 --land manual`." With manual landing it says
 so and continues from the run's own tip; its accepted commits then diverge from
 the branch, so land them with `git merge autohelix/<id>`. Before the baseline
 the run hasn't started from its commit yet, so nothing is compared; after it,
-a run that never accepted a change says so ("committed since run k3f9 started;
-it hasn't accepted any changes").
+a run that never accepted a change says so ("main has 1 commit past run k3f9's
+base (committed since it started; it hasn't accepted any changes)").
 
 ## `autohelix stop`
 
@@ -649,7 +658,10 @@ git switch main && git pull             # main now has the run's work as one com
 ```
 
 The runs table, `view`, the entry screen and `delete` then read k3f9 as
-landed (no `--force` needed), while its tip isn't on main. Commits the run
+landed (no `--force` needed), while its tip isn't on main. Landed means main
+has the work: merging the landed tip into main (or into a commit of main's since
+the landing) changes nothing (git 2.38+). Before the PR merges, main reads
+diverged. Commits the run
 accepts after that (a `resume --land manual`) count as unlanded and diverged:
 merge them with `git merge autohelix/<id>`, or land them again through a PR.
 An auto-landing `resume` refuses such a run like one whose target moved on: to

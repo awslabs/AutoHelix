@@ -784,7 +784,8 @@ def test_target_behind_after_baseline_warns_only_for_auto_landing(project):
     harness.run(Budget(until=1), report=False)
     base = harness.run_info["base_commit"]
     warning = reconcile(harness.paths, harness.run_info, harness.history, "auto")[1]
-    assert "not in main yet" in warning and "Auto landing lands it again" in warning
+    assert "not in main yet. Auto landing lands it again" in warning
+    assert "`autohelix land" not in warning  # the segment lands it: no command to run by hand
     # In manual mode, behind just means not landed yet.
     assert reconcile(harness.paths, harness.run_info, harness.history, "manual")[1] is None
     assert git(project, "rev-parse", "HEAD").stdout.strip() == base

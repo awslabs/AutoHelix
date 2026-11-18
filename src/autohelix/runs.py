@@ -741,7 +741,7 @@ class Landing:
     target, which has more; also a tip with no commits of its own the target lacks),
     `diverged` (each has commits the other lacks), `landed` (the tip is the one `autohelix
     land` last landed, run.json's `landed`, on this branch or another, and the target
-    lacks it: it has its work as other commits, a squash-merged or rebased PR), or None
+    lacks it but has its work as other commits, `_has_work`: a squash-merged or rebased PR), or None
     when a side is missing (no ref; no target branch: started detached, or it is gone).
     Commits accepted after a recorded landing that the target lacks are `diverged`, and
     `ahead` counts only them.
@@ -773,6 +773,30 @@ def _commit(project: Path, ref: str) -> str | None:
 def _count(project: Path, *revisions: str) -> int:
     counted = git(project, "rev-list", "--count", *revisions, check=False)
     return int(counted.stdout.strip()) if counted.returncode == 0 and counted.stdout.strip().isdigit() else 0
+
+
+LANDED_CHECKS = 20  # the target's commits since a landing that `_has_work` looks at
+
+
+def _has_work(project: Path, target_tip: str, landed_tip: str, at) -> bool:
+    """Whether the target has a landed tip's work as other commits (a squash-merged or
+    rebased PR): merging the tip into the target, or into one of its first-parent
+    commits made since the landing (`at`; later commits may change the same lines),
+    changes nothing. git without `merge-tree --write-tree` (2.38) says no."""
+    since = [f"--since={at}"] if isinstance(at, str) and at else []
+    later = git(project, "rev-list", "--first-parent", f"--max-count={LANDED_CHECKS}", *since,
+                target_tip, f"^{landed_tip}", check=False).stdout.split()
+    for commit in dict.fromkeys([target_tip, *later]):
+        merged = git(project, "merge-tree", "--write-tree", commit, landed_tip, check=False)
+        tree = merged.stdout.split("\n", 1)[0].strip()
+        if merged.returncode == 0 and tree and tree == _tree(project, commit):
+            return True
+    return False
+
+
+def _tree(project: Path, commit: str) -> str | None:
+    found = git(project, "rev-parse", "--verify", "-q", f"{commit}^{{tree}}", check=False)
+    return found.stdout.strip() or None if found.returncode == 0 else None
 
 
 def landing(paths: RunPaths, data: dict, tip: str | None = None, *, into: str | None = None,
@@ -813,7 +837,8 @@ def landing(paths: RunPaths, data: dict, tip: str | None = None, *, into: str | 
             relation = ("same" if tip == target_tip else "ahead" if not behind else "behind" if not ahead
                         else "diverged")
             if relation == "diverged" and landed_tip and (landed_tip == tip or git(
-                    project, "merge-base", "--is-ancestor", landed_tip, tip, check=False).returncode == 0):
+                    project, "merge-base", "--is-ancestor", landed_tip, tip, check=False).returncode == 0) \
+                    and _has_work(project, target_tip, landed_tip, landed.get("at")):
                 # Landed, then merged as other commits: only what it accepted since counts.
                 ahead = _count(project, tip, f"^{landed_tip}", f"^{target_tip}")
                 relation = "diverged" if ahead else "landed"
@@ -995,8 +1020,15 @@ def _new_run_notices(project: Path, config_path: str, target: str | None,
                      base: str | None = None, land_mode: str | None = None) -> list[tuple[str, str]]:
     """What `run` says about this config's other runs: it never refuses. Runs of a
     group are meant to run side by side, and when either run lands manually only one of
-    them lands on its own, so a live one isn't worth a warning then; the `imported` run
-    needs no pointer to itself, nor a warning when `base` has its code."""
+    them lands on its own, so a live one isn't worth a warning then. With an `imported`
+    run, only that run: whether `base` lacks its accepted commits (`land_first`)."""
+    if imported:
+        paths = RunPaths(project, imported)
+        try:
+            said = land_first(paths, paths.read_identity(), target, base)
+        except RuntimeError:
+            return []
+        return [("warn", said)] if said else []
     notices = []
     runs = project_runs(project, config_path)
     for paths, data in runs:
@@ -1012,10 +1044,11 @@ def _new_run_notices(project: Path, config_path: str, target: str | None,
         short = short_id(paths.run_id)
         found = landing(paths, data)
         count = found.ahead
-        if paths.run_id == imported and (not count or base and git(
-                project, "merge-base", "--is-ancestor", paths.ref, base, check=False).returncode == 0):
-            return notices
-        if count:
+        if not has_baseline(paths):  # a failed first attempt: nothing to continue
+            if not notices:
+                notices.append(("info", f"Previous run for this config: {short}, without an accepted baseline "
+                                f"(`autohelix delete {short}` removes it)."))
+        elif count:
             words = landing_words(found.payload(), paths.run_id, found.target, land_mode=data.get("land") or "auto")
             notices.append(("warn", f"{short}: {words.sentence} This run starts from {target or 'HEAD'} without "
                             f"{'it' if count == 1 else 'them'}: `autohelix resume {short}` to continue {short} "
@@ -1024,6 +1057,33 @@ def _new_run_notices(project: Path, config_path: str, target: str | None,
             notices.append(("info", f"Previous run for this config: {short} "
                             f"(`autohelix resume {short}` to continue it)."))
     return notices
+
+
+def land_first(paths: RunPaths, data: dict, branch: str | None, base: str | None = None) -> str | None:
+    """For a new run that continues `paths`' run (`run --import`), started on `branch`
+    (a new run's base is its tip) or, detached, at `base`: when that lacks the run's
+    accepted commits, how to start from them (land it on `branch`, or start a branch at
+    its tip); None when it has them (or their work: a landed squash merge)."""
+    short = short_id(paths.run_id)
+    if branch:
+        found = landing(paths, data, into=branch)
+        count = found.ahead if found.relation in ("ahead", "diverged") else 0
+        commands = landing_words(found.payload(), paths.run_id, branch).commands
+        command = commands[0] if commands else None
+        if command and command.startswith("autohelix land") and data.get("target_branch") != branch:
+            command += f" --into {branch}"
+    else:
+        tip = _commit(paths.project, paths.ref)
+        count = _count(paths.project, tip, f"^{base}", *[f"^{b}" for b in [data.get("base_commit")] if b]) \
+            if tip and base else 0
+        command = None
+    if not count:
+        return None
+    where = branch or "HEAD"
+    first = f"`{command}`, or " if command else ""
+    return (f"{short}'s {plural(count, 'accepted commit')} {'is' if count == 1 else 'are'}n't in {where}: land "
+            f"it first ({first}`git switch -c <branch> autohelix/{paths.run_id}`) "
+            f"to start from {'it' if count == 1 else 'them'}.")
 
 
 def _owned(paths: RunPaths) -> tuple[dict, RunLock, list[tuple[str, str]]]:
@@ -1258,10 +1318,13 @@ def target_ahead_refusal(paths: RunPaths, data: dict, found: Landing) -> str:
     is `behind`: by you or another run, after its tip, or since it started if it never
     accepted a change; or `landed`, merged there as other commits)."""
     short = short_id(paths.run_id)
-    when = (f"committed since run {short} started; it hasn't accepted any changes"
-            if found.tip == data.get("base_commit") else "committed after it")
-    words = landing_words(found.payload(), paths.run_id, found.target, land_mode="auto")
-    said = words.sentence if found.relation == "landed" else f"{words.sentence[:-1]} ({when})."
+    if found.relation == "behind" and found.tip == data.get("base_commit"):
+        said = (f"{found.target} has {plural(found.behind, 'commit')} past run {short}'s base (committed since "
+                f"it started; it hasn't accepted any changes).")
+    else:
+        words = landing_words(found.payload(), paths.run_id, found.target, land_mode="auto")
+        said = words.sentence if found.relation == "landed" else words.sentence.replace(
+            " past its tip.", " past its tip (committed after it).")
     return (f"{said} A run continues its own code: start a new run that continues from it, "
             f"`{run_command(data['config_path'])} --import {short}`, or continue without landing: "
             f"`autohelix resume {short} --land manual`.")
@@ -1305,7 +1368,7 @@ def reconcile(paths: RunPaths, data: dict, history, land_mode: str) -> tuple[str
     elif found.relation == "diverged":
         warning = f"{words.sentence} Run {short} continues from its accepted tip."
     elif found.relation == "ahead" and land_mode == "auto":  # in manual mode, ahead just means not landed yet
-        warning = (f"{words.sentence} Auto landing lands {'it' if found.ahead == 1 else 'them'} again at the end of "
+        warning = (f"{plural(found.ahead, 'commit')} on autohelix/{paths.run_id} not in {target} yet. Auto landing lands {'it' if found.ahead == 1 else 'them'} again at the end of "
                    f"this segment; if a reset of {target} meant to discard the run, press Ctrl-C and "
                    f"`autohelix archive {short}`.")
     return tip, warning
@@ -1373,6 +1436,14 @@ def archive(paths: RunPaths, *, undo: bool = False, why: str | None = None) -> N
             if why:
                 data["archive_why"] = why
         write_json(paths.identity, data)
+
+
+def group_landing_note(paths: RunPaths, data: dict, group: str | None, land_mode: str | None) -> str | None:
+    """`resume --group NAME` without `--land` on a run that lands automatically: the
+    landing mode doesn't change as a side effect, so say so."""
+    if group and not land_mode and (data.get("land") or "auto") == "auto":
+        return f"{short_id(paths.run_id)} still lands automatically; pass `--land manual` for a group."
+    return None
 
 
 def set_options(paths: RunPaths, *, land_mode: str | None = None, group: str | None = None) -> list[str]:

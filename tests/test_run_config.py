@@ -157,9 +157,16 @@ def refused(paths, result, keys):
     short = short_id(paths.run_id)
     text = " ".join(result.output.split())
     assert result.exit_code == 1, result.output
-    assert (f"autohelix.yaml changed since run {short} started (changed: {keys}); the run keeps the config it "
+    said = (f"autohelix.yaml changed since run {short} started (changed: {keys}); the run keeps the config it "
             f"started with. To apply the new config, start a new run that continues from this one: "
-            f"`autohelix run --import {short}`. To continue this run, restore the file.") in text
+            f"`autohelix run --import {short}`. ")
+    assert said in text and text.endswith("To continue this run, restore the file."), text
+    between = text[text.index(said) + len(said):].removesuffix("To continue this run, restore the file.")
+    # Its unlanded commits (manual landing; the config's commit made main diverge): land
+    # them first, to start the new run from them.
+    assert between in ("", f"{short}'s 1 accepted commit isn't in main: land it first (`git merge "
+                       f"autohelix/{paths.run_id}`, or `git switch -c <branch> autohelix/{paths.run_id}`) to start "
+                       "from it. "), between
     assert History(paths.project, paths.run_id).get_last_iteration() == 1  # nothing spent
 
 

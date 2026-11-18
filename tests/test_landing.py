@@ -186,3 +186,49 @@ def test_an_auto_resume_after_a_squash_merged_landing_refuses(project):
         Harness(project)
     delete(harness.paths)  # nothing unlanded: no --force needed
     assert not harness.paths.run_dir.exists()
+
+
+def squash_onto(project, branch, work):
+    """Squash-merge `work` into `branch` (checked out) as one commit of its changes."""
+    git(project, "switch", "-q", branch)
+    git(project, "merge", "-q", "--squash", work)
+    git(project, "commit", "-qm", "Squashed PR")
+
+
+def test_the_pr_flow_reads_landed_only_once_the_pr_merged(project):
+    """Landed `--into` a PR branch while main moves on: main lacks the work, so the run
+    is diverged (not landed) and `land` refuses; once the PR is squash-merged into a main
+    that moved, it reads landed, also after main changes the same lines again."""
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    paths, tip = harness.paths, harness.run_state.expected_tip
+    git(project, "branch", "perf-pr", harness.run_info["base_commit"])
+    with RunLock(paths.lock):
+        land(paths, harness.run_info, tip, into="perf-pr")
+    data = paths.read_identity()
+    assert data["landed"]["target"] == "perf-pr"
+    commit_on_main(project, "unrelated")  # while the PR is open
+    assert relation(paths, data) == ("diverged", 1, 1)
+    with RunLock(paths.lock), pytest.raises(RuntimeError, match="^Cannot land: main diverged from run"):
+        land(paths, data, tip)
+    squash_onto(project, "main", "perf-pr")
+    assert relation(paths, data) == ("landed", 0, 2)
+    (project / "code.py").write_text("print('changed on main since')\n")  # the same line, after the PR
+    git(project, "commit", "-qam", "later")
+    assert relation(paths, data) == ("landed", 0, 3)
+
+
+def test_a_landing_on_one_branch_is_not_a_landing_on_another(project):
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    paths, tip = harness.paths, harness.run_state.expected_tip
+    git(project, "branch", "release", harness.run_info["base_commit"])
+    with RunLock(paths.lock):
+        land(paths, harness.run_info, tip)
+    data = paths.read_identity()
+    git(project, "switch", "-q", "release")
+    commit_on_main(project, "hotfix")  # on release
+    git(project, "switch", "-q", "main")
+    assert landing(paths, data, into="release").relation == "diverged"
+    with RunLock(paths.lock), pytest.raises(RuntimeError, match="^Cannot land: release diverged from run"):
+        land(paths, data, tip, into="release")

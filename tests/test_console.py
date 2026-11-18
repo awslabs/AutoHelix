@@ -330,12 +330,14 @@ def test_ending_when_landing_fails(project, monkeypatch):
 
 def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):
     _configure(project, stop=["echo broken; exit 3"], scope={"editable": ["hello.py"]})
-    result, _, _ = _run(project)
+    result, short, _ = _run(project)
     assert result.exit_code == 1
     ending = _ending(result.output)
-    # The exit code and the command's last output lines, which used to be printed apart.
+    # The exit code and the command's last output lines, which used to be printed apart;
+    # then, a failed first attempt, what to do (run again).
     message = ("Stop command exited 3 on the baseline: echo broken; exit 3 (expected exit 0 to stop or 1 to "
-               "continue) broken")
+               f"continue) broken Fix it and run `autohelix run` again (`autohelix delete {short}` removes "
+               "this attempt).")
     assert ending[0].startswith("  Error      Stop command exited 3 on the baseline: echo broken;")
     totals = next(i for i, line in enumerate(ending) if line.startswith("  run "))
     assert " ".join(" ".join(ending[:totals]).split()) == f"Error {message}"  # wrapped, not cut

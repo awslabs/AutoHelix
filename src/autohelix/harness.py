@@ -34,7 +34,7 @@ from autohelix.runs import (RunPaths, RunState, select_run, reconcile, land, git
                             claim_copies, config_relative, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, landing,
                             Landing, LandingWords, landing_words, WHY_LIMIT,
-                            imported_run, is_live, has_baseline, target_ahead_refusal,
+                            imported_run, is_live, group_landing_note, has_baseline, land_first, target_ahead_refusal,
                             write_json)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
@@ -285,7 +285,11 @@ class Harness:
             short = short_id(self.paths.run_id)
             notices.append(("info", f"{short} joins group {group} from its next iteration." if group
                             else f"{short} leaves group {self.run_info['group']}."))
+        if self.paths.run_id in existing and (note := group_landing_note(self.paths, self.run_info, group, land_mode)):
+            notices.append(("warn", note))
         self.land_mode = land_mode or self.run_info.get("land") or "auto"
+        if self.paths.run_id not in existing and self.land_mode == "auto":
+            notices.extend(("warn", text) for text in self._uncommitted_config())
         for level, text in notices:
             if level == "warn":
                 self._warn(text)
@@ -325,6 +329,24 @@ class Harness:
             self.close()
             raise
 
+    def _uncommitted_config(self) -> list[str]:
+        """A new auto-landing run's warning when its config file or prompt template is
+        untracked or modified (not ignored): committing it after the run lands puts the
+        branch past the run's tip, and `resume` then refuses."""
+        branch = self.run_info.get("target_branch")
+        files = [f for f in (self.config_file, self.config.prompt_template) if f is not None]
+        if not branch or not files:
+            return []
+
+        def uncommitted(path: Path) -> bool:
+            def fails(*args: str) -> bool:
+                return git(self.project_path, "--no-optional-locks", *args, "--", str(path), check=False).returncode != 0
+            if not fails("check-ignore", "-q"):
+                return False  # ignored: committing it never moves the branch
+            return fails("ls-files", "--error-unmatch") or fails("diff", "--quiet", "HEAD")
+        return [f"commit {config_relative(self.project_path, f)} first: a commit on {branch} after this run lands "
+                "makes `resume` refuse." for f in files if uncommitted(f)]
+
     def _run_config(self, paths: RunPaths, check: bool = True):
         """A run's stored config (`load_run_config`). With `check`, refuses, before
         anything is spent, when the file it came from parses differently now, or its
@@ -356,11 +378,16 @@ class Harness:
         except ConfigError as e:
             changed = f"it no longer reads: {e}"
         if changed:
+            said = f"{data['config_path']} changed since run {short} started ({changed}); "
+            if not has_baseline(paths):  # a failed first attempt: nothing to continue or import
+                raise RuntimeError(f"{said}run {short} has no accepted baseline: start a new run, "
+                                   f"`{run_command(data['config_path'])}` (`autohelix delete {short}` removes "
+                                   "this attempt).")
+            first = land_first(paths, data, data.get("target_branch"))
             raise RuntimeError(
-                f"{data['config_path']} changed since run {short} started ({changed}); the run keeps the "
-                f"config it started with. To apply the new config, start a new run that continues from "
-                f"this one: `{run_command(data['config_path'])} --import {short}`. To continue this run, "
-                "restore the file.")
+                f"{said}the run keeps the config it started with. To apply the new config, start a new run "
+                f"that continues from this one: `{run_command(data['config_path'])} --import {short}`"
+                f"{'. ' + first if first else '.'} To continue this run, restore the file.")
         return config
 
     def _metric_label(self, name: str) -> str:
@@ -1346,6 +1373,15 @@ class Harness:
             if any(r.iteration == 0 and r.accepted for r in self.history.load()):
                 raise
             self._write_baseline(baseline)
+            if isinstance(error, RuntimeError) and len(error.args) == 1 and isinstance(error.args[0], str):
+                # A run without an accepted baseline is a disposable attempt: fixing the
+                # config means a new run (a resume refuses a changed config).
+                short = short_id(self.paths.run_id)
+                said = error.args[0]  # after a command's output lines, on a line of its own
+                said = f"{said}\n" if "\n" in said else f"{said.rstrip('.')}. "
+                error.args = (f"{said}Fix it and run "
+                              f"`{run_command(config_relative(self.project_path, self.config_file))}` again "
+                              f"(`autohelix delete {short}` removes this attempt).",)
             raise
         finally:
             workspace.close()

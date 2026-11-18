@@ -25,7 +25,7 @@ from autohelix.run_status import read_run_status
 from autohelix.runs import (RunPaths, planned_run, RunLock, archive as archive_run, check_group, check_why,
                             default_run, delete as delete_run, find_project, is_live,
                             load_run_config, land as land_run, project_runs, resolve_run, resolve_runs,
-                            config_relative, run_tip, set_options, short_id)
+                            config_relative, group_landing_note, run_tip, set_options, short_id)
 from autohelix import run_table
 from autohelix.skill import SKILL_NAME, skill
 from autohelix.workspace import SCRUBBED_GIT_ENV, run_git
@@ -779,6 +779,8 @@ def resume(target: str | None, path: Path, verbose: bool, no_report: bool, land_
                 raise click.ClickException(str(error)) from error
             click.echo(f"Run {short_id(paths.run_id)}: {', '.join(changed) or 'no change'}; already at iteration "
                        f"{done}, --until {budget.until} runs nothing.")
+            if note := group_landing_note(paths, paths.read_identity(), group, land_mode):
+                _warn(note)
             return
         click.echo(f"Already at iteration {done}; --until {budget.until} runs nothing.")
         return
