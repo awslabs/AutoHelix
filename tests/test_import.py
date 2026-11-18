@@ -209,7 +209,7 @@ def test_a_manual_resume_continues_from_its_own_tip(project):
     tip = git(project, "rev-parse", paths.ref).stdout.strip()
     result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report", "--land", "manual")
     assert result.exit_code == 0, result.output
-    assert (f"has 1 commit past its tip. Run {short_id(paths.run_id)} continues from its own tip, "
+    assert (f"has 1 commit past its tip (committed after it). Run {short_id(paths.run_id)} continues from its own tip, "
             "without main's commits") in " ".join(result.output.split())
     new_tip = git(project, "rev-parse", paths.ref).stdout.strip()
     assert git(project, "rev-parse", f"{new_tip}^").stdout.strip() == tip  # built on the run's tip, not main

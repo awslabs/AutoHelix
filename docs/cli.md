@@ -489,8 +489,10 @@ git switch -c perf-fork autohelix/20261111-1432-perf-k3f9 && autohelix run perf 
 aren't in the branch you start from, "k3f9's 2 accepted commits aren't in main:
 land it first (`autohelix land k3f9`, or `git switch -c <branch>
 autohelix/<id>`) to start from them" (`git merge autohelix/<id>` instead of
-`land` when main diverged). The config-change refusal of `resume` says the same
-for a run with unlanded commits.
+`land` when main diverged; `--into <branch>` when you start from another branch
+than the run's). Of the config's other runs it only names a live one that lands
+on the same branch. The config-change refusal of `resume` says the same for a
+run with unlanded commits.
 
 Each continuation is a new run with a new baseline (its code differs), at the
 cost of a chain of runs in `autohelix view`, where each shows what it continues

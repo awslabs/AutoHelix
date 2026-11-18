@@ -113,8 +113,14 @@
   `resume`'s refusal and warnings, the `run` notice about the previous run's
   unlanded commits and `delete`'s refusal start from the same sentence the run
   list's tooltip has ("Everything run k3f9 accepted is in main, which has 2
-  commits past its tip", "1 commit on autohelix/<id> not in main yet; main can
-  fast-forward: `autohelix land k3f9`").
+  commits past its tip (committed after it)", "1 commit on autohelix/<id> not
+  in main yet; main can fast-forward: `autohelix land k3f9`"); an auto-landing
+  `resume`'s warning, `run --import`'s "land it first" and the refusal for a
+  run that never accepted a change ("main has 2 commits past run k3f9's base")
+  take their clauses from the same wording (`runs.landing_words`' `state` and
+  `missing`). `delete`'s refusal for a run whose branch is gone says what the
+  tooltip says ("Branch main or the run's commits are not available
+  (`autohelix land k3f9 --into <branch>` lands it on another branch)").
 
 ### Landed stays landed after a squash-merged PR
 
@@ -136,7 +142,8 @@
 - **`run --import ID` says one thing, about the imported run**: when its
   accepted commits aren't in the branch you start from, "k3f9's 2 accepted
   commits aren't in main: land it first (`autohelix land k3f9`, or `git switch
-  -c <branch> autohelix/<id>`) to start from them"; no other-run notices then.
+  -c <branch> autohelix/<id>`) to start from them"; of the other runs, only
+  the "also running for this config" warning.
   `resume`'s config-change refusal says the same for a run with unlanded
   commits. The fork recipe in docs/cli.md uses `git switch -c`.
 - **A run without an accepted baseline is a disposable attempt**: the baseline

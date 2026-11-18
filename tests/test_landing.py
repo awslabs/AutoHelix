@@ -232,3 +232,27 @@ def test_a_landing_on_one_branch_is_not_a_landing_on_another(project):
     assert landing(paths, data, into="release").relation == "diverged"
     with RunLock(paths.lock), pytest.raises(RuntimeError, match="^Cannot land: release diverged from run"):
         land(paths, data, tip, into="release")
+
+
+def test_landing_words_state_and_missing_are_the_sentence_s_own_clauses():
+    """`state` (the sentence without its advice: an auto-landing resume's warning) and
+    `missing` (`run --import`'s land-first notice) come from the same wording."""
+    from autohelix.runs import landing_words
+
+    run_id = "20261117-1200-perf-k3f9"
+    ahead = landing_words({"relation": "ahead", "commits": 2, "behind": 0}, run_id, "main", land_mode="auto")
+    assert ahead.state == f"2 commits on autohelix/{run_id} not in main yet."
+    assert ahead.sentence == f"2 commits on autohelix/{run_id} not in main yet; main can fast-forward: `autohelix land k3f9`."
+    assert ahead.missing == "k3f9's 2 accepted commits aren't in main"
+    diverged = landing_words({"relation": "diverged", "commits": 1, "behind": 3}, run_id, "main")
+    assert diverged.sentence.startswith(diverged.state[:-1] + ", so `autohelix land` can't fast-forward main.")
+    assert diverged.missing == "k3f9's 1 accepted commit isn't in main"
+    behind = landing_words({"relation": "behind", "commits": 0, "behind": 1}, run_id, "main")
+    assert behind.sentence == "Everything run k3f9 accepted is in main, which has 1 commit past its tip (committed after it)."
+    assert behind.missing == "" and behind.state == behind.sentence
+    unchanged = landing_words({"relation": "behind", "commits": 0, "behind": 1}, run_id, "main", accepted=False)
+    assert unchanged.sentence == ("main has 1 commit past run k3f9's base (committed since it started; it hasn't "
+                                  "accepted any changes).")
+    assert landing_words(None, run_id, "main").sentence == (
+        "Branch main or the run's commits are not available (`autohelix land k3f9 --into <branch>` lands it on "
+        "another branch).")

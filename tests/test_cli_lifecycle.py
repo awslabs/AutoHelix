@@ -136,6 +136,13 @@ def test_delete_refuses_unlanded_commits_unless_forced(project):
     assert result.exit_code == 1
     assert (f"Not deleting run {short}, which has 1 unlanded commit: 1 commit on autohelix/{second.run_id} not in "
             f"main yet; main can fast-forward: `autohelix land {short}`.") in " ".join(result.output.split())
+    git(project, "switch", "-qc", "other")
+    git(project, "branch", "-qD", "main")  # its target gone: the same words as the runs table's tooltip
+    result = cli(project, "delete", short)
+    assert result.exit_code == 1
+    assert (f"which has 1 unlanded commit: Branch main or the run's commits are not available (`autohelix land "
+            f"{short} --into <branch>` lands it on another branch).") in " ".join(result.output.split())
+    git(project, "switch", "-qC", "main")  # back
     result = cli(project, "delete", "--force", short)
     assert result.exit_code == 0, result.output
     assert not second.run_dir.exists()

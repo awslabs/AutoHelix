@@ -287,7 +287,7 @@ def test_with_runs_the_table_the_next_commands_and_ask_first(project, monkeypatc
     [(file, argv, _)] = execs
     prompt = argv[-1]
     assert re.search(rf"^- {first} \(\d{{8}}-\d{{4}}-{first}, autohelix.yaml\): finished, last iteration 1, "
-                     r"1 commit not landed$", prompt, re.M), prompt
+                     r"1 to land$", prompt, re.M), prompt
     assert 'I picked "Ask Claude Code about these runs"' in prompt
     assert 'I may switch to the other option ("Set up a new experiment with Claude Code")' in prompt
     assert "Open with a short summary of the live runs plus the most recent one" in prompt

@@ -119,3 +119,33 @@ def test_resume_group_without_land_says_it_still_lands_automatically(project):
     result = cli(project, "resume", short, "--group", "g", "--land", "manual", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     assert "still lands automatically" not in result.output
+
+
+def test_import_still_warns_about_a_live_run_of_the_config(project):
+    from autohelix.runs import RunLock
+
+    first, _ = started(project)  # lands automatically: nothing to land first
+    short = short_id(first.run_id)
+    with RunLock(first.lock):  # another terminal is running it
+        _, result = started(project, "--import", short)
+    said = before_header(result)
+    assert f"{short} is also running for this config. Both land on main" in said
+    assert "accepted commit" not in said and "Previous run" not in said
+
+
+def test_import_on_another_branch_lands_into_it(project):
+    first, _ = started(project, "--land", "manual")
+    short = short_id(first.run_id)
+    git(project, "switch", "-qc", "perf")  # at main, without the run's commit
+    _, result = started(project, "--import", short)
+    assert (f"{short}'s 1 accepted commit isn't in perf: land it first (`autohelix land {short} --into perf`, or "
+            f"`git switch -c <branch> autohelix/{first.run_id}`) to start from it.") in before_header(result)
+
+
+def test_import_on_a_detached_head_offers_the_branch(project):
+    first, _ = started(project, "--land", "manual")
+    short = short_id(first.run_id)
+    git(project, "switch", "-q", "--detach", "main")
+    _, result = started(project, "--import", short, "--land", "manual")  # detached: nothing to land on
+    assert (f"{short}'s 1 accepted commit isn't in HEAD: land it first (`git switch -c <branch> "
+            f"autohelix/{first.run_id}`) to start from it.") in before_header(result)

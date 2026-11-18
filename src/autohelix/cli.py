@@ -262,9 +262,7 @@ def _run_line(run: dict) -> str:
     if run.get("error"):
         return f"- {run['id']}: unreadable ({run['error']})"
     config = f", {run['config_file']}" if run.get("config_file") else ""
-    landing = run.get("landing") or {}
-    to_land = (f", {landing['commits']} commit{'s' * (landing['commits'] != 1)} not landed"
-               if landing.get("commits") else "")
+    to_land = f", {run_table._landing(run)}" if (run.get("landing") or {}).get("commits") else ""  # `2 diverged`
     return (f"- {short_id(run['id'])} ({run['id']}{config}): {run_table._word(run)}, "
             f"last iteration {run['progress']['iterations']}{to_land}")
 
