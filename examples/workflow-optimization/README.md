@@ -40,7 +40,7 @@ The mock command is a free smoke test. A real evaluation contains six inner
 model calls. The two-iteration run above evaluates the baseline and two
 candidates, for at least 18 calls total. The benchmark records each call's cost
 in `$AUTOHELIX_USAGE_FILE`, so the run's cost totals and `--cost` include them
-(see [Cost Tracking](../../docs/config.md#cost-tracking)).
+(see [Cost Tracking](../../docs/concepts.md#cost-tracking)).
 
 By default, the inner workflow invokes the user's configured Claude CLI model
 as a one-shot completion with tools and session persistence disabled. The CLI

@@ -292,58 +292,9 @@ This is a **best-effort nudge, not a security boundary.** In practice a cooperat
 
 ## Runs and run state
 
-`.autohelix/` is gitignored locally; AutoHelix leaves `.gitignore` unchanged.
-State is scoped to `.autohelix/runs/<id>/`, one folder per iteration; what the
-harness keeps for itself is in `.internal/` folders:
-
-```
-.autohelix/
-├── runs/<id>/
-│   ├── run.json                # identity (base commit, target branch, config file), archived flag
-│   ├── config.yaml             # the run's config, stored verbatim when it started
-│   ├── prompt_template.md      # its prompt_template's text, stored with it (only with one)
-│   ├── history.jsonl           # one record per iteration: the index and the source of truth
-│   ├── hints.md
-│   ├── report.md  report.html  # the run summary; the one-file run page
-│   ├── notes -> .internal/notes/<n>   # agent memory; round-trips (link to the latest version)
-│   ├── iterations/
-│   │   ├── 000/                # the baseline
-│   │   └── 001/ ...            # one folder per iteration (below)
-│   ├── logs/                   # run logs per segment, report.log
-│   └── .internal/              # status.json, segments.jsonl, stop.json (autohelix stop), usage/,
-│                               # notes versions notes/<n>/, superseded attempts attempts/,
-│                               # report.json, the copies path
-└── .internal/                  # lock files, helper scripts (bin/)
-```
-
-Every iteration's folder has the same parts; those that don't apply are absent:
-
-```
-iterations/NNN/
-├── record.json                 # its history.jsonl record, pretty-printed (written last)
-├── prompt.md  agent.log        # what the agent was given and did (not at the baseline)
-├── notes -> ../../.internal/notes/<n>   # the notes as saved with it
-├── gates/<k>/                  # gate k of gates: that ran: command.txt, stdout.txt, stderr.txt, ask.log
-├── observe/<name>/             # each observe entry: stdout.txt, stderr.txt, captures, review.log
-├── stop/<k>/                   # stop command k, after an accept: as gates/<k>/
-└── rejected.patch              # a rejected attempt's change (also kept on its ref)
-```
-
-Numbers are three digits, so `ls` and globs sort in order (past 999 the width
-grows and glob order breaks at that boundary); `ls iterations | tail -1` is the
-latest. `record.json` is derived from `history.jsonl`, which stays the source
-of truth (`jq` on it for numbers across iterations; see
-[Stored output](config.md#stored-output) for texts). A killed iteration, or a
-retried baseline, reuses its number: the earlier attempt's folder is moved to
-`.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
-
-The `.internal/` folders are the harness's own files, not an interface: their
-formats can change. To follow a run from a script, use
-[`autohelix wait`](cli.md#autohelix-wait) (its events are the run's event log,
-`.internal/segments.jsonl`) or [`autohelix view --json`](cli.md#json-output).
-
-The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
-project; see [Phases → Where things live](phases.md#where-things-live).
+A run's files are in `.autohelix/runs/<id>/` and its copies outside the
+project; [Phases → Where things live](phases.md#where-things-live) has the
+layout.
 
 A run is a line of work: `autohelix run` starts one, `autohelix resume` continues
 one (by default the config's most recently active), `autohelix stop` ends a
@@ -395,10 +346,89 @@ history must be moved or deleted before run; there is no automatic migration.
 
 ## Cost Tracking
 
-Each iteration's cost (its agent, and the model calls its commands make) is
-shown after it and stored in `history.jsonl`; what is counted, how Codex costs
-are estimated and what happens when a cost is unavailable is in
-[Configuration → Cost Tracking](config.md#cost-tracking).
+Available token usage and cost are captured from the agent CLIs and shown:
+
+- Per iteration (after accepted/rejected). A `+` after the amount (`$0.10+`) means part of that iteration's cost (agent or a command's model call) is unavailable, so the amount is what is known.
+- Cumulative in the final summary
+- Persisted in `.autohelix/runs/<id>/history.jsonl`
+
+What each CLI reports:
+
+- **Claude Code**: input/output tokens, cost (USD), duration
+- **Codex**: input/output and available cached-input, cache-write, and reasoning
+  tokens; calculated API-equivalent cost for recognized models (below); measured
+  duration
+- **OpenCode**: input/output tokens, cost (per step, accumulated)
+
+Iteration costs include the optimization agent and model calls made by the
+commands the harness runs (`ask:` gates and `review:` entries, or
+`autohelix ask` and `autohelix review` anywhere in `gates:`, `observe:` or
+`stop:`). Run totals and `--cost` also include the baseline's commands.
+Run totals also count every summary call, recorded in
+`.internal/usage/summary.jsonl` (one line per call; one that never returned
+stays unknown; see [CLI → `autohelix report`](cli.md#autohelix-report)).
+
+History's `calls` list records each attempted agent call and command model call
+with its role, usage and log path (relative to the run directory); it is the
+only place usage is stored. Records from earlier versions may list `reviewer`
+calls; they count the same way. Every agent call's usage (the main agent's, a
+judge's, the run summary's) records `cli`, `model` (the model the CLI's output
+named, `null` when it named none) and `executable` (the resolved path started):
+which model ran, whatever `model:` asked for. `view`'s run screen and the web
+viewer's run page show the latest main-agent call's model.
+
+A command of your own can report its model calls the same way: append one JSON
+line per call, e.g. `{"id": "...", "source": "my-eval", "cost_usd": 0.12}`, to the
+file named by `$AUTOHELIX_USAGE_FILE` (set for every command the harness runs).
+Lines with the same `id` are one call (the last line wins), so a call can be
+recorded with `"cost_usd": null` when it starts and its cost when it ends.
+
+Interrupted or failed main-agent attempts are recorded as rejected iterations,
+including command calls and any available usage; they consume their iteration
+number. Failures before an agent call consume no iteration. Failed baseline
+attempts keep their costs in iteration 0 for a clean retry. A process killed
+before a durable history write can still lose unreturned usage; recovered
+accepted commits record that charge as unknown.
+
+The numeric field is `usage.cost_usd` for every CLI. `usage.cost_source` is
+`backend` when the CLI supplies the amount, or `calculated` when AutoHelix
+calculates it. Backend-supplied amounts can themselves be estimates; they are
+not necessarily invoice totals. Older history without this metadata still loads.
+
+**Codex costs are estimated** from reported input, cached-input, cache-write,
+and output token counts and a bundled snapshot of the model's published
+[OpenAI API rates](https://developers.openai.com/api/docs/pricing).
+For subscription and Bedrock users, these are API-equivalent amounts, not
+subscription charges or provider bills. The normal display uses the same
+**Cost** label for every CLI; provenance is saved in history:
+
+- `cost_model` identifies the model priced.
+- `cost_basis: openai_standard_api` identifies Standard pricing at ordinary
+  context lengths, with 30-minute cache writes.
+- `cost_rates` saves the rates per million tokens, cache-write lifetime, and
+  verification date used for that iteration.
+- `output_includes_reasoning` records whether separately reported reasoning
+  tokens were already included in output. They are not counted twice.
+
+The snapshot was verified on November 6, 2026. It supports listed GPT-6 models
+and common GPT-5 Codex models; unknown names and expiring promotional prices are
+not guessed. The model priced is the one Codex's JSON output names, else
+`agent.model`; with neither, the cost is unavailable ("set agent.model").
+AutoHelix doesn't read Codex's session files or guess from `extra_args`: a model
+chosen there (`-m`, a profile) is priced as `agent.model` says, so set
+`agent.model` to the model you run.
+
+Estimates exclude speed-tier and regional premiums, per-request long-context
+surcharges, separately billed tools, and usage outside the captured thread.
+Cache-write lifetimes other than 30 minutes are not inferred. External
+evaluator calls count when they record usage through `$AUTOHELIX_USAGE_FILE`.
+Codex agent duration is measured locally even when usage is unavailable.
+
+Missing, invalid, or interrupted usage remains **unavailable**, not zero, and
+totals with unavailable parts are labeled **incomplete**. `--cost` counts the
+saved amounts (Codex estimates included) and is checked between iterations, so
+it is an approximate stopping threshold, not a guaranteed spending cap; what it
+does when a cost is unavailable is in [CLI → Budgets](cli.md#budgets).
 
 ## Run page
 

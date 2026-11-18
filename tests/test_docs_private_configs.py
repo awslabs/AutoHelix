@@ -7,6 +7,7 @@ recipe does (its file is outside the project, which `git check-ignore` refuses),
 the docs say it doesn't apply."""
 
 import json
+from pathlib import Path
 
 import yaml
 
@@ -81,7 +82,6 @@ def test_untracked_root_config(project):
 
 def test_the_page_shows_the_tested_exclude_entries():
     """The page's recipes use the entries these tests use."""
-    from pathlib import Path
 
     page = (Path(__file__).resolve().parents[1] / "docs" / "config.md").read_text()
     section = page[page.index("## Where configs live"):page.index("## Full Reference")]

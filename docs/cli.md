@@ -226,7 +226,9 @@ autohelix run [CONFIG] --check
 without it, the run uses `autohelix.yaml`, else the only config in
 `autohelix/` (see [Config files](#config-files)). The project must be a git
 checkout with a commit, and the first baseline needs no uncommitted changes to
-tracked files. Commit the scripts its commands use
+tracked files.
+
+Commit the scripts its commands use
 ([Phases → Candidate copies](phases.md#candidate-copies)), and commit the config
 before the first `run` or keep it private
 ([Where configs live](config.md#where-configs-live)).
@@ -234,7 +236,9 @@ before the first `run` or keep it private
 While the segment runs, `run` (and `resume`) keeps the machine from sleeping:
 `caffeinate -i -w <pid>` on macOS, `systemd-inhibit` (idle and sleep) on Linux.
 The block watches the AutoHelix process, so it goes when the segment ends or
-the process is killed. Where the tool is missing or refuses (a container, no
+the process is killed.
+
+Where the tool is missing or refuses (a container, no
 systemd, polkit over ssh) there is no block and no message. It doesn't keep a
 closed laptop lid from sleeping, and it keeps no credentials, SSO session or
 VPN alive.
@@ -273,24 +277,32 @@ VPN alive.
   summary   .autohelix/runs/20261115-1402-sorting-krp3/report.md
 ```
 
-The header names the run (its id's last part, which every command accepts), what it
-runs and the budget (the Agent line: the CLI, the configured model or `(its default)`,
-and `via <executable>` when `AUTOHELIX_<CLI>_CMD` names another one); in a terminal the AutoHelix mark stands beside it. Then one row
-per iteration: ✓ accepted or ✗ rejected, its time and cost, each metric's value
-(an accepted row with its change from the baseline, `373×`, `-21%`, in green or red;
-a rejection's values dimmed, without a change), and for a rejection why: the gate
-that failed (`pytest -q failed (exit 1)`, `ask: … answered no`), a metric gate's
-comparison with the iteration it compares against, or the agent's failure. A reason that doesn't fit goes on the line under the row, with failed
-observe entries and discarded out-of-scope paths. While an iteration runs, a live row
-shows its time and phase (`agent`, `gates`, `observe · bench` with the entry
-running, `stop`), and under it, after a blank line, the commands that steer the run, dim:
-`autohelix view krp3 · hint --run krp3 "…" · stop krp3 · Ctrl-C now` (`stop`
-ends it after the current iteration; Ctrl-C interrupts it now, progress kept),
-then two blank lines. Piped, the header has them as its `Steer` line instead. The end block says how the segment ended (`Done`, `Stopped`,
-`Interrupted`, `Error`), each metric from the baseline to the run's tip, the totals,
-what landed (`landing  failed: …` in yellow
-when auto landing couldn't, the commits then waiting for `autohelix land`), what to
-type next and the files written. `resume` shows the baseline and the last 5 rows before `resumed HH:MM`.
+- **The header** names the run (its id's last part, which every command
+  accepts), what it runs and the budget. The Agent line has the CLI, the
+  configured model or `(its default)`, and `via <executable>` when
+  `AUTOHELIX_<CLI>_CMD` names another one. In a terminal the AutoHelix mark
+  stands beside it.
+- **One row per iteration**: ✓ accepted or ✗ rejected, its time and cost, and
+  each metric's value. An accepted row has its change from the baseline
+  (`373×`, `-21%`, in green or red); a rejection's values are dimmed, without a
+  change.
+- **A rejection says why**: the gate that failed (`pytest -q failed (exit 1)`,
+  `ask: … answered no`), a metric gate's comparison with the iteration it
+  compares against, or the agent's failure. A reason that doesn't fit goes on
+  the line under the row, with failed observe entries and discarded
+  out-of-scope paths.
+- **While an iteration runs**, a live row shows its time and phase (`agent`,
+  `gates`, `observe · bench` with the entry running, `stop`). Under it, after a
+  blank line, the commands that steer the run, dim: `autohelix view krp3 · hint
+  --run krp3 "…" · stop krp3 · Ctrl-C now` (`stop` ends it after the current
+  iteration; Ctrl-C interrupts it now, progress kept), then two blank lines.
+  Piped, the header has them as its `Steer` line instead.
+- **The end block** says how the segment ended (`Done`, `Stopped`,
+  `Interrupted`, `Error`), each metric from the baseline to the run's tip, the
+  totals, what landed (`landing  failed: …` in yellow when auto landing
+  couldn't, the commits then waiting for `autohelix land`), what to type next
+  and the files written.
+- **`resume`** shows the baseline and the last 5 rows before `resumed HH:MM`.
 
 Wide terminals (where a reason still fits after the values) space the columns out;
 at 80 columns they are as above. Narrower terminals drop the cost column, then the changes. Without a terminal (a
@@ -315,16 +327,18 @@ pipe, a log file) or colours there is no mark and no live row. The renders at 80
 | `--check` | Start nothing: make every check the run makes before writing anything (the config and its prompt template, a clean checkout, the agent command, scope patterns, `--import`'s run), print what it finds, exit 0 when the run would start, else 1. For setup and CI |
 
 `run` always starts a **new** run, with its own notes and history; to
-continue one, use [`autohelix resume`](#autohelix-resume). It never refuses
-because of other runs, but says what it sees: a run of the same config that is
-still running when both land automatically (both will land on the same branch,
-and whichever finishes second may not fast-forward), a previous run with commits
-that haven't landed (this run starts from your branch without them), or
-otherwise just which run came before. Runs started with `--group` don't warn
-about each other (running side by side is the point), and neither does a live
-run when either of the two lands manually (only one of them lands on its own).
-Scripts that want to continue where they left off should call
-`resume`, not `run`.
+continue one, use [`autohelix resume`](#autohelix-resume) (scripts that want
+to continue where they left off should call `resume`, not `run`). It never
+refuses because of other runs, but says what it sees:
+
+- a run of the same config that is still running when both land automatically
+  (both will land on the same branch, and whichever finishes second may not
+  fast-forward). Runs started with `--group` don't warn about each other
+  (running side by side is the point), and neither does a live run when either
+  of the two lands manually (only one of them lands on its own);
+- a previous run with commits that haven't landed (this run starts from your
+  branch without them);
+- otherwise, just which run came before.
 
 When a segment finishes (not when interrupted), it writes a summary to `.autohelix/runs/<id>/report.md`: see [`autohelix report`](#autohelix-report).
 
@@ -333,28 +347,39 @@ On first start, performs preflight checks and evaluates the baseline (see
 
 A refused dirty first start creates no run. The first valid baseline requires
 a clean checkout at the run's starting commit. Resumes use the run's accepted
-code, so unrelated staged/dirty user files can stay in the checkout. Accepted
-commits advance `refs/autohelix/<id>` first, then auto landing fast-forwards the
-starting branch before report generation. If dirty files would be overwritten,
-the target diverged, or the target is checked out elsewhere, landing is refused
-and the run ref retains the accepted code. Resolve that condition and land later.
-One `run` or `resume` command is a **segment**, with its own
-[budget](#budgets). Only one process can own a run at a time: a process-held
-file lock enforces it, and whether a run is running comes from that lock (a
-status that says running whose lock is free reads as crashed). The segment
-starts as soon as the command holds the lock, before its checks (a clean
-checkout, preflight): `autohelix stop` and `autohelix wait` see it from there, and
-a start its checks refuse is a recorded segment that failed.
+code, so unrelated staged/dirty user files can stay in the checkout.
 
-A failed or timed-out main-agent call records a rejected attempt (unchecked,
-`agent failed: …` in red in the console row, `agent timed out (30m)` for a timeout),
-consumes its number, and the loop goes on to the next iteration; budgets apply
-as for any rejection. Three failed calls in a row stop the run ("the agent failed
-3 times in a row: …"), with landing and the report as at any segment end, and
-the command exits 1.
-Setup failures before a call (copy creation, the prompt) do not consume an
-iteration and stop the run with an error. Failed baseline attempts remain iteration 0 and retain their costs.
-A run whose first baseline failed is a disposable attempt: the error ends "Fix it and run `autohelix run` again (`autohelix delete <id>` removes this attempt)", since a fixed config makes a new run (`resume` refuses a changed config).
+Accepted commits advance `refs/autohelix/<id>` first, then auto landing
+fast-forwards the starting branch before report generation. If dirty files
+would be overwritten, the target diverged, or the target is checked out
+elsewhere, landing is refused and the run ref retains the accepted code.
+Resolve that condition and land later.
+
+One `run` or `resume` command is a **segment**, with its own
+[budget](#budgets). Only one process can own a run at a time:
+
+- a process-held file lock enforces it, and whether a run is running comes from
+  that lock (a status that says running whose lock is free reads as crashed);
+- the segment starts as soon as the command holds the lock, before its checks
+  (a clean checkout, preflight): `autohelix stop` and `autohelix wait` see it
+  from there, and a start its checks refuse is a recorded segment that failed.
+
+When a call fails:
+
+- A failed or timed-out main-agent call records a rejected attempt (unchecked,
+  `agent failed: …` in red in the console row, `agent timed out (30m)` for a
+  timeout), consumes its number, and the loop goes on to the next iteration;
+  budgets apply as for any rejection.
+- Three failed calls in a row stop the run ("the agent failed 3 times in a
+  row: …"), with landing and the report as at any segment end, and the command
+  exits 1.
+- Setup failures before a call (copy creation, the prompt) do not consume an
+  iteration and stop the run with an error.
+- Failed baseline attempts remain iteration 0 and retain their costs. A run
+  whose first baseline failed is a disposable attempt: the error ends "Fix it
+  and run `autohelix run` again (`autohelix delete <id>` removes this
+  attempt)", since a fixed config makes a new run (`resume` refuses a changed
+  config).
 
 ### Exit codes
 
@@ -529,57 +554,77 @@ process, a reboot, three agent failures), a stop condition or `autohelix stop`, 
 | `--land auto\|manual` | Change the run's landing mode (stored; default: keep it) |
 | `--group NAME` | Put the run in group NAME from its next iteration (stored); `--group ''` takes it out of its group |
 
-Other options as for `run`, and it keeps the machine awake the same way. A run always uses the config it stored when it
-started ([Config files](#config-files)). Before spending anything, `resume`
-compares it with the config file: when the file's parsed config differs (a
-setting, or the prompt template's text), it refuses, names the settings, and
-names both ways out: `autohelix run <config> --import <id>` applies the new
-config in a new run, or restore the file to continue this one. What the run
-would do counts, not how the file says it: comments, formatting, empty values
-(`gates: []`, a key left out), a default written out (`agent: {cli:
-claude-code}`) and another spelling (`10m` for `600`, `- pytest` for `- command:
-pytest`) are not changes. A deleted file, or a deleted prompt template, isn't a
-change: the run continues with its copy (other keys are still compared). The
-stored copy is read-only. A
-run started before runs stored their config can't be resumed: continue it
-with `run --import <id>`. `resume perf` (a config name, as `run perf`
-takes) continues the latest run of `autohelix/perf.yaml`; a run id takes
-precedence over a config of the same name. Without either, the config is the
-one a bare `autohelix run` would use (with several configs and no
-`autohelix.yaml`, `resume` stops: name a run or a config), and `resume`
-continues that config's most recently active run that isn't [archived](#autohelix-archive), preferring runs
-that captured their baseline; it says which ("Resuming k3f9: 12 iterations,
-last active 2h ago"). If that run is running in another terminal, `resume`
-says so rather than picking an older one. With no run to resume it exits 1
-(see [Exit codes](#exit-codes)).
+Other options as for `run`, and it keeps the machine awake the same way.
 
-Budgets are this segment's ([Budgets](#budgets)): `resume -n 10 --cost 5`
-runs 10 more iterations, up to $5 more, however much the run spent before.
-After an interrupted segment (Ctrl-C, a killed process, a reboot), a
-`resume` without budget flags says what that one had left: "1 more (default);
-the interrupted segment had 8 left: -n 8" (not when that segment had already stopped for a
-reason of its own). `--until` with a number already reached says so ("Already at iteration 5;
---until 3 runs nothing.") and exits 0 without starting a segment: nothing is written, landed or
-reported, except a `--land` or `--group` given with it, which is stored at once ("Run k3f9: landing
-set to auto; already at iteration 5, --until 5 runs nothing."), so `resume ID --until <its last
-iteration> --land auto` changes a run's landing mode without running anything. A run stopped by a
-[stop condition](config.md#stop) is paused, not ended: `resume` continues it
-and says so ("Run k3f9 stopped because score reached 0.9; it stops again after
-the next accepted iteration if that still holds"): the condition is checked
-again after the next accepted iteration.
+**Which run.**
 
-When the target branch has moved past the run's tip (you or another run
-committed on it after the run's tip), the run doesn't take those commits. With
-auto landing, `resume` refuses before writing anything (after saying so if the
-run is running elsewhere): "Everything run k3f9 accepted is in main, which
-has 2 commits past its tip (committed after it). A run continues its own code: start a new run
-that continues from it, `autohelix run perf --import k3f9`, or continue without
-landing: `autohelix resume k3f9 --land manual`." With manual landing it says
-so and continues from the run's own tip; its accepted commits then diverge from
-the branch, so land them with `git merge autohelix/<id>`. Before the baseline
-the run hasn't started from its commit yet, so nothing is compared; after it,
-a run that never accepted a change says so ("main has 1 commit past run k3f9's
-base (committed since it started; it hasn't accepted any changes)").
+- `resume k3f9` continues that run.
+- `resume perf` (a config name, as `run perf` takes) continues the latest run
+  of `autohelix/perf.yaml`; a run id takes precedence over a config of the
+  same name.
+- Without either, the config is the one a bare `autohelix run` would use (with
+  several configs and no `autohelix.yaml`, `resume` stops: name a run or a
+  config).
+
+With a config, `resume` continues that config's most recently active run that
+isn't [archived](#autohelix-archive), preferring runs that captured their
+baseline; it says which ("Resuming k3f9: 12 iterations, last active 2h ago").
+If that run is running in another terminal, `resume` says so rather than
+picking an older one. With no run to resume it exits 1 (see
+[Exit codes](#exit-codes)).
+
+**Its config.** A run always uses the config it stored when it started
+([Config files](#config-files)); the stored copy is read-only. Before spending
+anything, `resume` compares it with the config file:
+
+- When the file's parsed config differs (a setting, or the prompt template's
+  text), it refuses, names the settings, and names both ways out: `autohelix
+  run <config> --import <id>` applies the new config in a new run, or restore
+  the file to continue this one.
+- What the run would do counts, not how the file says it: comments,
+  formatting, empty values (`gates: []`, a key left out), a default written out
+  (`agent: {cli: claude-code}`) and another spelling (`10m` for `600`,
+  `- pytest` for `- command: pytest`) are not changes.
+- A deleted file, or a deleted prompt template, isn't a change: the run
+  continues with its copy (other keys are still compared).
+- A run started before runs stored their config can't be resumed: continue it
+  with `run --import <id>`.
+
+**Its budget** is this segment's ([Budgets](#budgets)): `resume -n 10 --cost
+5` runs 10 more iterations, up to $5 more, however much the run spent before.
+
+- After an interrupted segment (Ctrl-C, a killed process, a reboot), a
+  `resume` without budget flags says what that one had left: "1 more
+  (default); the interrupted segment had 8 left: -n 8" (not when that segment
+  had already stopped for a reason of its own).
+- `--until` with a number already reached says so ("Already at iteration 5;
+  --until 3 runs nothing.") and exits 0 without starting a segment: nothing is
+  written, landed or reported, except a `--land` or `--group` given with it,
+  which is stored at once ("Run k3f9: landing set to auto; already at
+  iteration 5, --until 5 runs nothing."). So `resume ID --until <its last
+  iteration> --land auto` changes a run's landing mode without running
+  anything.
+- A run stopped by a [stop condition](config.md#stop) is paused, not ended:
+  `resume` continues it and says so ("Run k3f9 stopped because score reached
+  0.9; it stops again after the next accepted iteration if that still
+  holds"): the condition is checked again after the next accepted iteration.
+
+**A target branch past the run's tip** (you or another run committed on it
+after the run's tip): the run doesn't take those commits.
+
+- With auto landing, `resume` refuses before writing anything (after saying so
+  if the run is running elsewhere): "Everything run k3f9 accepted is in main,
+  which has 2 commits past its tip (committed after it). A run continues its
+  own code: start a new run that continues from it, `autohelix run perf
+  --import k3f9`, or continue without landing: `autohelix resume k3f9 --land
+  manual`."
+- With manual landing it says so and continues from the run's own tip; its
+  accepted commits then diverge from the branch, so land them with `git merge
+  autohelix/<id>`.
+- Before the baseline the run hasn't started from its commit yet, so nothing
+  is compared; after it, a run that never accepted a change says so ("main has
+  1 commit past run k3f9's base (committed since it started; it hasn't
+  accepted any changes)").
 
 ## `autohelix stop`
 
@@ -605,33 +650,43 @@ iteration takes precedence. Asking again replaces the earlier request (and its
 iteration in progress is recorded as rejected (`interrupted`), the agent's and
 commands' processes are ended, the run lands as usual, and no summary is
 written; the segment's state is `interrupted`. It works only on the host the run
-is running on, and only when that process is an `autohelix` process. A plain
-`kill PID` (the `pid` in the run's `.internal/status.json`) ends a run the same way (without a stop reason); unlike Ctrl-C it also
-reaches a run a script started in the background, which ignores SIGINT. Ctrl-C
-and SIGTERM wait for an accept that is being recorded to finish.
+is running on, and only when that process is an `autohelix` process (not in a
+container: see [Docker → Stopping a run](docker.md#stopping-a-run)).
 
-`stop` refuses runs that aren't running (also one whose process is gone while
-its status still says running: its lock is free). A segment counts as running
-from the moment its command holds the run's lock, so a run just launched can be
-stopped during its checks; it then stops right after them (after the baseline,
-for a new run). It takes several ids and exits 1 if any of them was refused or, with
-`--now`, could not be signalled (its request stands: it still stops after its
-iteration). It prints what happens next ("Run k3f9 stops after its current
-iteration (4).") and the `autohelix wait` command that says when it has ended
-(repeat it until it prints `ended` or `idle`). A second `--now` while the first
-is being handled sends nothing ("already being interrupted"). An interrupt
-during the ending waits for the landing to finish.
+A plain `kill PID` (the `pid` in the run's `.internal/status.json`) ends a run
+the same way (without a stop reason); unlike Ctrl-C it also reaches a run a
+script started in the background, which ignores SIGINT. Ctrl-C and SIGTERM wait
+for an accept that is being recorded to finish.
+
+What it refuses and prints:
+
+- It refuses runs that aren't running (also one whose process is gone while
+  its status still says running: its lock is free).
+- A segment counts as running from the moment its command holds the run's
+  lock, so a run just launched can be stopped during its checks; it then stops
+  right after them (after the baseline, for a new run).
+- It takes several ids and exits 1 if any of them was refused or, with
+  `--now`, could not be signalled (its request stands: it still stops after its
+  iteration).
+- It prints what happens next ("Run k3f9 stops after its current iteration
+  (4).") and the `autohelix wait` command that says when it has ended (repeat
+  it until it prints `ended` or `idle`).
+- A second `--now` while the first is being handled sends nothing ("already
+  being interrupted"). An interrupt during the ending waits for the landing to
+  finish.
 
 The request is `.autohelix/runs/<id>/.internal/stop.json`, for the running
 segment only: a request the segment didn't answer is removed when it ends, so it
 never stops a later `resume`. The run checks it before each iteration (first
-right after the baseline). While it is pending, `view` shows the run as
-`running (stopping)` (the web page's tooltip says whether `--now` was used and
-why) and `view --json` has it as `stop_requested`. The stop is recorded as
-the segment's stop reason, in `status.json` and `segments.jsonl`: `kind:
-request`, `detail` ("requested by autohelix stop: enough data"), `why`,
-`requested_at`, and `now: true` for `--now` (see
-[Concepts → Runs and run state](concepts.md#runs-and-run-state)).
+right after the baseline).
+
+- While it is pending, `view` shows the run as `running (stopping)` (the web
+  page's tooltip says whether `--now` was used and why) and `view --json` has
+  it as `stop_requested`.
+- The stop is recorded as the segment's stop reason, in `status.json` and
+  `segments.jsonl`: `kind: request`, `detail` ("requested by autohelix stop:
+  enough data"), `why`, `requested_at`, and `now: true` for `--now` (see
+  [Stop reasons](#stop-reasons)).
 
 ## `autohelix land`
 
@@ -640,14 +695,16 @@ autohelix land [RUN_ID] [-p PATH] [--into BRANCH]
 ```
 
 Fast-forward the run's starting branch to its accepted tip, preserving unrelated
-checkout edits. Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on). It only fast-forwards: when the
-target diverged (a commit on it after the run's base, during a segment or
-since), it refuses, says so, and gives what works: `git merge autohelix/<id>`
-after reviewing the changes, or, for a run that lands automatically,
-`autohelix resume <id> --land manual` to stop trying to land it. Auto landing
-at a segment's end refuses the same way; AutoHelix never rewinds user commits.
-A run created from a detached checkout requires `--into BRANCH`. Landing also
-refuses branches that are being rebased.
+checkout edits. Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on).
+
+- It only fast-forwards: when the target diverged (a commit on it after the
+  run's base, during a segment or since), it refuses, says so, and gives what
+  works: `git merge autohelix/<id>` after reviewing the changes, or, for a run
+  that lands automatically, `autohelix resume <id> --land manual` to stop
+  trying to land it. Auto landing at a segment's end refuses the same way;
+  AutoHelix never rewinds user commits.
+- A run created from a detached checkout requires `--into BRANCH`.
+- Landing also refuses branches that are being rebased.
 
 `land` (and auto landing) records what it landed in the run's `run.json` as
 `landed: {tip, target, at}`. So a run stays `landed` when its target branch gets
@@ -662,19 +719,22 @@ git fetch origin && git reset --hard origin/main   # your main as the remote has
 
 The runs table, `view`, the entry screen and `delete` then read k3f9 as
 landed (no `--force` needed), while its tip isn't on main: the target lacks the
-tip, but run.json says `land` landed that tip on this same branch. Nothing
-compares the code, so if the PR is abandoned and main reset, the run still
-reads landed (its commits stay on `autohelix/<id>`). Only a landing on the
-run's own target is recorded: a landing on another branch (`land --into
-other`) leaves the record alone, and a squash merge of the run's branch done
-without `land` (`git merge --squash autohelix/<id>`) isn't recorded, so both
-read diverged. Commits the run accepts after the landing (a `resume --land
-manual`) count as unlanded and diverged: apply them with `git cherry-pick
-<landed tip>..autohelix/<id>` (the command the runs table, `view` and the entry
-screen give; `git merge` would re-apply the squashed commits and conflict), or
-land them again through a PR.
-An auto-landing `resume` refuses such a run like one whose target moved on: to
-continue from the merged code, start a new run, `autohelix run --import k3f9`.
+tip, but run.json says `land` landed that tip on this same branch.
+
+- Nothing compares the code, so if the PR is abandoned and main reset, the run
+  still reads landed (its commits stay on `autohelix/<id>`).
+- Only a landing on the run's own target is recorded: a landing on another
+  branch (`land --into other`) leaves the record alone, and a squash merge of
+  the run's branch done without `land` (`git merge --squash autohelix/<id>`)
+  isn't recorded, so both read diverged.
+- Commits the run accepts after the landing (a `resume --land manual`) count
+  as unlanded and diverged: apply them with `git cherry-pick <landed
+  tip>..autohelix/<id>` (the command the runs table, `view` and the entry
+  screen give; `git merge` would re-apply the squashed commits and conflict),
+  or land them again through a PR.
+- An auto-landing `resume` refuses such a run like one whose target moved on:
+  to continue from the merged code, start a new run, `autohelix run --import
+  k3f9`.
 
 ## `autohelix archive`
 
@@ -750,7 +810,7 @@ With `RUN_ID`, `--once` prints the top part of `--terminal`'s screen once and ex
   - `id`, `name`, `archived` (true or false), `created_at`, `last_activity`;
   - `group` (`null` outside a group) and `land` (`auto` or `manual`: the run's landing mode);
   - `config_file`, `goal` and `title` (the goal's first line, cut to about 80 characters), read from the config file as it is now in the checkout;
-  - `status`: the last segment's `state` (`running`, `finished`, `interrupted`, `failed`, or `crashed` when its process is gone), `phase`, `iteration`, `iteration_started_at`, `phase_started_at`, `stopped_at`, `stop_reason` (`kind`, `detail`, …; see [Concepts → Runs and run state](concepts.md#runs-and-run-state) for the kinds), that segment's caps `max_iterations`, `max_cost_usd` and `max_time_seconds` (as in `progress`), `segment_started_at`, when that segment started (its `--time` counts from there), and `segment`, its number (1, 2, … in the run); `null` before the first segment;
+  - `status`: the last segment's `state` (`running`, `finished`, `interrupted`, `failed`, or `crashed` when its process is gone), `phase`, `iteration`, `iteration_started_at`, `phase_started_at`, `stopped_at`, `stop_reason` (`kind`, `detail`, …; see [Stop reasons](#stop-reasons)), that segment's caps `max_iterations`, `max_cost_usd` and `max_time_seconds` (as in `progress`), `segment_started_at`, when that segment started (its `--time` counts from there), and `segment`, its number (1, 2, … in the run); `null` before the first segment;
   - `stop_requested`: while the running segment has been asked to end by [`autohelix stop`](#autohelix-stop), `requested_at`, `why` and `now`; else `null`;
   - `accepted`: the number of accepted iterations;
   - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
@@ -781,7 +841,7 @@ autohelix wait [RUN_ID...] [-p PATH] [--after CURSOR] --follow
 
 It only reads each run's event log, `.autohelix/runs/<id>/.internal/segments.jsonl`
 (a line when a segment starts, when an iteration's record is final, when the
-segment ends; see [Concepts](concepts.md#runs-and-run-state)): nothing written
+segment ends; see [The event log](#the-event-log)): nothing written
 or repaired, so it is safe beside running runs, and any number can wait at once.
 Whether an open segment's process is gone comes from the run's lock, probed only
 for a segment open on this host (once for a crashed one).
@@ -842,22 +902,12 @@ Per event:
   the agent call failed, else `null`). `time` is when it ended. An accepted
   iteration is reported once its record is final, after its stop commands.
 - **`ended`**: a segment ended. `segment`, `state` (`finished`, `interrupted`
-  or `failed`), `stop_reason` (why the loop ended, below; kept when Ctrl-C or an
+  or `failed`), `stop_reason` (why the loop ended, see [Stop reasons](#stop-reasons); kept when Ctrl-C or an
   error comes later, during landing or the report; `null` only when the loop
   itself was interrupted or failed, except by `autohelix stop --now`), `error` (a failed segment's error, else `null`),
   `last_iteration` (the run's last iteration), `iterations` (the records this
   segment added). `time` is when it ended.
 
-A stop reason has a `kind` and a `detail` (the line shown, "iteration budget
-reached (5)"), plus fields of its kind:
-
-- `budget`: `budget` is `iterations`, `cost` or `time`;
-- `condition`: a [stop command](config.md#stop) succeeded; `iteration`,
-  `command` and `reason`;
-- `agent`: the agent failed three times in a row; `iteration` and `error`;
-- `request`: [`autohelix stop`](#autohelix-stop) asked; `why` (or
-  `null`), `requested_at`, and `now: true` when `--now` interrupted the
-  segment (its state is then `interrupted`).
 - **`crashed`**: a segment never ended and its process is gone (nothing holds
   the run's lock, or a later segment started). `segment`, `last_iteration` (the
   last iteration reported before it crashed; `null` if none was, e.g. during its
@@ -883,6 +933,44 @@ iterations, then its `ended` or `crashed`. Across runs the oldest pending event
 comes first, but a line can be written after its `time`, so an event of one
 run may follow a newer one of another run. Only complete lines of the log
 count.
+
+### Stop reasons
+
+A stop reason (an `ended` event's, `status.json`'s, `view --json`'s) has a
+`kind` and a `detail` (the line shown, "iteration budget reached (5)"), plus
+fields of its kind:
+
+- `budget`: `budget` is `iterations`, `cost` or `time`;
+- `condition`: a [stop command](config.md#stop) succeeded; `iteration`,
+  `command` and `reason`;
+- `agent`: the agent failed three times in a row; `iteration` and `error`;
+- `request`: [`autohelix stop`](#autohelix-stop) asked; `why` (or
+  `null`), `requested_at`, and `now: true` when `--now` interrupted the
+  segment (its state is then `interrupted`).
+
+### The event log
+
+`wait`'s events come from `.autohelix/runs/<id>/.internal/segments.jsonl`, one
+JSON line per record, linked by `segment` and told apart by `event`. A segment's
+start is written as soon as its command holds the run's lock, before its checks
+(a start they refuse is a segment that failed). The lines:
+
+- `"event": "start"` (`started`): `started_at` (Unix seconds), `budget` as
+  given (`iterations`, `until`, `cost_usd`, `time_seconds`, each `null` when
+  unset, and `default`: no budget flag, so the default `-n 1` applied),
+  `start_iteration`, `pid`, `host` and `executable` (the main agent's,
+  resolved).
+- `"event": "iteration"` (`iteration`): `ended_at` and the `iteration`
+  event's fields. A record whose process was killed before its line (or one
+  recovered from a published commit) gets it at the next `resume`, with the
+  previous segment's number, just before the new start.
+- `"event": "end"` (`ended`): `ended_at`, `state`, `stop_reason`,
+  `iterations`, `last_iteration` and `error` (one line, cut to 500
+  characters).
+
+A segment whose process died has a start and no end. Each line is written in
+one append and synced, and earlier lines are never rewritten: a damaged line
+loses only itself (readers skip it).
 
 ### Exit codes and limits
 

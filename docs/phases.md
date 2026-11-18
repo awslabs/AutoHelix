@@ -76,15 +76,56 @@ when the copy is made; no stash, no remote). This means:
 
 ## Where things live
 
-In the project, `.autohelix/` (full layout:
-[Concepts → Runs and run state](concepts.md#runs-and-run-state)):
+In the project, `.autohelix/` (gitignored locally; AutoHelix leaves
+`.gitignore` unchanged) holds each run's state in `.autohelix/runs/<id>/`, one
+folder per iteration; what the harness keeps for itself is in `.internal/`
+folders:
 
-- `runs/<id>/`: what you read: `run.json`, `config.yaml`, `history.jsonl`,
-  `hints.md`, `notes`, `iterations/NNN/` (each phase's output, as in the
-  table above), `logs/`, `report.md`;
-- `runs/<id>/.internal/`: the harness's own files (status, event log, usage,
-  saved notes versions);
-- `.internal/`: lock files and helper scripts.
+```
+.autohelix/
+├── runs/<id>/
+│   ├── run.json                # identity (base commit, target branch, config file), archived flag
+│   ├── config.yaml             # the run's config, stored verbatim when it started
+│   ├── prompt_template.md      # its prompt_template's text, stored with it (only with one)
+│   ├── history.jsonl           # one record per iteration: the index and the source of truth
+│   ├── hints.md
+│   ├── report.md  report.html  # the run summary; the one-file run page
+│   ├── notes -> .internal/notes/<n>   # agent memory; round-trips (link to the latest version)
+│   ├── iterations/
+│   │   ├── 000/                # the baseline
+│   │   └── 001/ ...            # one folder per iteration (below)
+│   ├── logs/                   # run logs per segment, report.log
+│   └── .internal/              # status.json, segments.jsonl, stop.json (autohelix stop), usage/,
+│                               # notes versions notes/<n>/, superseded attempts attempts/,
+│                               # report.json, the copies path
+└── .internal/                  # lock files, helper scripts (bin/)
+```
+
+Every iteration's folder has the same parts; those that don't apply are absent:
+
+```
+iterations/NNN/
+├── record.json                 # its history.jsonl record, pretty-printed (written last)
+├── prompt.md  agent.log        # what the agent was given and did (not at the baseline)
+├── notes -> ../../.internal/notes/<n>   # the notes as saved with it
+├── gates/<k>/                  # gate k of gates: that ran: command.txt, stdout.txt, stderr.txt, ask.log
+├── observe/<name>/             # each observe entry: stdout.txt, stderr.txt, captures, review.log
+├── stop/<k>/                   # stop command k, after an accept: as gates/<k>/
+└── rejected.patch              # a rejected attempt's change (also kept on its ref)
+```
+
+Numbers are three digits, so `ls` and globs sort in order (past 999 the width
+grows and glob order breaks at that boundary); `ls iterations | tail -1` is the
+latest. `record.json` is derived from `history.jsonl`, which stays the source
+of truth (`jq` on it for numbers across iterations; see
+[Stored output](config.md#stored-output) for texts). A killed iteration, or a
+retried baseline, reuses its number: the earlier attempt's folder is moved to
+`.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
+
+`.internal/segments.jsonl` is the run's event log, one line when a segment
+(one `run` or `resume` command) starts, when an iteration's record is final and
+when the segment ends: [`autohelix wait`](cli.md#autohelix-wait) reads it, and
+[CLI → The event log](cli.md#the-event-log) has its format.
 
 The copies are outside the project, in
 `${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/<project>-<hash>/<id>/` and are deleted
@@ -211,7 +252,7 @@ started is killed. Each gets:
 | `AUTOHELIX_RUN_ID`, `AUTOHELIX_RUN_DIR` | The run's id and its `.autohelix/runs/<id>/` folder |
 | `AUTOHELIX_LOG_DIR` | A private folder for this command where `autohelix ask` and `review` write their transcripts; after the command ended they are moved to its stored output (`ask*.log`, `review*.log` only) |
 | `AUTOHELIX_CALL` | Where this command's output is stored in the iteration's folder: `gates/<k>`, `observe/<name>` or `stop/<k>`; `ask`/`review` record it with their transcript's name |
-| `AUTOHELIX_USAGE_FILE` | Where model calls record their cost (see [Cost Tracking](config.md#cost-tracking)) |
+| `AUTOHELIX_USAGE_FILE` | Where model calls record their cost (see [Cost Tracking](concepts.md#cost-tracking)) |
 | `AUTOHELIX_COMMAND_DEADLINE` | The command's deadline, in Unix seconds |
 | `AUTOHELIX_PREVIOUS` | Observe commands only: see [Previous output](config.md#previous-output) |
 | `AUTOHELIX_METRICS`, `AUTOHELIX_OBSERVATIONS` | Stop commands only: see [Stop](config.md#stop) |

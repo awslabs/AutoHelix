@@ -279,15 +279,18 @@ autohelix archive k3f9               # hidden, skipped by a bare resume; history
 autohelix delete k3f9                # history, notes and logs removed
 ```
 
-For a full reset to before iteration 1:
+For a full reset to before iteration 1, roll the code back first, while the
+run's record still names its starting commit (`base_commit` in its `run.json`),
+then delete the run:
 
 ```bash
-autohelix delete --force k3f9        # 1. remove the run (--force: even with unlanded commits)
-git reset --hard <initial-commit>    # 2. roll code back to before the agent's iterations
+git reset --hard "$(jq -r .base_commit .autohelix/runs/*-k3f9/run.json)"  # 1. code as when the run started
+autohelix delete --force k3f9        # 2. remove the run (--force: even with unlanded commits)
 rm -rf /path/to/artifacts/<task>/*   # 3. only if you configured an external artifacts path
 ```
 
-Find `<initial-commit>` with `git log --oneline` (the one before "AutoHelix iteration 1").
+Run step 1 on the run's branch. `git reset --hard` also discards uncommitted
+changes and any commits you made on that branch since the run started.
 
 ### 5. Several configs
 
