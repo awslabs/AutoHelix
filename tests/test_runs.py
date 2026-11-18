@@ -469,7 +469,7 @@ def test_resume_keeps_its_own_tip_past_user_commits_and_land_divergence_is_safe(
     (project / "user.txt").write_text("user")
     git(project, "add", ".")
     git(project, "commit", "-qm", "user work")
-    with pytest.raises(RuntimeError, match="has 1 commit past run .*'s tip"):
+    with pytest.raises(RuntimeError, match="which has 1 commit past its tip"):
         Harness(project, land_mode="auto")  # refused before anything is written
     resumed = Harness(project, land_mode="manual")
     assert resumed.run_state.expected_tip == tip  # a run continues its own code
@@ -784,7 +784,7 @@ def test_target_behind_after_baseline_warns_only_for_auto_landing(project):
     harness.run(Budget(until=1), report=False)
     base = harness.run_info["base_commit"]
     warning = reconcile(harness.paths, harness.run_info, harness.history, "auto")[1]
-    assert "is behind" in warning and "auto landing" in warning
+    assert "not in main yet" in warning and "Auto landing lands it again" in warning
     # In manual mode, behind just means not landed yet.
     assert reconcile(harness.paths, harness.run_info, harness.history, "manual")[1] is None
     assert git(project, "rev-parse", "HEAD").stdout.strip() == base

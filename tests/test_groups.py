@@ -255,9 +255,9 @@ def test_a_template_naming_the_old_copy_layout_is_flagged():
 def test_a_new_member_doesnt_warn_about_unlanded_members(project):
     first, _ = started(project, "--group", "g")  # manual landing: its commit stays unlanded
     _, result = started(project, "--group", "g")
-    assert "unlanded commit" not in result.output.split("  AutoHelix ·")[0] and "Previous run" not in result.output
+    assert "not in main yet" not in result.output.split("  AutoHelix ·")[0] and "Previous run" not in result.output
     _, result = started(project)  # outside the group the warning stands
-    assert "unlanded commit" in result.output.split("  AutoHelix ·")[0]  # the warning, before the header
+    assert "not in main yet" in " ".join(result.output.split("  AutoHelix ·")[0].split())  # the warning, before the header
 
 
 def test_a_checks_copy_gets_the_complete_change_and_nothing_else(project):

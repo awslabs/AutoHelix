@@ -173,7 +173,8 @@ def test_resume_refuses_when_the_target_moved_past_the_tip(project):
     result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report")
     assert result.exit_code == 1, result.output
     short = short_id(paths.run_id)
-    assert (f"has 1 commit past run {short}'s tip (committed after its tip). A run continues its own code: "
+    assert (f"Everything run {short} accepted is in main, which has 1 commit past its tip (committed after it). "
+            f"A run continues its own code: "
             f"start a new run that continues from it, `autohelix run --import {short}`, or continue without "
             f"landing: `autohelix resume {short} --land manual`.") in " ".join(result.output.split())
     assert git(project, "rev-parse", paths.ref).stdout.strip() == tip
@@ -185,7 +186,7 @@ def test_resume_refuses_when_the_target_moved_past_the_tip(project):
     with RunLock(paths.lock):
         result = cli(project, "resume", short, "-n", "1", "--no-report")
     assert result.exit_code == 1 and f"Run {short} is running." in result.output
-    assert "past run" not in result.output
+    assert "past its tip" not in result.output
 
 
 def test_the_refusal_says_when_the_run_never_accepted_a_change(project):
@@ -206,7 +207,8 @@ def test_a_manual_resume_continues_from_its_own_tip(project):
     tip = git(project, "rev-parse", paths.ref).stdout.strip()
     result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report", "--land", "manual")
     assert result.exit_code == 0, result.output
-    assert f"past run {short_id(paths.run_id)}'s tip; it continues from its own tip" in " ".join(result.output.split())
+    assert (f"has 1 commit past its tip. Run {short_id(paths.run_id)} continues from its own tip, "
+            "without main's commits") in " ".join(result.output.split())
     new_tip = git(project, "rev-parse", paths.ref).stdout.strip()
     assert git(project, "rev-parse", f"{new_tip}^").stdout.strip() == tip  # built on the run's tip, not main
     assert git(project, "show", f"{new_tip}:user.py", check=False).returncode  # without the user's commit

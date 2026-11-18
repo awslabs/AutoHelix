@@ -280,7 +280,7 @@ def test_with_runs_the_table_the_next_commands_and_ask_first(project, monkeypatc
     assert result.exit_code == 0, result.output
     shown = lines(result)
     assert any(line.startswith("  run ") and " state " in line for line in shown)  # the dashboard's table
-    assert any(re.fullmatch(rf"  {first}  finished · 1 commit to land +next: autohelix land {first}", line)
+    assert any(re.fullmatch(rf"  {first}  finished · 1 to land +next: autohelix land {first}", line)
                for line in shown), shown
     assert " 1. Ask Claude Code about these runs it summarizes them, then answers questions" in flat_lines(result)
     assert " 2. Set up a new experiment with Claude Code it drafts a config with you" in flat_lines(result)
@@ -320,11 +320,11 @@ def test_a_crashed_run_reads_stopped_unexpectedly_and_resume_applies(project, mo
     ("interrupted", 2, ("interrupted · iteration 3", "resume")),  # resuming is the point; auto landing lands
     ("crashed", 0, ("stopped unexpectedly · iteration 3", "resume")),
     ("crashed", 1, ("stopped unexpectedly · iteration 3", "resume")),
-    ("finished", 2, ("finished · 2 commits to land", "land")),
-    ("finished", 1, ("finished · 1 commit to land", "land")),
+    ("finished", 2, ("finished · 2 to land", "land")),
+    ("finished", 1, ("finished · 1 to land", "land")),
     ("finished", 0, None),
     ("failed", 0, ("failed · iteration 3", "resume")),
-    ("failed", 2, ("failed · 2 commits to land", "land")),
+    ("failed", 2, ("failed · 2 to land", "land")),
     (None, 0, ("not started · iteration 3", "resume")),
 ])
 def test_one_suggested_command_per_run(state, commits, expected):
@@ -345,7 +345,7 @@ def test_a_diverged_run_suggests_git_merge(state):
     run = {"id": "20261115-1402-sorting-krp3", "progress": {"iterations": 3}, "status": {"state": state},
            "target_branch": "main", "landing": {"relation": "diverged", "commits": 2, "behind": 1,
                                                 "fast_forward": False}}
-    assert run_table.suggestion(run) == (f"{state} · 2 commits diverged from main",
+    assert run_table.suggestion(run) == (f"{state} · 2 diverged",
                                          "git merge autohelix/20261115-1402-sorting-krp3")
 
 

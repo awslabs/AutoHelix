@@ -559,8 +559,8 @@ again after the next accepted iteration.
 When the target branch has moved past the run's tip (you or another run
 committed on it after the run's tip), the run doesn't take those commits. With
 auto landing, `resume` refuses before writing anything (after saying so if the
-run is running elsewhere): "main has 2 commits past run k3f9's tip (committed
-after its tip). A run continues its own code: start a new run
+run is running elsewhere): "Everything run k3f9 accepted is in main, which
+has 2 commits past its tip (committed after it). A run continues its own code: start a new run
 that continues from it, `autohelix run perf --import k3f9`, or continue without
 landing: `autohelix resume k3f9 --land manual`." With manual landing it says
 so and continues from the run's own tip; its accepted commits then diverge from
@@ -637,6 +637,26 @@ at a segment's end refuses the same way; AutoHelix never rewinds user commits.
 A run created from a detached checkout requires `--into BRANCH`. Landing also
 refuses branches that are being rebased.
 
+`land` (and auto landing) records what it landed in the run's `run.json` as
+`landed: {tip, target, at}`. So a run stays `landed` when its commits reach the
+target as other commits, the usual pull request flow:
+
+```bash
+git branch perf-pr main                 # a branch for the pull request
+autohelix land k3f9 --into perf-pr      # fast-forward it to the run's tip
+git push -u origin perf-pr              # open a PR from it; squash-merge (or rebase) it
+git switch main && git pull             # main now has the run's work as one commit
+```
+
+The runs table, `view`, the entry screen and `delete` then read k3f9 as
+landed (no `--force` needed), while its tip isn't on main. Commits the run
+accepts after that (a `resume --land manual`) count as unlanded and diverged:
+merge them with `git merge autohelix/<id>`, or land them again through a PR.
+An auto-landing `resume` refuses such a run like one whose target moved on: to
+continue from the merged code, start a new run, `autohelix run --import k3f9`.
+A squash merge of the run's branch done without `land` (`git merge --squash
+autohelix/<id>`) isn't recorded and reads diverged.
+
 ## `autohelix archive`
 
 ```bash
@@ -648,7 +668,8 @@ Sets runs aside: they are hidden from [`autohelix view`](#autohelix-view)'s run 
 commits stay; `autohelix resume RUN_ID` resumes one and brings it back, and
 `--undo` brings it back without running it. A running run can't be archived.
 Use it for runs that are done or didn't work out, and for runs you merged some
-other way (squash, cherry-pick): those keep looking unlanded to git.
+other way than through `land` (a squash of the run's branch, cherry-pick):
+those keep looking unlanded to git.
 `--why TEXT` records why (one line, at most 300 characters) in each run's
 `run.json` as `archive_why`, shown on the web page and in `--json`;
 `--undo` keeps the note, and a later `archive --why` replaces it.
@@ -716,7 +737,7 @@ With `RUN_ID`, `--once` prints the top part of `--terminal`'s screen once and ex
   - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
   - `progress`: `iterations` attempted, `cost_usd` and `cost_incomplete` (the whole run's), `seconds` (the recorded iterations' wall clock, the baseline's included), and the latest segment's [budget](#budgets), `null` where it had none: `max_iterations` (the last iteration it may run: the previous last iteration + `-n`, or `--until`) and `max_cost_usd` (the run's cost before it + `--cost`) as run totals, "spent before it + its own cap"; `max_seconds`, that segment's own `--time` (not a run total: compare it with the time since `status.segment_started_at`, not with `seconds`). They come from the run's status, never from the config;
   - `agent`: the latest main-agent call's `model` (the one the CLI reported, `null` if none) and `executable`, `{}` before any call;
-  - `target_branch` and `landing`: how the run's tip stands against its target, `relation` (`same`, `ahead`: the target can fast-forward onto it, `behind`: the target has commits past it, or `diverged`), `commits` (the run's accepted commits the target lacks), `behind` (the target's commits the run lacks), whether the target can `fast_forward` (`same` or `ahead`), or `null` when either side is unavailable; `landing_words`: the runs table's `cell` (`landed`, `2 to land`, `2 diverged`, `—`) and `text`, what it means and what works (the run list's tooltip);
+  - `target_branch` and `landing`: how the run's tip stands against its target, `relation` (`same`, `ahead`: the target can fast-forward onto it, `behind`: the target has commits past it, `diverged`, or `landed`: the tip `autohelix land` last landed, which the target has as other commits, as after a squash-merged PR), `commits` (the run's accepted commits the target lacks), `behind` (the target's commits the run lacks), whether the target can `fast_forward` (`same` or `ahead`), or `null` when either side is unavailable; `landing_words`: the runs table's `cell` (`landed`, `2 to land`, `2 diverged`, `—`) and `text`, what it means and what works (the run list's tooltip);
   - `why` (`run --why`), `archive_why` (`archive --why`) and `import` (`{"run": <id>}` for a run started with `run --import`), each `null` when absent.
   - A run that can't be read has only `id` and `error`.
 

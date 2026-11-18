@@ -23,7 +23,7 @@ from rich.text import Text
 from autohelix import terminal
 from autohelix.formatting import clean, format_cap, format_duration
 from autohelix.iteration_time import format_limit
-from autohelix.runs import LandingWords, landing_words, plural, short_id
+from autohelix.runs import LandingWords, landing_words, short_id
 from autohelix.terminal import Row, Table
 
 WORDS = {"crashed": "stopped unexpectedly", "idle": "not started"}  # others as they are (dashboard.js)
@@ -385,16 +385,14 @@ def suggestion(run: dict) -> tuple[str, str] | None:
         return None
     short = short_id(run["id"])
     state = (run.get("status") or {}).get("state")
-    landing, lands = run.get("landing") or {}, _words(run).commands
+    lands = _words(run).commands
     where = f"iteration {_under_way(run) or run['progress']['iterations']}"
     if _live(run):
         command = f"autohelix view {short}"
     elif state in ("interrupted", "crashed"):
         command = f"autohelix resume {short}"
     elif lands:
-        command = lands[0]
-        where = plural(landing["commits"], "commit") + (
-            f" diverged from {run['target_branch']}" if landing["relation"] == "diverged" else " to land")
+        command, where = lands[0], _words(run).cell
     elif state in ("failed", "idle", None):
         command = f"autohelix resume {short}"
     else:

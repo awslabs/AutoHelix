@@ -108,6 +108,24 @@
   tip.
 - A run with no commits of its own to land is never `diverged` (it read
   `0 diverged`): its target past its base reads `behind`.
+- The entry screen's suggestion names the state in the runs table's words
+  (`finished · 2 to land`, `finished · 2 diverged`; was `2 commits to land`).
+  `resume`'s refusal and warnings, the `run` notice about the previous run's
+  unlanded commits and `delete`'s refusal start from the same sentence the run
+  list's tooltip has ("Everything run k3f9 accepted is in main, which has 2
+  commits past its tip", "1 commit on autohelix/<id> not in main yet; main can
+  fast-forward: `autohelix land k3f9`").
+
+### Landed stays landed after a squash-merged PR
+
+- **`autohelix land` (and auto landing) records `landed: {tip, target, at}`
+  in `run.json`.** A run whose tip is the one it landed reads `landed` when the
+  target has the work as other commits (a squash-merged or rebased PR, also of
+  a branch landed with `--into`): the runs table, `view`, the web run list, the
+  entry screen and `delete` (no `--force` needed) agree. Commits accepted after
+  it count as unlanded (`1 diverged`: `git merge autohelix/<id>`); an
+  auto-landing `resume` refuses such a run, as one whose target moved on. A
+  squash merge without `land` stays `diverged`. docs/cli.md has the PR flow.
 
 ### Runs keep the machine awake
 

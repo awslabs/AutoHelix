@@ -500,7 +500,7 @@ def test_dashboard_tolerates_an_unreadable_run(tmp_path, run_paths):
     assert "error" in rows["bad-aaaa"]
     assert "error" not in rows["test"] and rows["test"]["landing"] is None  # no target branch
     assert rows["test"]["landing_words"] == {
-        "cell": "—", "text": "Started on a detached HEAD: land with `autohelix land --into <branch>`."}
+        "cell": "—", "text": "Started on a detached HEAD: land with `autohelix land test --into <branch>`."}
 
 
 def test_dashboard_metrics_are_the_latest_accepted_not_the_best():

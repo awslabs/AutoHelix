@@ -52,7 +52,7 @@ def test_each_relation_with_its_counts_and_words(project):
         land(paths, data, resumed.run_state.expected_tip)
     assert str(refused.value) == f"Cannot land: {words.sentence}"
     assert "1 commit on autohelix/" in words.sentence and "1 commit on main that it lacks" in words.sentence
-    with pytest.raises(RuntimeError, match=rf"has 1 unlanded commit on .*land them first \(`git merge autohelix/"):
+    with pytest.raises(RuntimeError, match=r"^Not deleting run \w+, which has 1 unlanded commit: main diverged from run .*`git merge autohelix/.*`autohelix delete --force \w+` discards it\.$"):
         delete(paths)
 
 
@@ -108,7 +108,7 @@ def test_resume_refusal_reads_the_relation(project):
     harness.run(Budget(until=1), report=False)  # lands
     commit_on_main(project, "user")
     assert relation(harness.paths, harness.run_info) == ("behind", 0, 1)
-    with pytest.raises(RuntimeError, match=r"main has 1 commit past run \w+'s tip \(committed after its tip\)"):
+    with pytest.raises(RuntimeError, match=r"^Everything run \w+ accepted is in main, which has 1 commit past its tip \(committed after it\)\. "):
         Harness(project)
 
 
@@ -128,3 +128,61 @@ def test_resume_of_a_diverged_auto_run_says_what_works(project, capsys):
                 f"to stop trying to land it. Run {short} continues from its accepted tip.") in out
     finally:
         resumed.close()
+
+
+def squash_main_onto_base(project, data):
+    """Replace main's commits since the run's base with one commit of the same tree, as a
+    squash-merged PR leaves them."""
+    tree = git(project, "rev-parse", "main^{tree}").stdout.strip()
+    squashed = git(project, "commit-tree", tree, "-p", data["base_commit"], "-m", "Squashed PR").stdout.strip()
+    git(project, "reset", "-q", "--hard", squashed)
+
+
+def test_a_landed_run_stays_landed_after_a_squash_merged_pr(project):
+    """`land` records `landed` in run.json; a target that has the work as one squashed
+    commit reads landed, and only commits accepted after it count."""
+    from autohelix.runs import RunPaths
+
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    paths = harness.paths
+    tip = harness.run_state.expected_tip
+    with RunLock(paths.lock):
+        land(paths, harness.run_info, tip)
+    data = RunPaths(project, paths.run_id).read_identity()
+    assert (data["landed"]["tip"], data["landed"]["target"]) == (tip, "main") and data["landed"]["at"]
+    squash_main_onto_base(project, data)
+    assert relation(paths, data) == ("landed", 0, 1)
+    words = landing_words(landing(paths, data).payload(), paths.run_id, "main", land_mode="manual")
+    assert (words.cell, words.commands) == ("landed", ())
+    assert "squash-merged" in words.sentence
+    with RunLock(paths.lock):
+        land(paths, data, tip)  # already there: nothing to do
+
+    resumed = Harness(project, land_mode="manual")
+    resumed.run(Budget(until=2), report=False)
+    data = RunPaths(project, paths.run_id).read_identity()
+    assert relation(paths, data) == ("diverged", 1, 1)  # the resume's commit, not the landed ones
+    words = landing_words(landing(paths, data).payload(), paths.run_id, "main", land_mode="manual")
+    assert (words.cell, words.commands) == ("1 diverged", (f"git merge autohelix/{paths.run_id}",))
+
+
+def test_a_squash_merge_without_land_stays_diverged(project):
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    data = harness.paths.read_identity()
+    assert "landed" not in data
+    squash_main_onto_base(project, data)
+    assert relation(harness.paths, data) == ("diverged", 1, 1)
+
+
+def test_an_auto_resume_after_a_squash_merged_landing_refuses(project):
+    harness = Harness(project)
+    harness.run(Budget(until=1), report=False)  # auto landing records `landed`
+    data = harness.paths.read_identity()
+    assert data["landed"]["tip"] == harness.run_state.expected_tip
+    squash_main_onto_base(project, data)
+    with pytest.raises(RuntimeError, match=r"landed on main, which has its work as other commits .* --import"):
+        Harness(project)
+    delete(harness.paths)  # nothing unlanded: no --force needed
+    assert not harness.paths.run_dir.exists()

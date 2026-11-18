@@ -245,7 +245,7 @@ class Harness:
         else:  # a run continues its own tip: refused before anything is written
             data = planned.read_identity()
             if (land_mode or data.get("land") or "auto") == "auto" and (
-                    found := landing(planned, data)).relation == "behind" and has_baseline(planned):
+                    found := landing(planned, data)).relation in ("behind", "landed") and has_baseline(planned):
                 if is_live(planned):  # said first: the advice (`--land manual`) would lead straight to it
                     raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
                 raise RuntimeError(target_ahead_refusal(planned, data, found))
