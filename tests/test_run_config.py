@@ -153,21 +153,28 @@ def test_a_comment_or_formatting_edit_resumes(started):
     assert started.config.read_text() == CONFIG  # the stored copy never changes
 
 
-def refused(paths, result, keys):
+def refused(paths, result, keys, unlanded):
     short = short_id(paths.run_id)
     text = " ".join(result.output.split())
     assert result.exit_code == 1, result.output
-    assert (f"autohelix.yaml changed since run {short} started (changed: {keys}); the run keeps the config it "
+    said = (f"autohelix.yaml changed since run {short} started (changed: {keys}); the run keeps the config it "
             f"started with. To apply the new config, start a new run that continues from this one: "
-            f"`autohelix run --import {short}`. To continue this run, restore the file.") in text
+            f"`autohelix run --import {short}`. ")
+    assert said in text and text.endswith("To continue this run, restore the file."), text
+    between = text[text.index(said) + len(said):].removesuffix("To continue this run, restore the file.")
+    # Its unlanded commits (`unlanded`: manual landing, and the config's commit made main
+    # diverge): land them first, to start the new run from them.
+    assert between == (f"{short}'s 1 accepted commit isn't in main: land it first (`git merge "
+                       f"autohelix/{paths.run_id}`, or `git switch -c <branch> autohelix/{paths.run_id}`) to start "
+                       "from it. " if unlanded else ""), between
     assert History(paths.project, paths.run_id).get_last_iteration() == 1  # nothing spent
 
 
 def test_a_value_edit_refuses(started):
     (started.project / "autohelix.yaml").write_text(CONFIG.replace("Make a checked change", "Something else"))
     commit(started.project)
-    refused(started, cli(started.project, "resume", "-n", "1", "--no-report"), "goal")
-    refused(started, cli(started.project, "resume", short_id(started.run_id), "--no-report"), "goal")
+    refused(started, cli(started.project, "resume", "-n", "1", "--no-report"), "goal", unlanded=True)
+    refused(started, cli(started.project, "resume", short_id(started.run_id), "--no-report"), "goal", unlanded=True)
 
 
 def test_a_template_edit_refuses(project):
@@ -179,7 +186,7 @@ def test_a_template_edit_refuses(project):
     assert paths.template.read_text() == "Do it: {{ goal }}\n"
     assert "Do it: Make a checked change" in paths.prompt(1).read_text()
     (project / "prompt.md").write_text("Do it differently: {{ goal }}\n")
-    refused(paths, cli(project, "resume", "-n", "1", "--no-report"), "prompt_template")
+    refused(paths, cli(project, "resume", "-n", "1", "--no-report"), "prompt_template", unlanded=False)
     (project / "prompt.md").unlink()
     (project / "prompt.md").mkdir()  # there, but unreadable: a change too
     result = cli(project, "resume", "-n", "1", "--no-report")
@@ -198,7 +205,7 @@ def test_a_deleted_template_continues_but_other_keys_are_compared(project):
     git(project, "rm", "-q", "prompt.md")
     commit(project, "drop template")
     (project / "autohelix.yaml").write_text(CONFIG.replace("Make a checked change", "Other") + "prompt_template: prompt.md\n")
-    refused(paths, cli(project, "resume", "-n", "1", "--no-report"), "goal")
+    refused(paths, cli(project, "resume", "-n", "1", "--no-report"), "goal", unlanded=True)
     (project / "autohelix.yaml").write_text(CONFIG + "prompt_template: prompt.md\n")
     result = cli(project, "resume", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output

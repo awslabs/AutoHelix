@@ -92,6 +92,17 @@ def record_seconds(record: IterationResult) -> float:
     return 0.0
 
 
+def latest_agent_call(records: list[IterationResult]) -> dict[str, Any]:
+    """What the latest main-agent call recorded (`agents.call_fields`): `model` (the one
+    its output named, None if none) and `executable`; {} when no call recorded them."""
+    for record in sorted(records, key=lambda r: r.iteration, reverse=True):
+        usage = record.usage
+        if isinstance(usage, dict) and isinstance(usage.get("cli"), str):
+            return {key: value if isinstance(value, str) else None
+                    for key, value in ((k, usage.get(k)) for k in ("model", "executable"))}
+    return {}
+
+
 def _copy_error(error: BaseException) -> str:
     """One line for a copy failure (shutil.Error carries a list of per-file errors)."""
     if isinstance(error, shutil.Error) and error.args and isinstance(error.args[0], list):

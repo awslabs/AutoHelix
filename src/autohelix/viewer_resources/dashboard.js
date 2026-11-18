@@ -121,18 +121,12 @@ function metricCell(run) {
 }
 
 function landingCell(run) {
-  const target = run.target_branch;
-  // Words rather than a bare dash: each case says why there is nothing to land.
-  if (!target) return el('td', { className: 'muted', textContent: 'detached', title: 'Started on a detached HEAD: land with autohelix land --into <branch>' });
-  const l = run.landing;
-  if (!l) return el('td', { className: 'muted', textContent: 'unavailable', title: `Branch ${target} or the run's commits are not available` });
-  if (l.commits === 0) return el('td', { className: 'muted', textContent: run.accepted ? 'landed' : 'nothing yet', title: run.accepted ? `Everything accepted is in ${target}` : 'Nothing accepted yet' });
-  const n = plural(l.commits, 'commit');
-  if (l.fast_forward) {
-    return el('td', { className: 'landing', title: `${n} not in ${target} yet; ${target} can fast-forward: autohelix land ${run.id}` }, `${n} to land`);
-  }
-  return el('td', { className: 'landing', title: `${target} has commits this run lacks, so it cannot fast-forward. Merge by hand: git merge autohelix/${run.id}` },
-    `${n} · `, el('span', { className: 'warn', textContent: 'diverged' }));
+  // The runs table's words (runs.landing_words): `landed`, `2 to land`, `2 diverged`, `—`;
+  // the tooltip says what it means and what works.
+  const words = run.landing_words, relation = run.landing && run.landing.commits ? run.landing.relation : null;
+  if (relation === 'diverged') return el('td', { className: 'landing warn', title: words.text }, words.cell);
+  if (relation === 'ahead') return el('td', { className: 'landing', title: words.text }, words.cell);
+  return el('td', { className: 'muted', textContent: words.cell, title: words.text });
 }
 
 function lastActiveCell(run) {

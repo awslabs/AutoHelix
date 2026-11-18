@@ -54,13 +54,121 @@
   `extra_args`) and `agent.require_notes` (with its Stop hook,
   `check_notes.sh`). Every removed key or value is a config error naming its
   replacement, and a set `AUTOHELIX_CLAUDE_CMD` is an error naming
-  `AUTOHELIX_CLAUDE_CODE_CMD`. Runs whose stored config uses the old keys
+  `AUTOHELIX_CLAUDE_CODE_CMD` wherever an agent's executable is resolved
+  (`run`, `resume`, `report`, `ask`, `review`, bare `autohelix`; a `mock` run
+  ignores it), reported like a config error (no traceback). Runs whose stored config uses the old keys
   can't be resumed; start a new run.
 - **`ask:` and `review:` entries' `agent:` take `cli`, `model`, `effort`**;
   `autohelix ask` / `review` take `--cli` (`claude-code` or `codex`) instead
   of `--agent`, and `--command` is gone (both are errors naming the
   replacement).
 - The packaged config template and the setup skill write `model:` explicitly.
+
+### Which model ran
+
+- **Every agent call records which model ran**: the main agent's (in the
+  history's `calls`), each `ask`/`review` judge's and the run summary's (in
+  their usage records) carry `cli`, `model` (the model the CLI's output named:
+  Claude Code's `init` event, a `model` Codex's JSON events name; `null` when
+  it named none, as OpenCode's events do) and `executable` (the resolved path
+  started). A judge's usage record names its CLI as `cli` (was `agent`).
+- **Each segment's start record** in `segments.jsonl` records the main agent's
+  `executable`; `resume` warns when it differs from the run's last segment.
+- **The Agent line** of the `run`/`resume` header reads `Claude Code · opus ·
+  via ~/bin/claude-bedrock`: the configured model (`(its default)` without
+  `model:`), and the executable when it isn't the CLI's plain name on PATH
+  (was `claude-code (opus)`). `view`'s run screen and the web viewer's run page
+  show the model the latest main-agent call reported, else the configured one.
+- A name in `AUTOHELIX_<CLI>_CMD` is resolved on PATH, like the default.
+
+### One run/target relation
+
+- **The run's tip against its target branch is computed in one place**
+  (same, ahead, behind or diverged, with the commit counts each way) and worded
+  in one: resume's refusal and warnings, `land`, `delete`, the notices at `run`,
+  the runs table, `view --terminal` and the web run list all read it, so they
+  agree (the web list counted commits of the run's base the target lacked).
+- `view --json`'s `landing` gains `relation` and `behind`, and each run gets
+  `landing_words`: the runs table's `cell` and `text` (what it means and what
+  works; the web run list's tooltip). The web run list's landing cell now has
+  the runs table's words (`2 to land`, `2 diverged`, `landed`, `—`; was
+  `2 commits to land`, `nothing yet`, `detached`, `unavailable`).
+- **One word, "diverged", and the command that works**: a target that can't
+  fast-forward reads `diverged` everywhere (`view --terminal`'s
+  `(main has moved on)` is now `(diverged from main)`); `land`'s refusal,
+  auto landing's and `resume`'s warning name the counts each way and
+  `git merge autohelix/<id>` (and, for a run that lands automatically,
+  `autohelix resume <id> --land manual` to stop trying). `autohelix land <id>`
+  is offered (`run`'s and `view --terminal`'s `next`, the entry screen's
+  suggestion, `delete`'s refusal) only when the target can fast-forward;
+  for a diverged run they offer `git merge autohelix/<id>`.
+- Auto landing no longer refuses on its own when the target moved during the
+  segment ("Target main changed during this segment"; a manual run's warning
+  too): `land` decides, and fast-forwards a target that is still behind the
+  tip.
+- A run with no commits of its own to land is never `diverged` (it read
+  `0 diverged`): its target past its base reads `behind`.
+- The entry screen's suggestion names the state in the runs table's words
+  (`finished · 2 to land`, `finished · 2 diverged`; was `2 commits to land`).
+  `resume`'s refusal and warnings, the `run` notice about the previous run's
+  unlanded commits and `delete`'s refusal start from the same sentence the run
+  list's tooltip has ("Everything run k3f9 accepted is in main, which has 2
+  commits past its tip (committed after it)", "1 commit on autohelix/<id> not
+  in main yet; main can fast-forward: `autohelix land k3f9`"); an auto-landing
+  `resume`'s warning, `run --import`'s "land it first" and the refusal for a
+  run that never accepted a change ("main has 2 commits past run k3f9's base")
+  take their clauses from the same wording (`runs.landing_words`' `state` and
+  `missing`). `delete`'s refusal for a run whose branch is gone says what the
+  tooltip says ("Branch main is not available (`autohelix land k3f9 --into
+  <branch>` lands it on another branch)"); `--into` is offered only when the
+  target branch is the missing side, not when the run's own commits are gone.
+- One rule for "the run accepted a change", its tip isn't its base
+  (`Landing.accepted`), in every wording of a run/target relation;
+  `runs.landing_words` takes the `Landing`, and `view --json`'s
+  `landing_words` also has the end block's `note` and the `commands` that land
+  it, which the runs table, the entry screen and `view --terminal` show.
+
+### Landed stays landed after a squash-merged PR
+
+- **`autohelix land` (and auto landing) records `landed: {tip, target, at}`
+  in `run.json`.** A run whose tip is the one it landed reads `landed` when the
+  target lacks the tip but the recorded `target` is that same branch (a
+  squash-merged or rebased PR): the runs table, `view`, the web run list, the
+  entry screen and `delete` (no `--force` needed) agree. Commits accepted after
+  it count as unlanded (`1 diverged`), applied with `git cherry-pick <landed
+  tip>..autohelix/<id>` (a merge would re-apply the squashed commits); an
+  auto-landing `resume` refuses such a run, as one whose target moved on. Only
+  a landing on the run's own target is recorded, and only for a run that
+  accepted a commit: a landing on another branch (`land --into other`) leaves
+  the record alone. A squash merge without `land` stays `diverged`.
+  docs/cli.md has the PR flow (`autohelix land`, push, squash-merge, reset the
+  local branch to the remote's). The record is the answer, the code isn't
+  compared: a landed PR that is abandoned, its branch reset, still reads
+  landed. `land` takes a `behind` target as already there only when it
+  contains the tip. run.json's `base_commit` and `landed.tip` reach git only
+  as commit ids (else they count as missing).
+- The entry screen never cuts a suggested command: one that doesn't fit beside
+  its run goes on its own line.
+
+### The notices at `run` and `resume`
+
+- **`run --import ID` says one thing, about the imported run**: when its
+  accepted commits aren't in the branch you start from, "k3f9's 2 accepted
+  commits aren't in main: land it first (`autohelix land k3f9`, or `git switch
+  -c <branch> autohelix/<id>`) to start from them"; of the other runs, only
+  the "also running for this config" warning.
+  `resume`'s config-change refusal says the same for a run with unlanded
+  commits. The fork recipe in docs/cli.md uses `git switch -c`.
+- **A run without an accepted baseline is a disposable attempt**: the baseline
+  error ends "Fix it and run `autohelix run` again (`autohelix delete <id>`
+  removes this attempt)"; the config-change refusal and the "Previous run"
+  notice no longer offer `--import` or `resume` for it.
+- **`run` with auto landing warns about an uncommitted config or prompt
+  template** (untracked or modified, not ignored): "commit autohelix.yaml
+  first: a commit on main after this run lands makes `resume` refuse".
+- **`resume --group NAME` without `--land` on a run that lands automatically**
+  says "<id> still lands automatically; pass `--land manual` for a group" (the
+  landing mode doesn't change as a side effect).
 
 ### Runs keep the machine awake
 

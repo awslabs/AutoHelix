@@ -32,16 +32,16 @@ from autohelix.terminal import LiveRow, Row, budget_text
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunState, select_run, reconcile, land, git,
                             claim_copies, config_relative, critical_section, new_run_name,
-                            iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, unlanded,
-                            WHY_LIMIT,
-                            imported_run, is_live, target_ahead, target_ahead_refusal,
+                            iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, landing,
+                            Landing, LandingWords, landing_words, WHY_LIMIT,
+                            imported_run, is_live, group_landing_note, has_baseline, land_first, target_ahead_refusal,
                             write_json)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning, StopCheckResult)
 from autohelix.events import iteration_fields
-from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_stop_request
+from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_segments, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, append_usage, read_usage, superseded_marker
 from autohelix.formatting import clean_block, format_cap, format_cost, format_duration, format_total_cost
 from autohelix.iteration_time import format_limit
@@ -183,7 +183,7 @@ class Harness:
         agent copy shows that run's state read-only, and the baseline's observe entries
         get its last outputs as `$AUTOHELIX_PREVIOUS`. `why` is the new run's note
         (`run --why`). A resume refuses, before writing anything, when its target branch
-        moved past its tip and it lands automatically (`runs.target_ahead`).
+        moved past its tip and it lands automatically (`runs.landing`: `behind`).
 
         `check_only` (`run --check`): make every check up to the first write (config,
         template, clean checkout, preflight) and stop there; the object is good for
@@ -245,10 +245,10 @@ class Harness:
         else:  # a run continues its own tip: refused before anything is written
             data = planned.read_identity()
             if (land_mode or data.get("land") or "auto") == "auto" and (
-                    count := target_ahead(planned, data)):
+                    found := landing(planned, data)).relation in ("behind", "landed") and has_baseline(planned):
                 if is_live(planned):  # said first: the advice (`--land manual`) would lead straight to it
                     raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
-                raise RuntimeError(target_ahead_refusal(planned, data, count))
+                raise RuntimeError(target_ahead_refusal(planned, data, found))
         if check_only:  # nothing written; the scope advice a run prints at its start too
             if warning := scope_warning(self.config):
                 self._warn(warning)
@@ -285,7 +285,11 @@ class Harness:
             short = short_id(self.paths.run_id)
             notices.append(("info", f"{short} joins group {group} from its next iteration." if group
                             else f"{short} leaves group {self.run_info['group']}."))
+        if self.paths.run_id in existing and (note := group_landing_note(self.paths, self.run_info, group, land_mode)):
+            notices.append(("warn", note))
         self.land_mode = land_mode or self.run_info.get("land") or "auto"
+        if self.paths.run_id not in existing and self.land_mode == "auto":
+            notices.extend(("warn", text) for text in self._uncommitted_config())
         for level, text in notices:
             if level == "warn":
                 self._warn(text)
@@ -303,7 +307,6 @@ class Harness:
             self._land_attempted = False
             self._segment_started = False
             self._segment: int | None = None  # this segment's number (segments.jsonl, status, stop requests)
-            self._segment_target_tip: str | None = None
             self._agent_logs = {}
             if warning:
                 self._warn(warning)
@@ -325,6 +328,24 @@ class Harness:
         except BaseException:
             self.close()
             raise
+
+    def _uncommitted_config(self) -> list[str]:
+        """A new auto-landing run's warning when its config file or prompt template is
+        untracked or modified (not ignored): committing it after the run lands puts the
+        branch past the run's tip, and `resume` then refuses."""
+        branch = self.run_info.get("target_branch")
+        files = [f for f in (self.config_file, self.config.prompt_template) if f is not None]
+        if not branch or not files:
+            return []
+
+        def uncommitted(path: Path) -> bool:
+            def fails(*args: str) -> bool:
+                return git(self.project_path, "--no-optional-locks", *args, "--", str(path), check=False).returncode != 0
+            if not fails("check-ignore", "-q"):
+                return False  # ignored: committing it never moves the branch
+            return fails("ls-files", "--error-unmatch") or fails("diff", "--quiet", "HEAD")
+        return [f"commit {config_relative(self.project_path, f)} first: a commit on {branch} after this run lands "
+                "makes `resume` refuse." for f in files if uncommitted(f)]
 
     def _run_config(self, paths: RunPaths, check: bool = True):
         """A run's stored config (`load_run_config`). With `check`, refuses, before
@@ -357,11 +378,16 @@ class Harness:
         except ConfigError as e:
             changed = f"it no longer reads: {e}"
         if changed:
+            said = f"{data['config_path']} changed since run {short} started ({changed}); "
+            if not has_baseline(paths):  # a failed first attempt: nothing to continue or import
+                raise RuntimeError(f"{said}run {short} has no accepted baseline: start a new run, "
+                                   f"`{run_command(data['config_path'])}` (`autohelix delete {short}` removes "
+                                   "this attempt).")
+            first = land_first(paths, data, data.get("target_branch"))
             raise RuntimeError(
-                f"{data['config_path']} changed since run {short} started ({changed}); the run keeps the "
-                f"config it started with. To apply the new config, start a new run that continues from "
-                f"this one: `{run_command(data['config_path'])} --import {short}`. To continue this run, "
-                "restore the file.")
+                f"{said}the run keeps the config it started with. To apply the new config, start a new run "
+                f"that continues from this one: `{run_command(data['config_path'])} --import {short}`"
+                f"{'. ' + first if first else '.'} To continue this run, restore the file.")
         return config
 
     def _metric_label(self, name: str) -> str:
@@ -429,7 +455,9 @@ class Harness:
         name = self.run_info.get("name") or self.project_path.name
         self.console.print()
         title = terminal.title(f"run {short_id(self.paths.run_id)}", name, terminal.clock(), version=terminal.version())
-        fields = terminal.run_fields(self.config, budget_text(budget, start_iter - 1))
+        agent = terminal.agent_text(self.config.agent.cli, self.config.agent.model,
+                                    getattr(self.agent, "executable", None))
+        fields = terminal.run_fields(self.config, budget_text(budget, start_iter - 1), agent)
         if not self.console.is_terminal:  # no live row to show them under
             fields.append(("Steer", terminal.steer_text(short_id(self.paths.run_id), interrupt=False)))
         terminal.print_lines(self.console, terminal.header(title, fields, width, terminal.shows_mark(self.console)))
@@ -1345,6 +1373,15 @@ class Harness:
             if any(r.iteration == 0 and r.accepted for r in self.history.load()):
                 raise
             self._write_baseline(baseline)
+            if isinstance(error, RuntimeError) and len(error.args) == 1 and isinstance(error.args[0], str):
+                # A run without an accepted baseline is a disposable attempt: fixing the
+                # config means a new run (a resume refuses a changed config).
+                short = short_id(self.paths.run_id)
+                said = error.args[0]  # after a command's output lines, on a line of its own
+                said = f"{said}\n" if "\n" in said else f"{said.rstrip('.')}. "
+                error.args = (f"{said}Fix it and run "
+                              f"`{run_command(config_relative(self.project_path, self.config_file))}` again "
+                              f"(`autohelix delete {short}` removes this attempt).",)
             raise
         finally:
             workspace.close()
@@ -1498,7 +1535,7 @@ class Harness:
                    check=False).stdout.strip() if target else None
 
     def _land(self) -> None:
-        """Auto-land at segment end; in every mode, refuse/warn if the target moved.
+        """Auto-land at segment end (`runs.land` refuses a target that can't fast-forward).
         Keeps what landed for the ending (`_landing`: `N commits on <branch>`, `N
         commits on autohelix/<id> (manual landing)`, `failed: …`; `_landed_count`)."""
         if not self._segment_checked or self._land_attempted:
@@ -1509,23 +1546,15 @@ class Harness:
         # attempted, the finally does not retry it.
         with critical_section():
             try:
-                if target and self._segment_target_tip is not None and self._target_tip() != self._segment_target_tip:
-                    if self.land_mode == "auto":
-                        raise AutoHelixRunError(
-                            f"Target {target} changed during this segment; leaving user commits untouched. "
-                            f"Review them, then use autohelix land {short_id(self.paths.run_id)} explicitly.")
-                    message = (f"Target {target} changed during this segment. Review those commits "
-                               f"before autohelix land {short_id(self.paths.run_id)}.")
-                    self._warn(message)
-                    self.log.warn(message)
                 if self.land_mode == "auto":
                     before = self._target_tip()
                     land(self.paths, self.run_info, self.run_state.expected_tip)
                     self._landed_count = self._commits_between(before, self.run_state.expected_tip)
                     self._landing = terminal.landed(self._landed_count, target)
                 else:
-                    self._landing = terminal.unlanded(self._unlanded(), f"autohelix/{self.paths.run_id}",
-                                                      "manual landing")
+                    found, words = self._relation()
+                    self._landing = terminal.unlanded(found.ahead, f"autohelix/{self.paths.run_id}", words.note,
+                                                      "yellow" if found.relation == "diverged" else None)
             except Exception as e:
                 self._landing = terminal.not_landed(e)
                 self._land_error = e
@@ -1574,10 +1603,14 @@ class Harness:
         # Records an earlier segment wrote but never logged (it died in between): theirs,
         # before this start.
         self.segment_log.catch_up(self.history.load())
+        executable = getattr(self.agent, "executable", None)
+        if previous := read_segments(self.paths.segments):
+            if (before := previous[-1].get("executable")) and executable and before != executable:
+                self._warn(f"The agent now starts {terminal.home_path(executable)} "
+                           f"(the run's last segment started {terminal.home_path(before)}).")
         self.segment_log.start(segment=self._segment, started_at=segment_started_at,
                                start_iteration=0 if start_iter == 1 and needs_baseline else start_iter,
-                               budget={**asdict(budget), "default": budget.default})
-        self._segment_target_tip = self._target_tip()
+                               budget={**asdict(budget), "default": budget.default}, executable=executable)
 
         # Again at each segment: the ignore rules may have changed since this Harness was
         # created (a long-lived programmatic one).
@@ -1784,8 +1817,9 @@ class Harness:
         try:
             table = self._rows()
             short = short_id(self.paths.run_id)
-            # `autohelix land` whenever commits wait: a manual run, or an auto landing that failed.
-            commands = terminal.next_commands(short, land=self._landed_count is None and bool(self._unlanded()))
+            # What lands the commits that wait (a manual run, an auto landing that failed):
+            # `autohelix land` when the target can fast-forward, else `git merge`.
+            commands = terminal.next_commands(short, also=self._relation()[1].commands)
             lines = table.ending(outcome, spent=format_total_cost(self.history.cost_usages), landing=self._landing,
                                  commands=commands, files=self._files)
         except Exception as e:  # noqa: BLE001 - the outcome line still shows
@@ -1793,8 +1827,11 @@ class Harness:
             lines = [Text(f"  {outcome[0]}  {outcome[1]}")]
         self._print_lines(lines)
 
-    def _unlanded(self) -> int:
+    def _relation(self) -> tuple[Landing, LandingWords]:
+        """The run's relation to its target now (`runs.landing`) and its words."""
+        target = self.run_info.get("target_branch")
         try:
-            return unlanded(self.paths, self.run_info)
+            found = landing(self.paths, self.run_info)
         except Exception:  # noqa: BLE001 - display only
-            return 0
+            found = Landing(None, target, None, None)
+        return found, landing_words(found, self.paths.run_id, self.land_mode)

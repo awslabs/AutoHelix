@@ -106,10 +106,14 @@ For requested resumption, use `autohelix resume <id>`, never `autohelix run`:
 `run` always starts a new run with fresh notes. `resume` only continues the
 same run (its stored config, its own tip): to apply an edited config, to keep
 going after the target branch moved past the run (it landed and the user
-committed more), or to fork from an old run (`git checkout autohelix/<id>`
-first), start a new run that continues from it, `autohelix run <config> --import
+committed more), or to fork from an old run (`git switch -c <branch>
+autohelix/<id>` first), start a new run that continues from it, `autohelix run <config> --import
 <id>`: it sees that run's notes and history read-only and continues its
-observations at the baseline. When the branch moved past a run that lands
+observations at the baseline. When the branch lacks that run's accepted
+commits, `run --import` says "land it first" with the commands; do that
+unless the user wants to start without them. A run whose first baseline
+failed is a disposable attempt: fix the config and `autohelix run` again
+(`autohelix delete <id>` removes it). When the branch moved past a run that lands
 automatically, `resume` refuses; `autohelix resume <id> --land manual`
 continues the same run from its own tip without landing. Budgets count each
 segment: `resume -n 5 --cost 3` is 5 more iterations, up to $3 more, and a

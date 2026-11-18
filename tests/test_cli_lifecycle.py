@@ -41,8 +41,9 @@ def test_run_warns_about_unlanded_commits_of_the_previous_run(project):
     result = cli(project, "run", "-n", "1", "--no-report")
     short = short_id(first.run_id)
     assert result.exit_code == 0, result.output
-    assert f"{short} has 1 unlanded commit;" in result.output
-    assert f"`autohelix archive {short}`" in result.output
+    assert (f"{short}: 1 commit on autohelix/{first.run_id} not in main yet; main can fast-forward: "
+            f"`autohelix land {short}`. This run starts from main without it") in " ".join(result.output.split())
+    assert f"`autohelix archive {short}`" in " ".join(result.output.split())
 
 
 def test_run_warns_but_starts_beside_a_live_run(project):
@@ -133,7 +134,15 @@ def test_delete_refuses_unlanded_commits_unless_forced(project):
     short = short_id(second.run_id)
     result = cli(project, "delete", short)
     assert result.exit_code == 1
-    assert f"Run {short} has 1 unlanded commit on autohelix/{second.run_id}" in result.output
+    assert (f"Not deleting run {short}, which has 1 unlanded commit: 1 commit on autohelix/{second.run_id} not in "
+            f"main yet; main can fast-forward: `autohelix land {short}`.") in " ".join(result.output.split())
+    git(project, "switch", "-qc", "other")
+    git(project, "branch", "-qD", "main")  # its target gone: the same words as the runs table's tooltip
+    result = cli(project, "delete", short)
+    assert result.exit_code == 1
+    assert (f"which has 1 unlanded commit: Branch main is not available (`autohelix land "
+            f"{short} --into <branch>` lands it on another branch).") in " ".join(result.output.split())
+    git(project, "switch", "-qC", "main")  # back
     result = cli(project, "delete", "--force", short)
     assert result.exit_code == 0, result.output
     assert not second.run_dir.exists()

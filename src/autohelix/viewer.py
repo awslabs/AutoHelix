@@ -44,10 +44,12 @@ from autohelix.agents import AgentEventKind
 from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained, open_dir as _open_dir, open_file as _open_file, open_run_log
 from autohelix.config import ConfigError, MetricGate, load_config, template_text
 from autohelix.costs import summarize_costs
-from autohelix.history import History, record_seconds
-from autohelix.runs import RunPaths, config_relative, git, is_archived, is_transcript, last_activity, load_run_config
+from autohelix.history import History, latest_agent_call, record_seconds
+from autohelix.runs import (COMMIT, RunPaths, config_relative, git, is_archived, is_transcript, landing, landing_words,
+                            last_activity, load_run_config)
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
+from autohelix.terminal import agent_text
 from autohelix.run_status import pending_stop, read_run_status, running_iteration
 from autohelix.workspace import ITERATION_DIR
 
@@ -55,7 +57,6 @@ MAX_TEXT = 256 * 1024
 MAX_EVENTS = 3000  # merged events kept per log; tool output is clipped to keep this small
 MAX_ARTIFACT = 20 * 1024 * 1024
 MAX_FILES = 500  # captured files listed per observe entry
-COMMIT = re.compile(r"[0-9a-f]{7,64}")
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
@@ -265,7 +266,9 @@ class RunData:
             cached = self._configs[path] = (key, config, _read_user_file(path))
         return cached[1], path
 
-    def _config_summary(self, config, path: Path | None) -> dict | None:
+    def _config_summary(self, config, path: Path | None, called: dict | None = None) -> dict | None:
+        """The run page's config: its file and text, and the header's fields; `agent` with
+        the model the latest main-agent call reported (`called`), else the configured one."""
         if path is None:
             return None
         cached = self._configs.get(path)
@@ -284,7 +287,8 @@ class RunData:
             summary["template"] = {"file": config_relative(self.project, config.prompt_template), "text": text}
         if config:
             summary.update(
-                agent=" · ".join(filter(None, [config.agent.cli, config.agent.model])),
+                agent=agent_text(config.agent.cli, (called or {}).get("model") or config.agent.model,
+                                 (called or {}).get("executable")),
                 gates=[gate.text for gate in config.gates],
                 observe=[{"name": entry.name, "review": entry.review is not None, "metrics": entry.metrics}
                          for entry in config.observe],
@@ -331,7 +335,7 @@ class RunData:
             # `autohelix stop` asked the running segment to end, as on the run list.
             "stop_requested": pending_stop(self.paths, status),
             "run_id": self.paths.run_id,
-            "config": self._config_summary(config, config_path),
+            "config": self._config_summary(config, config_path, latest_agent_call(records)),
             "notes_files": sorted(self._notes_files(), key=_note_order),
             "iterations": iterations,
             "cost": {
@@ -882,7 +886,7 @@ class ProjectRuns:
         self.project = project.resolve()
         self._histories: dict[str, History] = {}
         self._configs: dict[Path, tuple[float, dict]] = {}
-        self._counts: dict[tuple[str, str], int | None] = {}
+        self._landings: dict = {}  # `runs.landing`'s cache
 
     def exists(self, run_id: str) -> bool:
         return bool(re.fullmatch(RUN_ID, run_id)) and (RunPaths(self.project).runs / run_id / "run.json").is_file()
@@ -948,18 +952,6 @@ class ProjectRuns:
         self._configs[path] = (mtime, summary)
         return summary
 
-    def _landing(self, target_tip: str | None, tip: str | None) -> dict | None:
-        """Commits on the run that its target lacks, and whether a fast-forward could add them."""
-        if not (target_tip and tip and COMMIT.fullmatch(target_tip) and COMMIT.fullmatch(tip)):
-            return None
-        key = (target_tip, tip)
-        if key not in self._counts:
-            count = git(self.project, "rev-list", "--count", f"{target_tip}..{tip}", check=False)
-            ancestor = git(self.project, "merge-base", "--is-ancestor", target_tip, tip, check=False)
-            self._counts[key] = None if count.returncode or not count.stdout.strip().isdigit() else {
-                "commits": int(count.stdout), "fast_forward": ancestor.returncode == 0}
-        return self._counts[key]
-
     @staticmethod
     def _metrics(records, directions: dict[str, str]) -> dict | None:
         """The latest accepted measurement (the code a land would deliver) against the baseline.
@@ -986,9 +978,11 @@ class ProjectRuns:
         attempts = [r for r in records if r.iteration > 0]
         cost = summarize_costs([usage for r in records for usage in r.cost_usages] + history.summary_usages())
         budget = status or {}
-        tip = refs.get(paths.ref)
         target = data.get("target_branch")
-        target_tip = refs.get(f"refs/heads/{target}") if target else None
+        accepted = sum(1 for r in attempts if r.accepted)
+        found = landing(paths, data, refs=refs, cache=self._landings)
+        land_mode = data.get("land") or "auto"
+        words = landing_words(found, run_id, land_mode)
         return {
             "id": run_id,
             "name": data.get("name"),
@@ -1006,7 +1000,7 @@ class ProjectRuns:
                 "segment", "entry")},
             # `autohelix stop` asked the running segment to end ({requested_at, why, now}), else None.
             "stop_requested": pending_stop(paths, status),
-            "accepted": sum(1 for r in attempts if r.accepted),
+            "accepted": accepted,
             "metrics": self._metrics(records, config.get("directions") or {}),
             # The caps of the latest segment (`run`/`resume` flags), from its status; None
             # where it had none. Iterations and cost as run totals (spent before it plus its
@@ -1020,10 +1014,16 @@ class ProjectRuns:
                 "seconds": sum(record_seconds(r) for r in records),
                 "max_seconds": budget.get("max_time_seconds"),  # the segment's, not a run total
             },
+            # The latest main-agent call's reported model and executable (`latest_agent_call`).
+            "agent": latest_agent_call(records),
             "target_branch": target,
-            "landing": self._landing(target_tip, tip),
+            "landing": found.payload(),  # `runs.landing`'s relation, None when a side is missing
+            # Its words (`landing_words`), the runs table's and the run list's: the cell, the
+            # tooltip, the end block's note and the commands that land it.
+            "landing_words": {"cell": words.cell, "text": words.sentence, "note": words.note,
+                              "commands": list(words.commands)},
             "group": data.get("group"),
-            "land": data.get("land") or "auto",  # recorded at creation
+            "land": land_mode,  # recorded at creation
             **run_notes(data),
         }
 

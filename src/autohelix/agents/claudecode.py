@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, command_path
+from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_copy_env
 
@@ -20,6 +20,9 @@ class ClaudeCodeAgent:
     def __init__(self, config: AgentConfig, heartbeat_seconds: int = 30):
         self.config = config
         self.heartbeat_seconds = heartbeat_seconds
+        # Resolved once, when the backend is created: a variable that is gone is a
+        # ConfigError before anything runs. Recorded with every call (`call_fields`).
+        self.executable = command_path("claude-code")
         self._tool_names: dict[int, str] = {}
         self._tool_inputs: dict[int, str] = {}
         self._active_kind: AgentEventKind | None = None
@@ -31,9 +34,10 @@ class ClaudeCodeAgent:
         self._result_error: str | None = None
         self._final_text: str | None = None
         self._structured_output = None
+        self._model: str | None = None  # the model the `init` event names
 
     def _command_path(self) -> str:
-        return command_path("claude-code")
+        return self.executable
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [
@@ -111,6 +115,8 @@ class ClaudeCodeAgent:
         if event_type == "system":
             subtype = payload.get("subtype", "event")
             model = payload.get("model")
+            if subtype == "init" and isinstance(model, str) and model:
+                self._model = model
             detail = f" model={model}" if model else ""
             self._emit(event_callback, AgentEventKind.STATUS, f"{subtype}{detail}")
             return
@@ -285,6 +291,7 @@ class ClaudeCodeAgent:
         self._result_error = None
         self._final_text = None
         self._structured_output = None
+        self._model = None
 
         # Build env with remapped PYTHONPATH for the copy
         env = build_copy_env(project_path, copy_path) if project_path else None
@@ -311,6 +318,7 @@ class ClaudeCodeAgent:
                 success=False,
                 exit_code=None,
                 error=f"'{command}' not found. Set AUTOHELIX_CLAUDE_CODE_CMD.",
+                usage=call_fields("claude-code", self.executable, None),
             )
 
         if result.timed_out:
@@ -336,7 +344,7 @@ class ClaudeCodeAgent:
             success=result.exit_code == 0 and error is None,
             exit_code=result.exit_code,
             error=error,
-            usage=self._usage,
+            usage={**self._usage, **call_fields("claude-code", self.executable, self._model)},
             final_text=self._final_text,
             structured_output=self._structured_output,
         )

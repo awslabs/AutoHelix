@@ -18,12 +18,13 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from rich.cells import cell_len
 from rich.text import Text
 
 from autohelix import terminal
 from autohelix.formatting import clean, format_cap, format_duration
 from autohelix.iteration_time import format_limit
-from autohelix.runs import short_id
+from autohelix.runs import LandingWords, short_id
 from autohelix.terminal import Row, Table
 
 WORDS = {"crashed": "stopped unexpectedly", "idle": "not started"}  # others as they are (dashboard.js)
@@ -112,14 +113,15 @@ def _notes(run: dict) -> str:
                                     run.get("archive_why") and f"archived: {run['archive_why']}"]))
 
 
+def _words(run: dict) -> LandingWords:
+    """A run payload's `landing_words` (`runs.landing_words`, as `view --json` has them)."""
+    words = run["landing_words"]
+    return LandingWords(words["cell"], words["text"], words["note"], tuple(words["commands"]))
+
+
 def _landing(run: dict) -> str:
-    """The dashboard's landing cell: `landed`, `2 to land`, `2 diverged`."""
-    landing = run["landing"]  # None without a target branch or tip
-    if not landing:
-        return "—"
-    if landing["commits"] == 0:
-        return "landed" if run["accepted"] else "—"
-    return f"{landing['commits']} {'to land' if landing['fast_forward'] else 'diverged'}"
+    """The dashboard's landing cell: `landed`, `2 to land`, `2 diverged` (`runs.landing_words`)."""
+    return _words(run).cell
 
 
 def _directions(runs: list[dict]) -> dict[str, str]:
@@ -198,16 +200,9 @@ def _landed(run: dict, made: int) -> tuple[str, str, str | None] | None:
     if not landing or not target:
         return None
     if n := landing["commits"]:
-        if not landing["fast_forward"]:
-            return terminal.unlanded(n, f"autohelix/{run['id']}", f"{target} has moved on", "yellow")
-        return terminal.unlanded(n, f"autohelix/{run['id']}", "manual landing" if run.get("land") == "manual" else "")
+        return terminal.unlanded(n, f"autohelix/{run['id']}", _words(run).note,
+                                 "yellow" if landing["relation"] == "diverged" else None)
     return terminal.landed(made, target)
-
-
-def _can_land(run: dict) -> bool:
-    """Whether `autohelix land` would fast-forward the target onto the run's commits."""
-    landing = run.get("landing") or {}
-    return bool(run.get("target_branch") and landing.get("commits") and landing.get("fast_forward"))
 
 
 def _live_what(run: dict) -> str:
@@ -237,7 +232,10 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
         budget = [f"{progress['max_iterations']} iterations"] if progress.get("max_iterations") else []
         budget += [format_cap(progress["max_cost_usd"])] if progress.get("max_cost_usd") is not None else []
         budget += [left] if (left := time_cap(run, now)) else []
-        fields = terminal.run_fields(config, " · ".join(budget))
+        called = run.get("agent") or {}  # the latest main-agent call's (`latest_agent_call`)
+        agent = terminal.agent_text(config.agent.cli, called.get("model") or config.agent.model,
+                                    called.get("executable"))
+        fields = terminal.run_fields(config, " · ".join(budget), agent)
         table = Table.of(config, width)
     else:
         fields = [("Goal", run.get("title") or (run.get("goal") or "").split("\n")[0]),
@@ -262,7 +260,7 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
         tail = [Text(), terminal.rule(width), *table.outcome_lines(_outcome(run))]
     else:
         accepted = sum(1 for r in table.rows if r.accepted and r.iteration > 0 and r.commit)
-        commands = terminal.next_commands(short, view=False, land=_can_land(run))
+        commands = terminal.next_commands(short, view=False, also=_words(run).commands)
         tail = table.ending(_outcome(run), spent=terminal.money(run["progress"]["cost_usd"],
                                                                  run["progress"]["cost_incomplete"]),
                             landing=_landed(run, accepted), commands=commands, files=list(saved.files))
@@ -380,26 +378,27 @@ def suggestion(run: dict) -> tuple[str, str] | None:
     """What the entry screen says under the table about a run: its state in the
     dashboard's words with where it is, and the one command that applies, or None:
     `view` a live run; `resume` an interrupted or crashed one, also with commits to land
-    (resuming is the point, and an auto-landing resume lands them); else `land` waiting
-    commits; else `resume` one that failed or never started."""
+    (resuming is the point, and an auto-landing resume lands them); else what lands
+    waiting commits (`runs.LandingWords.commands`: `land` when the target can
+    fast-forward, `git merge autohelix/<id>` when it diverged); else `resume` one that
+    failed or never started."""
     if run.get("error"):
         return None
     short = short_id(run["id"])
     state = (run.get("status") or {}).get("state")
+    lands = _words(run).commands
+    where = f"iteration {_under_way(run) or run['progress']['iterations']}"
     if _live(run):
-        verb = "view"
+        command = f"autohelix view {short}"
     elif state in ("interrupted", "crashed"):
-        verb = "resume"
-    elif _can_land(run):
-        verb = "land"
+        command = f"autohelix resume {short}"
+    elif lands:
+        command, where = lands[0], _words(run).cell
     elif state in ("failed", "idle", None):
-        verb = "resume"
+        command = f"autohelix resume {short}"
     else:
         return None
-    landing = run.get("landing") or {}
-    where = (f"{landing['commits']} commit{'s' * (landing['commits'] != 1)} to land" if verb == "land"
-             else f"iteration {_under_way(run) or run['progress']['iterations']}")
-    return f"{_word(run)} · {where}", f"autohelix {verb} {short}"
+    return f"{_word(run)} · {where}", command
 
 
 def entry_header(folder: str, width: int = 100, git: tuple | None = None, version: str | None = None
@@ -428,9 +427,12 @@ def entry_lines(data: dict, width: int = 100, now: float | None = None) -> list[
             ids = max(len(short) for short, *_ in found)
             states = max(len(state) for _, state, _ in found)
             for short, state, command in found:
-                text = Text(f"  {short:<{ids}}  {clean(state):<{states}}  ")
-                text.append("next: ", style="dim").append(command, style=terminal.TEAL)
-                lines.append(terminal.cut(text, width))
+                text = Text(f"  {short:<{ids}}  {clean(state):<{states}}  ").append("next: ", style="dim")
+                if text.cell_len + cell_len(command) <= width:
+                    lines.append(text.append(command, style=terminal.TEAL))
+                else:  # a command is never cut: on its own line(s), broken at spaces only
+                    lines.append(terminal.cut(text, width))
+                    lines += terminal.hanging("    ", command, width, terminal.TEAL)
     footer = [f"{archived} archived" if shown else f"no current runs, {archived} archived"] if archived else []
     return lines + [Text()] + _footer(footer, width)
 

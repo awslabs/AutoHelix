@@ -8,7 +8,7 @@
   c9d1 sorting  stopped unexpectedly   7/7  57,520.8  2 to land  $2.65  Nov 12        Make sort_list faster in sort.py.
 
   m2xq  running · iteration 4               next: autohelix view m2xq
-  xax8  finished · 1 commit to land         next: autohelix land xax8
+  xax8  finished · 1 to land                next: autohelix land xax8
   0mws  interrupted · iteration 7           next: autohelix resume 0mws
   c9d1  stopped unexpectedly · iteration 7  next: autohelix resume c9d1
 

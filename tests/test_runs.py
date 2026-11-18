@@ -469,7 +469,7 @@ def test_resume_keeps_its_own_tip_past_user_commits_and_land_divergence_is_safe(
     (project / "user.txt").write_text("user")
     git(project, "add", ".")
     git(project, "commit", "-qm", "user work")
-    with pytest.raises(RuntimeError, match="has 1 commit past run .*'s tip"):
+    with pytest.raises(RuntimeError, match="which has 1 commit past its tip"):
         Harness(project, land_mode="auto")  # refused before anything is written
     resumed = Harness(project, land_mode="manual")
     assert resumed.run_state.expected_tip == tip  # a run continues its own code
@@ -784,7 +784,8 @@ def test_target_behind_after_baseline_warns_only_for_auto_landing(project):
     harness.run(Budget(until=1), report=False)
     base = harness.run_info["base_commit"]
     warning = reconcile(harness.paths, harness.run_info, harness.history, "auto")[1]
-    assert "is behind" in warning and "auto landing" in warning
+    assert "not in main yet. Auto landing lands it again" in warning
+    assert "`autohelix land" not in warning  # the segment lands it: no command to run by hand
     # In manual mode, behind just means not landed yet.
     assert reconcile(harness.paths, harness.run_info, harness.history, "manual")[1] is None
     assert git(project, "rev-parse", "HEAD").stdout.strip() == base
@@ -812,7 +813,9 @@ def test_refused_first_start_creates_no_identity(project, problem, capsys, monke
     assert not git(project, "for-each-ref", "--format=%(refname)", "refs/autohelix/").stdout.strip()
 
 
-def test_manual_mode_warns_when_target_moves_during_segment(project, monkeypatch, capsys):
+def test_manual_mode_says_diverged_when_target_moves_during_segment(project, monkeypatch, capsys):
+    """A commit on the target during the segment: the ending says the run diverged and
+    offers `git merge`, not `autohelix land` (which only fast-forwards)."""
     harness = Harness(project, land_mode="manual")
     target = harness.run_info["target_branch"]
     real = harness.run_agent
@@ -823,7 +826,11 @@ def test_manual_mode_warns_when_target_moves_during_segment(project, monkeypatch
 
     monkeypatch.setattr(harness, "run_agent", agent)
     harness.run(Budget(until=1), report=False)
-    assert f"! Target {target} changed during this segment" in " ".join(capsys.readouterr().out.split())
+    out = " ".join(capsys.readouterr().out.replace(" · ", " ").split())  # the next line wraps
+    run_id, short = harness.paths.run_id, short_id(harness.paths.run_id)
+    assert f"unlanded 1 commit on autohelix/{run_id} (diverged from {target})" in out
+    assert f"next autohelix view {short} autohelix resume {short} git merge autohelix/{run_id} page" in out
+    assert "changed during this segment" not in out and f"autohelix land {short}" not in out
 
 
 def test_ask_from_an_agent_without_log_dir_records_absolute_log(tmp_path, monkeypatch):

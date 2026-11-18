@@ -12,7 +12,10 @@ from autohelix.agents.codex import CodexAgent
 from autohelix.agents.opencode import OpenCodeAgent
 from autohelix.checks import preflight_check
 from autohelix.cli import main
-from autohelix.config import Config
+from autohelix.config import Config, ConfigError
+from autohelix.history import History
+from autohelix.runs import project_runs
+from tests.helpers import configure, latest_run
 
 
 def _errors(agent) -> list[str]:
@@ -96,13 +99,65 @@ def _after(cmd: list[str], flag: str) -> list[str]:
     return cmd[cmd.index(flag):cmd.index(flag) + 2]
 
 
-def test_the_old_claude_variable_is_an_error(monkeypatch, tmp_path):
+OLD_VARIABLE = "AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD: set that instead (and unset AUTOHELIX_CLAUDE_CMD)"
+
+
+@pytest.mark.parametrize("cli, agent_class", [
+    ("claude-code", ClaudeCodeAgent), ("codex", CodexAgent), ("opencode", OpenCodeAgent)])
+def test_the_old_claude_variable_is_a_config_error(cli, agent_class, monkeypatch, tmp_path):
+    """One check, where an executable is resolved (`agents.executable`): creating a
+    backend, preflight, the entry screen. Its ConfigError is what every command reports
+    as a config error."""
     monkeypatch.setenv("AUTOHELIX_CLAUDE_CMD", "/opt/claude")
-    with pytest.raises(ValueError, match="AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD"):
-        command_path("claude-code")
-    issues = preflight_check(Config.from_dict({"goal": "g", "agent": {"cli": "mock"}}), tmp_path)
-    assert [i.message for i in issues if i.level == "error"] == [
-        "AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD: set that instead (and unset AUTOHELIX_CLAUDE_CMD)"]
+    with pytest.raises(ConfigError, match=OLD_VARIABLE.replace("(", r"\(").replace(")", r"\)")):
+        command_path(cli)
+    with pytest.raises(ConfigError, match="AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD"):
+        agent_class(AgentConfig(cli=cli))
+    with pytest.raises(ConfigError, match="AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD"):
+        preflight_check(Config.from_dict({"goal": "g", "agent": {"cli": cli}}), tmp_path)
+
+
+def _run_output(result) -> str:
+    assert not isinstance(result.exception, ConfigError), result.exception  # no traceback
+    return " ".join(result.output.split())
+
+
+def test_run_with_the_old_variable_is_refused_like_a_config_error(project, monkeypatch):
+    """A Codex run with `agent.timeout` (the time-left hook check resolves the executable
+    before preflight did) ends in the error, not a traceback, before anything is written."""
+    configure(project, agent={"cli": "codex", "timeout": "10m"})
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CMD", "/opt/claude")
+    monkeypatch.setenv("AUTOHELIX_CODEX_CMD", str(project / "no-codex"))  # never started
+    for args in ([], ["--check"]):
+        result = CliRunner().invoke(main, ["run", "-p", str(project), "--no-report", *args])
+        assert result.exit_code == 1 and f"Error: {OLD_VARIABLE}" in _run_output(result), result.output
+    assert not project_runs(project)
+
+
+def test_resume_with_the_old_variable_is_refused_like_a_config_error(project, monkeypatch):
+    assert CliRunner().invoke(main, ["run", "-p", str(project), "--no-report"]).exit_code == 0
+    codex = "goal: Make a checked change\nagent:\n  cli: codex\n  timeout: 10m\n"
+    stored = latest_run(project).config  # and the stored copy: no config change
+    stored.chmod(0o644)
+    for config in (project / "autohelix.yaml", stored):
+        config.write_text(codex)
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CMD", "/opt/claude")
+    monkeypatch.setenv("AUTOHELIX_CODEX_CMD", str(project / "no-codex"))  # never started
+    result = CliRunner().invoke(main, ["resume", "-p", str(project), "--no-report"])
+    assert result.exit_code == 1 and f"Error: {OLD_VARIABLE}" in _run_output(result), result.output
+    assert len(History(project, latest_run(project).run_id).load()) == 2  # the first run's records only
+
+
+def test_report_with_the_old_variable_is_refused_like_a_config_error(project, monkeypatch):
+    assert CliRunner().invoke(main, ["run", "-p", str(project), "--no-report"]).exit_code == 0
+    stored = latest_run(project).config  # the summary agent is the run's: Claude Code
+    stored.chmod(0o644)
+    stored.write_text("goal: Make a checked change\n")
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CMD", "/opt/claude")
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", str(project / "no-claude"))  # never started
+    result = CliRunner().invoke(main, ["report", "-p", str(project)])
+    assert result.exit_code == 1 and f"Error: {OLD_VARIABLE}" in _run_output(result), result.output
+    assert not latest_run(project).report.exists()
 
 
 @pytest.mark.parametrize("command", ["ask", "review"])
@@ -127,3 +182,16 @@ def test_ask_and_review_refuse_the_old_variable(command, tmp_path, monkeypatch):
 
 def test_no_check_notes_hook_is_shipped():
     assert not (Path(__file__).parent.parent / "src" / "autohelix" / "bin" / "check_notes.sh").exists()
+
+
+def test_a_judge_refuses_the_old_variable_before_anything_is_made(tmp_path, monkeypatch):
+    """`judge_config` (the one check, `agents.executable`): before the judged target is
+    built or a usage record is written; a mock judge ignores it."""
+    from autohelix.judge import judge_config
+
+    monkeypatch.setenv("AUTOHELIX_USAGE_FILE", str(tmp_path / "usage.jsonl"))
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CMD", "/opt/claude")
+    with pytest.raises(ConfigError, match="AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD"):
+        judge_config(AgentConfig(cli="codex"))
+    assert not (tmp_path / "usage.jsonl").exists()
+    assert judge_config(AgentConfig(cli="mock")).cli == "mock"

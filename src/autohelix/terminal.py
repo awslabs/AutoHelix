@@ -246,9 +246,30 @@ def title(*parts: str, version: str) -> list[tuple[str, str | None]]:
     return [("AutoHelix", "bold"), (f"  {shown}", "dim"), *[(f" · {clean(part)}", None) for part in parts if part]]
 
 
-def run_fields(config, budget: str) -> list[tuple[str, str]]:
+def home_path(path: str) -> str:
+    """A path with the home folder as `~` (`~/bin/claude-bedrock`)."""
+    import os
+
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if home not in ("", "/") and (path == home or path.startswith(home + "/")) else path
+
+
+def agent_text(cli: str, model: str | None, executable: str | None = None) -> str:
+    """The Agent field: `Claude Code · opus · via ~/bin/claude-bedrock`: the CLI, the
+    model (`(its default)` without one), and the executable when it isn't what the CLI's
+    plain name finds on PATH (`agents.plain_executable`)."""
+    from autohelix.agents import CLI_NAMES, plain_executable
+
+    parts = [CLI_NAMES.get(cli, cli), clean(model) if model else "(its default)"]
+    if not plain_executable(cli, executable):
+        parts.append(f"via {clean(home_path(executable))}")
+    return " · ".join(parts)
+
+
+def run_fields(config, budget: str, agent: str | None = None) -> list[tuple[str, str]]:
     """A run's header fields: Goal, Agent, Gates, Observe, Scope, Budget (`budget`:
-    `budget_text`, the timeout added as `30m each`)."""
+    `budget_text`, the timeout added as `30m each`). `agent`: the Agent field
+    (`agent_text`), else the configured CLI and model."""
     observe = []
     for entry in config.observe:
         metrics = ", ".join(f"{name} {'↓' if direction == 'lower' else '↑'}" for name, direction in entry.metrics.items())
@@ -260,7 +281,8 @@ def run_fields(config, budget: str) -> list[tuple[str, str]]:
         scope.append("frozen: " + ", ".join(frozen))
     if config.agent.timeout is not None:
         budget = " · ".join(filter(None, [budget, f"{format_limit(config.agent.timeout)} each"]))
-    return [("Goal", config.title), ("Agent", config.agent.cli + (f" ({config.agent.model})" if config.agent.model else "")),
+    agent = agent or agent_text(config.agent.cli, config.agent.model)
+    return [("Goal", config.title), ("Agent", agent),
             ("Gates", " · ".join(gate.text for gate in config.gates)), ("Observe", " · ".join(observe)),
             ("Scope", " · ".join(scope)), ("Budget", budget)]
 
@@ -667,16 +689,12 @@ def not_landed(error) -> tuple[str, str, str | None]:
     return "landing", f"failed: {clean(error)}", "yellow"
 
 
-def next_commands(short: str, view: bool = True, land: bool = False) -> list[str]:
+def next_commands(short: str, view: bool = True, also=()) -> list[str]:
     """What to type after a run: look at it (`view`: not from the view itself), continue
-    it, and land it when commits wait for a manual landing."""
-    commands = []
-    if view:
-        commands.append(f"autohelix view {short}")
-    commands.append(f"autohelix resume {short}")
-    if land:
-        commands.append(f"autohelix land {short}")
-    return commands
+    it, then `also`: what lands commits that wait (`runs.LandingWords.commands`:
+    `autohelix land <id>` when the target can fast-forward, `git merge autohelix/<id>`
+    when it diverged)."""
+    return ([f"autohelix view {short}"] if view else []) + [f"autohelix resume {short}", *also]
 
 
 def shown_path(path) -> str:

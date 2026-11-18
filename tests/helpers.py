@@ -1,4 +1,4 @@
-"""Helpers shared by test files: `git`, `cli`, `configure` and `latest_run`. The
+"""Helpers shared by test files: `git`, `cli`, `configure`, `latest_run` and `with_words`. The
 committed mock-agent `project` and the file-only `run_paths` fixtures are in
 `tests/conftest.py`."""
 
@@ -10,7 +10,7 @@ import yaml
 from click.testing import CliRunner
 
 from autohelix.cli import main
-from autohelix.runs import RunPaths, project_runs
+from autohelix.runs import Landing, RunPaths, landing_words, project_runs
 
 
 def git(cwd, *args, check=True, env=None) -> str:
@@ -42,3 +42,16 @@ def latest_run(project: Path) -> RunPaths:
     paths without a run (`RunPaths(project)`), as file-only tests use them."""
     runs = project_runs(project)
     return runs[0][0] if runs else RunPaths(project)
+
+
+def with_words(run: dict) -> dict:
+    """A hand-made run payload with the `landing_words` the viewer gives it: the words of
+    its `landing` (None: the target branch is missing), `target_branch`, `accepted` (a
+    count, as the payload has it) and `land`."""
+    landing = run.get("landing")
+    found = Landing("tip", run.get("target_branch"), "target-tip" if landing else None,
+                    landing and landing["relation"], landing["commits"] if landing else 0,
+                    landing["behind"] if landing else 0, bool(run.get("accepted")))
+    words = landing_words(found, run["id"], run.get("land"))
+    return {**run, "landing_words": {"cell": words.cell, "text": words.sentence, "note": words.note,
+                                     "commands": list(words.commands)}}

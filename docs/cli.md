@@ -94,7 +94,8 @@ there would use), else the top of the git checkout, whichever subfolder you
 are in. The screen has a header (the version and the project), the project's
 current runs as [`view --once`](#printed-once) draws them, under them
 the command that applies to each run (`view` a live run, `resume` one that
-stopped before its end, `land` waiting commits; an interrupted run or one that
+stopped before its end, `land` waiting commits, `git merge autohelix/<id>`
+for a run whose branch diverged from its target; an interrupted run or one that
 stopped unexpectedly gets `resume` even with commits to land, which an
 auto-landing resume lands), how many runs are
 archived, and a pointer to `autohelix --help`:
@@ -225,9 +226,8 @@ without it, the run uses `autohelix.yaml`, else the only config in
 `autohelix/` (see [Config files](#config-files)). The project must be a git
 checkout with a commit, and the first baseline needs no uncommitted changes to
 tracked files. Commit the config so it's versioned, and any scripts its
-commands use: iteration copies are made from the commit. Do it before the first
-`run`: with auto landing, a later commit on the branch makes `resume` refuse
-(see [`resume`](#autohelix-resume)), leaving `run --import` or `--land manual`.
+commands use: iteration copies are made from the commit.
+Commit the config before the first `run`: with auto landing, `run` warns when it isn't ("commit autohelix.yaml first: a commit on main after this run lands makes `resume` refuse").
 
 While the segment runs, `run` (and `resume`) keeps the machine from sleeping:
 `caffeinate -i -w <pid>` on macOS, `systemd-inhibit` (idle and sleep) on Linux.
@@ -242,7 +242,7 @@ VPN alive.
 ```text
   AutoHelix  v0.3.0 · run krp3 · sorting · 14:02
   Goal     Make sort_list faster in sort.py.
-  Agent    claude (sonnet)
+  Agent    Claude Code · sonnet
   Gates    pytest -q test_sort.py · speed regress 5%
   Observe  bench (speed ↑, mem_mb ↓)
   Scope    editable: sort.py
@@ -272,7 +272,8 @@ VPN alive.
 ```
 
 The header names the run (its id's last part, which every command accepts), what it
-runs and the budget; in a terminal the AutoHelix mark stands beside it. Then one row
+runs and the budget (the Agent line: the CLI, the configured model or `(its default)`,
+and `via <executable>` when `AUTOHELIX_<CLI>_CMD` names another one); in a terminal the AutoHelix mark stands beside it. Then one row
 per iteration: ✓ accepted or ✗ rejected, its time and cost, each metric's value
 (an accepted row with its change from the baseline, `373×`, `-21%`, in green or red;
 a rejection's values dimmed, without a change), and for a rejection why: the gate
@@ -351,6 +352,7 @@ as for any rejection. Three failed calls in a row stop the run ("the agent faile
 the command exits 1.
 Setup failures before a call (copy creation, the prompt) do not consume an
 iteration and stop the run with an error. Failed baseline attempts remain iteration 0 and retain their costs.
+A run whose first baseline failed is a disposable attempt: the error ends "Fix it and run `autohelix run` again (`autohelix delete <id>` removes this attempt)", since a fixed config makes a new run (`resume` refuses a changed config).
 
 ### Exit codes
 
@@ -446,7 +448,9 @@ the reason (`autohelix archive m2x7 --why "slower than k3f9"`). Group runs land
 manually by default: with auto landing the first to finish would land and every
 other would diverge from it for good. `resume --group NAME` moves a run into a
 group (from its next iteration) and `resume --group ''` takes it out; archiving
-a run takes it out of its group, and resuming it brings it back.
+a run takes it out of its group, and resuming it brings it back. `--group`
+doesn't change how a run lands: a run that lands automatically says so ("k3f9
+still lands automatically; pass `--land manual` for a group").
 
 ### Continuing from another run
 
@@ -477,9 +481,18 @@ the group is shown once, as imported. Typical uses:
 autohelix run perf --import k3f9
 # Apply an edited config (resume refuses a changed one).
 autohelix run perf --import k3f9
-# Fork from an old run's code: check it out first (or an iteration's commit).
-git checkout autohelix/20261111-1432-perf-k3f9 && autohelix run perf --import k3f9
+# Fork from an old run's code: start a branch at it first (or at an iteration's commit).
+git switch -c perf-fork autohelix/20261111-1432-perf-k3f9 && autohelix run perf --import k3f9
 ```
+
+`run --import` says one thing about the imported run: when its accepted commits
+aren't in the branch you start from, "k3f9's 2 accepted commits aren't in main:
+land it first (`autohelix land k3f9`, or `git switch -c <branch>
+autohelix/<id>`) to start from them" (`git merge autohelix/<id>` instead of
+`land` when main diverged; `--into <branch>` when you start from another branch
+than the run's). Of the config's other runs it only names a live one that lands
+on the same branch. The config-change refusal of `resume` says the same for a
+run with unlanded commits.
 
 Each continuation is a new run with a new baseline (its code differs), at the
 cost of a chain of runs in `autohelix view`, where each shows what it continues
@@ -557,15 +570,15 @@ again after the next accepted iteration.
 When the target branch has moved past the run's tip (you or another run
 committed on it after the run's tip), the run doesn't take those commits. With
 auto landing, `resume` refuses before writing anything (after saying so if the
-run is running elsewhere): "main has 2 commits past run k3f9's tip (committed
-after its tip). A run continues its own code: start a new run
+run is running elsewhere): "Everything run k3f9 accepted is in main, which
+has 2 commits past its tip (committed after it). A run continues its own code: start a new run
 that continues from it, `autohelix run perf --import k3f9`, or continue without
 landing: `autohelix resume k3f9 --land manual`." With manual landing it says
 so and continues from the run's own tip; its accepted commits then diverge from
 the branch, so land them with `git merge autohelix/<id>`. Before the baseline
 the run hasn't started from its commit yet, so nothing is compared; after it,
-a run that never accepted a change says so ("committed since run k3f9 started;
-it hasn't accepted any changes").
+a run that never accepted a change says so ("main has 1 commit past run k3f9's
+base (committed since it started; it hasn't accepted any changes)").
 
 ## `autohelix stop`
 
@@ -626,11 +639,41 @@ autohelix land [RUN_ID] [-p PATH] [--into BRANCH]
 ```
 
 Fast-forward the run's starting branch to its accepted tip, preserving unrelated
-checkout edits. Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on). For a divergent target, use the
-printed git merge command after reviewing the changes. A run created from a
-detached checkout requires `--into BRANCH`. Landing also refuses branches that
-are being rebased. If the target moved during a segment, review it and land
-explicitly; AutoHelix never rewinds user commits.
+checkout edits. Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on). It only fast-forwards: when the
+target diverged (a commit on it after the run's base, during a segment or
+since), it refuses, says so, and gives what works: `git merge autohelix/<id>`
+after reviewing the changes, or, for a run that lands automatically,
+`autohelix resume <id> --land manual` to stop trying to land it. Auto landing
+at a segment's end refuses the same way; AutoHelix never rewinds user commits.
+A run created from a detached checkout requires `--into BRANCH`. Landing also
+refuses branches that are being rebased.
+
+`land` (and auto landing) records what it landed in the run's `run.json` as
+`landed: {tip, target, at}`. So a run stays `landed` when its target branch gets
+its commits as other commits, the usual pull request flow:
+
+```bash
+autohelix land k3f9                     # fast-forward your local main to the run's tip
+git push origin main:perf-pr            # push it as a branch and open a PR from it
+                                        # the PR is squash-merged (or rebased) on the remote
+git fetch origin && git reset --hard origin/main   # your main as the remote has it
+```
+
+The runs table, `view`, the entry screen and `delete` then read k3f9 as
+landed (no `--force` needed), while its tip isn't on main: the target lacks the
+tip, but run.json says `land` landed that tip on this same branch. Nothing
+compares the code, so if the PR is abandoned and main reset, the run still
+reads landed (its commits stay on `autohelix/<id>`). Only a landing on the
+run's own target is recorded: a landing on another branch (`land --into
+other`) leaves the record alone, and a squash merge of the run's branch done
+without `land` (`git merge --squash autohelix/<id>`) isn't recorded, so both
+read diverged. Commits the run accepts after the landing (a `resume --land
+manual`) count as unlanded and diverged: apply them with `git cherry-pick
+<landed tip>..autohelix/<id>` (the command the runs table, `view` and the entry
+screen give; `git merge` would re-apply the squashed commits and conflict), or
+land them again through a PR.
+An auto-landing `resume` refuses such a run like one whose target moved on: to
+continue from the merged code, start a new run, `autohelix run --import k3f9`.
 
 ## `autohelix archive`
 
@@ -643,7 +686,8 @@ Sets runs aside: they are hidden from [`autohelix view`](#autohelix-view)'s run 
 commits stay; `autohelix resume RUN_ID` resumes one and brings it back, and
 `--undo` brings it back without running it. A running run can't be archived.
 Use it for runs that are done or didn't work out, and for runs you merged some
-other way (squash, cherry-pick): those keep looking unlanded to git.
+other way than through `land` (a squash of the run's branch, cherry-pick):
+those keep looking unlanded to git.
 `--why TEXT` records why (one line, at most 300 characters) in each run's
 `run.json` as `archive_why`, shown on the web page and in `--json`;
 `--undo` keeps the note, and a later `archive --why` replaces it.
@@ -688,7 +732,7 @@ A run's page (`/run/<id>/`) shows its `.autohelix/` state. The header shows the 
 
 ### In the terminal
 
-`--terminal` follows one run (run it in a second terminal while a run goes). The terminal shows, on top, the run's own screen as `autohelix run` prints it: the header (goal, agent, gates, observe entries, scope, budget, the group and the run's notes, and the run's state in the title line), one row per iteration under the column header (outcome, time, cost, each metric with its change from the baseline, why a rejection was rejected), then the live row of the iteration under way (its time so far, ticking and with a spinner, and phase: agent, gates, `observe · <entry>`, stop) or, once the run stopped, its end block (how it ended, each metric's baseline → latest accepted value, totals, what landed, what to type next, and the run's report.html and report.md once written), refreshed as the run goes (the run is reread when its files change). The rows come from the run's history, so they read as `run` printed them; if the history can't be read, a yellow `!` line says so and the end block has only how the run ended. Commits waiting on the run's branch read `unlanded  3 commits on autohelix/<id> (manual landing)` (or `(main has moved on)`) with `autohelix land` among the next commands, as in `run`'s end block. Below that is the live output of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (in the live row's words: agent, gates, observe, stop) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`. While the run goes, the last line says what Ctrl-C does there: `Ctrl-C quits this view · autohelix stop krp3 stops the run · hint --run krp3 "…"`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out (the baseline stays). When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/` (and, for a judge or review call still running, its transcript in the run's copies folder).
+`--terminal` follows one run (run it in a second terminal while a run goes). The terminal shows, on top, the run's own screen as `autohelix run` prints it: the header (goal, agent, gates, observe entries, scope, budget, the group and the run's notes, and the run's state in the title line), one row per iteration under the column header (outcome, time, cost, each metric with its change from the baseline, why a rejection was rejected), then the live row of the iteration under way (its time so far, ticking and with a spinner, and phase: agent, gates, `observe · <entry>`, stop) or, once the run stopped, its end block (how it ended, each metric's baseline → latest accepted value, totals, what landed, what to type next, and the run's report.html and report.md once written), refreshed as the run goes (the run is reread when its files change). The rows come from the run's history, so they read as `run` printed them; if the history can't be read, a yellow `!` line says so and the end block has only how the run ended. Commits waiting on the run's branch read `unlanded  3 commits on autohelix/<id> (manual landing)` with `autohelix land` among the next commands, as in `run`'s end block; on a branch that diverged from its target, `(diverged from main)` with `git merge autohelix/<id>` instead (`autohelix land` only fast-forwards). Below that is the live output of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end (tool calls, text, elapsed time), and a status line with the iteration, phase (in the live row's words: agent, gates, observe, stop) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`. While the run goes, the last line says what Ctrl-C does there: `Ctrl-C quits this view · autohelix stop krp3 stops the run · hint --run krp3 "…"`. On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out (the baseline stays). When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. Works with Claude Code, Codex and OpenCode logs. Safe to run alongside `autohelix run`; it only reads `.autohelix/` (and, for a judge or review call still running, its transcript in the run's copies folder).
 
 ### Printed once
 
@@ -710,7 +754,8 @@ With `RUN_ID`, `--once` prints the top part of `--terminal`'s screen once and ex
   - `accepted`: the number of accepted iterations;
   - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
   - `progress`: `iterations` attempted, `cost_usd` and `cost_incomplete` (the whole run's), `seconds` (the recorded iterations' wall clock, the baseline's included), and the latest segment's [budget](#budgets), `null` where it had none: `max_iterations` (the last iteration it may run: the previous last iteration + `-n`, or `--until`) and `max_cost_usd` (the run's cost before it + `--cost`) as run totals, "spent before it + its own cap"; `max_seconds`, that segment's own `--time` (not a run total: compare it with the time since `status.segment_started_at`, not with `seconds`). They come from the run's status, never from the config;
-  - `target_branch` and `landing`: `commits` the target lacks and whether it can `fast_forward`, or `null` when either side is unavailable;
+  - `agent`: the latest main-agent call's `model` (the one the CLI reported, `null` if none) and `executable`, `{}` before any call;
+  - `target_branch` and `landing`: how the run's tip stands against its target, `relation` (`same`, `ahead`: the target can fast-forward onto it, `behind`: the target has commits past it, `diverged`, or `landed`: the target lacks the tip, but it is the one `autohelix land` last landed on this branch, as after a squash-merged PR), `commits` (the run's accepted commits the target lacks), `behind` (the target's commits the run lacks), whether the target can `fast_forward` (`same` or `ahead`), or `null` when either side is unavailable; `landing_words`: the runs table's `cell` (`landed`, `2 to land`, `2 diverged`, `—`), `text`, what it means and what works (the run list's tooltip), the end block's `note` (`manual landing`, `diverged from main`) and the `commands` that land it (`autohelix land <id>`, `git merge autohelix/<id>`, `git cherry-pick <landed tip>..autohelix/<id>` after a squash-merged landing);
   - `why` (`run --why`), `archive_why` (`archive --why`) and `import` (`{"run": <id>}` for a run started with `run --import`), each `null` when absent.
   - A run that can't be read has only `id` and `error`.
 

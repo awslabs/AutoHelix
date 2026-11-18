@@ -18,7 +18,7 @@ from click.testing import CliRunner
 from autohelix import cli
 from autohelix.cli import main
 from autohelix.config import load_config
-from tests.helpers import git
+from tests.helpers import git, with_words
 
 
 @pytest.fixture
@@ -280,14 +280,14 @@ def test_with_runs_the_table_the_next_commands_and_ask_first(project, monkeypatc
     assert result.exit_code == 0, result.output
     shown = lines(result)
     assert any(line.startswith("  run ") and " state " in line for line in shown)  # the dashboard's table
-    assert any(re.fullmatch(rf"  {first}  finished · 1 commit to land +next: autohelix land {first}", line)
+    assert any(re.fullmatch(rf"  {first}  finished · 1 to land +next: autohelix land {first}", line)
                for line in shown), shown
     assert " 1. Ask Claude Code about these runs it summarizes them, then answers questions" in flat_lines(result)
     assert " 2. Set up a new experiment with Claude Code it drafts a config with you" in flat_lines(result)
     [(file, argv, _)] = execs
     prompt = argv[-1]
     assert re.search(rf"^- {first} \(\d{{8}}-\d{{4}}-{first}, autohelix.yaml\): finished, last iteration 1, "
-                     r"1 commit not landed$", prompt, re.M), prompt
+                     r"1 to land$", prompt, re.M), prompt
     assert 'I picked "Ask Claude Code about these runs"' in prompt
     assert 'I may switch to the other option ("Set up a new experiment with Claude Code")' in prompt
     assert "Open with a short summary of the live runs plus the most recent one" in prompt
@@ -320,11 +320,11 @@ def test_a_crashed_run_reads_stopped_unexpectedly_and_resume_applies(project, mo
     ("interrupted", 2, ("interrupted · iteration 3", "resume")),  # resuming is the point; auto landing lands
     ("crashed", 0, ("stopped unexpectedly · iteration 3", "resume")),
     ("crashed", 1, ("stopped unexpectedly · iteration 3", "resume")),
-    ("finished", 2, ("finished · 2 commits to land", "land")),
-    ("finished", 1, ("finished · 1 commit to land", "land")),
+    ("finished", 2, ("finished · 2 to land", "land")),
+    ("finished", 1, ("finished · 1 to land", "land")),
     ("finished", 0, None),
     ("failed", 0, ("failed · iteration 3", "resume")),
-    ("failed", 2, ("failed · 2 commits to land", "land")),
+    ("failed", 2, ("failed · 2 to land", "land")),
     (None, 0, ("not started · iteration 3", "resume")),
 ])
 def test_one_suggested_command_per_run(state, commits, expected):
@@ -332,9 +332,21 @@ def test_one_suggested_command_per_run(state, commits, expected):
 
     run = {"id": "20261115-1402-sorting-krp3", "progress": {"iterations": 3},
            "status": {"state": state, "iteration": 4} if state else None,
-           "target_branch": "main", "landing": {"commits": commits, "fast_forward": True}}
-    found = run_table.suggestion(run)
+           "target_branch": "main", "landing": {"relation": "ahead", "commits": commits, "behind": 0, "fast_forward": True}}
+    found = run_table.suggestion(with_words(run))
     assert found == (expected and (expected[0], f"autohelix {expected[1]} krp3"))
+
+
+@pytest.mark.parametrize("state", ["finished", "failed"])
+def test_a_diverged_run_suggests_git_merge(state):
+    """`autohelix land` can't fast-forward a diverged target: the merge that works."""
+    from autohelix import run_table
+
+    run = {"id": "20261115-1402-sorting-krp3", "progress": {"iterations": 3}, "status": {"state": state},
+           "target_branch": "main", "landing": {"relation": "diverged", "commits": 2, "behind": 1,
+                                                "fast_forward": False}}
+    assert run_table.suggestion(with_words(run)) == (f"{state} · 2 diverged",
+                                         "git merge autohelix/20261115-1402-sorting-krp3")
 
 
 def test_archived_runs_are_counted(project, monkeypatch, execs, tty):

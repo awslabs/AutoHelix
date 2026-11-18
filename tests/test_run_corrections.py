@@ -190,8 +190,12 @@ def test_auto_landing_never_rewinds_target_changed_during_segment(project, monke
         return run_agent(*args)
 
     monkeypatch.setattr(harness, "run_agent", agent)
-    with pytest.raises(AutoHelixRunError, match="auto landing failed: Target main changed during this segment"):
+    # No pre-check of its own: `land` refuses the diverged target and says what works.
+    with pytest.raises(AutoHelixRunError, match="auto landing failed: Cannot land: main diverged from run") as e:
         harness.run(Budget(until=1), report=False)  # a refused landing is an error (exit 1)
+    run_id = harness.paths.run_id
+    assert str(e.value).endswith(f"Merge it by hand: `git merge autohelix/{run_id}`, or "
+                                 f"`autohelix resume {run_id.rsplit('-', 1)[1]} --land manual` to stop trying to land it.")
     assert harness.history.load()[-1].accepted
     assert git(project, "rev-parse", "HEAD").stdout.strip() == observed[0]
     assert (project / "user.txt").read_text() == "legitimate concurrent user commit"

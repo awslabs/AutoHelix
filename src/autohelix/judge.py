@@ -39,7 +39,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
-from autohelix.agents import AgentConfig, AgentEvent, create_agent, variable_problem
+from autohelix.agents import AgentConfig, AgentEvent, create_agent, executable
 from autohelix.config import ASK_TIMEOUT, ConfigNotFound, find_config
 from autohelix.workspace import ITERATION_DIR, Copy, Fingerprint, Repo, diff_args, git_env
 from autohelix.usage_log import append_usage, new_call_id
@@ -107,14 +107,14 @@ def judge_config(base: AgentConfig, *, cli: str | None = None, model: str | None
     its extra args. Another CLI (`cli`) drops the config's model and effort unless they
     are given too. `schema` is the answer's JSON Schema (`autohelix review` passes its
     own). The executable comes from the environment, as the main agent's does."""
-    if problem := variable_problem():
-        raise JudgeError(problem)
     overrides_cli = cli is not None and cli != base.cli
     cli = cli or base.cli
     if cli == "opencode":
         # OpenCode has no read-only mode, and project files (plugins, config) the
         # judged agent may have written would configure the judge.
         raise JudgeError("OpenCode can't be used as a judge yet; use --cli claude-code or codex")
+    if cli != "mock":
+        executable(cli)  # a variable that is gone: its ConfigError before the target is made
     return AgentConfig(
         cli=cli,
         model=model or (None if overrides_cli else base.model),
@@ -313,8 +313,8 @@ def call_judge(cwd: Path, config: AgentConfig, *, source: str, record: dict, pro
             "Reply with only the JSON object.")
         call_id = new_call_id()
         log_path = _log_path(source)
-        entry = {"id": call_id, "source": source, **record, "agent": config.cli,
-                 "model": config.model, **_log_fields(log_path)}
+        # The backend's usage adds the model its output named and the executable (`call_fields`).
+        entry = {"id": call_id, "source": source, **record, "cli": config.cli, **_log_fields(log_path)}
         append_usage({**entry, "status": "started", "cost_usd": None})
         started = time.monotonic()
         result = None

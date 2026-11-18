@@ -6,7 +6,7 @@
 import json
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, command_path
+from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_copy_env
 
@@ -19,11 +19,14 @@ class OpenCodeAgent:
     def __init__(self, config: AgentConfig, heartbeat_seconds: int = 30):
         self.config = config
         self.heartbeat_seconds = heartbeat_seconds
+        # Resolved once, when the backend is created: a variable that is gone is a
+        # ConfigError before anything runs. Recorded with every call (`call_fields`).
+        self.executable = command_path("opencode")
         self._usage: dict[str, object] = {}
         self._final_text: str | None = None
 
     def _command_path(self) -> str:
-        return command_path("opencode")
+        return self.executable
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [
@@ -128,6 +131,7 @@ class OpenCodeAgent:
                 success=False,
                 exit_code=None,
                 error=f"'{command}' not found. Set AUTOHELIX_OPENCODE_CMD.",
+                usage=call_fields("opencode", self.executable, None),
             )
 
         error = None
@@ -141,5 +145,7 @@ class OpenCodeAgent:
             self._usage["cost_unavailable_reason"] = "OpenCode timed out before reporting its whole cost."
         elif result.exit_code != 0:
             error = f"OpenCode exited with status {result.exit_code}"
-        return AgentRunResult(success=error is None, exit_code=result.exit_code, error=error, usage=self._usage,
+        # OpenCode's JSON events, as parsed here, name no model (unconfirmed): None.
+        return AgentRunResult(success=error is None, exit_code=result.exit_code, error=error,
+                              usage={**self._usage, **call_fields("opencode", self.executable, None)},
                               final_text=self._final_text)

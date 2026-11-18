@@ -460,7 +460,8 @@ linked by `segment` (1, 2, … in the run) and told apart by `event`:
   (`iterations`, `until`, `cost_usd`, `time_seconds`, each `null` when unset,
   and `default`: no budget flag, so the default `-n 1` applied),
   `start_iteration` (the first iteration it may run, `0` when it captures the
-  baseline), `pid` and `host`;
+  baseline), `pid`, `host` and `executable` (the main agent's, resolved;
+  `resume` warns when it differs from the last segment's);
 - `"event": "iteration"`, one per record once it is final (after its stop
   commands; a failed or retried baseline too): `ended_at` and the fields of
   `wait`'s [`iteration` event](cli.md#events) (`iteration`, `accepted`,
@@ -600,7 +601,11 @@ its role, usage and log path; baseline calls and failed calls count too.
 Failed main-agent calls consume their iteration number and resume at the next one;
 setup failures before a call do not. Baseline retry calls stay in iteration 0.
 `calls` is the sole persisted usage representation; log paths are relative to the
-run directory.
+run directory. Every agent call's usage (the main agent's, a judge's, the run
+summary's) records `cli`, `model` (the model the CLI's output named, `null` when
+it named none) and `executable` (the resolved path started): which model ran,
+whatever `model:` asked for. `view`'s run screen and the web viewer's run page
+show the latest main-agent call's model.
 Every run summary's call is counted in the run's totals too, recorded in
 `.internal/usage/summary.jsonl` (one per call; one that never returned stays
 unknown).
