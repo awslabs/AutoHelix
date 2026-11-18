@@ -31,7 +31,7 @@ for gate and observe output).
 - **Stop commands** run only after an accepted iteration, and at the baseline.
   After an iteration, a change or an error is shown and the run continues.
 - **Run summary:** when a `run` or `resume` finishes (not with `--no-report`),
-  or by `autohelix report`; see [Report](config.md#report).
+  or by `autohelix report`; see [CLI → `autohelix report`](cli.md#autohelix-report).
 
 ## Candidate copies
 
@@ -49,7 +49,8 @@ when the copy is made; no stash, no remote). This means:
 - **Only files git would add reach checks.** Ignored files the agent built (build
   output, virtualenvs, caches, models) are deleted with the agent's copy. Gates
   must build or install what they need; long-lived outputs such as trained models
-  belong at a fixed absolute path outside the project.
+  belong at an absolute path outside the project
+  ([ML Experiments → One folder per iteration](ml-experiments.md#one-folder-per-iteration)).
 - **Checks are read-only.** Any change a gate command, observe command, review or `ask`
   makes to the candidate's files rejects the iteration. New files are scratch, shared between
   commands in the checks phase (so build-then-test works) and deleted afterwards. If
@@ -62,7 +63,8 @@ when the copy is made; no stash, no remote). This means:
 - PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo), and
   `autohelix` on a command's `PATH` is a launcher for the harness's own installation
   (see [Command environment](#command-environment)).
-- **A copy holds only committed files.** Commands get
+- **A copy holds only committed files.** A script a gate runs that isn't
+  committed is missing there, so commit the scripts your commands use. Commands get
   their tools from the environment AutoHelix started in: run it with your virtualenv
   activated so `python` and `pytest` resolve to it, and reference untracked data by
   absolute path. Copies sit outside the project, so lookups in parent directories

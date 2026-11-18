@@ -15,27 +15,27 @@ repo, and every path (`capture:` files, the patterns in `scope.editable` and
 silently ignored or crash the run (in `scope:`, an absolute path or a `..`
 component is a config error).
 (The one exception is long-lived outputs you deliberately keep outside the repo,
-such as a model checkpoint directory, which are meant to live at a fixed absolute
-path.) Untracked files such as a virtualenv or downloaded data aren't in the copy;
+such as model checkpoints: see
+[ML Experiments → One folder per iteration](ml-experiments.md#one-folder-per-iteration).) Untracked files such as a virtualenv or downloaded data aren't in the copy;
 see [Phases → Candidate copies](phases.md#candidate-copies).
 
 ## Where configs live
 
-A run doesn't need git to keep its config: it stores the file's text when it
-starts (`.autohelix/runs/<id>/config.yaml`, its prompt template as
-`prompt_template.md`), and `resume`, `view`, `report` and the judges read that
-copy ([CLI → Config files](cli.md#config-files)). Git is for sharing configs, a
-choice per experiment, and both choices are normal:
+A run stores its config when it starts
+([CLI → Config files](cli.md#config-files)), so git is only for sharing
+configs. Either choice is fine, per experiment:
 
 - **Shared** (a team's benchmark): commit `autohelix.yaml` or `autohelix/` with
   the project. Commit it before the first `run`: with auto landing, a commit on
   the branch after the run lands puts the branch past the run's tip, and
   `resume` refuses (`run` warns when the config isn't committed).
-- **Private**: put `/autohelix/` in `.git/info/exclude` (your clone only) or
-  `.gitignore`. An ignored config is never committed, so it can't move the
-  branch. Scripts the commands run must still be committed in the project,
-  outside `autohelix/`: copies are made from the commit, and an ignored
-  `autohelix/` isn't in them.
+- **Private**: put `/autohelix/` (or `/autohelix.yaml`) in `.git/info/exclude`
+  (your clone only) or `.gitignore`. An ignored config is never committed, so it
+  can't move the branch. A config that is already committed must be untracked
+  first (`git rm -r --cached autohelix`, then commit), or the exclude has no
+  effect. Scripts the commands run must still be committed in the project,
+  outside `autohelix/`: an ignored `autohelix/` isn't in the copies
+  ([Phases → Candidate copies](phases.md#candidate-copies)).
 
 For a private history of your configs, either make `autohelix/` its own git
 repository:
@@ -104,14 +104,16 @@ stop:                     # end the run early once one exits 0
 ```
 
 How a launch goes is not in the config either: how long (`autohelix run -n 10
---cost 20 --time 2h`, see [Budget](#budget)), how it lands (`--land manual`, see
-[Run identity and landing](#run-identity-and-landing)) and whether it writes a
-summary (`--no-report`, see [Report](#report)).
+--cost 20 --time 2h`, see [CLI → Budgets](cli.md#budgets)), how it lands
+(`--land manual`, see [CLI → `autohelix run` options](cli.md#options)) and
+whether it writes a summary (`--no-report`, see
+[CLI → `autohelix report`](cli.md#autohelix-report)).
 
 Top-level keys: `goal`, `prompt_template`, `agent`,
 `scope`, `gates`, `observe` and `stop`. An unknown key is an error (a
 misspelt `stop:` or `gates:` would otherwise do nothing); a key of the old
-format is an error that names its replacement (see [Old → new](#old--new)).
+format is an error that names its replacement (the CHANGELOG's "Upgrading
+from 0.1.1" lists them).
 `goal:` must be a string (`|` for several lines), `agent.cli`, `model` and
 `effort` strings (arguments go in `extra_args`), and
 `auto_memory` `true` or `false`. `autohelix run` lists every error and starts
@@ -556,7 +558,8 @@ The executable is never in the config: set the variable (a wrapper script, a
 Bedrock or proxy launcher) where you run `autohelix`. `run` checks before
 starting that every agent the config runs (the main agent, each `ask:` and
 `review:` entry's judge) can be found; `ask`, `review` and bare `autohelix` use
-the same variables.
+the same variables. A `resume` whose agent executable differs from the one the
+run's last segment started warns ("The agent now starts …").
 
 `ask:` and `review:` calls keep their own independent, read-only defaults and
 use only `cli`, `model` and `effort` from here, never `extra_args` or
@@ -576,30 +579,13 @@ hints), OpenCode through a plugin. Every agent can run
 
 ## Budget
 
-The config says what one iteration does; how long a run goes on is up to each
-`autohelix run` or `resume`: `-n N` (N iterations, or N more), `--until N` (up
-to iteration N), `--cost USD` (up to USD spent by that command) and `--time
-DURATION` (its wall clock), whichever comes first. Without any of
-them, 1 iteration. See [CLI → Budgets](cli.md#budgets). A `budget:` key is an
-error naming the flags.
+How long a run goes on is set on the command line (`-n`, `--until`, `--cost`,
+`--time`), not here: see [CLI → Budgets](cli.md#budgets).
 
 ## Run identity and landing
 
-Runs are named after the config file: runs of `autohelix/perf.yaml` get ids
-like `20261111-1432-perf-k3f9`, and `autohelix.yaml` gives them no name (see
-[CLI → Config files](cli.md#config-files)). The name doesn't select an
-existing run.
-
-How a run lands is chosen on the command line, not in the config: `--land
-auto` fast-forwards accepted code to the starting branch when a run segment
-ends, while `--land manual` keeps it on the run ref until `autohelix land`.
-Each run records its mode when it starts (`--land`; else `manual` for a run
-started with `--group`; else `auto`) and keeps it; `resume --land` changes it.
-A `land:` key is an error naming the flag.
-
-A bare `autohelix resume` picks the most recently active run of the config a
-bare `autohelix run` would use, or name one; neither depends on the run's
-name or landing mode.
+A run is named after its config file ([CLI → Config files](cli.md#config-files))
+and lands as `run --land` says ([CLI → `autohelix land`](cli.md#autohelix-land)).
 
 ## Prompt template
 
@@ -617,61 +603,8 @@ read; a run warns while it exists.
 
 ## Report
 
-When a run finishes after at least one iteration (a stop condition is met, or
-the iteration, cost or time budget is reached, but not after the agent failed 3
-times in a row), one more agent call reads the
-run's history, notes, logs and commits and writes a short summary
-to `.autohelix/runs/<id>/report.md`: what was achieved, which changes
-mattered, what didn't work, what to try next, and anything worth checking
-before relying on the results. An interrupted run gets no summary; run
-[`autohelix report`](cli.md#autohelix-report) to write one. Pass `--no-report`
-to `run` or `resume` to skip it; it counts for that command only, not stored
-with the run like `--land`, so pass it to each `resume` too (a `report:` key
-is an error naming the flag). The call uses the run's agent settings (`cli`,
-`model`, `effort`, `extra_args`), with a
-timeout of `agent.timeout` capped at 15 minutes. Its time and cost are shown
-next to the summary in `autohelix view` and `report.html`, and every summary's
-cost is counted in the run's total (the end block, `view`, the run
-page) and in the segment's: it runs after the loop, so `--cost` doesn't stop
-it, but the next segment's `--cost` starts after it. A summary that fails says
-why (with its log, `logs/report.log`) and a Ctrl-C during it ends only the
-summary: the segment's outcome and exit code stay as they were.
-
-## Old → new
-
-The first config format is not read. Each old key is an error naming its
-replacement; there are no aliases and no migration.
-
-| Old | New | Error message |
-|---|---|---|
-| `constraints:` | `gates:` (commands, unchanged) | `` `constraints:` is now `gates:` `` |
-| `metrics:`, `observables:` | `observe:`, every entry with a `name:` | `` `metrics:` is now `observe:` (each entry needs a `name:`; `values:` is now `metrics:`) `` |
-| `values:` in an entry | `metrics:` in an `observe:` entry | `` `values:` is now `metrics:` `` |
-| `capture_stdout:` | removed: stdout is always saved | `` `capture_stdout:` is gone: stdout is always saved; remove it `` |
-| `acceptance.metric_gates` (`max_regression_pct`) | `gates:` entry `metric:` with `regress: N%` (vs the last accepted iteration, not the best) or `improve: N%` | `` `acceptance:` is now a `gates:` entry: ... `` |
-| `autohelix ask "..."` in `constraints:` | a `gates:` entry `ask:` (or the command, unchanged) | |
-| `reviewer:` | an `observe:` entry with `name:` and `review:` | `` `reviewer:` is now an `observe:` entry with `name:` and `review: <prompt>` `` |
-| `reviewer.model`, `reviewer.timeout_seconds` | `agent:` and `timeout:` on the review entry | |
-| `agent.type`, `agent.backend` | `agent.cli` | `` `agent.backend` is now `agent.cli` (claude-code, codex or opencode) `` |
-| `agent.backend: claude` | `agent.cli: claude-code` | `` `agent.cli: claude` is now `claude-code` `` |
-| `agent.reasoning_effort` | `agent.effort` | `` `agent.reasoning_effort` is now `agent.effort` `` |
-| `agent.command` | `$AUTOHELIX_CLAUDE_CODE_CMD`, `$AUTOHELIX_CODEX_CMD`, `$AUTOHELIX_OPENCODE_CMD` | `` `agent.command` is gone: set AUTOHELIX_CLAUDE_CODE_CMD, ... `` |
-| `$AUTOHELIX_CLAUDE_CMD` | `$AUTOHELIX_CLAUDE_CODE_CMD` | `AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD: ...` |
-| `agent.settings` | `agent.extra_args` | `` `agent.settings` is gone: pass the CLI's own options in `agent.extra_args` `` |
-| `agent.require_notes` | ask for notes in the goal or the prompt template | `` `agent.require_notes` is gone: ... `` |
-| `ask`/`review` `--agent`, `--command` | `--cli`; the variables above | `--agent is now --cli (claude-code or codex)` |
-| `agent.timeout_seconds` | `agent.timeout` (a duration) | `` `agent.timeout_seconds` is now `agent.timeout` (a duration such as 30m) `` |
-| `budget:` (`iterations`, `cost`, `time`) | the `run`/`resume` flags `-n`, `--cost`, `--time`, per segment (see [CLI → Budgets](cli.md#budgets)) | `` `budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`; ...) `` |
-| `land:` | `run --land auto\|manual` (also `resume`), stored with the run; default `auto`, `manual` with `--group` | `` `land:` moved to the command line: `autohelix run --land auto\|manual` (also `resume`; ...) `` |
-| `report:` | `run --no-report` (also `resume`; per command, not stored) | `` `report:` moved to the command line: `autohelix run --no-report` (also `resume`) `` |
-| `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | as `budget:` |
-| a bare number as the threshold (`max_regression_pct: 5` was one; `regress: 5` now) | `regress: 5%` | `write the percentage with %, e.g. 5%, got 5` |
-| `timeout:` in seconds | durations everywhere (a bare number, or a string of digits like `"90"`, is still seconds) | |
-| `.autohelix/prompt.md` | `prompt_template:` (relative to the config) | a warning at run start |
-| `-c/--config FILE` on `run`, `resume`, `view`, `report` | the config at `autohelix/<name>.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
-| `name:` | the config file's name: `autohelix/<name>.yaml` (and `autohelix run <name>`) | `` `name:` is gone: runs are named after the config file; use autohelix/<name>.yaml `` |
-| `run --name NAME` | the config file's name, as for `name:` | `No such option '--name'.` |
-| the `setup [NAME]` and `init [PATH]` commands | bare `autohelix` in a terminal (an agent drafts the config; by hand: the examples and template above) | `No such command 'setup'.` |
+When the run summary is written, and `--no-report`: see
+[CLI → `autohelix report`](cli.md#autohelix-report).
 
 ## Example Configs
 
@@ -838,25 +771,43 @@ Available token usage and cost are captured from the agent CLIs and shown:
 - Cumulative in the final summary
 - Persisted in `.autohelix/runs/<id>/history.jsonl`
 
+What each CLI reports:
+
+- **Claude Code**: input/output tokens, cost (USD), duration
+- **Codex**: input/output and available cached-input, cache-write, and reasoning
+  tokens; calculated API-equivalent cost for recognized models (below); measured
+  duration
+- **OpenCode**: input/output tokens, cost (per step, accumulated)
+
 Iteration costs include the optimization agent and model calls made by the
 commands the harness runs (`ask:` gates and `review:` entries, or
 `autohelix ask` and `autohelix review` anywhere in `gates:`, `observe:` or
-`stop:`). Run totals and `--cost` also include the baseline's commands;
-run totals also count every summary call (see [Report](#report)). History's `calls` list records each
-attempted agent call and command model call with its role, usage and log path.
-Records from earlier versions may list `reviewer` calls; they count the same way.
+`stop:`). Run totals and `--cost` also include the baseline's commands.
+Run totals also count every summary call, recorded in
+`.internal/usage/summary.jsonl` (one line per call; one that never returned
+stays unknown; see [CLI → `autohelix report`](cli.md#autohelix-report)).
+
+History's `calls` list records each attempted agent call and command model call
+with its role, usage and log path (relative to the run directory); it is the
+only place usage is stored. Records from earlier versions may list `reviewer`
+calls; they count the same way. Every agent call's usage (the main agent's, a
+judge's, the run summary's) records `cli`, `model` (the model the CLI's output
+named, `null` when it named none) and `executable` (the resolved path started):
+which model ran, whatever `model:` asked for. `view`'s run screen and the web
+viewer's run page show the latest main-agent call's model.
 
 A command of your own can report its model calls the same way: append one JSON
 line per call, e.g. `{"id": "...", "source": "my-eval", "cost_usd": 0.12}`, to the
 file named by `$AUTOHELIX_USAGE_FILE` (set for every command the harness runs).
 Lines with the same `id` are one call (the last line wins), so a call can be
 recorded with `"cost_usd": null` when it starts and its cost when it ends.
-Interrupted or failed actual main-agent attempts are recorded as rejected
-iterations, including command calls and any available usage. Missing
-charges remain unknown, so totals are incomplete rather than zero. Failures before
-an agent call consume no iteration. Failed baseline attempts retain their costs in
-iteration 0 for a clean retry. A process killed before a durable history write can
-still lose unreturned usage; recovered accepted commits record that charge as unknown.
+
+Interrupted or failed main-agent attempts are recorded as rejected iterations,
+including command calls and any available usage; they consume their iteration
+number. Failures before an agent call consume no iteration. Failed baseline
+attempts keep their costs in iteration 0 for a clean retry. A process killed
+before a durable history write can still lose unreturned usage; recovered
+accepted commits record that charge as unknown.
 
 The numeric field is `usage.cost_usd` for every CLI. `usage.cost_source` is
 `backend` when the CLI supplies the amount, or `calculated` when AutoHelix
@@ -888,14 +839,12 @@ chosen there (`-m`, a profile) is priced as `agent.model` says, so set
 
 Estimates exclude speed-tier and regional premiums, per-request long-context
 surcharges, separately billed tools, and usage outside the captured thread.
-Cache-write lifetimes other than 30 minutes are not inferred. Report and
-supervisor calls remain separate; external evaluator calls count when they
-record usage through `$AUTOHELIX_USAGE_FILE`. Codex agent duration is measured
-locally even when usage is unavailable.
+Cache-write lifetimes other than 30 minutes are not inferred. External
+evaluator calls count when they record usage through `$AUTOHELIX_USAGE_FILE`.
+Codex agent duration is measured locally even when usage is unavailable.
 
-Missing, invalid, or interrupted usage remains **unavailable**, not zero.
-Mixed totals are labeled **incomplete**. If an iteration or resumed history has
-unavailable cost, `--cost` warns and tracks only the known amounts; give
-`-n` or `--time` as well. It uses the saved estimate and is checked between
-iterations, so it is an approximate stopping threshold, not a guaranteed
-spending cap.
+Missing, invalid, or interrupted usage remains **unavailable**, not zero, and
+totals with unavailable parts are labeled **incomplete**. `--cost` counts the
+saved amounts (Codex estimates included) and is checked between iterations, so
+it is an approximate stopping threshold, not a guaranteed spending cap; what it
+does when a cost is unavailable is in [CLI → Budgets](cli.md#budgets).

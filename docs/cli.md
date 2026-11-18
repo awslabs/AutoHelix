@@ -178,9 +178,8 @@ config names all three.
 A project's configs live in exactly two places: `autohelix.yaml` at its root,
 or `autohelix/<name>.yaml` for several loops. The `autohelix/` folder can
 also hold prompt templates and helper scripts (`autohelix/prompts/perf.md`;
-`prompt_template:` is relative to the config's folder). Commit the scripts:
-iteration copies are made from the commit, so an untracked script a gate runs
-is missing there. Whether to commit the configs:
+`prompt_template:` is relative to the config's folder). Commit the scripts
+([Phases → Candidate copies](phases.md#candidate-copies)). Whether to commit the configs:
 [Configuration → Where configs live](config.md#where-configs-live). Keep `autohelix/` out of
 `scope.editable` (or list it under `frozen:`), so the agent can't edit its own
 gates. `.autohelix/` is the runs' state, kept out of git.
@@ -195,8 +194,9 @@ gates. `.autohelix/` is the runs' state, kept out of git.
 - A run has exactly one config: it stores the file's text when it starts
   (`.autohelix/runs/<id>/config.yaml`, its prompt template beside it as
   `prompt_template.md`), and `resume`, `view`, `report` and the
-  judges use that copy. `resume` refuses when the file's parsed config has
-  changed since (comment, formatting and spelling edits don't count):
+  judges (`$AUTOHELIX_CONFIG`) use that copy. `resume` refuses before spending
+  anything when the file's parsed config has changed since (comment, formatting
+  and spelling edits don't count; the prompt template's text does):
   apply an edited config with a new run, `autohelix run perf --import <id>`,
   or restore the file to continue. A deleted file (or template) is fine: the
   run continues with its stored copy.
@@ -226,11 +226,10 @@ autohelix run [CONFIG] --check
 without it, the run uses `autohelix.yaml`, else the only config in
 `autohelix/` (see [Config files](#config-files)). The project must be a git
 checkout with a commit, and the first baseline needs no uncommitted changes to
-tracked files. Commit any scripts its commands use: iteration copies are made
-from the commit. Commit the config before the first `run`, or keep it private
-([Where configs live](config.md#where-configs-live)); with auto landing, `run`
-warns about an uncommitted one ("commit autohelix.yaml first: a commit on main
-after this run lands makes `resume` refuse").
+tracked files. Commit the scripts its commands use
+([Phases → Candidate copies](phases.md#candidate-copies)), and commit the config
+before the first `run` or keep it private
+([Where configs live](config.md#where-configs-live)).
 
 While the segment runs, `run` (and `resume`) keeps the machine from sleeping:
 `caffeinate -i -w <pid>` on macOS, `systemd-inhibit` (idle and sleep) on Linux.
@@ -327,7 +326,7 @@ run when either of the two lands manually (only one of them lands on its own).
 Scripts that want to continue where they left off should call
 `resume`, not `run`.
 
-When the run finishes (not when interrupted), it writes a summary to `.autohelix/runs/<id>/report.md` — see [Configuration → Report](config.md#report).
+When a segment finishes (not when interrupted), it writes a summary to `.autohelix/runs/<id>/report.md`: see [`autohelix report`](#autohelix-report).
 
 On first start, performs preflight checks and evaluates the baseline (see
 [Configuration → Order within an iteration](config.md#order-within-an-iteration)). When the run stops, it saves `.autohelix/runs/<id>/report.html`, a one-file copy of the [`autohelix view`](#the-web-page) run page — see [Concepts → Run page](concepts.md#run-page).
@@ -402,9 +401,9 @@ a hard limit on one iteration use [`agent.timeout`](config.md#agent). Costs that
 are unavailable don't count (`--cost` warns and tracks only the known ones): keep
 `-n` or `--time` alongside. With `--cost` the only bound, an unknown cost stops
 the segment before its next iteration ("cost unknown: --cost can't bound this
-segment (add -n or --time)") only while none of the segment's charges was priced
-(a backend that can't price); once one was, an unknown one (a timed-out call)
-only warns.
+segment (add -n or --time)") only while none of the segment's main-agent calls
+was priced (a backend that can't price); once one was, an unknown one (a
+timed-out call) only warns.
 
 `--time` starts no new iteration once the time is up; what is under way then
 comes on top, so the worst case is `--time` plus one iteration, landing and the
@@ -425,8 +424,7 @@ iteration and cost caps as run totals and the `--time` cap as this segment's
 own; while the segment runs, `view --terminal`'s Budget field shows what is left of that cap
 ("47m 55s left (--time 1h)", "time up (--time 1h)" once past it); the run's total
 time has no cap (`progress.seconds` in [JSON output](#json-output)). Every segment that starts
-is also recorded in `.autohelix/runs/<id>/.internal/segments.jsonl` (see
-[Concepts → Runs and run state](concepts.md#runs-and-run-state)).
+is also an event for [`autohelix wait`](#autohelix-wait).
 
 ### Groups
 
@@ -731,7 +729,7 @@ ssh -L 8765:127.0.0.1:8765 user@host   # then open http://localhost:8765
 
 The run list (`/`) has one row per run: its short id and name (with its group, and the config file under it when the run isn't named after it), state (with time and cost so far, and what is left of `--time`, under it), iterations, one metric from the latest accepted iteration, landing, last activity and the goal's title (with the run's notes under it: why it was started, what it continues from, why it was archived). The metric's change against the run's own baseline is in the tooltip, and the metric is picked from a menu in the column header. Hover a cell for details such as the stop reason or budgets. The header names the machine and checkout (every page is `localhost` over an SSH tunnel). Archived runs are hidden until you click their count in the header. Narrower than about 900 pixels, the Goal and Last active columns are hidden and the goal goes under the run's name. Click a row for that run's page.
 
-A run's page (`/run/<id>/`) shows its `.autohelix/` state. The header shows the goal's title (its first line; click it for the rest) and run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed, and when; hover for why it ended). The left side shows the best metric value with total time and cost, the metric over time, and one row per iteration with the agent's one-line summary (and, for a rejection, the gate that failed), then a row for the run summary once one is written (see [Configuration → Report](config.md#report)). The right side is one panel: the selected iteration (the running one while a run is live; click a row or chart point, press `j`/`k` or use the panel's arrows to pick another; `#iter-N` in the address picks one), or, after the last iteration, the run summary (shown when the run has stopped; `#summary`). An iteration's panel has: why it was rejected; changes outside the editable scope that were discarded; the gates in list order (passed, failed with its output, or pending), each with its stored output (`iterations/NNN/gates/<k>/`: stdout, stderr and an `ask:` gate's judge transcript); its notes (`notes/iter-N.md`, as saved with the iteration); the iteration's own changes (from the commit it started from to its frozen tree, rejected attempts included while their ref is kept) and the changes against the baseline, each file folding on its own when there are several; one section per observe entry (`iterations/NNN/observe/<name>/`: status, metrics, stdout, stderr and captured files; a review's text as Markdown); the stop commands that ran after it (`iterations/NNN/stop/<k>/`, the one that stopped the run marked); and agent and judge activity (`iterations/NNN/agent.log` and the transcripts, live while they run). A section you open or close stays so as you move between iterations. Paths are below `.autohelix/runs/<id>/`. Notes that are not tied to an iteration are listed under Shared notes.
+A run's page (`/run/<id>/`) shows its `.autohelix/` state. The header shows the goal's title (its first line; click it for the rest) and run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed, and when; hover for why it ended). The left side shows the best metric value with total time and cost, the metric over time, and one row per iteration with the agent's one-line summary (and, for a rejection, the gate that failed), then a row for the run summary once one is written (see [`autohelix report`](#autohelix-report)). The right side is one panel: the selected iteration (the running one while a run is live; click a row or chart point, press `j`/`k` or use the panel's arrows to pick another; `#iter-N` in the address picks one), or, after the last iteration, the run summary (shown when the run has stopped; `#summary`). An iteration's panel has: why it was rejected; changes outside the editable scope that were discarded; the gates in list order (passed, failed with its output, or pending), each with its stored output (`iterations/NNN/gates/<k>/`: stdout, stderr and an `ask:` gate's judge transcript); its notes (`notes/iter-N.md`, as saved with the iteration); the iteration's own changes (from the commit it started from to its frozen tree, rejected attempts included while their ref is kept) and the changes against the baseline, each file folding on its own when there are several; one section per observe entry (`iterations/NNN/observe/<name>/`: status, metrics, stdout, stderr and captured files; a review's text as Markdown); the stop commands that ran after it (`iterations/NNN/stop/<k>/`, the one that stopped the run marked); and agent and judge activity (`iterations/NNN/agent.log` and the transcripts, live while they run). A section you open or close stays so as you move between iterations. Paths are below `.autohelix/runs/<id>/`. Notes that are not tied to an iteration are listed under Shared notes.
 
 ### In the terminal
 
@@ -844,10 +842,22 @@ Per event:
   the agent call failed, else `null`). `time` is when it ended. An accepted
   iteration is reported once its record is final, after its stop commands.
 - **`ended`**: a segment ended. `segment`, `state` (`finished`, `interrupted`
-  or `failed`), `stop_reason` (an object with `kind` and `detail`, as in
-  `status.json`, or `null`), `error` (a failed segment's error, else `null`),
+  or `failed`), `stop_reason` (why the loop ended, below; kept when Ctrl-C or an
+  error comes later, during landing or the report; `null` only when the loop
+  itself was interrupted or failed, except by `autohelix stop --now`), `error` (a failed segment's error, else `null`),
   `last_iteration` (the run's last iteration), `iterations` (the records this
   segment added). `time` is when it ended.
+
+A stop reason has a `kind` and a `detail` (the line shown, "iteration budget
+reached (5)"), plus fields of its kind:
+
+- `budget`: `budget` is `iterations`, `cost` or `time`;
+- `condition`: a [stop command](config.md#stop) succeeded; `iteration`,
+  `command` and `reason`;
+- `agent`: the agent failed three times in a row; `iteration` and `error`;
+- `request`: [`autohelix stop`](#autohelix-stop) asked; `why` (or
+  `null`), `requested_at`, and `now: true` when `--now` interrupted the
+  segment (its state is then `interrupted`).
 - **`crashed`**: a segment never ended and its process is gone (nothing holds
   the run's lock, or a later segment started). `segment`, `last_iteration` (the
   last iteration reported before it crashed; `null` if none was, e.g. during its
@@ -1000,4 +1010,35 @@ Write (or rewrite) the run summary.
 autohelix report [RUN_ID] [-p PATH]
 ```
 
-Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on). `autohelix run` and `resume` write the summary automatically when a run finishes; use this command after an interrupted run, or to regenerate it. It uses the config the run stored when it started. One agent call reads the run's history, notes, logs and commits and writes `.autohelix/runs/<id>/report.md`. The summary inspects a detached checkout of the accepted run tip, even when the user's checkout is dirty. Standalone report refuses a live ownership lock. The previous summary is replaced only if the agent writes a new one. See [Configuration → Report](config.md#report).
+Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on).
+
+One agent call reads the run's history, notes, logs and commits and writes a
+short summary to `.autohelix/runs/<id>/report.md`: what was achieved, which
+changes mattered, what didn't work, what to try next, and anything worth
+checking before relying on the results.
+
+`run` and `resume` write it when a segment ends after at least one iteration
+(a stop condition, a budget, `autohelix stop`):
+
+- Not after an interrupted segment, and not after the agent failed 3 times in
+  a row. Run `autohelix report` to write one then.
+- `--no-report` on `run` or `resume` skips it. It counts for that command only
+  (not stored with the run like `--land`), so pass it to each `resume` too.
+- A summary that fails says why (its log is `logs/report.log`). A Ctrl-C
+  during it ends only the summary: the segment's outcome and exit code stay.
+
+The call:
+
+- uses the run's agent settings (`cli`, `model`, `effort`, `extra_args`), with
+  a timeout of `agent.timeout` capped at 15 minutes;
+- reads the config the run stored when it started;
+- inspects a detached checkout of the run's accepted tip, even when your
+  checkout is dirty.
+
+Its time and cost are shown next to the summary in `autohelix view` and
+`report.html`. Every summary's cost counts in the run's total (the end block,
+`view`, the run page) and in its segment's. It runs after the loop, so
+`--cost` doesn't stop it, but the next segment's `--cost` starts after it.
+
+`autohelix report` refuses a run that is running. It replaces the previous
+summary only if the agent writes a new one.

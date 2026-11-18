@@ -38,7 +38,9 @@ With [Colima](https://github.com/abiosoft/colima), the project must be under you
 ## What's NOT isolated
 
 - Network: agent can reach the internet (`--network=host`). Required for LLM API calls.
-- Project files: mounted read-write, so accepted iterations commit directly to your repo.
+- Project files: mounted read-write. Accepted iterations go to the run's ref
+  (`refs/autohelix/<id>`) in your repository and land on your branch as in any run
+  ([CLI → `autohelix land`](cli.md#autohelix-land)).
 
 ## Env script
 

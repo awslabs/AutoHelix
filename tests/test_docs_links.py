@@ -1,4 +1,4 @@
-"""Every relative link in docs/*.md and README.md resolves.
+"""Every relative link in docs/*.md, README.md and CHANGELOG.md resolves.
 
 A link's path must name a file or folder that exists; a `#anchor` (on its
 own, or after a markdown file's path) must name a heading of that file, by
@@ -15,7 +15,7 @@ from urllib.parse import unquote
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-DOCS = sorted((ROOT / "docs").glob("*.md")) + [ROOT / "README.md"]
+DOCS = sorted((ROOT / "docs").glob("*.md")) + [ROOT / "README.md", ROOT / "CHANGELOG.md"]
 
 FENCE = re.compile(r"^\s*(```|~~~)")
 HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$")

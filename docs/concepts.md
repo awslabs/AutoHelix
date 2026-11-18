@@ -337,50 +337,10 @@ of truth (`jq` on it for numbers across iterations; see
 retried baseline, reuses its number: the earlier attempt's folder is moved to
 `.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
 
-`.internal/segments.jsonl` is the run's event log (what [`autohelix
-wait`](cli.md#autohelix-wait) reads): every segment (one `run` or `resume`
-command) that started (as soon as the command held the run's lock, before its
-checks: a start they refuse is a segment that failed), append-only, JSON lines
-linked by `segment` (1, 2, … in the run) and told apart by `event`:
-
-- `"event": "start"`: `started_at` (epoch seconds), `budget` as given
-  (`iterations`, `until`, `cost_usd`, `time_seconds`, each `null` when unset,
-  and `default`: no budget flag, so the default `-n 1` applied),
-  `start_iteration` (the first iteration it may run, `0` when it captures the
-  baseline), `pid`, `host` and `executable` (the main agent's, resolved;
-  `resume` warns when it differs from the last segment's);
-- `"event": "iteration"`, one per record once it is final (after its stop
-  commands; a failed or retried baseline too): `ended_at` and the fields of
-  `wait`'s [`iteration` event](cli.md#events) (`iteration`, `accepted`,
-  `reason`, `summary`, `metrics`, `commit`, `cost_usd`, `cost_incomplete`,
-  `agent_error`). A record whose process was killed before its line (or one
-  recovered from a published commit) gets it at the next `resume`, with the
-  previous segment's number, just before the new start;
-- `"event": "end"`: `ended_at`, `state` (`finished`, `interrupted` or
-  `failed`), `stop_reason` (as in `status.json`: why the loop ended, kept when
-  Ctrl-C or an error comes later, during landing or the report; `null` only when
-  the loop itself was interrupted or failed, except by `autohelix stop --now`),
-  `iterations` (how many records the
-  segment added to `history.jsonl`, the baseline's included: `0` when none
-  completed), `last_iteration` (the run's last recorded iteration then; with
-  `iterations: 0` it is the one before the segment) and `error` (what a failed
-  segment failed with, one line, cut to 500 characters; else `null`).
-
-A stop reason has a `kind` and a `detail` (the line shown, "iteration budget
-reached (5)"), plus fields of its kind:
-
-- `budget`: `budget` is `iterations`, `cost` or `time`;
-- `condition`: a [stop command](config.md#stop) succeeded; `iteration`,
-  `command` and `reason`;
-- `agent`: the agent failed three times in a row; `iteration` and `error`;
-- `request`: [`autohelix stop`](cli.md#autohelix-stop) asked; `why` (or
-  `null`), `requested_at`, and `now: true` when `--now` interrupted the
-  segment (its state is then `interrupted`).
-
-A segment whose process died has a start and no end. Each line is written in
-one append and synced, and earlier lines are never rewritten: a damaged line
-loses only itself (readers skip it). [`autohelix wait`](cli.md#autohelix-wait)
-reports segments from this file as `started`, `ended` and `crashed` events.
+The `.internal/` folders are the harness's own files, not an interface: their
+formats can change. To follow a run from a script, use
+[`autohelix wait`](cli.md#autohelix-wait) (its events are the run's event log,
+`.internal/segments.jsonl`) or [`autohelix view --json`](cli.md#json-output).
 
 The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
 project; see [Phases → Where things live](phases.md#where-things-live).
@@ -388,20 +348,11 @@ project; see [Phases → Where things live](phases.md#where-things-live).
 A run is a line of work: `autohelix run` starts one, `autohelix resume` continues
 one (by default the config's most recently active), `autohelix stop` ends a
 running one after its current iteration, `archive` sets one aside and `delete`
-removes it. **A run keeps its config**: it stores it as `config.yaml`
-(and its prompt template as `prompt_template.md`) when it starts, and every segment, `view`, `report` and the judges
-(`$AUTOHELIX_CONFIG`) use that copy. `resume` refuses before spending anything
-when the config file's parsed config differs from it (comments, formatting and
-other spellings of the same value don't count; the prompt template's text does): `autohelix run <config> --import
-<id>` applies the new config in a new run, or restore the file to continue. A
-deleted config file isn't a change. `run --import <id>` starts a new run (code
-from your checkout, its own config, budgets, baseline and notes) whose agents
-also see the imported run's `run.json`, `history.jsonl` and notes read-only, and
-whose baseline observe entries continue from that run's outputs
-(`$AUTOHELIX_PREVIOUS`); `run.json` records it as `import: {run: <id>}`. The config file and its `prompt_template:`
-file are always frozen, so the agent can't change its own protocol. Scripts the
-config calls (`bench.py`, gate scripts) are code: they move with the run's
-commits; list them under `scope.frozen` if they must not change. A run has no other state: whether it is running comes from its
+removes it. **A run keeps its config**: the one it stored when it started
+([CLI → Config files](cli.md#config-files), which also says when `resume`
+refuses an edited one and what is frozen). `run --import <id>` starts a new run
+that also sees another run's notes and history
+([CLI → Continuing from another run](cli.md#continuing-from-another-run)). A run has no other state: whether it is running comes from its
 lock, how its last segment ended from `status.json`, and whether it has landed from
 git. One `run` or `resume` command, called a **segment**,
 holds a process lock through validation, final landing and report. Agent commits
@@ -444,47 +395,11 @@ history must be moved or deleted before run; there is no automatic migration.
 
 ## Cost Tracking
 
-Available token usage and cost are captured from agent backends:
-
-- **Per iteration**: shown after each accepted/rejected result
-- **Cumulative**: shown in the final summary
-- **Persisted**: stored in `.autohelix/runs/<id>/history.jsonl` for later analysis
-
-Each iteration's cost includes its optimization agent and the model calls its
-commands report (`ask`, `review`). Run totals and `--cost` also include the
-baseline's. History's `calls` list records each agent and command call with
-its role, usage and log path; baseline calls and failed calls count too.
-Failed main-agent calls consume their iteration number and resume at the next one;
-setup failures before a call do not. Baseline retry calls stay in iteration 0.
-`calls` is the sole persisted usage representation; log paths are relative to the
-run directory. Every agent call's usage (the main agent's, a judge's, the run
-summary's) records `cli`, `model` (the model the CLI's output named, `null` when
-it named none) and `executable` (the resolved path started): which model ran,
-whatever `model:` asked for. `view`'s run screen and the web viewer's run page
-show the latest main-agent call's model.
-Every run summary's call is counted in the run's totals too, recorded in
-`.internal/usage/summary.jsonl` (one per call; one that never returned stays
-unknown).
-
-What's available depends on the backend:
-
-- **Claude Code**: input/output tokens, cost (USD), duration
-- **Codex**: input/output and available cached-input, cache-write, and reasoning
-  tokens; calculated API-equivalent cost for recognized models; measured duration
-- **OpenCode**: input/output tokens, cost (per step, accumulated)
-
-Every backend uses the same `usage.cost_usd` field and **Cost** display.
-History also records `cost_source`: `backend` for a CLI-supplied amount,
-`calculated` for a Codex estimate. Calculated costs save their model, pricing
-basis, and rates. Codex estimates use Standard OpenAI API prices; they do not
-represent subscription or Bedrock bills. Backend-supplied amounts may also be
-estimates.
-
-Missing costs are unavailable, and totals with missing costs are incomplete.
-`--cost` uses the recorded amounts, including Codex estimates, and warns
-if some costs are unavailable. See [Cost Tracking](config.md#cost-tracking) for
-the pricing assumptions and accounting limits.
+Each iteration's cost (its agent, and the model calls its commands make) is
+shown after it and stored in `history.jsonl`; what is counted, how Codex costs
+are estimated and what happens when a cost is unavailable is in
+[Configuration → Cost Tracking](config.md#cost-tracking).
 
 ## Run page
 
-To follow a run live, open this page with [`autohelix view <id>`](cli.md#autohelix-view), or use `autohelix view --terminal` in a terminal. When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/runs/<id>/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's gates, notes and observe entries (status and metrics; a review's text), the changes from the baseline to the final code, and the run summary when there is one (see [Configuration → Report](config.md#report)). It leaves out agent activity, per-iteration diffs, and stdout, stderr and captured files; use `autohelix view <id>` (the live page) for those. `autohelix report` also rewrites it.
+To follow a run live, open this page with [`autohelix view <id>`](cli.md#autohelix-view), or use `autohelix view --terminal` in a terminal. When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/runs/<id>/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's gates, notes and observe entries (status and metrics; a review's text), the changes from the baseline to the final code, and the run summary when there is one (see [CLI → `autohelix report`](cli.md#autohelix-report)). It leaves out agent activity, per-iteration diffs, and stdout, stderr and captured files; use `autohelix view <id>` (the live page) for those. `autohelix report` also rewrites it.

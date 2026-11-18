@@ -60,3 +60,34 @@ def test_autohelix_symlink_into_a_personal_repository(project, tmp_path):
     (project / "autohelix").symlink_to(personal)
     # run.json names the config by its resolved path, outside the project.
     run_and_resume(project, str((personal / "perf.yaml").resolve()), warned=True)
+
+
+def test_untracked_root_config(project):
+    """The **Private** bullet's other form: a committed `autohelix.yaml` untracked
+    (`git rm --cached`) and excluded as `/autohelix.yaml` runs without the warning."""
+    (project / "autohelix.yaml").write_text(yaml.safe_dump(CONFIG))
+    git(project, "add", "autohelix.yaml")
+    git(project, "commit", "-qm", "config")
+    git(project, "rm", "-q", "--cached", "autohelix.yaml")
+    git(project, "commit", "-qm", "config is private")
+    with open(project / ".git" / "info" / "exclude", "a") as f:
+        f.write("/autohelix.yaml\n")
+    result = cli(project, "run", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert "first: a commit on" not in result.output
+    assert git(project, "status", "--porcelain") == ""
+    assert git(project, "rev-parse", "HEAD") == git(project, "rev-parse", f"autohelix/{latest_run(project).run_id}")
+
+
+def test_the_page_shows_the_tested_exclude_entries():
+    """The page's recipes use the entries these tests use."""
+    from pathlib import Path
+
+    page = (Path(__file__).resolve().parents[1] / "docs" / "config.md").read_text()
+    section = page[page.index("## Where configs live"):page.index("## Full Reference")]
+    for line in ("echo /autohelix/ >> .git/info/exclude",
+                 "echo /autohelix >> .git/info/exclude",
+                 "ln -s ~/configs/myproject autohelix",
+                 "`/autohelix.yaml`",
+                 "git rm -r --cached autohelix"):
+        assert line in section, line
