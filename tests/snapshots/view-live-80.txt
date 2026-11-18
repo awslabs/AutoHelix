@@ -6,7 +6,7 @@
     ⠘⢦⣤⠵⠫⣤⡴⠃     Scope      editable: sort.py
                  Budget     7 iterations · $10.00 · 30m each
   ────────────────────────────────────────────────────────────────────────────
-             time    cost   speed ↑         mem_mb ↓
+             time    cost     speed ↑         mem_mb ↓
   · base                       46.9              120
   ✓ 1         31s   $0.15  17,481.5 373×         118 -2%
   ✗ 2      2m 23s   $0.48  pytest -q test_sort.py failed (exit 1)

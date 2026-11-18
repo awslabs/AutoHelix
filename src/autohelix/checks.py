@@ -18,7 +18,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from autohelix.agents.runner import _kill_process_group, end_group
+from autohelix.agents.runner import _kill_process_group, child_signals, end_group
 from autohelix.agents import command_path
 from autohelix.config import DEFAULT_CHECK_TIMEOUT, CommandSpec, Config, MetricGate, ObserveEntry
 from autohelix.sandbox import build_copy_env
@@ -172,16 +172,17 @@ def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str]) -> _Exe
     start = time.monotonic()
     proc: subprocess.Popen | None = None
     try:
-        proc = subprocess.Popen(
-            command,
-            shell=True,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,  # never the user's terminal: no prompts, no TTY size
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            start_new_session=True,
-        )
+        with child_signals():
+            proc = subprocess.Popen(
+                command,
+                shell=True,
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,  # never the user's terminal: no prompts, no TTY size
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                start_new_session=True,
+            )
         while True:
             try:
                 stdout, stderr = proc.communicate(timeout=2.0)

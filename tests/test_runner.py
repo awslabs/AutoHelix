@@ -5,9 +5,13 @@
 
 import os
 import resource
+import signal
 import time
+from contextlib import contextmanager
 
-from autohelix.agents.runner import run_process
+import pytest
+
+from autohelix.agents.runner import child_signals, run_process
 
 
 def _run(tmp_path, script, **kwargs):
@@ -138,3 +142,42 @@ def test_detached_background_child_is_killed_after_a_normal_exit(tmp_path):
         tmp_path, f"sleep 30 >/dev/null 2>&1 & echo $! > {marker}; exit 4")
     assert (result.exit_code, result.timed_out) == (4, False)
     _assert_gone(int(marker.read_text()), "background sleep with its output redirected")
+
+
+@contextmanager
+def _ignored(*signums):
+    """SIGINT/SIGQUIT ignored in this process, as in a run a script started in the
+    background (`nohup autohelix run ... &`); restored afterwards."""
+    previous = {signum: signal.signal(signum, signal.SIG_IGN) for signum in signums}
+    try:
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGQUIT])
+def test_an_agent_starts_with_default_signals_while_the_harness_ignores_them(tmp_path, signum):
+    """An agent call started while the harness ignores Ctrl-C (or SIGQUIT) can be
+    interrupted by it: a shell that sends it to itself dies. The harness still ignores it."""
+    with _ignored(signal.SIGINT, signal.SIGQUIT):
+        result, lines, _ = _run(tmp_path, f"kill -{signum.name[3:]} $$; echo survived")
+        assert signal.getsignal(signum) == signal.SIG_IGN
+    assert "survived" not in lines
+    assert result.exit_code == -signum
+
+
+def test_a_signal_while_a_child_starts_is_still_ignored():
+    """Inside `child_signals` an ignored signal is caught by a handler that does nothing,
+    so the harness still ignores it; afterwards it is ignored again. A handled signal is
+    left alone."""
+    with _ignored(signal.SIGINT, signal.SIGQUIT):
+        with child_signals():
+            assert signal.getsignal(signal.SIGINT) not in (signal.SIG_IGN, signal.SIG_DFL)
+            signal.raise_signal(signal.SIGINT)
+            signal.raise_signal(signal.SIGQUIT)
+        assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+        assert signal.getsignal(signal.SIGQUIT) == signal.SIG_IGN
+    handler = signal.getsignal(signal.SIGINT)
+    with child_signals():
+        assert signal.getsignal(signal.SIGINT) is handler

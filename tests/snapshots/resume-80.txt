@@ -6,7 +6,7 @@
     ⠘⢦⣤⠵⠫⣤⡴⠃     Scope      editable: sort.py
                  Budget     2 more iterations (to 9) · 30m each
   ────────────────────────────────────────────────────────────────────────────
-             time    cost   speed ↑         mem_mb ↓
+             time    cost     speed ↑         mem_mb ↓
   · base                       46.9              120
   … 2 earlier iterations · autohelix view krp3
   ✓ 3      2m 06s   $0.32  35,310.7 753×          96 -20%
