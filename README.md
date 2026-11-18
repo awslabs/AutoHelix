@@ -45,38 +45,25 @@ autohelix
 An agent session opens and helps you turn your goal into a protocol: it looks at your
 project, proposes the checks and what to measure, and commits the file once you agree.
 
-**2. Run.** Start the protocol with a budget:
+**2. Run.** The setup agent ends by suggesting a command and budget, for example:
 
 ```bash
-autohelix run -n 3        # three iterations
-autohelix run --cost 20   # or a budget in dollars
-autohelix run --time 2h   # or in time
-autohelix resume -n 5     # later: five more iterations of the same run
+autohelix run -n 3        # three iterations (or --cost 20, --time 2h)
 ```
 
-Each iteration prints a row with its time, cost and metrics:
-
-<p align="center">
-  <img alt="autohelix run in the terminal: one row per iteration with time, cost and metric" src="assets/run-terminal.png" width="600">
-</p>
-
-Accepted changes land on your branch when the run ends. With `--land manual` they wait
-until you run `autohelix land`, for example to review them first or to compare several runs.
+Each iteration prints a row with its time, cost and metrics. Accepted changes land on your
+branch when the run ends. With `--land manual` they wait until you run `autohelix land`,
+for example to review them first or to compare several runs. `autohelix resume` continues
+a run later.
 
 **3. Follow it.**
 
 ```bash
-autohelix view --open     # --terminal to follow here instead
+autohelix view --open
 ```
 
-The web view lists all of the project's runs, live, so runs of the same protocol can be
-compared side by side, here with three models:
-
-<p align="center">
-  <img alt="The web view's run list: the same protocol run with Claude Opus, Sonnet and Haiku" src="assets/run-list-dark.png" width="880">
-</p>
-
-Open a run to see its metrics, diffs, notes and costs, iteration by iteration.
+The web view lists all of the project's runs, live. Open one to see its metrics, diffs,
+notes and costs, iteration by iteration.
 
 **4. Ask about it.** Run `autohelix` again any time: it lists your runs and opens an agent
 that can read them, answer questions and suggest what to try next.
@@ -156,6 +143,19 @@ AutoHelix records every attempt: its diff, cost, metrics and gate results, why i
 rejected and the reviews it got. It's all plain files in `.autohelix/runs/<id>/`, which the
 web view shows and the `autohelix` agent reads when you ask about a run. When the run ends, an agent reads the record and writes a report of what
 was tried, what worked and what it cost.
+
+In the terminal, each iteration is a row with its time, cost and metrics:
+
+<p align="center">
+  <img alt="autohelix run in the terminal: one row per iteration with time, cost and metric" src="assets/run-terminal.png" width="600">
+</p>
+
+In the web view, runs of the same protocol can be compared side by side, here with three
+models:
+
+<p align="center">
+  <img alt="The web view's run list: the same protocol run with Claude Opus, Sonnet and Haiku" src="assets/run-list-dark.png" width="880">
+</p>
 
 ## Why not just a loop?
 
