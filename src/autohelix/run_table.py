@@ -335,10 +335,7 @@ def table_lines(shown: list[dict], width: int = 100, metric: str | None = None, 
             ([terminal.number(value)] if metric else []) + \
             [_landing(run), terminal.money(p["cost_usd"], p["cost_incomplete"]) or "—",
              _phase(run, now) if _live(run) else _ago(run["last_activity"], now), run.get("title") or ""]
-        cells = [clean(cell) for cell in cells]
-        if metric:  # the value ends under the metric's name, its arrow after both
-            cells[3] += " " * len(arrow)
-        rows.append((cells, terminal.TEAL if _live(run) else STATE_STYLES.get(_word(run))))
+        rows.append(([clean(cell) for cell in cells], terminal.TEAL if _live(run) else STATE_STYLES.get(_word(run))))
     table = [head] + [cells for cells, _ in (r for r in rows if isinstance(r, tuple))]
     widths = [max(len(row[i]) for row in table) for i in range(goal)] + [0]
     widths[0] = max([widths[0]] + [len(short_id(r["id"])) for r in rows if isinstance(r, dict)])

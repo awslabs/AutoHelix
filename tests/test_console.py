@@ -398,11 +398,14 @@ def test_a_metric_value_ends_under_the_last_letter_of_its_name(width):
     table = Table({"mbpp_16b": "higher", "mbpp_13b": "higher", "loss": "lower"}, width)
     head = table.column_header().plain
     row = table.add(Row(0, True, {"mbpp_16b": 0.7407, "mbpp_13b": 0.7196, "loss": 1.5}))[-1].plain
+    checked = 0
     for name, arrow, value in (("mbpp_16b", "↑", "0.7407"), ("mbpp_13b", "↑", "0.7196"), ("loss", "↓", "1.5")):
         if f"{name} {arrow}" not in head:  # cut at this width
             continue
         assert row.index(value) + len(value) == head.index(name) + len(name), (head, row)
         assert head[head.index(name) + len(name):].startswith(f" {arrow}")
+        checked += 1
+    assert checked, head
 
 
 @pytest.mark.parametrize("width, spacing", [(80, terminal.COMPACT), (120, terminal.SPACED), (130, terminal.WIDE)])

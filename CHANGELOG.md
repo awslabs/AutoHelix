@@ -622,6 +622,8 @@ Fixed:
   run ... &`, which ignores both): before, they and what they started
   inherited the ignored signals, so a project's own Ctrl-C tests run as a gate
   failed. The run itself still ignores them.
+- The run table's metric values (`run`, `resume`, `view --terminal`) end under
+  the metric's name, its arrow after it; before, they ended under the arrow.
 
 ## 0.1.1 — 2026-09-02
 

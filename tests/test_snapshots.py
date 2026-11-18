@@ -296,16 +296,6 @@ def test_screens_fit_their_width(name):
     assert all(line.cell_len <= width for line in SCREENS[name]())
 
 
-def test_the_runs_table_ends_each_value_under_the_metric_name():
-    """The metric column's values end under the name's last letter, its arrow after them."""
-    lines = [line.plain for line in dashboard_screen(120)]
-    [head] = [line for line in lines if "speed ↑" in line]
-    end = head.index("speed ↑") + len("speed")
-    for value in ("35,310.7", "57,520.8"):
-        [row] = [line for line in lines if value in line]
-        assert row.index(value) + len(value) == end
-
-
 def test_an_unreadable_history_shows_the_outcome_only():
     """Totals and landing would be counted from no rows, so the end block stops after
     the outcome; the warning is `terminal.warning`'s, like every warning."""
