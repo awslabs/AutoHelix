@@ -140,9 +140,11 @@ def squash_main_onto_base(project, data):
     git(project, "reset", "-q", "--hard", squashed)
 
 
-def test_a_landed_run_stays_landed_after_a_squash_merged_pr(project):
+def test_a_landed_run_stays_landed_after_a_squash_merged_pr(project, capsys):
     """`land` records `landed` in run.json; a target that has the work as one squashed
-    commit reads landed, and only commits accepted after it count."""
+    commit reads landed, and only commits accepted after it count: `git cherry-pick` of
+    the commits after the landed tip applies them (a merge would re-apply the squashed
+    ones and conflict)."""
     from autohelix.runs import RunPaths
 
     harness = Harness(project, land_mode="manual")
@@ -161,12 +163,21 @@ def test_a_landed_run_stays_landed_after_a_squash_merged_pr(project):
     with RunLock(paths.lock):
         land(paths, data, tip)  # already there: nothing to do
 
+    capsys.readouterr()
     resumed = Harness(project, land_mode="manual")
+    pick = f"git cherry-pick {tip}..autohelix/{paths.run_id}"
+    assert f"once it accepts a change, apply it yourself: {pick})" in " ".join(capsys.readouterr().out.split())
     resumed.run(Budget(until=2), report=False)
     data = RunPaths(project, paths.run_id).read_identity()
-    assert relation(paths, data) == ("diverged", 1, 1)  # the resume's commit, not the landed ones
-    words = landing_words(landing(paths, data), paths.run_id, "manual")
-    assert (words.cell, words.commands) == ("1 diverged", (f"git merge autohelix/{paths.run_id}",))
+    found = landing(paths, data)
+    assert (found.relation, found.ahead, found.behind, found.since) == ("diverged", 1, 1, tip)
+    words = landing_words(found, paths.run_id, "manual")
+    assert (words.cell, words.commands) == ("1 diverged", (pick,))
+    assert f"apply the ones after them by hand: `{pick}`." in words.sentence and "git merge" not in words.sentence
+    assert git(project, "merge", "--no-commit", f"autohelix/{paths.run_id}", check=False).returncode  # conflicts
+    git(project, "merge", "--abort")
+    git(project, *pick.split()[1:])  # applies cleanly
+    assert (project / "code.py").read_text() == git(project, "show", f"{found.tip}:code.py").stdout
 
 
 def test_a_squash_merge_without_land_stays_diverged(project):
@@ -229,7 +240,7 @@ def test_a_landing_on_another_branch_is_not_a_landing_on_the_target(project):
     with RunLock(paths.lock):
         land(paths, harness.run_info, tip, into="other")
     data = paths.read_identity()
-    assert data["landed"]["target"] == "other"
+    assert "landed" not in data  # only a landing on the run's own target is recorded
     squash_onto(project, "main", "other")
     assert relation(paths, data) == ("diverged", 1, 1)
     with RunLock(paths.lock), pytest.raises(RuntimeError, match="^Cannot land: main diverged from run"):
@@ -288,3 +299,81 @@ def test_landing_words_state_and_missing_are_the_sentence_s_own_clauses():
                                   "accepted any changes).")
     assert landing_words(Landing("t", "main", None, None, 2, 0, True), run_id).sentence == (
         "Branch main is not available (`autohelix land k3f9 --into <branch>` lands it on another branch).")
+
+
+def test_a_landing_into_another_branch_keeps_the_landing_on_the_target(project):
+    """`land --into release` after a landing on main that a PR squash-merged: run.json
+    still records main's, so main stays landed and `delete` needs no --force."""
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    paths, tip = harness.paths, harness.run_state.expected_tip
+    git(project, "branch", "release", harness.run_info["base_commit"])
+    with RunLock(paths.lock):
+        land(paths, harness.run_info, tip)
+    squash_main_onto_base(project, harness.run_info)
+    data = paths.read_identity()
+    assert relation(paths, data) == ("landed", 0, 1)
+    with RunLock(paths.lock):
+        land(paths, data, tip, into="release")
+    assert git(project, "rev-parse", "release").stdout.strip() == tip
+    data = paths.read_identity()
+    assert (data["landed"]["tip"], data["landed"]["target"]) == (tip, "main")
+    assert relation(paths, data) == ("landed", 0, 1)
+    delete(paths)  # nothing unlanded on main
+
+
+def test_land_records_nothing_for_a_run_that_accepted_nothing(project):
+    """A tip at the base: `same` lands nothing and records nothing; a `behind` target
+    that lacks the tip (reset behind the base, then committed on) isn't "already there"."""
+    commit_on_main(project, "before")
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    paths, data = harness.paths, harness.run_info
+    base = data["base_commit"]
+    git(project, "update-ref", paths.ref, base)  # as if it had accepted nothing
+    with RunLock(paths.lock):
+        land(paths, data, base)
+    assert "landed" not in paths.read_identity()
+    git(project, "reset", "-q", "--hard", "HEAD~1")
+    commit_on_main(project, "other")
+    found = landing(paths, data)
+    assert (found.relation, found.accepted) == ("behind", False)
+    with RunLock(paths.lock):
+        land(paths, data, base)  # nothing to land
+    assert "landed" not in paths.read_identity()
+    assert git(project, "merge-base", "--is-ancestor", base, "main", check=False).returncode  # main lacks it
+
+
+def test_an_auto_resume_warns_of_commits_to_land_only_when_there_are_some(project, capsys):
+    """A tip at the base with the target reset behind it reads `ahead` with 0 commits:
+    no "Auto landing lands them again" warning."""
+    commit_on_main(project, "before")
+    harness = Harness(project)
+    harness.run(Budget(until=1), report=False)
+    paths, data = harness.paths, harness.run_info
+    git(project, "update-ref", paths.ref, data["base_commit"])
+    git(project, "reset", "-q", "--hard", f"{data['base_commit']}~1")  # main before the run's base
+    assert relation(paths, data) == ("ahead", 0, 0)
+    capsys.readouterr()
+    resumed = Harness(project)
+    try:
+        assert "Auto landing lands" not in capsys.readouterr().out
+    finally:
+        resumed.close()
+
+
+def test_run_json_commit_ids_that_are_not_hex_count_as_missing(project):
+    """`base_commit` and `landed.tip` reach git only as commit ids: an option or a rev
+    expression in run.json is ignored (as missing), never passed on."""
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    paths, tip = harness.paths, harness.run_state.expected_tip
+    with RunLock(paths.lock):
+        land(paths, harness.run_info, tip)
+    squash_main_onto_base(project, harness.run_info)
+    data = paths.read_identity()
+    assert relation(paths, data) == ("landed", 0, 1)
+    bad = {**data, "base_commit": "--all", "landed": {**data["landed"], "tip": "HEAD@{1}"}}
+    found = landing(paths, bad)
+    assert (found.relation, found.since, found.accepted) == ("diverged", None, True)
+    assert found.ahead == 1  # the landed commit, no longer excused

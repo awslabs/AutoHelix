@@ -135,13 +135,20 @@
   target lacks the tip but the recorded `target` is that same branch (a
   squash-merged or rebased PR): the runs table, `view`, the web run list, the
   entry screen and `delete` (no `--force` needed) agree. Commits accepted after
-  it count as unlanded (`1 diverged`: `git merge autohelix/<id>`); an
-  auto-landing `resume` refuses such a run, as one whose target moved on. A
-  squash merge without `land`, or a landing on another branch (`land --into
-  other`), stays `diverged`. docs/cli.md has the PR flow (`autohelix land`,
-  push, squash-merge, reset the local branch to the remote's). The record is
-  the answer, the code isn't compared: a landed PR that is abandoned, its
-  branch reset, still reads landed.
+  it count as unlanded (`1 diverged`), applied with `git cherry-pick <landed
+  tip>..autohelix/<id>` (a merge would re-apply the squashed commits); an
+  auto-landing `resume` refuses such a run, as one whose target moved on. Only
+  a landing on the run's own target is recorded, and only for a run that
+  accepted a commit: a landing on another branch (`land --into other`) leaves
+  the record alone. A squash merge without `land` stays `diverged`.
+  docs/cli.md has the PR flow (`autohelix land`, push, squash-merge, reset the
+  local branch to the remote's). The record is the answer, the code isn't
+  compared: a landed PR that is abandoned, its branch reset, still reads
+  landed. `land` takes a `behind` target as already there only when it
+  contains the tip. run.json's `base_commit` and `landed.tip` reach git only
+  as commit ids (else they count as missing).
+- The entry screen never cuts a suggested command: one that doesn't fit beside
+  its run goes on its own line.
 
 ### The notices at `run` and `resume`
 

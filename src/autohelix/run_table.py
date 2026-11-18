@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from rich.cells import cell_len
 from rich.text import Text
 
 from autohelix import terminal
@@ -426,9 +427,12 @@ def entry_lines(data: dict, width: int = 100, now: float | None = None) -> list[
             ids = max(len(short) for short, *_ in found)
             states = max(len(state) for _, state, _ in found)
             for short, state, command in found:
-                text = Text(f"  {short:<{ids}}  {clean(state):<{states}}  ")
-                text.append("next: ", style="dim").append(command, style=terminal.TEAL)
-                lines.append(terminal.cut(text, width))
+                text = Text(f"  {short:<{ids}}  {clean(state):<{states}}  ").append("next: ", style="dim")
+                if text.cell_len + cell_len(command) <= width:
+                    lines.append(text.append(command, style=terminal.TEAL))
+                else:  # a command is never cut: on its own line(s), broken at spaces only
+                    lines.append(terminal.cut(text, width))
+                    lines += terminal.hanging("    ", command, width, terminal.TEAL)
     footer = [f"{archived} archived" if shown else f"no current runs, {archived} archived"] if archived else []
     return lines + [Text()] + _footer(footer, width)
 

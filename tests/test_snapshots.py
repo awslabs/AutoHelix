@@ -327,3 +327,23 @@ def test_view_offers_git_merge_for_a_diverged_run():
     assert "  unlanded   2 commits on autohelix/20261115-1402-sorting-krp3 (diverged from main)\n" in text
     assert "  next       autohelix resume krp3 · git merge autohelix/20261115-1402-sorting-krp3\n" in text
     assert "moved on" not in text and "autohelix land" not in text
+
+
+def test_the_entry_screen_never_cuts_a_command():
+    """A suggestion wider than the screen (a long run id, `git cherry-pick <tip>..`):
+    the command goes on its own line, broken at spaces only, never cut."""
+    from autohelix.run_table import entry_lines
+
+    run_id = "20261117-2253-benchmark-optimization-sweep-k3f9"
+    tip = "0123456789abcdef0123456789abcdef01234567"
+    run = {**_run_payload(False), "id": run_id,
+           "landing": {"relation": "diverged", "commits": 2, "behind": 1, "fast_forward": False}}
+    for words, command in [(with_words(run), f"git merge autohelix/{run_id}"),
+                           ({**run, "landing_words": {"cell": "2 diverged", "text": "", "note": "",
+                                                       "commands": [f"git cherry-pick {tip}..autohelix/{run_id}"]}},
+                            f"git cherry-pick {tip}..autohelix/{run_id}")]:
+        lines = [line.plain for line in entry_lines({**PROJECT, "runs": [words]}, 80, now=T)]
+        text = "\n".join(lines)
+        assert "…" not in "".join(line for line in lines if "next:" in line or "autohelix/" in line)
+        assert command.split()[-1] in text.split()  # the long word whole
+        assert " ".join(" ".join(lines).split()).count(command) == 1

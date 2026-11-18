@@ -45,7 +45,7 @@ from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained
 from autohelix.config import ConfigError, MetricGate, load_config, template_text
 from autohelix.costs import summarize_costs
 from autohelix.history import History, latest_agent_call, record_seconds
-from autohelix.runs import (RunPaths, config_relative, git, is_archived, is_transcript, landing, landing_words,
+from autohelix.runs import (COMMIT, RunPaths, config_relative, git, is_archived, is_transcript, landing, landing_words,
                             last_activity, load_run_config)
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info
@@ -57,7 +57,6 @@ MAX_TEXT = 256 * 1024
 MAX_EVENTS = 3000  # merged events kept per log; tool output is clipped to keep this small
 MAX_ARTIFACT = 20 * 1024 * 1024
 MAX_FILES = 500  # captured files listed per observe entry
-COMMIT = re.compile(r"[0-9a-f]{7,64}")
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
