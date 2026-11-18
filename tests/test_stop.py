@@ -504,6 +504,28 @@ def test_an_ignored_signal_stays_ignored_in_a_critical_section():
         signal.signal(signal.SIGINT, previous)
 
 
+def test_commands_start_with_default_signals_in_a_run_that_ignores_them(project, tmp_path):
+    """A run a script started in the background ignores SIGINT and SIGQUIT; its gate
+    commands, and what they start, don't inherit that (a project's own Ctrl-C tests
+    run as a gate must pass). The run itself still ignores both afterwards."""
+    seen = tmp_path / "seen"
+    check = ("import signal, sys; ok = signal.getsignal(signal.SIGINT) is signal.default_int_handler "
+             "and signal.getsignal(signal.SIGQUIT) == signal.SIG_DFL; "
+             f"open({str(seen)!r}, 'a').write(str(ok) + chr(10)); sys.exit(0 if ok else 1)")
+    configure(project, gates=[f'"{sys.executable}" -c "{check}"'])
+    previous = {signum: signal.signal(signum, signal.SIG_IGN) for signum in (signal.SIGINT, signal.SIGQUIT)}
+    try:
+        Harness(project, new=True).run(Budget(iterations=1), report=False)
+        assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+        assert signal.getsignal(signal.SIGQUIT) == signal.SIG_IGN
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+    assert seen.read_text().split() == ["True", "True"]  # the baseline and iteration 1
+    records = History(project, latest_run(project).run_id).load()
+    assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True)]
+
+
 def test_a_segment_takes_sigterm_as_ctrl_c_and_restores_it(project, monkeypatch):
     harness = Harness(project, new=True)
 

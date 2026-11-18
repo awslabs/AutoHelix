@@ -615,6 +615,14 @@ Fixed:
   `report.html`, stop commands and `autohelix ask`, and cost accounting
   across agents, judges and resumed runs.
 
+### Fixed
+
+- Commands and agents start with Ctrl-C (SIGINT) and SIGQUIT at their
+  defaults also in a run a script started in the background (`nohup autohelix
+  run ... &`, which ignores both): before, they and what they started
+  inherited the ignored signals, so a project's own Ctrl-C tests run as a gate
+  failed. The run itself still ignores them.
+
 ## 0.1.1 — 2026-09-02
 
 ### Added

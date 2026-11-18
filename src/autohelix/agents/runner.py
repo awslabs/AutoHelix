@@ -8,7 +8,9 @@ import os
 import select
 import signal
 import subprocess
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -20,6 +22,31 @@ class ProcessRunResult:
 
     exit_code: int
     timed_out: bool = False
+
+
+def _ignore(signum, frame) -> None:
+    pass
+
+
+@contextmanager
+def child_signals():
+    """Children started in this block (commands, agents) get SIGINT and SIGQUIT at
+    their defaults, also when the harness ignores them (a background run: `nohup
+    autohelix run ... &`). An ignored signal survives exec, a caught one is reset, so
+    while the child starts an ignored one is caught by a handler that does nothing:
+    the harness still ignores it. Main thread only, where handlers can be set (no
+    `preexec_fn`: unsafe with threads)."""
+    caught = []
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT, signal.SIGQUIT):
+            if signal.getsignal(signum) == signal.SIG_IGN:
+                signal.signal(signum, _ignore)
+                caught.append(signum)
+    try:
+        yield
+    finally:
+        for signum in caught:
+            signal.signal(signum, signal.SIG_IGN)
 
 
 def format_timeout_seconds(timeout_seconds: int | None) -> str:
@@ -98,17 +125,18 @@ def run_process(
     process: subprocess.Popen[bytes] | None = None
     try:
         with open(log_path, "w") as log_file:
-            process = subprocess.Popen(
-                cmd,
-                cwd=cwd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=False,
-                bufsize=0,
-                start_new_session=True,
-                env=env,
-            )
+            with child_signals():
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=cwd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=False,
+                    bufsize=0,
+                    start_new_session=True,
+                    env=env,
+                )
 
             start = time.monotonic()
             deadline = start + timeout_seconds if timeout_seconds is not None else None
