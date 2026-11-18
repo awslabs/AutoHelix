@@ -107,3 +107,57 @@ def test_default_model_uses_tool_free_claude_completion(monkeypatch):
     assert captured["kwargs"]["input"] == "prompt"
     assert captured["kwargs"]["timeout"] == 7
     assert response.text == '{"action": "deny", "reason_code": "x"}'
+
+
+def _claude_reply(**fields):
+    class Completed:
+        returncode = 0
+        stderr = ""
+        stdout = json.dumps({"result": '{"action": "deny", "reason_code": "x"}', **fields})
+
+    return lambda command, **kwargs: Completed()
+
+
+def _usage_lines(path):
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_each_model_call_records_its_cost_for_autohelix(monkeypatch, tmp_path):
+    usage = tmp_path / "usage.jsonl"
+    monkeypatch.setenv("AUTOHELIX_USAGE_FILE", str(usage))
+    monkeypatch.setattr(benchmark.subprocess, "run", _claude_reply(
+        total_cost_usd=0.0123, modelUsage={"claude-haiku": {}}))
+    model = benchmark.ClaudeCliModel(model=None)
+    model.complete("one")
+    model.complete("two")
+
+    lines = _usage_lines(usage)
+    # Each call: a line when it starts (cost unknown), then one with its cost, same id.
+    assert [line["cost_usd"] for line in lines] == [None, 0.0123, None, 0.0123]
+    assert lines[0]["id"] == lines[1]["id"] != lines[2]["id"] == lines[3]["id"]
+    assert {line["source"] for line in lines} == {"workflow-benchmark"}
+    assert lines[1]["model"] == "claude-haiku"
+
+
+def test_a_call_without_a_reported_cost_or_that_fails_is_of_unknown_cost(monkeypatch, tmp_path):
+    usage = tmp_path / "usage.jsonl"
+    monkeypatch.setenv("AUTOHELIX_USAGE_FILE", str(usage))
+    monkeypatch.setattr(benchmark.subprocess, "run", _claude_reply())
+    benchmark.ClaudeCliModel(model=None).complete("prompt")
+    assert [line["cost_usd"] for line in _usage_lines(usage)] == [None, None]
+
+    def timeout(command, **kwargs):
+        raise benchmark.subprocess.TimeoutExpired(command, 1)
+
+    monkeypatch.setattr(benchmark.subprocess, "run", timeout)
+    with pytest.raises(benchmark.ModelError):
+        benchmark.ClaudeCliModel(model=None).complete("prompt")
+    assert [line["cost_usd"] for line in _usage_lines(usage)] == [None, None, None]
+
+
+def test_no_usage_file_outside_autohelix(monkeypatch, tmp_path):
+    monkeypatch.delenv("AUTOHELIX_USAGE_FILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(benchmark.subprocess, "run", _claude_reply(total_cost_usd=0.5))
+    benchmark.ClaudeCliModel(model=None).complete("prompt")
+    assert list(tmp_path.iterdir()) == []

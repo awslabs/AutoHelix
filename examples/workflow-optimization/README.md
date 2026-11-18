@@ -38,7 +38,9 @@ autohelix run -n 2
 
 The mock command is a free smoke test. A real evaluation contains six inner
 model calls. The two-iteration run above evaluates the baseline and two
-candidates, for at least 18 calls total.
+candidates, for at least 18 calls total. The benchmark records each call's cost
+in `$AUTOHELIX_USAGE_FILE`, so the run's cost totals and `--cost` include them
+(see [Cost Tracking](../../docs/config.md#cost-tracking)).
 
 By default, the inner workflow invokes the user's configured Claude CLI model
 as a one-shot completion with tools and session persistence disabled. The CLI
@@ -79,4 +81,5 @@ export WORKFLOW_MODEL_COMMAND="/path/to/my-model-wrapper"
 That wrapper can call Bedrock, a hosted API, or a local model. Keeping this
 adapter command-based avoids requiring one cloud account or SDK for the
 example. Custom commands do not report model identity, token counts, or cost
-unless the adapter in `benchmark.py` is extended.
+unless the adapter in `benchmark.py` is extended, so the run's cost totals
+leave their calls out.

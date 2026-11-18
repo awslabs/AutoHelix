@@ -1,4 +1,16 @@
-# Chat template is extracted from the base model at setup time.
+# Never commit the Qwen chat template here (license). The eval reads it from the
+# base model in the Hugging Face cache; an older setup step wrote it to this path.
 templates/qwen3.jinja
+
+# Training by-products: anything else written here (and not frozen) would be
+# committed with an accepted iteration. Models and checkpoints go to $ARTIFACTS.
+trainer_output/
+outputs/
+checkpoints/
+wandb/
+*.safetensors
+*.bin
+*.pt
+__pycache__/
 
 .DS_Store

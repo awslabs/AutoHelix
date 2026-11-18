@@ -10,10 +10,13 @@ benchmark. The `posttrain` example is a full working reference.
 - **Write artifacts to a fixed absolute path outside the project.** Models,
   checkpoints, and eval outputs must go to a fixed *absolute* path outside the repo
   (e.g. `/data/artifacts/<task>/final_model`). Each phase runs in a fresh copy of the
-  code: anything the agent writes inside its copy — gitignored or not — is deleted
-  with it, and checks never see it. Note that a rejected iteration rolls back *code*
-  but not your external artifacts — so back up the current best before a risky
-  experiment.
+  code. A file the agent writes inside its copy that git ignores is deleted with
+  the copy, and checks never see it; any other new file in scope is part of the
+  change: checked and, if accepted, committed (a checkpoint saved in the working
+  folder ends up in your git history). Ignore training by-products
+  (`checkpoints/`, `wandb/`, `*.safetensors`, ...) in `.gitignore`. Note that a
+  rejected iteration rolls back *code* but not your external artifacts — so back
+  up the current best before a risky experiment.
 - **Evaluate from that fixed path.** The eval script should read the model from the
   same absolute artifacts path, independent of the current working directory.
 - **Report the score in a parseable form.** AutoHelix reads the metric from your
