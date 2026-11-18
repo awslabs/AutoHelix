@@ -12,5 +12,8 @@ wandb/
 *.bin
 *.pt
 __pycache__/
+# Defaults meant to be changed in config.sh (both belong outside the project).
+_artifacts_local/
+uv_env/
 
 .DS_Store

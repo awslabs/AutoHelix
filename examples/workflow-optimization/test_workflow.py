@@ -1,12 +1,24 @@
 """Contract tests for the editable workflow and frozen benchmark."""
 
 import json
+import os
 
 import pytest
 
 import benchmark
 import workflow
 from benchmark import CASES, POLICIES, FixtureModel, evaluate, execute_action
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_usage_file(monkeypatch):
+    # Under AutoHelix these tests run as a gate, with the run's usage file in
+    # $AUTOHELIX_USAGE_FILE: a stubbed model call must not land in its totals.
+    monkeypatch.delenv("AUTOHELIX_USAGE_FILE", raising=False)
+
+
+def test_these_tests_never_see_the_runs_usage_file():
+    assert "AUTOHELIX_USAGE_FILE" not in os.environ
 
 
 def test_prompt_contains_request_record_and_selected_policy():

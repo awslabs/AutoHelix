@@ -10,7 +10,7 @@ benchmark. The `posttrain` example is a full working reference.
 - **Write artifacts to a fixed absolute path outside the project.** Models,
   checkpoints, and eval outputs must go to a fixed *absolute* path outside the repo
   (e.g. `/data/artifacts/<task>/final_model`). Each phase runs in a fresh copy of the
-  code. A file the agent writes inside its copy that git ignores is deleted with
+  code ([Phases](phases.md)). A file the agent writes inside its copy that git ignores is deleted with
   the copy, and checks never see it; any other new file in scope is part of the
   change: checked and, if accepted, committed (a checkpoint saved in the working
   folder ends up in your git history). Ignore training by-products

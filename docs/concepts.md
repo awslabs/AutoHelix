@@ -45,8 +45,8 @@ A useful loop answers five questions:
 - To see exactly what the agent received, read the prompt kept in each
   iteration's folder, `.autohelix/runs/<id>/iterations/NNN/prompt.md` (the agent
   copy, which holds it as `.autohelix-iteration/prompt.md`, is gone once the
-  iteration ends), or the built-in template
-  (`src/autohelix/templates/default_prompt.md`). See [Prompt](#prompt).
+  iteration ends), or a sample rendering of the built-in template in
+  [Phases → Prompts](phases.md#the-main-agent). See [Prompt](#prompt).
 - AutoHelix already retains iteration evidence and agent memory. When findings
   should also be user-facing and revisable, keep them in an editable,
   version-controlled file. The [research example](https://github.com/awslabs/AutoHelix/tree/main/examples/research) uses
@@ -61,93 +61,8 @@ combined.
 
 ## Candidate Copies
 
-Every phase of an iteration (agent, checks, each review, stop) runs in **its own fresh
-copy** of the code: a private folder holding one fixed tree, with its own small
-`.git`. That `.git` borrows your repository's objects and has copies of its
-branches, tags, remote branches, and the refs of this run, its imported run and its group (a snapshot taken
-when the copy is made; no stash, no remote). This means:
-
-- Whatever the agent does with git (commits, branches, config, hooks) stays in its copy.
-  AutoHelix reads the copy from outside, through your repository, and never runs git
-  inside it after a call has used it.
-- What gets checked is exactly what gets published: the agent's copy is frozen to a
-  tree, checks run on a fresh copy of that tree, and acceptance commits that tree.
-- **Only files git would add reach checks.** Ignored files the agent built (build
-  output, virtualenvs, caches, models) are deleted with the agent's copy. Gates
-  must build or install what they need; long-lived outputs such as trained models
-  belong at a fixed absolute path outside the project.
-- **Checks are read-only.** Any change a gate command, observe command, review or `ask`
-  makes to the candidate's files rejects the iteration. New files are scratch, shared between
-  commands in the checks phase (so build-then-test works) and deleted afterwards. If
-  generated code should be accepted, generating it is the agent's job.
-- In a checks copy, plain `git diff` shows changes to tracked files; new files show as
-  untracked. The complete change is in `.autohelix-iteration/candidate.diff`; that is
-  the only harness material a checks copy gets (no notes, history or prompt). A judge's
-  (`ask`) or review's own copy gets the same, a review's also `previous.md` with
-  `previous: true`.
-- Accepted commits advance the run's hidden `refs/autohelix/<id>` first.
-- A process-held per-run lock lets only one process write a run at a time.
-- PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo), and
-  `autohelix` on a command's `PATH` is a launcher for the harness's own installation
-  (see [Configuration → Command environment](config.md#command-environment)).
-- **A copy holds only committed files.** Commands get
-  their tools from the environment AutoHelix started in: run it with your virtualenv
-  activated so `python` and `pytest` resolve to it, and reference untracked data by
-  absolute path. Copies sit outside the project, so lookups in parent directories
-  (Node's `node_modules`, a `.venv` beside the project) don't find your project's.
-- **Submodule changes are not supported.** Submodules appear as empty directories in a
-  copy; changing one, or writing inside one, rejects the iteration. So does a git
-  repository of its own the agent creates or clones into the copy ("nested git
-  repository at X: remove its .git or clone outside the project").
-
-Copies live in
-`${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/<project>-<hash>/<id>/` and are deleted
-after each phase; the run's folder goes when a segment ends. To put them elsewhere (for
-example on a larger disk), set `AUTOHELIX_COPIES_ROOT` to an absolute path. Each run
-records the folder it used, so `view` and `delete` find it from any shell. The
-folders below that root are private (mode 0700, owned by you); a shared root must be
-sticky like `/tmp`. Copies left by a process that was killed (or a machine that
-crashed) are removed at the start of the next `run` or `resume` in the project,
-and other projects' leftovers once their checkout has been gone for a day (each
-project's folder records which checkout it serves, and the machine); with no run
-active, the whole `copies/` folder is safe to delete. A
-baseline command that modifies the code it checks (for example a formatter without
-`--check`) stops the run with a setup error before any agent runs.
-
-### What copies protect against
-
-Copies, read-only checks and the `autohelix` launcher make the loop correct
-for a cooperative agent, and for candidate code that misbehaves by accident:
-
-- what is checked is exactly what is accepted, and a check can't change it;
-- a gate, entry or judge that edits the files it checks is caught, even if a
-  wrapper script restores them;
-- stored output (gates', observe entries' and stop commands', judge and review
-  transcripts included), `$AUTOHELIX_PREVIOUS` and `$AUTOHELIX_OBSERVATIONS` are
-  written or copied by the harness after the command ended, so what the next
-  call reads can't be rewritten in place;
-- reviews read their own copy of exactly the candidate, not files earlier
-  commands left behind;
-- `autohelix ask` and `autohelix review` run the harness's own installation,
-  not modules from the candidate's `PYTHONPATH`;
-- a command's background processes are killed when it ends.
-
-The main agent's copy has no config file or prompt template (commands read the
-run's stored config, `$AUTOHELIX_CONFIG`), and its environment doesn't name the
-project or the run folder: `AUTOHELIX_PROJECT` and `AUTOHELIX_RUN_DIR` are for
-gate, observe and stop commands; the agent gets `AUTOHELIX_RUN_ID` and
-`AUTOHELIX_ITERATION`. That is hygiene, so the agent doesn't work in the checkout
-by accident, not a boundary: its copy's `.git` alternates and the copies folder
-still lead to the project.
-
-They are not a security boundary. The agent and candidate code run as you:
-they can still reach the project, its `.git`, other runs and your home folder
-by absolute path, and write run state there (`.autohelix/runs/<id>/`, including
-the history and observations of earlier iterations) until commands run in a
-sandbox. A child process that starts a session of its own escapes the
-process-group kill. Main-checkout inspection is best effort: it logs possible
-escapes without reverting them. For stronger isolation use the
-[Docker sandbox](docker.md).
+Every phase runs in its own fresh copy of the code, outside the project; what
+each copy holds, and what is checked and committed: [Phases](phases.md).
 
 ## Notes
 
@@ -207,36 +122,7 @@ read-only mode.
 
 ## What the agent sees
 
-Each iteration's prompt (see [Prompt](#prompt)) always holds the goal, the last
-five iterations (one line each: metrics or the rejection reason, then the
-agent's one-line summary), the gates, observe entries and stop commands, the
-scope, any hints sent with `autohelix hint` (their text, newest last), where
-to read notes and iterations, and where to write notes. Then, about the
-latest iteration:
-
-- **After an accepted iteration:** its gate results and where its observations
-  are (`.autohelix-iteration/iterations/NNN/observe/<name>/`, failed entries
-  marked, and an entry that ran but didn't report a declared metric named with
-  how to report it). The copy holds its code.
-- **After a rejection:** the rejected attempt's gate results (passed, failed,
-  or not reached; a failing gate with the folder holding its whole output), the
-  failure output, the observations it produced before being rejected, and
-  `.autohelix-iteration/rejected.patch` (for a change over 2 MiB, the `git diff`
-  command that shows it instead). The copy is still the last accepted code, and
-  the prompt names the folder of the last accepted iteration too.
-- **After discarded changes:** the paths that were outside the scope, frozen
-  ones said apart from the ones that aren't editable.
-
-The reading list, "Where things are", names the run's own notes (editable,
-numbered from its iteration 1) and its own iterations. With other runs in the
-copy (an [import](cli.md#continuing-from-another-run) or a
-[group](cli.md#groups)) it also names each other run's state in `runs/<id>/`
-(read-only, the imported one and the group members said apart) and their
-code's refs.
-
-Observe commands are different: `$AUTOHELIX_PREVIOUS` (and so
-`review --previous`) always comes from the last *accepted* iteration in which
-the entry succeeded, so a tracker's status moves only with accepted code.
+What the agent's copy and prompt hold: [Phases → The agent](phases.md#the-agent).
 
 ## Rejected work
 
@@ -285,10 +171,8 @@ observe:
     # agent: {cli: codex, model: gpt-5.5}   # a review by another model family
 ```
 
-- Each review runs in its **own fresh copy of exactly the candidate**, with the
-  complete change as `.autohelix-iteration/candidate.diff`: not the checks copy,
-  where gate and observe commands leave files and run candidate code. Symlinks
-  pointing outside the copy are removed and listed in the reviewer's prompt.
+- Each review reads its own fresh, read-only copy of exactly the candidate (see
+  [Phases → Judges](phases.md#judges-ask-and-review)).
 - The prompt is the reviewer's entire request: it is not handed the goal,
   metrics, notes or other reviews, so include whatever context it should
   consider.
@@ -299,8 +183,6 @@ observe:
   timeout) is recorded and shown to the next agent, and the run continues; so
   is a reviewer that changes the files it reviews (its call fails; the change
   was in its own copy).
-- Read-only: the backend's read-only mode, one write guard around each call
-  (a change fails the call), and its own fresh copy.
 
 ## Progress tracking
 
@@ -355,7 +237,8 @@ for display and `stop:`; gating on them is not recommended.
 
 The prompt sent to the agent each iteration is built from a
 [Jinja2](https://jinja.palletsprojects.com/) template: the built-in one
-(`src/autohelix/templates/default_prompt.md`), so new features reach every
+(`src/autohelix/templates/default_prompt.md`, shown rendered in
+[Phases → Prompts](phases.md#the-main-agent)), so new features reach every
 project. Most configs only need `goal:`. To replace the whole prompt, point
 `prompt_template:` in the config at a template file (a path relative to the
 config file, so it is versioned with it); copying the built-in template is the
@@ -500,34 +383,8 @@ loses only itself (readers skip it). [`autohelix wait`](cli.md#autohelix-wait)
 reports segments from this file as `started`, `ended` and `crashed` events.
 
 The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
-project; see [Candidate Copies](#candidate-copies).
+project; see [Phases → Where things live](phases.md#where-things-live).
 
-The agent's copy holds no `.autohelix/` (nothing in a copy looks like project
-state). What the harness provides is in `.autohelix-iteration/`, which is never
-part of a candidate (it is left out when the copy is frozen), laid out like the
-run's folder:
-
-```
-<copy>/
-├── <code at the run's tip>
-├── .git/                       private; refs: branches, tags, this run's (and its import's, group's)
-└── .autohelix-iteration/
-    ├── prompt.md  hints.md     this iteration's prompt; hints
-    ├── notes/                  this run's notes: the only thing saved back
-    ├── history.jsonl           this run's iterations
-    ├── iterations/NNN/         the last 5 iterations and the last accepted one: record.json,
-    │                           failing gates' gates/<k>/, observe/, stop/
-    ├── rejected.patch          after a rejection: the rejected attempt's change
-    ├── commit_summary.txt      written by the agent: the commit's first line
-    └── runs/<other-id>/        the imported run and other runs of the group: run.json,
-                                history.jsonl, notes/
-```
-
-A copy's `iterations/` leaves out the agent logs, prompts, `notes` links,
-passing gates' output and rejected patches; `history.jsonl` covers older
-iterations. Only `notes/` round-trips: when the copy is frozen it is saved as a
-new version, `runs/<id>/.internal/notes/<n>/`, and the `runs/<id>/notes` link
-switches to it in one step, so a note the agent deletes stays deleted and other
 runs never read a half-saved mix; the iteration's `notes` link keeps pointing at
 that version. Everything else is reference material. A checks copy gets only
 `candidate.diff`; a review's copy `candidate.diff` (and `previous.md` with

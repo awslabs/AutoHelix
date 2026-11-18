@@ -17,7 +17,7 @@ component is a config error).
 (The one exception is long-lived outputs you deliberately keep outside the repo,
 such as a model checkpoint directory, which are meant to live at a fixed absolute
 path.) Untracked files such as a virtualenv or downloaded data aren't in the copy;
-see [Concepts → Candidate Copies](concepts.md#candidate-copies).
+see [Phases → Candidate copies](phases.md#candidate-copies).
 
 ## Full Reference
 
@@ -309,7 +309,7 @@ failure are recorded and shown to the next agent, and the remaining entries
 run. **A failed entry contributes no metrics**, so a metric gate on one of its
 numbers fails. Only gates reject. One exception: a command or review that
 changes the candidate's files rejects the iteration (see
-[Read-only evaluation](concepts.md#candidate-copies)).
+[Read-only evaluation](phases.md#candidate-copies)).
 
 ### Stored output
 
@@ -365,42 +365,8 @@ may be flakiness, not setup).
 
 ## Command environment
 
-Gate, observe and stop commands run with the copy as their working directory,
-with no input (stdin is `/dev/null`, also when `autohelix run` is in a terminal),
-in their own process group: when a command ends or times out, everything it
-started is killed. Each gets:
-
-| Variable | Content |
-|---|---|
-| `AUTOHELIX_CANDIDATE` | The candidate's tree (a git tree hash); at the baseline, the starting commit's tree |
-| `AUTOHELIX_BASE` | The commit the candidate is built on (the last accepted tip) |
-| `AUTOHELIX_PROJECT` | The project directory (in your checkout) |
-| `AUTOHELIX_SCRATCH` | A private, empty folder for this command, removed after it |
-| `AUTOHELIX_CONFIG` | The run's config, as stored when it started (`.autohelix/runs/<id>/config.yaml`) |
-| `AUTOHELIX_ITERATION` | The iteration number (0 for the baseline) |
-| `AUTOHELIX_RUN_ID`, `AUTOHELIX_RUN_DIR` | The run's id and its `.autohelix/runs/<id>/` folder |
-| `AUTOHELIX_LOG_DIR` | A private folder for this command where `autohelix ask` and `review` write their transcripts; after the command ended they are moved to its stored output (`ask*.log`, `review*.log` only) |
-| `AUTOHELIX_CALL` | Where this command's output is stored in the iteration's folder: `gates/<k>`, `observe/<name>` or `stop/<k>`; `ask`/`review` record it with their transcript's name |
-| `AUTOHELIX_USAGE_FILE` | Where model calls record their cost (see [Cost Tracking](#cost-tracking)) |
-| `AUTOHELIX_COMMAND_DEADLINE` | The command's deadline, in Unix seconds |
-| `AUTOHELIX_PREVIOUS` | Observe commands only: see [Previous output](#previous-output) |
-| `AUTOHELIX_METRICS`, `AUTOHELIX_OBSERVATIONS` | Stop commands only: see [Stop](#stop) |
-
-The main agent gets fewer: `AUTOHELIX_RUN_ID`, `AUTOHELIX_ITERATION` and, with
-`agent.timeout`, the time-left hint's variables (`AUTOHELIX_TIME_LEFT_SCRIPT`);
-not `AUTOHELIX_PROJECT`, `AUTOHELIX_RUN_DIR` or the others above. Its copy has no
-config file and no `prompt_template:` file (both frozen, so the removal is never
-committed; commands read `$AUTOHELIX_CONFIG`). This is hygiene, not a boundary:
-the agent can still find the project (its copy's `.git` borrows the project's
-objects through alternates, and the copies folder records the checkout) and runs
-as you.
-
-`PYTHONPATH` is remapped so the project's own sources import from the copy.
-That would let candidate code replace modules inside `autohelix ask` or
-`autohelix review`, so `PATH` starts with a private folder holding an
-`autohelix` launcher: it runs the harness's own installation in isolated mode,
-whatever the command's `PYTHONPATH` and working directory. Call `autohelix` by
-name in commands, not by a path to your virtualenv.
+Where gate, observe and stop commands run and the variables they get:
+[Phases → Command environment](phases.md#command-environment).
 
 ## Stop
 
@@ -423,7 +389,7 @@ Python exits 1 on an uncaught exception, which reads as "keep going": a script
 should catch its own errors and exit 2 (`sys.exit(0 if done else 1)` inside a
 `try`), or use `jq -e`.
 
-On top of the [command environment](#command-environment), stop commands get:
+On top of the [command environment](phases.md#command-environment), stop commands get:
 
 - `AUTOHELIX_METRICS`: a JSON file with the metrics just measured, e.g.
   `{"speedup": 10.3}`. A target is a one-liner:

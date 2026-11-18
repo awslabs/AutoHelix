@@ -222,7 +222,8 @@ See the [configuration reference](config.md).
 
 AutoHelix needs a git repository with a commit, and the first baseline needs no
 uncommitted changes to tracked files. Commit the config, and any scripts its
-commands use (iteration copies are made from the commit).
+commands use (iteration copies are made from the commit; see
+[Phases](phases.md)).
 Commit the config before the first `run`: with auto landing, a commit on the branch after the run lands makes `resume` refuse (`run` warns).
 Preserve unrelated work:
 

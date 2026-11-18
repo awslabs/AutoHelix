@@ -12,7 +12,8 @@ TASK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$TASK_DIR/config.sh"
 
 # The env must be outside the project: every phase runs in a fresh copy of the
-# committed code, so an env beside this script isn't there.
+# committed code, so an env beside this script isn't there. (The check below
+# catches an env inside this copy or a relative path; not one elsewhere.)
 if [ -z "$UV_ENV" ]; then
   echo "UV_ENV is not set; set UV_ENV in config.sh to the prebuilt env, outside the project" >&2
   exit 2

@@ -143,7 +143,8 @@ def test_run_native_runs_in_an_env_outside_the_project(tmp_path):
 
 def test_posttrain_ignores_training_by_products():
     ignored = (POSTTRAIN / ".gitignore").read_text().splitlines()
-    for pattern in ("trainer_output/", "checkpoints/", "wandb/", "*.safetensors"):
+    for pattern in ("trainer_output/", "checkpoints/", "wandb/", "*.safetensors",
+                    "_artifacts_local/", "uv_env/"):
         assert pattern in ignored
 
 
