@@ -6,7 +6,7 @@ import pytest
 
 from autohelix.harness import Budget, Harness
 from autohelix.run_table import _landing
-from autohelix.runs import RunLock, delete, git, land, landing, landing_words, short_id
+from autohelix.runs import Landing, RunLock, delete, git, land, landing, landing_words, short_id
 
 
 def commit_on_main(project, name):
@@ -26,24 +26,24 @@ def test_each_relation_with_its_counts_and_words(project):
     paths, data = harness.paths, harness.run_info
     short = short_id(paths.run_id)
     assert relation(paths, data) == ("ahead", 1, 0)
-    words = landing_words(landing(paths, data).payload(), paths.run_id, "main", land_mode="manual")
+    words = landing_words(landing(paths, data), paths.run_id, "manual")
     assert words.cell == "1 to land" and words.sentence.endswith(f"main can fast-forward: `autohelix land {short}`.")
     assert (words.note, words.commands) == ("manual landing", (f"autohelix land {short}",))
 
     with RunLock(paths.lock):
         land(paths, data, harness.run_state.expected_tip)
     assert relation(paths, data) == ("same", 0, 0)
-    assert landing_words(landing(paths, data).payload(), paths.run_id, "main").cell == "landed"
+    assert landing_words(landing(paths, data), paths.run_id).cell == "landed"
 
     commit_on_main(project, "user")
     assert relation(paths, data) == ("behind", 0, 1)
-    words = landing_words(landing(paths, data).payload(), paths.run_id, "main")
+    words = landing_words(landing(paths, data), paths.run_id)
     assert (words.cell, words.commands) == ("landed", ())  # nothing to land: no command
 
     resumed = Harness(project, land_mode="manual")  # continues its own tip, without the user's commit
     resumed.run(Budget(until=2), report=False)
     assert relation(paths, data) == ("diverged", 1, 1)
-    words = landing_words(landing(paths, data).payload(), paths.run_id, "main", land_mode="manual")
+    words = landing_words(landing(paths, data), paths.run_id, "manual")
     assert (words.cell, words.note) == ("1 diverged", "diverged from main")
     assert words.commands == (f"git merge autohelix/{paths.run_id}",)  # never `autohelix land`: it can't
     # `land` refuses in the same words, and `delete` counts the same unlanded commit.
@@ -72,19 +72,21 @@ def test_no_target_branch_counts_every_accepted_commit(project):
     detached = {**harness.run_info, "target_branch": None}
     found = landing(harness.paths, detached)
     assert (found.relation, found.ahead, found.payload()) == (None, 1, None)
-    run = {"id": harness.paths.run_id, "landing": None, "target_branch": None, "accepted": 1}
-    assert _landing(run) == "—"
+    words = landing_words(found, harness.paths.run_id)
+    run = {"id": harness.paths.run_id, "landing": None, "target_branch": None, "accepted": 1,
+           "landing_words": {"cell": words.cell, "text": words.sentence, "note": words.note, "commands": []}}
+    assert _landing(run) == "—" and words.sentence.startswith("Started on a detached HEAD")
 
 
 def test_diverged_words_for_an_auto_landing_run_say_how_to_stop_landing():
-    payload = {"relation": "diverged", "commits": 2, "behind": 1, "fast_forward": False}
+    found = Landing("t", "main", "m", "diverged", 2, 1, True)
     run_id = "20261117-1200-sorting-krp3"
-    auto = landing_words(payload, run_id, "main", land_mode="auto").sentence
+    auto = landing_words(found, run_id, "auto").sentence
     assert auto == ("main diverged from run krp3: 2 commits on autohelix/20261117-1200-sorting-krp3 that main "
                     "lacks, 1 commit on main that it lacks, so `autohelix land` can't fast-forward main. Merge it "
                     "by hand: `git merge autohelix/20261117-1200-sorting-krp3`, or `autohelix resume krp3 --land "
                     "manual` to stop trying to land it.")
-    assert "--land manual" not in landing_words(payload, run_id, "main", land_mode="manual").sentence
+    assert "--land manual" not in landing_words(found, run_id, "manual").sentence
 
 
 def test_a_tip_with_no_commits_of_its_own_is_never_diverged(project):
@@ -98,7 +100,7 @@ def test_a_tip_with_no_commits_of_its_own_is_never_diverged(project):
     git(project, "reset", "-q", "--hard", "HEAD~1")
     commit_on_main(project, "other")
     assert relation(paths, data) == ("behind", 0, 1)
-    assert landing_words(landing(paths, data).payload(), paths.run_id, "main", accepted=False).cell == "—"
+    assert landing_words(landing(paths, data), paths.run_id).cell == "—"  # tip is base: nothing accepted
 
 
 def test_resume_refusal_reads_the_relation(project):
@@ -153,7 +155,7 @@ def test_a_landed_run_stays_landed_after_a_squash_merged_pr(project):
     assert (data["landed"]["tip"], data["landed"]["target"]) == (tip, "main") and data["landed"]["at"]
     squash_main_onto_base(project, data)
     assert relation(paths, data) == ("landed", 0, 1)
-    words = landing_words(landing(paths, data).payload(), paths.run_id, "main", land_mode="manual")
+    words = landing_words(landing(paths, data), paths.run_id, "manual")
     assert (words.cell, words.commands) == ("landed", ())
     assert "squash-merged" in words.sentence
     with RunLock(paths.lock):
@@ -163,7 +165,7 @@ def test_a_landed_run_stays_landed_after_a_squash_merged_pr(project):
     resumed.run(Budget(until=2), report=False)
     data = RunPaths(project, paths.run_id).read_identity()
     assert relation(paths, data) == ("diverged", 1, 1)  # the resume's commit, not the landed ones
-    words = landing_words(landing(paths, data).payload(), paths.run_id, "main", land_mode="manual")
+    words = landing_words(landing(paths, data), paths.run_id, "manual")
     assert (words.cell, words.commands) == ("1 diverged", (f"git merge autohelix/{paths.run_id}",))
 
 
@@ -182,7 +184,7 @@ def test_an_auto_resume_after_a_squash_merged_landing_refuses(project):
     data = harness.paths.read_identity()
     assert data["landed"]["tip"] == harness.run_state.expected_tip
     squash_main_onto_base(project, data)
-    with pytest.raises(RuntimeError, match=r"landed on main, which has its work as other commits .* --import"):
+    with pytest.raises(RuntimeError, match=r"landed on main \(`autohelix land`\), which has other commits in their place since .* --import"):
         Harness(project)
     delete(harness.paths)  # nothing unlanded: no --force needed
     assert not harness.paths.run_dir.exists()
@@ -195,27 +197,43 @@ def squash_onto(project, branch, work):
     git(project, "commit", "-qm", "Squashed PR")
 
 
-def test_the_pr_flow_reads_landed_only_once_the_pr_merged(project):
-    """Landed `--into` a PR branch while main moves on: main lacks the work, so the run
-    is diverged (not landed) and `land` refuses; once the PR is squash-merged into a main
-    that moved, it reads landed, also after main changes the same lines again."""
+def test_the_pr_flow_reads_landed_once_squash_merged(project):
+    """`autohelix land`, push, a squash-merged PR (main moved meanwhile), the local main
+    reset to the remote's: the run reads landed, also after main changes the same lines
+    again (no window: the recorded landing on main is the answer)."""
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
-    paths, tip = harness.paths, harness.run_state.expected_tip
-    git(project, "branch", "perf-pr", harness.run_info["base_commit"])
+    paths, tip, base = harness.paths, harness.run_state.expected_tip, harness.run_info["base_commit"]
     with RunLock(paths.lock):
-        land(paths, harness.run_info, tip, into="perf-pr")
+        land(paths, harness.run_info, tip)
     data = paths.read_identity()
-    assert data["landed"]["target"] == "perf-pr"
-    commit_on_main(project, "unrelated")  # while the PR is open
-    assert relation(paths, data) == ("diverged", 1, 1)
-    with RunLock(paths.lock), pytest.raises(RuntimeError, match="^Cannot land: main diverged from run"):
-        land(paths, data, tip)
-    squash_onto(project, "main", "perf-pr")
+    git(project, "branch", "remote-main", base)  # the remote's main, moving while the PR is open
+    git(project, "switch", "-q", "remote-main")
+    commit_on_main(project, "unrelated")
+    squash_onto(project, "remote-main", tip)
+    git(project, "switch", "-q", "main")
+    git(project, "reset", "-q", "--hard", "remote-main")  # the local main reset to the remote's
     assert relation(paths, data) == ("landed", 0, 2)
     (project / "code.py").write_text("print('changed on main since')\n")  # the same line, after the PR
     git(project, "commit", "-qam", "later")
     assert relation(paths, data) == ("landed", 0, 3)
+
+
+def test_a_landing_on_another_branch_is_not_a_landing_on_the_target(project):
+    """`land --into other`, then that work squash-merged into the run's own target: the
+    recorded landing names another branch, so main reads diverged."""
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    paths, tip = harness.paths, harness.run_state.expected_tip
+    git(project, "branch", "other", harness.run_info["base_commit"])
+    with RunLock(paths.lock):
+        land(paths, harness.run_info, tip, into="other")
+    data = paths.read_identity()
+    assert data["landed"]["target"] == "other"
+    squash_onto(project, "main", "other")
+    assert relation(paths, data) == ("diverged", 1, 1)
+    with RunLock(paths.lock), pytest.raises(RuntimeError, match="^Cannot land: main diverged from run"):
+        land(paths, data, tip)
 
 
 def test_a_landing_on_one_branch_is_not_a_landing_on_another(project):
@@ -234,25 +252,39 @@ def test_a_landing_on_one_branch_is_not_a_landing_on_another(project):
         land(paths, data, tip, into="release")
 
 
+def test_the_not_available_words_offer_into_only_when_the_target_is_missing(project):
+    harness = Harness(project, land_mode="manual")
+    harness.run(Budget(until=1), report=False)
+    paths, data = harness.paths, harness.run_info
+    short = short_id(paths.run_id)
+    gone = landing(paths, {**data, "target_branch": "gone"})
+    assert (gone.relation, gone.tip is not None, gone.target_tip) == (None, True, None)
+    assert landing_words(gone, paths.run_id).sentence == (
+        f"Branch gone is not available (`autohelix land {short} --into <branch>` lands it on another branch).")
+    git(project, "update-ref", "-d", paths.ref)  # the run's own commits gone
+    missing = landing_words(landing(paths, data), paths.run_id).sentence
+    assert missing == f"Run {short}'s commits are not available (no autohelix/{paths.run_id})."
+    assert "--into" not in missing
+
+
 def test_landing_words_state_and_missing_are_the_sentence_s_own_clauses():
     """`state` (the sentence without its advice: an auto-landing resume's warning) and
     `missing` (`run --import`'s land-first notice) come from the same wording."""
     from autohelix.runs import landing_words
 
     run_id = "20261117-1200-perf-k3f9"
-    ahead = landing_words({"relation": "ahead", "commits": 2, "behind": 0}, run_id, "main", land_mode="auto")
+    ahead = landing_words(Landing("t", "main", "m", "ahead", 2, 0, True), run_id, "auto")
     assert ahead.state == f"2 commits on autohelix/{run_id} not in main yet."
     assert ahead.sentence == f"2 commits on autohelix/{run_id} not in main yet; main can fast-forward: `autohelix land k3f9`."
     assert ahead.missing == "k3f9's 2 accepted commits aren't in main"
-    diverged = landing_words({"relation": "diverged", "commits": 1, "behind": 3}, run_id, "main")
+    diverged = landing_words(Landing("t", "main", "m", "diverged", 1, 3, True), run_id)
     assert diverged.sentence.startswith(diverged.state[:-1] + ", so `autohelix land` can't fast-forward main.")
     assert diverged.missing == "k3f9's 1 accepted commit isn't in main"
-    behind = landing_words({"relation": "behind", "commits": 0, "behind": 1}, run_id, "main")
+    behind = landing_words(Landing("t", "main", "m", "behind", 0, 1, True), run_id)
     assert behind.sentence == "Everything run k3f9 accepted is in main, which has 1 commit past its tip (committed after it)."
     assert behind.missing == "" and behind.state == behind.sentence
-    unchanged = landing_words({"relation": "behind", "commits": 0, "behind": 1}, run_id, "main", accepted=False)
+    unchanged = landing_words(Landing("t", "main", "m", "behind", 0, 1, False), run_id)
     assert unchanged.sentence == ("main has 1 commit past run k3f9's base (committed since it started; it hasn't "
                                   "accepted any changes).")
-    assert landing_words(None, run_id, "main").sentence == (
-        "Branch main or the run's commits are not available (`autohelix land k3f9 --into <branch>` lands it on "
-        "another branch).")
+    assert landing_words(Landing("t", "main", None, None, 2, 0, True), run_id).sentence == (
+        "Branch main is not available (`autohelix land k3f9 --into <branch>` lands it on another branch).")

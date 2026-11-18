@@ -18,7 +18,7 @@ from click.testing import CliRunner
 from autohelix import cli
 from autohelix.cli import main
 from autohelix.config import load_config
-from tests.helpers import git
+from tests.helpers import git, with_words
 
 
 @pytest.fixture
@@ -333,7 +333,7 @@ def test_one_suggested_command_per_run(state, commits, expected):
     run = {"id": "20261115-1402-sorting-krp3", "progress": {"iterations": 3},
            "status": {"state": state, "iteration": 4} if state else None,
            "target_branch": "main", "landing": {"relation": "ahead", "commits": commits, "behind": 0, "fast_forward": True}}
-    found = run_table.suggestion(run)
+    found = run_table.suggestion(with_words(run))
     assert found == (expected and (expected[0], f"autohelix {expected[1]} krp3"))
 
 
@@ -345,7 +345,7 @@ def test_a_diverged_run_suggests_git_merge(state):
     run = {"id": "20261115-1402-sorting-krp3", "progress": {"iterations": 3}, "status": {"state": state},
            "target_branch": "main", "landing": {"relation": "diverged", "commits": 2, "behind": 1,
                                                 "fast_forward": False}}
-    assert run_table.suggestion(run) == (f"{state} · 2 diverged",
+    assert run_table.suggestion(with_words(run)) == (f"{state} · 2 diverged",
                                          "git merge autohelix/20261115-1402-sorting-krp3")
 
 

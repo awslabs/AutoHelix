@@ -18,6 +18,7 @@ from autohelix import terminal
 from autohelix.config import Config
 from autohelix.harness import Budget
 from autohelix.terminal import Row, Table
+from tests.helpers import with_words
 
 SNAPSHOTS = Path(__file__).parent / "snapshots"
 NOW = datetime(2026, 11, 15, 14, 2)
@@ -154,7 +155,7 @@ def view_screen(width: int, running: bool = False, readable: bool = True) -> lis
     from autohelix.run_table import Saved, view_lines
 
     saved = Saved(CONFIG, (ROWS[:4] if running else ROWS) if readable else None, FILES)
-    return view_lines({**PROJECT, "run": _run_payload(running)}, saved, width, now=T, show_mark=True)
+    return view_lines({**PROJECT, "run": with_words(_run_payload(running))}, saved, width, now=T, show_mark=True)
 
 
 def dashboard_screen(width: int) -> list:
@@ -167,7 +168,7 @@ def dashboard_screen(width: int) -> list:
             "title": "Cut the memory use of sort_list.", "config_file": "autohelix/perf.yaml",
             "why": "try a lower memory bound", "landing": {"relation": "ahead", "commits": 2, "behind": 0, "fast_forward": True}}
     old = {**_run_payload(False), "id": "20261110-0900-old-a1b2", "archived": True}
-    return dashboard_lines({**PROJECT, "runs": [_run_payload(False), perf, old]}, width, now=T)
+    return dashboard_lines({**PROJECT, "runs": [with_words(r) for r in [_run_payload(False), perf, old]]}, width, now=T)
 
 
 def _menu(options: list[tuple[str, str]], width: int) -> list:
@@ -219,14 +220,14 @@ def entry_screen(width: int) -> list:
     gone = {**_run_payload(False), "id": "20261112-1000-sorting-c9d1", "last_activity": T - 86400 * 3,
             "status": {"state": "crashed", "iteration": 7}, "landing": {"relation": "ahead", "commits": 2, "behind": 0, "fast_forward": True}}
     old = {**_run_payload(False), "id": "20261110-0900-old-a1b2", "archived": True}
-    data = {**PROJECT, "runs": [finished, perf, manual, stopped, gone, old]}
+    data = {**PROJECT, "runs": [with_words(r) for r in [finished, perf, manual, stopped, gone, old]]}
     return _entry(data, width, ["claude-code"], ["autohelix/sorting.yaml", "autohelix/perf.yaml"])
 
 
 def entry_archived_screen(width: int) -> list:
     """Bare `autohelix` where every run is archived, two agents: counted, not "no runs",
     and asked as with no runs (the config has a run: not "no runs yet")."""
-    data = {**PROJECT, "runs": [{**_run_payload(False), "archived": True}]}
+    data = {**PROJECT, "runs": [with_words({**_run_payload(False), "archived": True})]}
     return _entry(data, width, ["claude-code", "codex"], ["autohelix/sorting.yaml"])
 
 
@@ -310,7 +311,7 @@ def test_view_says_what_waits_for_a_manual_landing():
     from autohelix.run_table import Saved, view_lines
 
     run = {**_run_payload(False), "land": "manual", "landing": {"relation": "ahead", "commits": 3, "behind": 0, "fast_forward": True}}
-    text = _text(view_lines({**PROJECT, "run": run}, Saved(CONFIG, ROWS, []), 120, now=T))
+    text = _text(view_lines({**PROJECT, "run": with_words(run)}, Saved(CONFIG, ROWS, []), 120, now=T))
     assert "  unlanded   3 commits on autohelix/20261115-1402-sorting-krp3 (manual landing)\n" in text
     assert "  next       autohelix resume krp3 · autohelix land krp3\n" in text
 
@@ -322,7 +323,7 @@ def test_view_offers_git_merge_for_a_diverged_run():
 
     run = {**_run_payload(False), "landing": {"relation": "diverged", "commits": 2, "behind": 1,
                                              "fast_forward": False}}
-    text = _text(view_lines({**PROJECT, "run": run}, Saved(CONFIG, ROWS, []), 140, now=T))
+    text = _text(view_lines({**PROJECT, "run": with_words(run)}, Saved(CONFIG, ROWS, []), 140, now=T))
     assert "  unlanded   2 commits on autohelix/20261115-1402-sorting-krp3 (diverged from main)\n" in text
     assert "  next       autohelix resume krp3 · git merge autohelix/20261115-1402-sorting-krp3\n" in text
     assert "moved on" not in text and "autohelix land" not in text

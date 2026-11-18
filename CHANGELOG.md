@@ -119,23 +119,29 @@
   run that never accepted a change ("main has 2 commits past run k3f9's base")
   take their clauses from the same wording (`runs.landing_words`' `state` and
   `missing`). `delete`'s refusal for a run whose branch is gone says what the
-  tooltip says ("Branch main or the run's commits are not available
-  (`autohelix land k3f9 --into <branch>` lands it on another branch)").
+  tooltip says ("Branch main is not available (`autohelix land k3f9 --into
+  <branch>` lands it on another branch)"); `--into` is offered only when the
+  target branch is the missing side, not when the run's own commits are gone.
+- One rule for "the run accepted a change", its tip isn't its base
+  (`Landing.accepted`), in every wording of a run/target relation;
+  `runs.landing_words` takes the `Landing`, and `view --json`'s
+  `landing_words` also has the end block's `note` and the `commands` that land
+  it, which the runs table, the entry screen and `view --terminal` show.
 
 ### Landed stays landed after a squash-merged PR
 
 - **`autohelix land` (and auto landing) records `landed: {tip, target, at}`
   in `run.json`.** A run whose tip is the one it landed reads `landed` when the
-  target has the work as other commits (a squash-merged or rebased PR, also of
-  a branch landed with `--into`): the runs table, `view`, the web run list, the
+  target lacks the tip but the recorded `target` is that same branch (a
+  squash-merged or rebased PR): the runs table, `view`, the web run list, the
   entry screen and `delete` (no `--force` needed) agree. Commits accepted after
   it count as unlanded (`1 diverged`: `git merge autohelix/<id>`); an
   auto-landing `resume` refuses such a run, as one whose target moved on. A
-  squash merge without `land` stays `diverged`. docs/cli.md has the PR flow.
-  "Has the work" is checked, not assumed: merging the landed tip into the
-  target (or into one of its commits since the landing) changes nothing
-  (`git merge-tree`, git 2.38+). A PR that hasn't merged yet, or a landing on
-  another branch, stays `diverged`, and `land` refuses it.
+  squash merge without `land`, or a landing on another branch (`land --into
+  other`), stays `diverged`. docs/cli.md has the PR flow (`autohelix land`,
+  push, squash-merge, reset the local branch to the remote's). The record is
+  the answer, the code isn't compared: a landed PR that is abandoned, its
+  branch reset, still reads landed.
 
 ### The notices at `run` and `resume`
 

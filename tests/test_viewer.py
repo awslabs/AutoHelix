@@ -19,7 +19,7 @@ from autohelix.runs import RunLock
 from autohelix.viewer import make_server
 from autohelix.runs import RunPaths, short_id
 from tests.test_integration import integration_project  # noqa: F401  (fixture)
-from tests.helpers import latest_run
+from tests.helpers import latest_run, with_words
 
 
 # ---------- run status ----------
@@ -500,7 +500,8 @@ def test_dashboard_tolerates_an_unreadable_run(tmp_path, run_paths):
     assert "error" in rows["bad-aaaa"]
     assert "error" not in rows["test"] and rows["test"]["landing"] is None  # no target branch
     assert rows["test"]["landing_words"] == {
-        "cell": "—", "text": "Started on a detached HEAD: land with `autohelix land test --into <branch>`."}
+        "cell": "—", "text": "Started on a detached HEAD: land with `autohelix land test --into <branch>`.",
+        "note": "", "commands": []}
 
 
 def test_dashboard_metrics_are_the_latest_accepted_not_the_best():
@@ -643,6 +644,7 @@ def test_table_shows_the_iteration_under_way():
                         "seconds": 60, "max_cost_usd": None, "max_seconds": None},
            "iterations": [{"iteration": 0, "accepted": True, "metrics": {}, "summary": None,
                            "cost": None, "cost_incomplete": False, "seconds": None}]}
+    run = with_words(run)
     header = {"schema": 1, "project": "p", "host": "h", "path": "/x", "path_display": "/x", "branch": None,
               "commit": "abc1234"}
     listing = format_runs({**header, "runs": [run]}, now=1000).splitlines()

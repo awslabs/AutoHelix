@@ -23,7 +23,7 @@ from rich.text import Text
 from autohelix import terminal
 from autohelix.formatting import clean, format_cap, format_duration
 from autohelix.iteration_time import format_limit
-from autohelix.runs import LandingWords, landing_words, short_id
+from autohelix.runs import LandingWords, short_id
 from autohelix.terminal import Row, Table
 
 WORDS = {"crashed": "stopped unexpectedly", "idle": "not started"}  # others as they are (dashboard.js)
@@ -113,9 +113,9 @@ def _notes(run: dict) -> str:
 
 
 def _words(run: dict) -> LandingWords:
-    """`runs.landing_words` for a run payload (`view --json`'s `landing`)."""
-    return landing_words(run.get("landing"), run["id"], run.get("target_branch"), bool(run.get("accepted")),
-                         run.get("land"))
+    """A run payload's `landing_words` (`runs.landing_words`, as `view --json` has them)."""
+    words = run["landing_words"]
+    return LandingWords(words["cell"], words["text"], words["note"], tuple(words["commands"]))
 
 
 def _landing(run: dict) -> str:

@@ -140,7 +140,7 @@ def test_delete_refuses_unlanded_commits_unless_forced(project):
     git(project, "branch", "-qD", "main")  # its target gone: the same words as the runs table's tooltip
     result = cli(project, "delete", short)
     assert result.exit_code == 1
-    assert (f"which has 1 unlanded commit: Branch main or the run's commits are not available (`autohelix land "
+    assert (f"which has 1 unlanded commit: Branch main is not available (`autohelix land "
             f"{short} --into <branch>` lands it on another branch).") in " ".join(result.output.split())
     git(project, "switch", "-qC", "main")  # back
     result = cli(project, "delete", "--force", short)

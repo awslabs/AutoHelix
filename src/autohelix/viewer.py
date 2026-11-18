@@ -981,9 +981,9 @@ class ProjectRuns:
         budget = status or {}
         target = data.get("target_branch")
         accepted = sum(1 for r in attempts if r.accepted)
-        relation = landing(paths, data, refs=refs, cache=self._landings).payload()
+        found = landing(paths, data, refs=refs, cache=self._landings)
         land_mode = data.get("land") or "auto"
-        words = landing_words(relation, run_id, target, bool(accepted), land_mode)
+        words = landing_words(found, run_id, land_mode)
         return {
             "id": run_id,
             "name": data.get("name"),
@@ -1018,9 +1018,11 @@ class ProjectRuns:
             # The latest main-agent call's reported model and executable (`latest_agent_call`).
             "agent": latest_agent_call(records),
             "target_branch": target,
-            "landing": relation,  # `runs.landing`'s relation, None when a side is missing
-            # Its words (`landing_words`), as the runs table has them: the run list's cell and tooltip.
-            "landing_words": {"cell": words.cell, "text": words.sentence},
+            "landing": found.payload(),  # `runs.landing`'s relation, None when a side is missing
+            # Its words (`landing_words`), the runs table's and the run list's: the cell, the
+            # tooltip, the end block's note and the commands that land it.
+            "landing_words": {"cell": words.cell, "text": words.sentence, "note": words.note,
+                              "commands": list(words.commands)},
             "group": data.get("group"),
             "land": land_mode,  # recorded at creation
             **run_notes(data),

@@ -11,7 +11,7 @@ import autohelix.live as W
 from autohelix.config import Config
 from autohelix.run_status import RunStatus
 from autohelix.runs import RunLock
-from tests.helpers import latest_run
+from tests.helpers import latest_run, with_words
 
 
 def _status(**info) -> dict:
@@ -176,7 +176,7 @@ def _run_data(iterations: int) -> dict:
                         "cost_incomplete": False, "seconds": 60, "max_cost_usd": None, "max_seconds": None},
            "iterations": rows}
     return {"schema": 1, "project": "p", "host": "h", "path": "/x", "path_display": "/x", "branch": None,
-            "commit": "abc1234", "run": run}
+            "commit": "abc1234", "run": with_words(run)}
 
 
 def test_the_time_cap_is_the_running_segments_own():

@@ -1834,4 +1834,4 @@ class Harness:
             found = landing(self.paths, self.run_info)
         except Exception:  # noqa: BLE001 - display only
             found = Landing(None, target, None, None)
-        return found, landing_words(found.payload(), self.paths.run_id, target, land_mode=self.land_mode)
+        return found, landing_words(found, self.paths.run_id, self.land_mode)
