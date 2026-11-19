@@ -830,7 +830,8 @@ def test_manual_mode_says_diverged_when_target_moves_during_segment(project, mon
     out = " ".join(capsys.readouterr().out.replace(" · ", " ").split())  # the next line wraps
     run_id, short = harness.paths.run_id, short_id(harness.paths.run_id)
     assert f"unlanded 1 commit on autohelix/{run_id} (diverged from {target})" in out
-    assert f"next autohelix view {short} autohelix resume {short} git merge autohelix/{run_id} page" in out
+    assert (f"next autohelix view {short} autohelix resume {short} git merge autohelix/{run_id} "
+            f".autohelix/runs/{run_id}/ page") in out
     assert "changed during this segment" not in out and f"autohelix land {short}" not in out
 
 

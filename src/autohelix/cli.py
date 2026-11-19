@@ -284,8 +284,9 @@ def _run_line(run: dict) -> str:
 def first_prompt(agent: str, project: Path, runs: list[dict], configs: list[str],
                  git: tuple[str, str | None] | None = None) -> str:
     """The session's first prompt: facts only; how the session opens and goes on is the
-    skill's (SKILL.md). The bundled skill, AutoHelix's own CLI, Python and docs, any git
-    problem, the project's runs and configs, and which agent CLI the session runs in."""
+    skill's (SKILL.md). The bundled skill, AutoHelix's own CLI, Python and docs, the
+    coordinator's notes (`autohelix/README.md`, when there is one), any git problem, the
+    project's runs and configs, and which agent CLI the session runs in."""
     skill_dir = _skill_dir()
     launcher = _launcher()
     docs = docs_dir()
@@ -299,6 +300,8 @@ def first_prompt(agent: str, project: Path, runs: list[dict], configs: list[str]
     parts = [f"Read `{skill_dir / 'SKILL.md'}` and follow it: you are helping me with AutoHelix in this "
              f"project ({project}).",
              tools + (f" AutoHelix's user docs are in `{docs}`: read them when needed." if docs else "")]
+    if (project / "autohelix" / "README.md").is_file():
+        parts.append("The coordinator's notes are in `autohelix/README.md`: read it first.")
     if git:
         problem, fix = git
         parts.append(f"Git: {problem.removesuffix('.')}" + (f" (`{fix}` fixes it)" if fix else "")

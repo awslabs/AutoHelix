@@ -73,9 +73,17 @@ has the checklist.
   (`python "$AUTOHELIX_EXPERIMENT/render.py"`); the agent gets one in
   `.autohelix-iteration/experiment/`, `ask`/`review` in their own copy. The
   folder is always frozen: an agent's edit to a committed one is discarded.
+  `run --check` warns about a command that names an `autohelix/` path the
+  commit lacks.
+- **The end block's `next` line and the web run page name the run's folder**
+  (`.autohelix/runs/<id>/`: `report.md`, `history.jsonl`, `iterations/`).
+  Each segment's start record in `segments.jsonl` has `autohelix_version`.
 - **Bare `autohelix`** in a terminal: the project's runs, then a Claude Code,
   Codex or OpenCode session with the bundled skill, which asks what next: a
-  question about the runs, or a new experiment.
+  question about the runs, or a new experiment. The skill keeps a new
+  experiment folder private (`/autohelix/` in `.git/info/exclude`) unless you
+  want it shared, and keeps the coordinator's notes in `autohelix/README.md`
+  (the session reads it first).
 - **`autohelix view`**: the runs on a live web page (`127.0.0.1:8765`; a page
   per run); `--terminal` follows a run; `--once` and `--json` print the runs
   or one run once (JSON fields are only ever added).

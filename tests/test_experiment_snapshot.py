@@ -372,12 +372,60 @@ def test_uncommitted_folder_files_warn_under_auto_landing(project, folder):
     for name in ("render.py", "b.py", ".env", "__pycache__/x.pyc"):
         (folder / name).parent.mkdir(exist_ok=True)
         (folder / name).write_text("x\n")
+    (project / "autohelix" / "lib").mkdir()
+    (project / "autohelix" / "lib" / "m.py").write_text("m\n")
+    (folder / "lib").symlink_to("../lib")  # stored as lib/m.py; git lists the link
     result = cli(project, "run", "exp", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     said = before_header(result)
-    assert ("commit autohelix/exp/ first (b.py, render.py): a commit on main after this run lands makes "
-            "`resume` refuse.") in said
+    assert ("commit autohelix/exp/ first (b.py, lib, render.py): a commit on main after this run "
+            "lands makes `resume` refuse.") in said
     assert "commit autohelix/exp/autohelix.yaml" not in said
     (project / ".git" / "info" / "exclude").write_text("/autohelix/\n")
     result = cli(project, "run", "exp", "-n", "1", "--no-report")
     assert "commit autohelix/exp/" not in result.output  # ignored files never move the branch
+
+
+# --- run --check: commands naming autohelix/ paths the commit lacks ---
+
+
+def test_check_warns_on_a_command_naming_an_uncommitted_autohelix_path(project, folder):
+    import yaml
+
+    (project / "autohelix" / "lib").mkdir()
+    for path in ("autohelix/exp/render.py", "autohelix/lib/metrics.py", "autohelix/shared/kept.py"):
+        (project / path).parent.mkdir(exist_ok=True)
+        (project / path).write_text("print(1)\n")
+    git(project, "add", "autohelix/shared/kept.py")
+    git(project, "commit", "-qm", "a committed helper")
+    data = yaml.safe_load((folder / "autohelix.yaml").read_text())
+    data.update(gates=["python autohelix/exp/render.py", "python autohelix/shared/kept.py",
+                       'python "$AUTOHELIX_EXPERIMENT/render.py"', "ls src/autohelix/x .autohelix/runs"],
+                observe=[{"name": "m", "command": "python autohelix/lib/metrics.py"}],
+                stop=["test -f 'autohelix/exp/render.py'"])
+    (folder / "autohelix.yaml").write_text(yaml.safe_dump(data))
+    result = cli(project, "run", "exp", "--check")
+    assert result.exit_code == 0, result.output
+    said = " ".join(result.output.split())
+    assert ("autohelix/exp/render.py (named by a command) isn't in the commit, so not in the copy: use "
+            "`$AUTOHELIX_EXPERIMENT/render.py`.") in said
+    assert said.count("autohelix/exp/render.py (named by a command)") == 1  # once per path
+    assert ("autohelix/lib/metrics.py (named by a command) isn't in the commit, so not in the copy: commit it, "
+            "or link it into autohelix/exp/ and use `$AUTOHELIX_EXPERIMENT/...`.") in said
+    for quiet in ("kept.py", "src/autohelix/x", ".autohelix/runs", "$AUTOHELIX_EXPERIMENT/render.py (named"):
+        assert f"{quiet} (named by a command)" not in said
+
+
+def test_the_project_config_is_told_to_commit_the_path(project):
+    from autohelix.checks import uncommitted_command_paths
+    from autohelix.config import CommandSpec
+
+    config = load_config(project)
+    config.gates = [CommandSpec(command="sh autohelix/run.sh")]
+    assert uncommitted_command_paths(config, project) == [
+        "autohelix/run.sh (named by a command) isn't in the commit, so not in the copy: commit it."]
+    (project / "autohelix").mkdir()
+    (project / "autohelix" / "run.sh").write_text("true\n")
+    git(project, "add", "autohelix")
+    git(project, "commit", "-qm", "commit it")
+    assert uncommitted_command_paths(config, project) == []

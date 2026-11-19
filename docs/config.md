@@ -35,9 +35,11 @@ configs. Either choice is fine, per experiment:
   (your clone only) or `.gitignore`. An ignored config is never committed, so it
   can't move the branch. A config that is already committed must be untracked
   first (`git rm -r --cached autohelix`, then commit), or the exclude has no
-  effect. Scripts the commands run must still be committed in the project,
-  outside `autohelix/`: an ignored `autohelix/` isn't in the copies
-  ([Phases → Candidate copies](phases.md#candidate-copies)).
+  effect. An ignored `autohelix/` isn't in the copies
+  ([Phases → Candidate copies](phases.md#candidate-copies)): commands run the
+  experiment folder's scripts from `$AUTOHELIX_EXPERIMENT`
+  ([Experiment folder](#experiment-folder)), and every other script they run
+  is committed in the project.
 
 For a private history of your configs, either make `autohelix/` its own git
 repository:
@@ -434,6 +436,12 @@ without a folder (the project's `autohelix.yaml`), so a command using it fails
 visibly. The agent gets the same files in `.autohelix-iteration/experiment/`
 (in its prompt's reading list), and `ask`/`review` in a run in
 `.autohelix-iteration/experiment/` of their own copy.
+
+A command that names the folder by its project path (`python
+autohelix/console/render.py`) works only for committed files: copies are built
+from the commit. `run --check` and the start's checks warn about such a path:
+"autohelix/console/render.py (named by a command) isn't in the commit, so not
+in the copy: use `$AUTOHELIX_EXPERIMENT/render.py`."
 
 ## Stop
 

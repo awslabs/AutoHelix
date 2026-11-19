@@ -1022,6 +1022,8 @@ function renderHeading() {
   const why = runNotes(state);
   setText('why', why);
   show('why', !!why);
+  setText('run-folder', runFolder(state.run_id));
+  show('run-folder', !!state.run_id);
 }
 
 function render() {

@@ -322,3 +322,18 @@ def test_documented_yaml_validates(resources, name):
             **raw,
         }
         assert Config.from_dict(data).validate() == []
+
+
+def test_setup_keeps_an_experiment_private_and_the_coordinator_reads_its_notes(bundled):
+    """The setup's private default, the `lib/` convention, linked documents, and
+    `autohelix/README.md` as the coordinator's notes (read first, updated at the end)."""
+    text = " ".join(bundled["SKILL.md"].decode().split())
+    assert "add `/autohelix/` to `.git/info/exclude`" in text
+    assert '"kept private: commit it to share it, or `git init` in autohelix/ for history"' in text
+    assert "with `autohelix/.git` present, `git add -f autohelix/...` in the project stages nothing" in text
+    assert "`ln -s ../lib/metrics.py autohelix/console/`" in text
+    assert "link it into the folder to freeze it with the run" in text
+    assert "`autohelix run <name> --import <id>`" in text
+    assert "`autohelix/README.md` first when it exists" in text and "## Coordinator notes" in bundled[
+        "SKILL.md"].decode()
+    assert "Only while `autohelix/` isn't tracked by the project" in text

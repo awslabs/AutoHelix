@@ -91,7 +91,53 @@ def preflight_check(config: Config, project_path: Path) -> list[PreflightIssue]:
                         message=f"scope.{label} '{pattern}' matches no committed file",
                     ))
 
+    # 4. Commands naming a path under autohelix/ the commit lacks (a private folder's
+    # helper): copies are built from the commit, so the command would fail in them.
+    issues.extend(PreflightIssue(level="warning", message=message)
+                  for message in uncommitted_command_paths(config, project_path))
+
     return issues
+
+
+# A path under autohelix/ in a command's text: not part of a longer path (`src/autohelix/`,
+# `$AUTOHELIX_PROJECT/autohelix/`, `.autohelix/`), up to a space, quote or shell operator.
+_AUTOHELIX_PATH = re.compile(r"(?<![\w./$~-])autohelix/[^\s'\"`;|&<>()]*")
+
+
+def uncommitted_command_paths(config: Config, project_path: Path) -> list[str]:
+    """`run --check`'s and preflight's warnings for gate, observe and stop commands that
+    name a path under autohelix/ that isn't in the commit (`python autohelix/perf/render.py`):
+    the copy they run in lacks it. A textual check; one warning per path."""
+    commands = [spec.command for spec in config.gate_commands()] + [entry.command for entry in config.observe] + [
+        spec.command for spec in config.stop]
+    named = dict.fromkeys(match.rstrip(".,:") for command in commands for match in _AUTOHELIX_PATH.findall(command))
+    named = [path for path in named if path.rstrip("/") != "autohelix" and not any(c in path for c in "*?[{$")]
+    if not named:
+        return []
+    listed = run_git(["git", "ls-tree", "-r", "-z", "--name-only", "HEAD"], cwd=project_path,
+                     capture_output=True, env=git_env())
+    if listed.returncode != 0:
+        return []  # no commit (or no repository): the clean-checkout check says so
+    committed = [name for name in os.fsdecode(listed.stdout).split("\0") if name]
+    folder = None
+    if config.experiment is not None:
+        try:
+            folder = config.experiment.resolve().relative_to(Path(project_path).resolve()).as_posix()
+        except ValueError:
+            pass
+    warnings = []
+    for path in named:
+        bare = path.rstrip("/")
+        if any(name == bare or name.startswith(bare + "/") for name in committed):
+            continue
+        if folder and bare.startswith(folder + "/"):
+            advice = f"use `$AUTOHELIX_EXPERIMENT/{bare[len(folder) + 1:]}`"
+        elif folder:
+            advice = f"commit it, or link it into {folder}/ and use `$AUTOHELIX_EXPERIMENT/...`"
+        else:
+            advice = "commit it"
+        warnings.append(f"{path} (named by a command) isn't in the commit, so not in the copy: {advice}.")
+    return warnings
 
 
 @dataclass

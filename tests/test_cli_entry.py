@@ -161,7 +161,18 @@ def test_nothing_yet_asks_one_question_and_enter_starts_the_session(project, mon
     assert prompt.endswith("This session runs in Claude Code (`agent.cli: claude-code`). I started it from "
                            "AutoHelix's start screen; open as the skill says.")  # no table without runs
     assert "--check" not in prompt and "commit" not in prompt and "request" not in prompt  # facts only
+    assert "README" not in prompt  # no coordinator's notes to name
     assert files(project) == ["main.py"]  # nothing written
+
+
+def test_the_prompt_names_the_coordinators_notes_first(project, monkeypatch, execs, tty):
+    agents(["claude"])(monkeypatch)
+    (project / "autohelix").mkdir()
+    (project / "autohelix" / "README.md").write_text("# Where things stand\n")
+    assert entry(input="\n").exit_code == 0
+    [(_, argv, _)] = execs
+    notes = "The coordinator's notes are in `autohelix/README.md`: read it first."
+    assert notes in argv[-1] and argv[-1].index(notes) < argv[-1].index("The project has no runs yet.")
 
 
 @pytest.mark.parametrize("answer", ["q\n", "Q\n"])

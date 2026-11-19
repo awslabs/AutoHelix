@@ -127,6 +127,8 @@ def test_a_run_records_which_model_ran_and_shows_it(project, monkeypatch):
     assert RunData(project, paths.run_id).state()["config"]["agent"] == "mock · reported-model"
     [segment] = read_segments(paths.segments)
     assert segment["executable"] == "/opt/mock-agent"
+    from autohelix.terminal import version
+    assert segment["autohelix_version"] == version()  # which AutoHelix ran the segment, as its header says
 
 
 def test_resume_warns_when_the_executable_changed(project, monkeypatch):

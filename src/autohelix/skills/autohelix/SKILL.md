@@ -11,8 +11,8 @@ Each iteration starts a fresh agent session, with persistent notes and
 measurements from earlier attempts.
 
 This skill covers three jobs: explaining existing runs, setting up an
-experiment (an agreed, checked, committed config, ready to run), and launching
-or supervising a run, only when the user asks for one.
+experiment (an agreed, checked config, ready to run), and launching or
+supervising a run, only when the user asks for one.
 
 Use the installed AutoHelix; a source checkout is not required. Its CLI and
 Python are the ones the session's first prompt names, else the `autohelix` on
@@ -31,7 +31,9 @@ unless the user asks.
 
 Unless the user has already said what they want, open with one short message,
 with no preamble and no mention of this skill. First take a quick look and run
-nothing that changes anything: the README and project instructions, how the
+nothing that changes anything: `autohelix/README.md` first when it exists (the
+coordinator's notes: see [Coordinator notes](#coordinator-notes)), the README
+and project instructions, how the
 code is tested and measured (test folders, benchmarks, evaluators, CI config),
 task or spec files (`TODO`, `TASKS.md`, a PRD), and any AutoHelix configs
 (`autohelix.yaml`, `autohelix/*/autohelix.yaml`).
@@ -142,6 +144,32 @@ Name the config's path:
 - A folder in `autohelix/` without `autohelix.yaml` (`autohelix/lib/`) isn't an
   experiment, nor is a `.yaml` file directly in `autohelix/`.
 
+An experiment folder holds its config and what only it uses: its prompt
+template, evaluators, metric adapters, sketches. The run stores the folder
+when it starts (dotfiles and `__pycache__/` left out; at most 200 files and
+10 MB):
+
+```
+autohelix/
+  console/
+    autohelix.yaml
+    render.py                  # its evaluator
+    metrics.py -> ../lib/metrics.py
+  lib/                         # helpers several experiments share (not an experiment)
+    metrics.py
+  README.md                    # the coordinator's notes
+```
+
+Helpers several experiments share go in `autohelix/lib/`, and each experiment
+links what it uses with a relative link (`ln -s ../lib/metrics.py
+autohelix/console/`), so it survives cloning `autohelix/` elsewhere. Links are
+followed only inside the checkout; a link outside it is refused. A helper the
+project commits can stay in the project instead (`scripts/`).
+
+A document the goal relies on (a design, a spec): link it into the folder to
+freeze it with the run (editing it then makes `resume` refuse), or name it by
+its path in the goal to keep it live.
+
 Preserve other configs and the run state in `.autohelix/`. A config in the
 first format (`constraints:`, `metrics:`, `reviewer:`, ...) no longer loads:
 propose converting it.
@@ -190,11 +218,11 @@ last the launch command and why. For example:
 
 Change no project files while proposing and revising: no config, helpers,
 evaluators or commits yet. For a design-only request, stop at the proposal.
-Otherwise ask whether to save and commit, or what to change; show the updated
-proposal after each revision. Agreement authorizes writing the proposed files
-and committing them, unless the user says otherwise.
+Otherwise ask whether to save it, or what to change; show the updated
+proposal after each revision. Agreement authorizes writing the proposed files,
+and the commits below, unless the user says otherwise.
 
-### Save, check and commit
+### Save and check
 
 Write the agreed config at its path, and only the agreed helpers, templates and
 evaluators. Fix routine validation errors within the agreed design; go back to
@@ -217,17 +245,26 @@ import probes, reviews and `ask` gates alike. A baseline or review call isn't
 needed to finish setup; report what ran and its result, and what didn't run and
 so is unverified.
 
-Commit the config and every script its commands use (iteration copies are made
-from the commit), by explicit path, leaving unrelated work, staged changes
-included, as it is. Keep the config uncommitted when the user wants it private
-(`config.md`, "Where configs live"; scripts must still be committed). If there
-is no repository or commit yet, say what remains. Run `--check` again after
-the commit.
+An experiment folder is private by default. When `autohelix/` has no tracked
+files and isn't ignored yet, add `/autohelix/` to `.git/info/exclude` and say
+so in one line: "kept private: commit it to share it, or `git init` in
+autohelix/ for history". Commit only when the user wants the experiment shared
+(`git add -f autohelix/<name>/` plus the `lib/` files it links: an excluded
+file needs `-f`), or into `autohelix/`'s own repository when it has one. Pick
+one of the two per project: with `autohelix/.git` present, `git add -f
+autohelix/...` in the project stages nothing. A top-level `autohelix.yaml` is
+committed with the project.
+
+Iteration copies are made from the commit: every script a command runs is
+committed in the project, or in the experiment folder and run from
+`$AUTOHELIX_EXPERIMENT`. Commit by explicit path, leaving unrelated work,
+staged changes included, as it is. If there is no repository or commit yet,
+say what remains. Run `--check` again after a commit.
 
 ### Hand off
 
-Keep it brief: the saved files, the setup commit (or why there is none), the
-`--check` result after the commit, what ran and what is unverified. End with the
+Keep it brief: the saved files, where they are kept (private, or the setup
+commit), the `--check` result, what ran and what is unverified. End with the
 complete launch command, every flag written out (`-n 1` included), and one line
 on why. For example:
 
@@ -238,6 +275,28 @@ on why. For example:
   iteration includes a review: add `--cost 20` to cap the spend."
 
 The YAML and its walkthrough were in the proposal; repeat them only if asked.
+
+### Change an experiment
+
+Edit its config or folder; a run that is going keeps the copy it stored. A
+changed config or folder makes `resume` refuse, so continue with
+`autohelix run <name> --import <id>`.
+
+## Coordinator notes
+
+`autohelix/README.md` is the coordinator's notes: current state, decisions and
+why, work done outside the loop, what's next. Keep it short; longer material
+goes in its own file in `autohelix/` (or an experiment folder), linked from it.
+
+- Read it first in every session.
+- At the end of a session, update it: what changed, what was decided, what's
+  next. Commit `autohelix/` only when it has its own repository and the user
+  agreed to the session's changes; never commit into the project from here
+  unless asked.
+- Only while `autohelix/` isn't tracked by the project: editing a tracked one
+  during a run dirties the checkout, and committing it puts the branch past an
+  auto-landing run's tip. With a committed `autohelix/`, don't write it (or
+  suggest excluding that one file).
 
 ## Launch and supervise a run
 

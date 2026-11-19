@@ -73,9 +73,10 @@ def _ending(table: Table, stop: dict, first: int = 1) -> list:
     landed = [row for row in table.rows if row.iteration >= first and row.accepted and row.commit]
     return table.ending(terminal.outcome(stop, None, None), spent=terminal.money(sum(r.cost or 0 for r in table.rows)),
                         landing=terminal.landed(len(landed), "main"), commands=terminal.next_commands("krp3"),
-                        files=FILES)
+                        files=FILES, folder=FOLDER)
 
 
+FOLDER = ".autohelix/runs/20261115-1402-sorting-krp3/"
 FILES = [("page", ".autohelix/runs/20261115-1402-sorting-krp3/report.html"),
          ("summary", ".autohelix/runs/20261115-1402-sorting-krp3/report.md")]
 
@@ -154,7 +155,7 @@ def view_screen(width: int, running: bool = False, readable: bool = True) -> lis
     `readable=False`: its history can't be read."""
     from autohelix.run_table import Saved, view_lines
 
-    saved = Saved(CONFIG, (ROWS[:4] if running else ROWS) if readable else None, FILES)
+    saved = Saved(CONFIG, (ROWS[:4] if running else ROWS) if readable else None, FILES, FOLDER)
     return view_lines({**PROJECT, "run": with_words(_run_payload(running))}, saved, width, now=T, show_mark=True)
 
 

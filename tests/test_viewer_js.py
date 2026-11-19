@@ -73,6 +73,13 @@ def test_run_ids_and_notes():
     assert js(("runNotes", run)) == ["Why: <b>bold</b> · continues from k3f9"]
 
 
+def test_the_run_page_names_the_run_folder():
+    assert js(("runFolder", "20261114-2333-sorting-1q3w"), ("runFolder", None)) == [
+        ".autohelix/runs/20261114-2333-sorting-1q3w/", ""]
+    assert 'id="run-folder"' in RESOURCES.joinpath("index.html").read_text()
+    assert "setText('run-folder', runFolder(state.run_id))" in RESOURCES.joinpath("viewer.js").read_text()
+
+
 def test_pages_set_html_only_from_server_rendered_markdown():
     # Everything else (run.json's notes, summaries, outputs) goes in as text.
     for name in ("common.js", "viewer.js", "dashboard.js"):

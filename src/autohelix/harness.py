@@ -41,7 +41,7 @@ from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning, StopCheckResult)
 from autohelix.events import iteration_fields
-from autohelix.experiment import SKIPPED_FOLDERS, shown, snapshot_changes, snapshot_files
+from autohelix.experiment import shown, snapshot_changes, snapshot_files
 from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_segments, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, append_usage, read_usage, superseded_marker
 from autohelix.formatting import clean_block, format_cap, format_cost, format_duration, format_total_cost
@@ -334,7 +334,7 @@ class Harness:
 
     def _uncommitted_config(self) -> list[str]:
         """A new auto-landing run's warning when its config file, prompt template or a file
-        of its experiment folder is untracked or modified (not ignored): committing it
+        the snapshot stores of its experiment folder is untracked or modified (not ignored): committing it
         after the run lands puts the branch past the run's tip, and `resume` then refuses."""
         branch = self.run_info.get("target_branch")
         files = [f for f in (self.config_file, self.config.prompt_template) if f is not None]
@@ -343,13 +343,15 @@ class Harness:
         consequence = f"a commit on {branch} after this run lands makes `resume` refuse."
         warnings = []
         if (folder := self.config.experiment) is not None and folder.is_dir():
+            # What the snapshot stores (a link, as git lists it, by the files under it) that
+            # is untracked and not ignored (tracked files are clean: `require_clean`).
             where = config_relative(self.project_path, folder)
-            listed = git(self.project_path, "--no-optional-locks", "ls-files", "-z", "--others", "--modified",
-                         "--exclude-standard", "--", where, check=False).stdout.split("\0")
-            named = {config_relative(self.project_path, f) for f in files}  # warned about below
-            others = sorted({name[len(where) + 1:] for name in listed if name.startswith(f"{where}/")
-                             and name not in named and not any(part.startswith(".") or part in SKIPPED_FOLDERS
-                                                               for part in Path(name).parts)})
+            stored = [file.name for file in snapshot_files(self.config, self.project_path) or ()]
+            listed = git(self.project_path, "--no-optional-locks", "ls-files", "-z", "--others", "--exclude-standard",
+                         "--", where, check=False).stdout.split("\0")
+            changed = {name[len(where) + 1:] for name in listed if name.startswith(f"{where}/")}
+            others = sorted(name for name in changed
+                            if name in stored or any(file.startswith(f"{name}/") for file in stored))
             if others:
                 listing = ", ".join(others[:5]) + (f" and {len(others) - 5} more" if len(others) > 5 else "")
                 warnings.append(f"commit {where}/ first ({listing}): {consequence}")
@@ -1864,7 +1866,8 @@ class Harness:
             # `autohelix land` when the target can fast-forward, else `git merge`.
             commands = terminal.next_commands(short, also=self._relation()[1].commands)
             lines = table.ending(outcome, spent=format_total_cost(self.history.cost_usages), landing=self._landing,
-                                 commands=commands, files=self._files)
+                                 commands=commands, files=self._files,
+                                 folder=f".autohelix/runs/{self.paths.run_id}/")
         except Exception as e:  # noqa: BLE001 - the outcome line still shows
             self.log.warn(f"Could not render the ending: {e}")
             lines = [Text(f"  {outcome[0]}  {outcome[1]}")]

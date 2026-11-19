@@ -232,6 +232,7 @@ VPN alive.
   run       7 iterations · 3 accepted · 38m 43s · $2.65
   landed    3 commits on main
   next      autohelix view krp3 · autohelix resume krp3
+            .autohelix/runs/20261115-1402-sorting-krp3/
   page      .autohelix/runs/20261115-1402-sorting-krp3/report.html
   summary   .autohelix/runs/20261115-1402-sorting-krp3/report.md
 ```
@@ -259,8 +260,9 @@ VPN alive.
 - **The end block** says how the segment ended (`Done`, `Stopped`,
   `Interrupted`, `Error`), each metric from the baseline to the run's tip, the
   totals, what landed (`landing  failed: …` in yellow when auto landing
-  couldn't, the commits then waiting for `autohelix land`), what to type next
-  and the files written.
+  couldn't, the commits then waiting for `autohelix land`), what to type next,
+  then the run's folder (`report.md`, `history.jsonl`, `iterations/` are in
+  it; on its own line when it doesn't fit), and the files written.
 - **`resume`** shows the baseline and the last 5 rows before `resumed HH:MM`.
 
 Wide terminals (where a reason still fits after the values) space the columns out;
@@ -283,7 +285,7 @@ pipe, a log file) or colours there is no mark and no live row. The renders at 80
 | `--why TEXT` | Why this run is started: one line (at most 300 characters), stored in `run.json` and shown by `autohelix view` |
 | `--verbose` | Show agent command details, file paths, heartbeats |
 | `--no-report` | Don't write the run summary when this segment finishes (not stored: pass it to each `resume` too) |
-| `--check` | Start nothing: make every check the run makes before writing anything (the config and its prompt template, a clean checkout, the agent command, scope patterns, `--import`'s run), print what it finds, exit 0 when the run would start, else 1. For setup and CI |
+| `--check` | Start nothing: make every check the run makes before writing anything (the config and its prompt template, the experiment folder, a clean checkout, the agent command, scope patterns, commands naming an `autohelix/` path the commit lacks, `--import`'s run), print what it finds, exit 0 when the run would start, else 1. For setup and CI |
 
 `run` always starts a **new** run, with its own notes and history; to
 continue one, use [`autohelix resume`](#autohelix-resume) (scripts that want
@@ -1050,8 +1052,9 @@ start is written as soon as its command holds the run's lock, before its checks
 - `"event": "start"` (`started`): `started_at` (Unix seconds), `budget` as
   given (`iterations`, `until`, `cost_usd`, `time_seconds`, each `null` when
   unset, and `default`: no budget flag, so the default `-n 1` applied),
-  `start_iteration`, `pid`, `host` and `executable` (the main agent's,
-  resolved).
+  `start_iteration`, `pid`, `host`, `executable` (the main agent's,
+  resolved) and `autohelix_version` (the AutoHelix that ran the segment, as
+  the header shows it).
 - `"event": "iteration"` (`iteration`): `ended_at` and the `iteration`
   event's fields. A record whose process was killed before its line (or one
   recovered from a published commit) gets it at the next `resume`, with the

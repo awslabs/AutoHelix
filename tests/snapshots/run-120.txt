@@ -23,6 +23,6 @@
   mem_mb     120 → 95  -21%  iter 6
   run        7 iterations · 3 accepted · 38m 43s · $2.65
   landed     3 commits on main
-  next       autohelix view krp3 · autohelix resume krp3
+  next       autohelix view krp3 · autohelix resume krp3 · .autohelix/runs/20261115-1402-sorting-krp3/
   page       .autohelix/runs/20261115-1402-sorting-krp3/report.html
   summary    .autohelix/runs/20261115-1402-sorting-krp3/report.md
