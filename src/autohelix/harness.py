@@ -41,6 +41,7 @@ from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning, StopCheckResult)
 from autohelix.events import iteration_fields
+from autohelix.experiment import shown, snapshot_changes, snapshot_files
 from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_segments, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, append_usage, read_usage, superseded_marker
 from autohelix.formatting import clean_block, format_cap, format_cost, format_duration, format_total_cost
@@ -350,8 +351,10 @@ class Harness:
     def _run_config(self, paths: RunPaths, check: bool = True):
         """A run's stored config (`load_run_config`). With `check`, refuses, before
         anything is spent, when the file it came from parses differently now, or its
-        template's text differs (`config_changes`); a deleted file, or a deleted prompt
-        template (the other settings still compared), continues from the stored copy."""
+        template's text differs (`config_changes`), or its experiment folder differs
+        from the run's snapshot (`snapshot_changes`); a deleted file, a deleted prompt
+        template (the other settings still compared) or a deleted folder continues from
+        the stored copy, and so does a run without a snapshot."""
         data = paths.read_identity()
         config = load_run_config(paths, data)
         source = self.project_path / data["config_path"]
@@ -361,6 +364,7 @@ class Harness:
         if not source.is_file():
             terminal.show(self.console, f"{data['config_path']} is gone; run {short} continues "
                           "with the config it stored when it started.", style="dim")
+            self._check_experiment(paths, data, config)
             return config
         try:
             current = load_config(self.project_path, source)
@@ -378,17 +382,39 @@ class Harness:
         except ConfigError as e:
             changed = f"it no longer reads: {e}"
         if changed:
-            said = f"{data['config_path']} changed since run {short} started ({changed}); "
-            if not has_baseline(paths):  # a failed first attempt: nothing to continue or import
-                raise RuntimeError(f"{said}run {short} has no accepted baseline: start a new run, "
-                                   f"`{run_command(data['config_path'])}` (`autohelix delete {short}` removes "
-                                   "this attempt).")
-            first = land_first(paths, data, data.get("target_branch"))
-            raise RuntimeError(
-                f"{said}the run keeps the config it started with. To apply the new config, start a new run "
-                f"that continues from this one: `{run_command(data['config_path'])} --import {short}`"
-                f"{'. ' + first if first else '.'} To continue this run, restore the file.")
+            self._refuse_changed(paths, data, f"{data['config_path']} changed since run {short} started ({changed}); ",
+                                 "the run keeps the config it started with", "config", "file")
+        self._check_experiment(paths, data, config)
         return config
+
+    def _check_experiment(self, paths: RunPaths, data: dict, config) -> None:
+        """`_run_config`'s comparison of the experiment folder with the run's snapshot:
+        a deleted folder continues (dim note), a changed one refuses; nothing for a run
+        without a snapshot."""
+        if config.experiment is None or not paths.experiment.is_dir():
+            return
+        folder, short = shown(self.project_path, config.experiment), short_id(paths.run_id)
+        if not config.experiment.is_dir():
+            terminal.show(self.console, f"{folder} is gone; run {short} continues with the files it "
+                          "stored when it started.", style="dim")
+        elif changed := snapshot_changes(config, self.project_path, paths.experiment):
+            self._refuse_changed(paths, data, f"{folder} changed since run {short} started ({changed}); ",
+                                 "the run keeps the experiment folder it started with", "folder", "files")
+
+    @staticmethod
+    def _refuse_changed(paths: RunPaths, data: dict, said: str, keeps: str, what: str, restore: str):
+        """`_run_config`'s refusal of a changed config or experiment folder (`said`, how):
+        with a baseline, `run --import`, else a new run."""
+        short = short_id(paths.run_id)
+        if not has_baseline(paths):  # a failed first attempt: nothing to continue or import
+            raise RuntimeError(f"{said}run {short} has no accepted baseline: start a new run, "
+                               f"`{run_command(data['config_path'])}` (`autohelix delete {short}` removes "
+                               "this attempt).")
+        first = land_first(paths, data, data.get("target_branch"))
+        raise RuntimeError(
+            f"{said}{keeps}. To apply the new {what}, start a new run "
+            f"that continues from this one: `{run_command(data['config_path'])} --import {short}`"
+            f"{'. ' + first if first else '.'} To continue this run, restore the {restore}.")
 
     def _metric_label(self, name: str) -> str:
         """Format metric name with direction arrow."""
@@ -1511,8 +1537,10 @@ class Harness:
         self.close()
 
     def _new_run_ready(self) -> None:
-        """Readiness checks for a first start, run before any run state exists: a run
-        starts from a commit, so tracked files must be clean."""
+        """Readiness checks for a first start, run before any run state exists: the
+        experiment folder can be stored (`experiment.snapshot_files`), and a run starts
+        from a commit, so tracked files must be clean."""
+        snapshot_files(self.config, self.project_path)
         require_clean(self.project_path)
         if not self._preflight():
             raise RuntimeError("Preflight checks failed. Fix the issues above before running.")

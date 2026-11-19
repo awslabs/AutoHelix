@@ -660,7 +660,7 @@ def run(config_name: str | None, path: Path, verbose: bool, no_report: bool, lan
     Always a new run, with its own notes and history; to continue one, use
     `autohelix resume`. CONFIG names an experiment folder in autohelix/ (`perf`
     for autohelix/perf/autohelix.yaml); without it, the run reads autohelix.yaml,
-    else the only experiment's in autohelix/.
+    else the config of the only experiment in autohelix/.
 
     The config says what one iteration does; the budget flags say how long this
     command (a segment of the run) goes on: -n N iterations (or --until N),

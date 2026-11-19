@@ -183,6 +183,9 @@ class Config:
     # The config file and its template, project-relative, as named and (for symlinks) as
     # resolved: always frozen, whatever `scope:` says (the agent can't edit its own protocol).
     protected: list[str] = field(default_factory=list)
+    # The experiment folder (autohelix/NAME/ for autohelix/NAME/autohelix.yaml, `config_name`),
+    # absolute; None for the project's autohelix.yaml. A run stores it (`experiment.snapshot_files`).
+    experiment: Path | None = None
     _parse_errors: list[str] = field(default_factory=list, repr=False)
 
     @property
@@ -703,7 +706,7 @@ def run_command(config_path: str) -> str:
 
 def find_config(project: Path, name: str | None = None) -> Path:
     """The config of the experiment `name` names (autohelix/<name>/autohelix.yaml), else
-    autohelix.yaml, else the only experiment's in autohelix/. Raises ConfigNotFound
+    autohelix.yaml, else the only experiment's config in autohelix/. Raises ConfigNotFound
     otherwise, and ValueError for a name that is a path."""
     configs = project_configs(project)
     listed = ", ".join(configs)
@@ -771,7 +774,8 @@ def load_config(project_path: Path, config_file: Path | None = None, *,
     copy (`runs.load_run_config`), `source` is the file it was made from: the template
     resolves next to it, and it is the config file `Config.protected` freezes; and
     `template_text` is the template's stored text (`RunPaths.template`), which the
-    prompt uses instead of the file."""
+    prompt uses instead of the file. The experiment folder is the one `source` (else
+    the file) is in, when that is autohelix/NAME/ (`Config.experiment`)."""
     config_path = Path(config_file) if config_file else find_config(project_path)
     if not config_path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
@@ -788,6 +792,10 @@ def load_config(project_path: Path, config_file: Path | None = None, *,
     elif template is not None:
         config._parse_errors.append("prompt_template must be a path to a template file")
     config.protected = _project_relative(Path(project_path), named)
+    named_at = Path(os.path.normpath(origin.absolute()))
+    root = Path(os.path.normpath(Path(project_path).absolute()))
+    if named_at.is_relative_to(root) and config_name(named_at.relative_to(root)):
+        config.experiment = named_at.parent
     return config
 
 

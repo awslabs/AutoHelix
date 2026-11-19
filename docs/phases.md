@@ -86,6 +86,7 @@ for itself is in `.internal/` folders:
 │   ├── run.json                # identity (base commit, target branch, config file), archived flag
 │   ├── config.yaml             # the run's config, stored verbatim when it started
 │   ├── prompt_template.md      # its prompt_template's text, stored with it (only with one)
+│   ├── experiment/             # its experiment folder's files, stored with it (autohelix/NAME/ only)
 │   ├── history.jsonl           # one record per iteration: the index and the source of truth
 │   ├── hints.md
 │   ├── report.md  report.html  # the run summary; the one-file run page

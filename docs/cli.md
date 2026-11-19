@@ -149,6 +149,13 @@ Which config a command uses:
   (`.autohelix/runs/<id>/config.yaml`, its prompt template beside it as
   `prompt_template.md`), and `resume`, `view`, `report` and the
   judges (`$AUTOHELIX_CONFIG`) use that copy.
+- A run of an experiment folder also stores the folder's other files, read-only,
+  as `.autohelix/runs/<id>/experiment/`: its scripts and material, without the
+  config, the template, dotfiles, dot-folders and `__pycache__/`. A link is
+  followed when it points inside the git checkout (`metrics.py ->
+  ../lib/metrics.py`); `run` refuses a link outside it, a file that isn't a
+  regular file, and a folder over 200 files or 10 MB, before it writes anything
+  (`run --check` too). Keep datasets out of the folder: name them by path.
 - `resume` refuses when the file's config has changed since: see
   [`autohelix resume`](#autohelix-resume) (Its config).
 - The config file and its `prompt_template:` file are always frozen, whatever
@@ -563,6 +570,12 @@ anything, `resume` compares it with the config file:
   `- pytest` for `- command: pytest`) are not changes.
 - A deleted file, or a deleted prompt template, isn't a change: the run
   continues with its copy (other keys are still compared).
+- The experiment folder is compared with the run's copy
+  (`runs/<id>/experiment/`), file by file: a changed file (its bytes or exec
+  bit), an added one or a removed one refuses, naming them, with the same two
+  ways out (restore the files). Edits to files the folder links to count. A
+  deleted folder isn't a change, and a run without a stored folder resumes
+  as before.
 - A run started before runs stored their config can't be resumed: continue it
   with `run --import <id>`.
 

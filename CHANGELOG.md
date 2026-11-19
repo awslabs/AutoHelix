@@ -64,6 +64,11 @@ has the checklist.
 
 ### Added
 
+- **A run keeps its experiment folder's files** (`runs/<id>/experiment/`):
+  the scripts and material beside `autohelix/<name>/autohelix.yaml`, links
+  inside the checkout followed. `run` refuses a folder with a link outside the
+  checkout, a non-regular file, or over 200 files or 10 MB. `resume` refuses
+  when the folder's files changed since, naming them.
 - **Bare `autohelix`** in a terminal: the project's runs, then a Claude Code,
   Codex or OpenCode session with the bundled skill, which asks what next: a
   question about the runs, or a new experiment.
