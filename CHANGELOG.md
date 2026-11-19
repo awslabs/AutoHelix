@@ -154,28 +154,20 @@ Each old key is an error naming its replacement; there are no aliases.
 | `values:` in an entry | `metrics:` in an `observe:` entry | `` `values:` is now `metrics:` `` |
 | `capture_stdout:` | removed: stdout is always saved | `` `capture_stdout:` is gone: stdout is always saved; remove it `` |
 | `acceptance.metric_gates` (`max_regression_pct`) | `gates:` entry `metric:` with `regress: N%` (vs the last accepted iteration, not the best) or `improve: N%` | `` `acceptance:` is now a `gates:` entry: ... `` |
-| `autohelix ask "..."` in `constraints:` | a `gates:` entry `ask:` (or the command, unchanged) | |
 | `reviewer:` | an `observe:` entry with `name:` and `review:` | `` `reviewer:` is now an `observe:` entry with `name:` and `review: <prompt>` `` |
 | `reviewer.model`, `reviewer.timeout_seconds` | `agent:` and `timeout:` on the review entry | |
-| `agent.type`, `agent.backend` | `agent.cli` | `` `agent.backend` is now `agent.cli` (claude-code, codex or opencode) `` |
-| `agent.backend: claude` | `agent.cli: claude-code` | `` `agent.cli: claude` is now `claude-code` `` |
+| `agent.type` | `agent.cli` (`claude` is `claude-code`) | `` `agent.type` is now `agent.cli` (claude-code, codex or opencode) `` |
 | `agent.reasoning_effort` | `agent.effort` | `` `agent.reasoning_effort` is now `agent.effort` `` |
 | `agent.command` | `$AUTOHELIX_CLAUDE_CODE_CMD`, `$AUTOHELIX_CODEX_CMD`, `$AUTOHELIX_OPENCODE_CMD` | `` `agent.command` is gone: set AUTOHELIX_CLAUDE_CODE_CMD, ... `` |
 | `$AUTOHELIX_CLAUDE_CMD` | `$AUTOHELIX_CLAUDE_CODE_CMD` | `AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD: ...` |
 | `agent.settings` | `agent.extra_args` | `` `agent.settings` is gone: pass the CLI's own options in `agent.extra_args` `` |
 | `agent.require_notes` | ask for notes in the goal or the prompt template | `` `agent.require_notes` is gone: ... `` |
-| `ask`/`review` `--agent`, `--command` | `--cli`; the variables above | `--agent is now --cli (claude-code or codex)` |
 | `agent.timeout_seconds` | `agent.timeout` (a duration) | `` `agent.timeout_seconds` is now `agent.timeout` (a duration such as 30m) `` |
 | `budget:` (`iterations`, `cost`, `time`) | the `run`/`resume` flags `-n`, `--cost`, `--time`, per segment (see [CLI → Budgets](docs/cli.md#budgets)) | `` `budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`; ...) `` |
-| `land:` | `run --land auto\|manual` (also `resume`), stored with the run; default `auto`, `manual` with `--group` | `` `land:` moved to the command line: `autohelix run --land auto\|manual` (also `resume`; ...) `` |
-| `report:` | `run --no-report` (also `resume`; per command, not stored) | `` `report:` moved to the command line: `autohelix run --no-report` (also `resume`) `` |
 | `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | as `budget:` |
-| a bare number as the threshold (`max_regression_pct: 5` was one; `regress: 5` now) | `regress: 5%` | `write the percentage with %, e.g. 5%, got 5` |
 | `timeout:` in seconds | durations everywhere (a bare number, or a string of digits like `"90"`, is still seconds) | |
 | `.autohelix/prompt.md` | `prompt_template:` (relative to the config) | a warning at run start |
-| `-c/--config FILE` on `run`, `resume`, `view`, `report` | the config at `autohelix/<name>.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
-| `name:` | the config file's name: `autohelix/<name>.yaml` (and `autohelix run <name>`) | `` `name:` is gone: runs are named after the config file; use autohelix/<name>.yaml `` |
-| `run --name NAME` | the config file's name, as for `name:` | `No such option '--name'.` |
+| `-c/--config FILE` on `run`, `report` | the config at `autohelix/<name>.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
 | the `init [PATH]` command | bare `autohelix` in a terminal (an agent drafts the config; by hand: the examples in docs/config.md and the template it names) | `No such command 'init'.` |
 
 ## 0.1.1 — 2026-09-02
