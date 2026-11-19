@@ -152,6 +152,9 @@ candidate code, not an editable install of the original checkout; an absolute
 path to an agent or Python executable can select the environment, but candidate
 code, inputs and captured outputs must resolve in the copy. Make external output
 locations deliberate: rejecting code doesn't restore files outside the project.
+A script kept in the config's experiment folder is stored with the run;
+commands run it from their copy of the folder:
+`python "$AUTOHELIX_EXPERIMENT/render.py"`.
 
 Show the complete YAML in a fenced block, the full goal included (its first
 line is the run's title). New configs use this top-level order, omitting unused

@@ -135,6 +135,7 @@ def build_prompt_variables(
         "group_runs": [describe_member(paths, data) for paths, data in members
                        if _in_copy(state, "runs", paths.run_id)],
         "imported": _describe_imported(imported, state, head or _own_tip(history)),
+        "experiment": _in_copy(state, "experiment"),
     }
     hints = history.paths.hints
     if hints.exists() and hints.stat().st_size > 0:
@@ -252,7 +253,7 @@ def _describe_accepted(history, iteration: int, state: Path) -> dict[str, Any] |
 VARIABLES = frozenset({
     "goal", "title", "iteration", "copy", "history", "gates", "observe", "stop", "editable", "frozen",
     "notes_path", "hints", "hints_text", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted",
-    "recent_iterations", "time_limit", "group", "group_runs", "imported",
+    "recent_iterations", "time_limit", "group", "group_runs", "imported", "experiment",
 })
 
 

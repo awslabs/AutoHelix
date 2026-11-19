@@ -95,7 +95,8 @@ def prepare_state(paths: RunPaths, copy, *, members=(), prompt: str | None = Non
     `notes/` round-trips (see `save_notes`); the rest is read-only reference:
     `prompt.md` (this iteration's prompt), `history.jsonl`, `hints.md`,
     `iterations/NNN/` for the iterations `seeded_iterations` picks (below `before`; as
-    `_seed_iteration` copies them), and for each other run shown (`members`: the
+    `_seed_iteration` copies them), `experiment/` (a copy of the run's stored
+    experiment folder, when it has one), and for each other run shown (`members`: the
     imported run and the group's, as `IterationWorkspace.others` lists them) its
     `run.json`, `history.jsonl` and `notes/` under `runs/<id>/`. Copies are anything
     with a `working_dir`. Project state remains reachable by absolute path; this is
@@ -111,6 +112,7 @@ def prepare_state(paths: RunPaths, copy, *, members=(), prompt: str | None = Non
             shutil.copy2(source, state / source.name)
     _copy_notes(paths.notes, state / "notes")
     (state / "notes").mkdir(exist_ok=True)
+    copy_dir(paths.project, paths.experiment.relative_to(paths.project).parts, state / "experiment")
     if paths.run_id:
         records = [r for r in History(paths.project, paths.run_id).load() if before is None or r.iteration < before]
         for n, record in seeded_iterations(records):
@@ -234,7 +236,7 @@ class IterationWorkspace:
     def agent_copy(self, hidden=()) -> Copy:
         """A's files with agent-facing material seeded under `.autohelix-iteration/`, and
         without the files `hidden` names (project-relative: the config and its template,
-        `Config.protected`) where they are in the tree. They are frozen, so a removal
+        `Config.hidden`) where they are in the tree. They are frozen, so a removal
         never reaches T (`snapshot` resets it) and isn't reported as discarded."""
         self.agent = self._copy("agent", self.base, self.base, watched=False)
         self._hidden = [name for name in dict.fromkeys(f"{self.repo.prefix}{name}" for name in hidden)
@@ -356,7 +358,9 @@ class IterationWorkspace:
         interrupt): an empty `scratch/` and `logs/` (`$AUTOHELIX_LOG_DIR`), `bin/` holding
         the `autohelix` launcher (`launcher.py`; put it first on the command's PATH), plus
         for each named source a copy of that folder under the same name (an empty folder
-        if the source doesn't exist or is reached through a symlink; no entry for None).
+        if the source doesn't exist or is reached through a symlink; no entry for None),
+        and `experiment/`, a copy of the run's stored experiment folder
+        (`$AUTOHELIX_EXPERIMENT`), when the run has one.
         Yields {"call": call, "scratch": path, "logs": path, "bin": path, <name>: path, ...}.
         A copy keeps what the command reads from run state fixed, whatever the command or
         the agent writes meanwhile."""
@@ -370,6 +374,8 @@ class IterationWorkspace:
             paths["scratch"].mkdir()
             paths["logs"].mkdir()
             paths["bin"] = write_launcher(folder / "bin")  # `autohelix`, immune to the command's env
+            if os.path.isdir(self._run.paths.experiment):
+                sources = {**sources, "experiment": self._run.paths.experiment}
             for name, source in sources.items():
                 if source is None:
                     continue

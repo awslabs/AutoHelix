@@ -240,3 +240,144 @@ def test_a_run_without_a_snapshot_resumes(project, folder, run_of_folder):
     (folder / "new.py").write_text("n\n")
     result = resumed(project, run_of_folder)
     assert result.exit_code == 0, result.output
+
+
+# --- who sees it: commands, the agent, the report ---
+
+
+def with_commands(folder, log, **extra):
+    """The experiment's config with a gate, an observe and a stop command that each log
+    `$AUTOHELIX_CALL` and what they read of `$AUTOHELIX_EXPERIMENT`, then remove a file
+    from their copy of it."""
+    import yaml
+
+    seen = (f'echo "$AUTOHELIX_ITERATION $AUTOHELIX_CALL $(cat "$AUTOHELIX_EXPERIMENT/data.txt") '
+            f'$(test -x "$AUTOHELIX_EXPERIMENT/render.sh" && echo x)" >> {log}; '
+            'rm -f "$AUTOHELIX_EXPERIMENT/data.txt"')
+    data = yaml.safe_load((folder / "autohelix.yaml").read_text())
+    data.update(gates=[seen], observe=[{"name": "look", "command": seen}], stop=[f"{seen}; exit 1"], **extra)
+    (folder / "autohelix.yaml").write_text(yaml.safe_dump(data))
+
+
+def test_commands_get_their_own_copy_of_the_snapshot(project, folder, tmp_path):
+    (folder / "data.txt").write_text("stored\n")
+    (folder / "render.sh").write_text("#!/bin/sh\n")
+    (folder / "render.sh").chmod(0o755)
+    log = tmp_path / "seen.log"
+    with_commands(folder, log)
+    result = cli(project, "run", "exp", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    # The baseline's gate, observe entry and stop command, then iteration 1's: each read
+    # the stored file (exec bit kept), though every one removed it from its copy.
+    assert log.read_text().splitlines() == [
+        "0 gates/1 stored x", "0 observe/look stored x", "0 stop/1 stored x",
+        "1 gates/1 stored x", "1 observe/look stored x", "1 stop/1 stored x"]
+    [(paths, _)] = project_runs(project)
+    assert (paths.experiment / "data.txt").read_text() == "stored\n"
+
+
+def test_without_a_folder_commands_get_no_experiment(project, tmp_path, monkeypatch):
+    import yaml
+
+    monkeypatch.setenv("AUTOHELIX_EXPERIMENT", str(tmp_path))  # not passed through from the user's shell
+    log = tmp_path / "seen.log"
+    unset = f'[ -n "${{AUTOHELIX_EXPERIMENT+set}}" ] && echo set >> {log} || echo unset >> {log}'
+    data = yaml.safe_load((project / "autohelix.yaml").read_text())
+    data.update(gates=[unset], observe=[{"name": "look", "command": unset}], stop=[f"{unset}; exit 1"])
+    (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
+    git(project, "commit", "-qam", "commands")
+    result = cli(project, "run", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert log.read_text().splitlines() == ["unset"] * 6
+
+
+def test_the_agent_copy_has_the_snapshot_and_the_prompt_names_it(project, folder, tmp_path):
+    from types import SimpleNamespace
+
+    from autohelix.iteration import prepare_state
+
+    (folder / "data.txt").write_text("stored\n")
+    result = cli(project, "run", "exp", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    [(paths, _)] = project_runs(project)
+    prompt = paths.iteration_dir(1).joinpath("prompt.md").read_text()
+    assert "- .autohelix-iteration/experiment/ — the experiment's folder as the run stored it" in prompt
+    copy = tmp_path / "copy"
+    prepare_state(paths, SimpleNamespace(working_dir=copy))
+    assert (copy / ".autohelix-iteration" / "experiment" / "data.txt").read_text() == "stored\n"
+
+
+def test_a_run_without_a_folder_has_none_in_the_agent_copy_or_prompt(project, tmp_path):
+    from types import SimpleNamespace
+
+    from autohelix.iteration import prepare_state
+
+    assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
+    [(paths, _)] = project_runs(project)
+    assert ".autohelix-iteration/experiment/" not in paths.iteration_dir(1).joinpath("prompt.md").read_text()
+    prepare_state(paths, SimpleNamespace(working_dir=tmp_path / "copy"))
+    assert not (tmp_path / "copy" / ".autohelix-iteration" / "experiment").exists()
+
+
+def test_the_report_prompt_names_the_stored_folder(project, folder):
+    from autohelix.report import build_report_prompt
+    from autohelix.runs import load_run_config
+
+    assert cli(project, "run", "exp", "-n", "1", "--no-report").exit_code == 0
+    [(paths, _)] = project_runs(project)
+    config = load_run_config(paths)
+    assert "- experiment/: the experiment's folder" in build_report_prompt(config, project, project / "d.md", paths.run_id)
+    shutil.rmtree(paths.experiment)
+    assert "- experiment/:" not in build_report_prompt(config, project, project / "d.md", paths.run_id)
+
+
+# --- a committed folder: frozen, not hidden; uncommitted files warned about ---
+
+
+def mock_settings(folder, **settings):
+    import yaml
+
+    data = yaml.safe_load((folder / "autohelix.yaml").read_text())
+    data["agent"]["mock"].update(settings)
+    (folder / "autohelix.yaml").write_text(yaml.safe_dump(data))
+
+
+def test_the_folder_is_frozen_but_not_hidden(project, folder):
+    config = load_config(project, folder / "autohelix.yaml")
+    assert config.frozen_names() == ["autohelix/exp/autohelix.yaml", "autohelix/exp/"]
+    assert config.hidden == ["autohelix/exp/autohelix.yaml"]
+
+
+def test_an_agent_edit_to_a_committed_folder_is_reset_and_resume_continues(project, folder):
+    (folder / "render.py").write_text("print('stored')\n")
+    mock_settings(folder, change_file="autohelix/exp/render.py", change_content="print('edited')")
+    git(project, "add", "autohelix")
+    git(project, "commit", "-qm", "commit the experiment")
+    result = cli(project, "run", "exp", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    [(paths, _)] = project_runs(project)
+    record = History(project, paths.run_id).load()[-1]
+    assert record.discarded_frozen == ["autohelix/exp/render.py"]
+    # In the agent's copy (it appended to the committed file), never in the run's code.
+    assert git(project, "show", f"autohelix/{paths.run_id}:autohelix/exp/render.py").stdout == "print('stored')\n"
+    result = resumed(project, paths)  # the folder still matches its snapshot
+    assert result.exit_code == 0, result.output
+
+
+def test_uncommitted_folder_files_warn_under_auto_landing(project, folder):
+    from tests.test_run_notices import before_header
+
+    git(project, "add", "autohelix")
+    git(project, "commit", "-qm", "commit the config")
+    for name in ("render.py", "b.py", ".env", "__pycache__/x.pyc"):
+        (folder / name).parent.mkdir(exist_ok=True)
+        (folder / name).write_text("x\n")
+    result = cli(project, "run", "exp", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    said = before_header(result)
+    assert ("commit autohelix/exp/ first (b.py, render.py): a commit on main after this run lands makes "
+            "`resume` refuse.") in said
+    assert "commit autohelix/exp/autohelix.yaml" not in said
+    (project / ".git" / "info" / "exclude").write_text("/autohelix/\n")
+    result = cli(project, "run", "exp", "-n", "1", "--no-report")
+    assert "commit autohelix/exp/" not in result.output  # ignored files never move the branch

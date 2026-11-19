@@ -256,7 +256,7 @@ The variables a template gets are a stable, documented contract:
 | `gates` | Every gate in list order: `{text, kind}`, `kind` being `command` or `metric`; a metric gate's text says what it compares ("speed: at most 5% worse than the last accepted iteration"). Elsewhere (console header, `view ID --json`, the `gates` of history records) a metric gate goes by its short text, `speed regress 5%` or `speed improve 0%` |
 | `observe` | Every observe entry: `{name, kind, metric_labels}`, `kind` being `command` (with `command`) or `review` (with `prompt`, on one line); `metric_labels` like `speed (↑)` |
 | `stop` | The stop commands |
-| `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files (always frozen) |
+| `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files and the experiment folder (`autohelix/NAME/`; always frozen) |
 | `notes_path` | Where this iteration's notes go (in the copy) |
 | `hints` | `.autohelix-iteration/hints.md` if there are hints, else empty |
 | `hints_text` | The hints' text (the lines `autohelix hint` added, oldest first), else empty |
@@ -270,6 +270,7 @@ The variables a template gets are a stable, documented contract:
 | `time_limit` | `agent.timeout` as a compact duration (`15m`), or empty |
 | `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group. Members whose state failed to copy are left out |
 | `imported` | The run this one continues from (`run --import`), or none (also when its state isn't in the copy, e.g. that run was deleted): `{id, short, path, description, same_code}`, `path` being its state in the copy (`.autohelix-iteration/runs/<id>/`, read-only), `description` its line as in `group_runs`, `same_code` whether its tip holds the same tree as the copy's code (false when unknown); its code is at `autohelix/<id>`. Not listed in `group_runs`, even when it is in the group |
+| `experiment` | `.autohelix-iteration/experiment/`, the copy of the run's stored experiment folder (`runs/<id>/experiment/`), or empty for a config without one (the project's `autohelix.yaml`) |
 
 A custom template is a copy: it won't pick up future changes to the built-in
 one. Remove `prompt_template:` to return to it. A run warns when a custom

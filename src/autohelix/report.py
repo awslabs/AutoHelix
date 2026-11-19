@@ -58,6 +58,9 @@ def build_report_prompt(config: Config, project: Path, draft: Path, run_id: str)
     from autohelix.run_status import read_run_status
 
     reason = (read_run_status(project, paths.run_id) or {}).get("stop_reason")
+    experiment = ("\n- experiment/: the experiment's folder (its scripts and material, without the config), as stored "
+                  "when the run started; commands got a copy of it as $AUTOHELIX_EXPERIMENT."
+                  if paths.experiment.is_dir() else "")
     ended = f"\nThe run ended because: {reason['detail']}.\n" if isinstance(reason, dict) and reason.get("detail") else ""
     return f"""\
 Write a summary of this AutoHelix run.
@@ -89,7 +92,7 @@ keeps the tree).
 iteration, a baseline retry), laid out like iterations/NNN/.
 - logs/: the harness's own logs: run-<time>.log per run or resume, report.log.
 {git}
-- config.yaml: the run's config, as stored when it started (verbatim); prompt_template.md: its prompt template's text, if it has one.
+- config.yaml: the run's config, as stored when it started (verbatim); prompt_template.md: its prompt template's text, if it has one.{experiment}
 
 ## Instructions
 {INSTRUCTIONS}

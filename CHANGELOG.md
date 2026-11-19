@@ -68,7 +68,11 @@ has the checklist.
   the scripts and material beside `autohelix/<name>/autohelix.yaml`, links
   inside the checkout followed. `run` refuses a folder with a link outside the
   checkout, a non-regular file, or over 200 files or 10 MB. `resume` refuses
-  when the folder's files changed since, naming them.
+  when the folder's files changed since, naming them. Gate, observe and stop
+  commands get a copy of it as `$AUTOHELIX_EXPERIMENT`
+  (`python "$AUTOHELIX_EXPERIMENT/render.py"`); the agent gets one in
+  `.autohelix-iteration/experiment/`, `ask`/`review` in their own copy. The
+  folder is always frozen: an agent's edit to a committed one is discarded.
 - **Bare `autohelix`** in a terminal: the project's runs, then a Claude Code,
   Codex or OpenCode session with the bundled skill, which asks what next: a
   question about the runs, or a new experiment.

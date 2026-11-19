@@ -83,6 +83,9 @@ Where things are (read before starting):
   observe/<name>/ (stdout.txt, stderr.txt, captured files, review.log){% endif %}{% if stop %},
   stop/<k>/ (stop commands' output){% endif %}. ask.log/review.log are judge transcripts, often long.
   Older iterations: .autohelix-iteration/history.jsonl
+{% if experiment %}
+- {{ experiment }} — the experiment's folder as the run stored it (the scripts and material its commands use, as `$AUTOHELIX_EXPERIMENT`); read-only (a copy; edits there are discarded)
+{% endif %}
 {% if others %}
 - .autohelix-iteration/runs/<id>/ — other runs' run.json, history.jsonl and notes/ (numbered by their own iterations; no iterations/: their observe outputs aren't copied); read-only (a copy; edits there are discarded)
 {% if imported %}

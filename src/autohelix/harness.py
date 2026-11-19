@@ -41,7 +41,7 @@ from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning, StopCheckResult)
 from autohelix.events import iteration_fields
-from autohelix.experiment import shown, snapshot_changes, snapshot_files
+from autohelix.experiment import SKIPPED_FOLDERS, shown, snapshot_changes, snapshot_files
 from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_segments, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, append_usage, read_usage, superseded_marker
 from autohelix.formatting import clean_block, format_cap, format_cost, format_duration, format_total_cost
@@ -153,9 +153,11 @@ def _terminate_interrupts():
 
 def _call_env(folders: dict) -> dict[str, str]:
     """The variables of one command call (`IterationWorkspace.call_folder`): its scratch
-    and transcript folders, its call name and the `autohelix` launcher first on PATH."""
+    and transcript folders, its call name, its copy of the experiment folder (unset
+    without one) and the `autohelix` launcher first on PATH."""
     return {"AUTOHELIX_SCRATCH": str(folders["scratch"]), "AUTOHELIX_LOG_DIR": str(folders["logs"]),
-            "AUTOHELIX_CALL": folders["call"], "PATH": command_path(folders["bin"])}
+            "AUTOHELIX_CALL": folders["call"], "PATH": command_path(folders["bin"]),
+            "AUTOHELIX_EXPERIMENT": str(folders["experiment"]) if "experiment" in folders else None}
 
 
 def _tail(output: str, lines: int = 15) -> str:
@@ -331,13 +333,26 @@ class Harness:
             raise
 
     def _uncommitted_config(self) -> list[str]:
-        """A new auto-landing run's warning when its config file or prompt template is
-        untracked or modified (not ignored): committing it after the run lands puts the
-        branch past the run's tip, and `resume` then refuses."""
+        """A new auto-landing run's warning when its config file, prompt template or a file
+        of its experiment folder is untracked or modified (not ignored): committing it
+        after the run lands puts the branch past the run's tip, and `resume` then refuses."""
         branch = self.run_info.get("target_branch")
         files = [f for f in (self.config_file, self.config.prompt_template) if f is not None]
         if not branch or not files:
             return []
+        consequence = f"a commit on {branch} after this run lands makes `resume` refuse."
+        warnings = []
+        if (folder := self.config.experiment) is not None and folder.is_dir():
+            where = config_relative(self.project_path, folder)
+            listed = git(self.project_path, "--no-optional-locks", "ls-files", "-z", "--others", "--modified",
+                         "--exclude-standard", "--", where, check=False).stdout.split("\0")
+            named = {config_relative(self.project_path, f) for f in files}  # warned about below
+            others = sorted({name[len(where) + 1:] for name in listed if name.startswith(f"{where}/")
+                             and name not in named and not any(part.startswith(".") or part in SKIPPED_FOLDERS
+                                                               for part in Path(name).parts)})
+            if others:
+                listing = ", ".join(others[:5]) + (f" and {len(others) - 5} more" if len(others) > 5 else "")
+                warnings.append(f"commit {where}/ first ({listing}): {consequence}")
 
         def uncommitted(path: Path) -> bool:
             def fails(*args: str) -> bool:
@@ -345,8 +360,8 @@ class Harness:
             if not fails("check-ignore", "-q"):
                 return False  # ignored: committing it never moves the branch
             return fails("ls-files", "--error-unmatch") or fails("diff", "--quiet", "HEAD")
-        return [f"commit {config_relative(self.project_path, f)} first: a commit on {branch} after this run lands "
-                "makes `resume` refuse." for f in files if uncommitted(f)]
+        return [f"commit {config_relative(self.project_path, f)} first: {consequence}"
+                for f in files if uncommitted(f)] + warnings
 
     def _run_config(self, paths: RunPaths, check: bool = True):
         """A run's stored config (`load_run_config`). With `check`, refuses, before
@@ -858,7 +873,7 @@ class Harness:
         the first rejection."""
         if self.verbose:
             self._status("Creating agent copy...")
-        agent_copy = workspace.agent_copy(hidden=self.config.protected)
+        agent_copy = workspace.agent_copy(hidden=self.config.hidden)
         if self.verbose:
             terminal.show(self.console, str(agent_copy.working_dir), "  Working dir: ")
         self.run_status.note(copy=str(agent_copy.working_dir))

@@ -354,6 +354,49 @@ def test_in_a_run_ask_judges_its_own_fresh_copy_of_the_candidate(candidate, monk
     assert list(candidate.scratch.iterdir()) == []  # removed afterwards
 
 
+def test_in_a_run_a_judge_gets_the_experiment_folder_named_in_its_prompt(candidate, monkeypatch):
+    """`$AUTOHELIX_EXPERIMENT` (the command's copy of the run's snapshot) as
+    `.autohelix-iteration/experiment/` beside candidate.diff: regular files and folders
+    only (the command may have planted a link)."""
+    from tests.test_review import Recorder
+
+    experiment = candidate.tmp / "experiment"
+    (experiment / "sketches").mkdir(parents=True)
+    (experiment / "render.py").write_text("print(1)\n")
+    (experiment / "sketches" / "a.md").write_text("a\n")
+    (candidate.tmp / "secret").write_text("key\n")
+    (experiment / "key").symlink_to(candidate.tmp / "secret")
+    monkeypatch.setenv("AUTOHELIX_EXPERIMENT", str(experiment))
+
+    def inspect(config, cwd):
+        folder = cwd / ".autohelix-iteration" / "experiment"
+        return {"files": sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*")),
+                "folder": folder}
+
+    judge = Recorder('{"answer": "yes", "reason": "fine"}', inspect=inspect)
+    monkeypatch.setattr("autohelix.judge.create_agent", judge)
+    monkeypatch.chdir(candidate.cwd)
+    result = CliRunner().invoke(main, ["ask", "Does the change keep the API?"])
+    assert result.exit_code == 0, result.stderr
+    [call] = judge.calls
+    assert call["files"] == ["render.py", "sketches", "sketches/a.md"]
+    assert (f"The experiment's folder, as the run stored it (the scripts and material its commands use), "
+            f"is in `{call['folder']}`; it is not part of the change.") in call["config"].system_prompt
+
+
+def test_in_a_run_without_an_experiment_folder_a_judge_gets_none(candidate, monkeypatch):
+    from tests.test_review import Recorder
+
+    monkeypatch.delenv("AUTOHELIX_EXPERIMENT", raising=False)
+    judge = Recorder('{"answer": "yes", "reason": "fine"}',
+                     inspect=lambda config, cwd: {"has": (cwd / ".autohelix-iteration" / "experiment").exists()})
+    monkeypatch.setattr("autohelix.judge.create_agent", judge)
+    monkeypatch.chdir(candidate.cwd)
+    assert CliRunner().invoke(main, ["ask", "Done?"]).exit_code == 0
+    [call] = judge.calls
+    assert not call["has"] and "experiment's folder" not in call["config"].system_prompt
+
+
 def test_in_a_run_a_judge_writing_fails_and_its_copy_goes(candidate, monkeypatch):
     candidate.config.write_text("goal: g\nagent:\n  cli: mock\n  mock:\n    judge_change_file: a.py\n")
     monkeypatch.chdir(candidate.cwd)

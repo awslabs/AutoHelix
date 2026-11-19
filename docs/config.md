@@ -29,7 +29,8 @@ configs. Either choice is fine, per experiment:
 - **Shared** (a team's benchmark): commit `autohelix.yaml` or `autohelix/` with
   the project. Commit it before the first `run`: with auto landing, a commit on
   the branch after the run lands puts the branch past the run's tip, and
-  `resume` refuses (`run` warns when the config isn't committed).
+  `resume` refuses (`run` warns when the config, or a file of its experiment
+  folder, isn't committed).
 - **Private**: put `/autohelix/` (or `/autohelix.yaml`) in `.git/info/exclude`
   (your clone only) or `.gitignore`. An ignored config is never committed, so it
   can't move the branch. A config that is already committed must be untracked
@@ -407,6 +408,33 @@ may be flakiness, not setup).
 Where gate, observe and stop commands run and the variables they get:
 [Phases → Command environment](phases.md#command-environment).
 
+### Experiment folder
+
+A config in an experiment folder (`autohelix/NAME/autohelix.yaml`) can keep its
+evaluator scripts and material beside it. The run stores the folder when it
+starts, as `.autohelix/runs/<id>/experiment/` (without the config and its
+template), and each gate, observe and stop command gets its own copy of that
+as `$AUTOHELIX_EXPERIMENT`:
+
+```
+autohelix/console/
+  autohelix.yaml
+  render.py
+```
+
+```yaml
+observe:
+  - name: screens
+    command: python "$AUTOHELIX_EXPERIMENT/render.py"
+```
+
+The copy's files are read-only and keep their exec bit; a command that changes
+its copy changes nothing stored. `$AUTOHELIX_EXPERIMENT` is unset for a config
+without a folder (the project's `autohelix.yaml`), so a command using it fails
+visibly. The agent gets the same files in `.autohelix-iteration/experiment/`
+(in its prompt's reading list), and `ask`/`review` in a run in
+`.autohelix-iteration/experiment/` of their own copy.
+
 ## Stop
 
 `stop:` lists commands that end the run early. Each entry is a string, or a
@@ -494,8 +522,9 @@ changes to tests/x.py were discarded: outside the editable scope", or "...:
 frozen" for frozen paths). A rejected attempt whose changes were all discarded
 keeps no tree and gives the next agent no `rejected.patch`.
 
-The config file and its `prompt_template:` file are always frozen (the run keeps
-the config it started with: [CLI → Config files](cli.md#config-files)). Scripts
+The config file, its `prompt_template:` file and its experiment folder are
+always frozen (the run keeps the config it started with:
+[CLI → Config files](cli.md#config-files)). Scripts
 the config calls are code: list them under `frozen:` if they must not change.
 
 With no scope, the agent may edit the tests and benchmarks that gate it; a run

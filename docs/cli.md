@@ -158,10 +158,11 @@ Which config a command uses:
   (`run --check` too). Keep datasets out of the folder: name them by path.
 - `resume` refuses when the file's config has changed since: see
   [`autohelix resume`](#autohelix-resume) (Its config).
-- The config file and its `prompt_template:` file are always frozen, whatever
-  `scope:` says. Scripts the config calls (`bench.py`, gate scripts) are code:
-  they move with the run's commits; list them under `scope.frozen` if they
-  must not change.
+- The config file, its `prompt_template:` file and its experiment folder are
+  always frozen, whatever `scope:` says (a committed folder is in the agent's
+  copy, but edits to it are discarded). Other scripts the config calls
+  (`bench.py`, gate scripts) are code: they move with the run's commits; list
+  them under `scope.frozen` if they must not change.
 
 There is no `--config` option, and nothing to initialize: the first
 `autohelix run` creates `.autohelix/` and adds `.autohelix/` and

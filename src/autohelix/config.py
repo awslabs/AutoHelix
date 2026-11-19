@@ -181,7 +181,9 @@ class Config:
     prompt_template: Path | None = None
     prompt_template_text: str | None = None
     # The config file and its template, project-relative, as named and (for symlinks) as
-    # resolved: always frozen, whatever `scope:` says (the agent can't edit its own protocol).
+    # resolved, then the experiment folder (`autohelix/NAME/`, a folder pattern: what of it
+    # is committed is in every copy): always frozen, whatever `scope:` says (the agent
+    # can't edit its own protocol). Only the files are hidden from agent copies (`hidden`).
     protected: list[str] = field(default_factory=list)
     # The experiment folder (autohelix/NAME/ for autohelix/NAME/autohelix.yaml, `config_name`),
     # absolute; None for the project's autohelix.yaml. A run stores it (`experiment.snapshot_files`).
@@ -193,9 +195,15 @@ class Config:
         """The goal's first line, cut to about 80 characters (`goal_title`)."""
         return goal_title(self.goal)
 
+    @property
+    def hidden(self) -> list[str]:
+        """The files of `protected` (the config and its template), which agent copies
+        don't get; the experiment folder stays in them, frozen."""
+        return [path for path in self.protected if not path.endswith("/")]
+
     def frozen_names(self) -> list[str]:
         """What is frozen, as shown (header, prompt): `scope.frozen`, then the config and
-        template files."""
+        template files and the experiment folder."""
         return self.frozen + [path for path in self.protected if path not in self.frozen]
 
     def frozen_patterns(self) -> list[str]:
@@ -796,6 +804,8 @@ def load_config(project_path: Path, config_file: Path | None = None, *,
     root = Path(os.path.normpath(Path(project_path).absolute()))
     if named_at.is_relative_to(root) and config_name(named_at.relative_to(root)):
         config.experiment = named_at.parent
+        config.protected += [f"{name}/" for name in _project_relative(Path(project_path), [config.experiment])
+                             if f"{name}/" not in config.protected]
     return config
 
 
