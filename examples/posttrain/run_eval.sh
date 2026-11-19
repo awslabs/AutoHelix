@@ -34,7 +34,7 @@ fi
   --limit "$LIMIT" \
   --fewshot "$FEWSHOT" \
   --json-output-file "$ARTIFACTS/eval_metrics.json" \
-  --templates-dir templates/ \
+  --chat-template-model "$BASE_MODEL" \
   --max-connections "$MAX_CONNECTIONS" \
   --max-tokens "$MAX_TOKENS" \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION"

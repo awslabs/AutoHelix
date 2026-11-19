@@ -14,4 +14,6 @@ See the [main README](https://github.com/awslabs/AutoHelix/blob/main/README.md) 
 - **[Docker Sandbox](docker.md)** — run the agent with filesystem isolation
 - **[Concepts](concepts.md)** — how iteration, isolation, and verified improvement
   work, and how to design a loop
+- **[Phases](phases.md)** — where each phase runs (agent, checks, judges, stop,
+  summary), what it gets, and where its output goes
 - **[ML Experiments](ml-experiments.md)** — patterns for training/eval loops (post-training, benchmarks)

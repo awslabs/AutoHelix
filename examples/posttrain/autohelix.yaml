@@ -55,7 +55,6 @@ observe:
 scope:
   frozen:
     - evaluate.py
-    - templates/
     - run_eval.sh
     - run_native.sh
     - check_final_model.sh

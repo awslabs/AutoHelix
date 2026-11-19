@@ -10,6 +10,7 @@ import os
 import shlex
 import statistics
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -196,6 +197,15 @@ def parse_claude_output(output: str) -> ModelResponse:
     )
 
 
+def record_usage(record: dict[str, Any]) -> None:
+    """Append one model call's usage line to $AUTOHELIX_USAGE_FILE, when AutoHelix
+    runs this benchmark, so the run's cost totals and `--cost` count the call."""
+    path = os.environ.get("AUTOHELIX_USAGE_FILE")
+    if path:
+        with open(path, "a") as f:
+            f.write(json.dumps(record) + "\n")
+
+
 class ClaudeCliModel:
     def __init__(self, model: str | None, timeout: int = 120):
         self.model = model
@@ -219,6 +229,9 @@ class ClaudeCliModel:
         env = os.environ.copy()
         env["CLAUDE_CODE_SIMPLE"] = "1"
 
+        # A call that fails keeps its first line: one call of unknown cost.
+        usage = {"id": uuid.uuid4().hex, "source": "workflow-benchmark"}
+        record_usage({**usage, "cost_usd": None})
         try:
             result = subprocess.run(
                 command,
@@ -233,7 +246,10 @@ class ClaudeCliModel:
         if result.returncode:
             detail = result.stderr.strip() or result.stdout.strip()
             raise ModelError(f"model command failed: {detail[-1000:]}")
-        return parse_claude_output(result.stdout)
+        response = parse_claude_output(result.stdout)
+        cost = json.loads(result.stdout).get("total_cost_usd")  # None: not reported
+        record_usage({**usage, "cost_usd": cost, "model": response.model})
+        return response
 
 
 class CommandModel:

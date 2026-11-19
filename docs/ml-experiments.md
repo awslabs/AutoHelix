@@ -3,18 +3,24 @@
 Tips for running AutoHelix on **training/evaluation loops** (post-training a model,
 optimizing a benchmark score) rather than pure code optimization. These are the
 patterns that matter when each iteration trains a model and scores it against a
-benchmark. The `posttrain` example is a full working reference.
+benchmark. The `posttrain` example is a full working reference (it keeps one
+model folder, so it doesn't roll models back; see
+[One folder per iteration](#one-folder-per-iteration)).
 
 ## Layout
 
-- **Write artifacts to a fixed absolute path outside the project.** Models,
-  checkpoints, and eval outputs must go to a fixed *absolute* path outside the repo
-  (e.g. `/data/artifacts/<task>/final_model`). Each phase runs in a fresh copy of the
-  code: anything the agent writes inside its copy — gitignored or not — is deleted
-  with it, and checks never see it. Note that a rejected iteration rolls back *code*
-  but not your external artifacts — so back up the current best before a risky
-  experiment.
-- **Evaluate from that fixed path.** The eval script should read the model from the
+- **Write artifacts to an absolute path outside the project.** Models,
+  checkpoints, and eval outputs must go to an *absolute* path outside the repo,
+  one folder per iteration (e.g. `/data/x/$AUTOHELIX_RUN_ID/$AUTOHELIX_ITERATION/model`,
+  [below](#one-folder-per-iteration)). Each phase runs in a fresh copy of the
+  code ([Phases](phases.md)). A file the agent writes inside its copy that git ignores is deleted with
+  the copy, and checks never see it; any other new file in scope is part of the
+  change: checked and, if accepted, committed (a checkpoint saved in the working
+  folder ends up in your git history). Ignore training by-products
+  (`checkpoints/`, `wandb/`, `*.safetensors`, ...) in `.gitignore`. A rejected
+  iteration rolls back *code*, not your external artifacts: give each iteration
+  its own folder ([One folder per iteration](#one-folder-per-iteration)).
+- **Evaluate from that path.** The eval script should read the model from the
   same absolute artifacts path, independent of the current working directory.
 - **Report the score in a parseable form.** AutoHelix reads the metric from your
   eval command's stdout (an `observe:` entry with `metrics: {score: higher}`). It
@@ -30,6 +36,61 @@ benchmark. The `posttrain` example is a full working reference.
 - **Freeze the eval harness.** Put the scorer, eval driver, run scripts, and prompt
   templates in `scope.frozen`. The agent should write *training* code only — never
   the thing that grades it (otherwise it can "fix" the eval to inflate the score).
+
+## One folder per iteration
+
+Key the artifacts folder by run and iteration, so no experiment overwrites the
+model an accepted iteration produced:
+
+```
+/data/x/$AUTOHELIX_RUN_ID/$AUTOHELIX_ITERATION/model
+```
+
+- **The agent** trains into its own iteration's folder, starting from the last
+  accepted iteration's. It finds that iteration in
+  `.autohelix-iteration/history.jsonl` (a number can appear on more than one
+  line; the last line for it counts). A killed iteration or a retried baseline
+  reuses its number, so clear `$out` first:
+
+  <!-- recipe: agent -->
+  ```bash
+  last=$(jq -s 'group_by(.iteration) | map(last | select(.accepted)) | last | .iteration' \
+    .autohelix-iteration/history.jsonl)
+  start=/data/x/$AUTOHELIX_RUN_ID/$last/model
+  out=/data/x/$AUTOHELIX_RUN_ID/$AUTOHELIX_ITERATION/model
+  rm -rf "$out"
+  ```
+
+  When `$last` is `0` (the baseline), `$start` doesn't exist: start from the
+  base model. Put the path and these lines in the goal, so the agent knows them.
+- **Gate and observe commands** evaluate
+  `/data/x/$AUTOHELIX_RUN_ID/$AUTOHELIX_ITERATION/model`: both variables are in
+  their [environment](phases.md#command-environment), with the values the agent
+  had. At the baseline (`AUTOHELIX_ITERATION` is `0`) no agent has trained, so
+  evaluate the base model there.
+
+What it gives you: rollback. A rejected iteration's model stays in its own
+folder, the next agent starts again from the last accepted one, and every
+accepted iteration's model stays on disk.
+
+What it doesn't:
+
+- **Cleanup.** Nothing removes these folders, rejected iterations' included;
+  `autohelix delete` and `archive` leave them. Delete them yourself.
+- **Accepting a retrain alone.** An iteration that only retrains (no change to
+  the code) is a no-op: accepted if its checks pass, and the next agent starts
+  from its folder, but it makes no commit, so a `metric:` gate keeps comparing
+  with the value measured on the last commit
+  ([the reference](config.md#gates)).
+- **Imported runs.** A run started with `run --import` has a new run id, so its
+  first agent finds only its own baseline and starts from the base model. To
+  continue the imported run's models, tell the agent to start from that run's
+  folder (its history is in `.autohelix-iteration/runs/<id>/history.jsonl`).
+
+A loop whose evaluation rebuilds the model from the commit needs none of this:
+the [ml-recipe example](https://github.com/awslabs/AutoHelix/tree/main/examples/ml-recipe)
+trains from its `train_config.yaml` and evaluates in one observe entry, so
+the commit is the model.
 
 ## Environment
 

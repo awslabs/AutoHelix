@@ -83,8 +83,9 @@ RENAMED_TOP_LEVEL_KEYS = {
                    "(was max_regression_pct) or `improve: N%`"),
     "reviewer": "`reviewer:` is now an `observe:` entry with `name:` and `review: <prompt>`",
     "name": "`name:` is gone: runs are named after the config file; use autohelix/<name>.yaml",
-    "budget": ("`budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` "
-               "(also `resume`; `agent.timeout` limits one iteration)"),
+    "budget": ("`budget:` moved to the command line: `autohelix run --until N --cost USD --time DURATION` "
+               "(the run's total, as `budget.iterations` was; `-n N` for N more; also `resume`; "
+               "`agent.timeout` limits one iteration)"),
     "land": ("`land:` moved to the command line: `autohelix run --land auto|manual` (also `resume`; "
              "default auto, manual with --group)"),
     "report": "`report:` moved to the command line: `autohelix run --no-report` (also `resume`)",
