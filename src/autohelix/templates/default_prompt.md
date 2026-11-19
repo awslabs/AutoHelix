@@ -76,28 +76,15 @@ Frozen (changes to these files will be reverted{% if editable %}, even inside th
 {% endif %}
 
 {% set others = imported or group_runs %}
-{% if others %}
 Where things are (read before starting):
-- .autohelix-iteration/notes/ — yours: this run's notes, editable; numbered by this run's iterations (iter-1.md onward), separately from other runs' iter-N.md
-{% else %}
-Read before starting:
-- .autohelix-iteration/notes/iter-*.md — your own notes from past iterations
-{% endif %}
-- .autohelix-iteration/iterations/NNN/ — {{ "this run's own" if others else "the" }} last {{ recent_iterations }} iterations and {{ "its" if others else "the" }} last accepted one: record.json{% if gates %},
+- .autohelix-iteration/notes/ — your own notes from this run's past iterations (iter-1.md onward); editable
+- .autohelix-iteration/iterations/NNN/ — this run's last {{ recent_iterations }} iterations and its last accepted one: record.json{% if gates %},
   gates/<k>/ of failed gates (k: position in the list above; stdout.txt, stderr.txt, ask.log){% endif %}{% if observe %},
   observe/<name>/ (stdout.txt, stderr.txt, captured files, review.log){% endif %}{% if stop %},
   stop/<k>/ (stop commands' output){% endif %}. ask.log/review.log are judge transcripts, often long.
   Older iterations: .autohelix-iteration/history.jsonl
-{% if others and rejected_patch %}
-- {{ rejected_patch }} — the last rejected attempt's change
-{% elif others and rejected_diff %}
-- `{{ rejected_diff }}` — the last rejected attempt's change (too large for a file)
-{% endif %}
-{% if hints %}
-- {{ hints }}{% if others %} — hints from the person running this run{% endif +%}
-{% endif %}
 {% if others %}
-- .autohelix-iteration/runs/<id>/ — other runs' run.json, history.jsonl and notes/ (no iterations/: their observe outputs aren't copied); read-only (a copy; edits there are discarded)
+- .autohelix-iteration/runs/<id>/ — other runs' run.json, history.jsonl and notes/ (numbered by their own iterations; no iterations/: their observe outputs aren't copied); read-only (a copy; edits there are discarded)
 {% if imported %}
   - Imported (this run continues from {{ imported.short }}; its notes and history are where that work left off):
     {{ imported.description }}
@@ -119,6 +106,11 @@ Read before starting:
 
 Build on the group's work or explore a different approach. If you adopt code from another
 run, name that run in your summary (e.g. "adopted the parser from k3f9").
+{% endif %}
+
+{% if hints_text %}
+Hints from the person running this run (newest last):
+{{ hints_text | indent(2, true) }}
 {% endif %}
 
 {% if time_limit %}

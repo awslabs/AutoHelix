@@ -221,9 +221,10 @@ See the [configuration reference](config.md).
 ### 3. Run
 
 AutoHelix needs a git repository with a commit, and the first baseline needs no
-uncommitted changes to tracked files. Commit the config, and any scripts its
-commands use (iteration copies are made from the commit).
-Commit the config before the first `run`: with auto landing, a commit on the branch after the run lands makes `resume` refuse (`run` warns).
+uncommitted changes to tracked files. Commit the config before the first
+`run` (or keep it private: [Where configs live](config.md#where-configs-live)),
+and commit any scripts its commands use
+([Phases → Candidate copies](phases.md#candidate-copies)).
 Preserve unrelated work:
 
 ```bash
@@ -278,21 +279,25 @@ autohelix archive k3f9               # hidden, skipped by a bare resume; history
 autohelix delete k3f9                # history, notes and logs removed
 ```
 
-For a full reset to before iteration 1:
+For a full reset to before iteration 1, roll the code back first, while the
+run's record still names its starting commit (`base_commit` in its `run.json`),
+then delete the run:
 
 ```bash
-autohelix delete --force k3f9        # 1. remove the run (--force: even with unlanded commits)
-git reset --hard <initial-commit>    # 2. roll code back to before the agent's iterations
+git reset --hard "$(jq -r .base_commit .autohelix/runs/*-k3f9/run.json)"  # 1. code as when the run started
+autohelix delete --force k3f9        # 2. remove the run (--force: even with unlanded commits)
 rm -rf /path/to/artifacts/<task>/*   # 3. only if you configured an external artifacts path
 ```
 
-Find `<initial-commit>` with `git log --oneline` (the one before "AutoHelix iteration 1").
+Run step 1 on the run's branch. `git reset --hard` also discards uncommitted
+changes and any commits you made on that branch since the run started.
 
 ### 5. Several configs
 
 A project can have several loops: one config each, in an `autohelix/` folder
-at the project root, versioned with the project. Commit the configs and any
-scripts their commands use: iteration copies are made from the commit.
+at the project root. Commit the configs, or keep the folder private
+([Where configs live](config.md#where-configs-live)), and commit any scripts
+their commands use.
 
 ```
 autohelix/

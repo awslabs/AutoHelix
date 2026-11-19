@@ -73,7 +73,7 @@ def test_import_shows_the_runs_state_and_continues_its_observations(project, mon
             f"that work left off):\n    `.autohelix-iteration/runs/{parent.run_id}/` (1 iteration, latest accepted "
             f"score 1, finished; code at `autohelix/{parent.run_id}`)")
     assert line in seen["prompt"]
-    assert "- .autohelix-iteration/notes/ — yours: this run's notes, editable; numbered by this run's iterations" \
+    assert "- .autohelix-iteration/notes/ — your own notes from this run's past iterations (iter-1.md onward)" \
         in seen["prompt"]
     # The parent's commit didn't land (manual): the copy's code isn't its tip.
     assert (f"Your copy holds this run's code, not necessarily {short_id(parent.run_id)}'s: "
@@ -123,7 +123,7 @@ def test_a_deleted_imported_run_doesnt_stop_the_run(project, monkeypatch):
     watch_agent(child, monkeypatch, seen)
     child.run(Budget(until=1), report=False)
     assert "previous none" in stdout(child.paths, 0, "tracker")
-    assert seen["runs"] == [] and "continues from" not in seen["prompt"] and "Where things are" not in seen["prompt"]
+    assert seen["runs"] == [] and "continues from" not in seen["prompt"] and ".autohelix-iteration/runs/<id>/" not in seen["prompt"]
     assert child.history.load()[-1].accepted
 
 

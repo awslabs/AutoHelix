@@ -7,9 +7,11 @@
 #   Example: /data/posttrain/gsm8k_qwen3_4b/artifacts  (NOT inside the project)
 : "${ARTIFACTS:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_artifacts_local}"
 
-# TODO(setup): point this at the prebuilt env (see README SETUP). The reference
-#   setup builds it once with uv and reuses it across iterations.
-: "${UV_ENV:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/uv_env}"
+# TODO(setup): point this at the prebuilt env (see README SETUP), a FIXED absolute
+#   path OUTSIDE this repo. The reference setup builds it once with uv and reuses
+#   it across iterations. No default: run_native.sh refuses to run without it.
+#   Example: /data/posttrain/uv_env  (NOT inside the project)
+: "${UV_ENV:=}"
 
 # Shared Hugging Face cache (so the base model + dataset aren't re-downloaded).
 # TODO(setup): set to a persistent location with the model + GSM8K pre-cached.

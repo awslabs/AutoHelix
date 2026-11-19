@@ -2,628 +2,176 @@
 
 ## Unreleased
 
-### One `view` command: the web page first
+What changes for a 0.1.1 user. [Upgrading from 0.1.1](#upgrading-from-011)
+has the checklist.
 
-- **`autohelix view` serves the web page** (the run list at `/`; with a run id,
-  that run's page), with `--port` and `--open`. `view --terminal [ID]` follows a
-  run live in the terminal (without an id, the running or latest run, as
-  before). `view --once` / `--json` print the project's runs (the runs
-  table, `--metric` picks its column); with an id, that run. **Breaking for
-  scripts:** `view --json` / `--once` without an id used to print the running
-  or latest run and now print the run list (pass an id for one run); a bare
-  `view` used to follow a run in the terminal (now `--terminal`).
-- **Removed `autohelix dashboard`** (no alias) and `view --web`; the live
-  terminal runs table goes with it (bare `autohelix` and `view --once` show the
-  table).
-- **The runs table is one line per run**: run, state, iterations, the metric,
-  landing, cost, activity and the goal (left out when there is no room; the
-  cost goes first on a narrow terminal). The
-  group and notes are in the header of `view ID --once` / `--terminal`; group,
-  config file and time spent on the web run list; all of it in `--json`. What
-  is left of `--time` is in `view`'s Budget field.
-- **`run` and `resume` show the commands that steer the run** under the live
-  row: `autohelix view krp3 · hint --run krp3 "…" · stop krp3 · Ctrl-C now`
-  (piped: a `Steer` header line). `view --terminal` says what Ctrl-C does there
-  (quits the view, not the run).
-- **The end block no longer lists the landed commits' summaries** (the
-  `landed`/`unlanded` line stays; the summaries are on the run page).
+### Breaking
 
-### What the main agent is given
-
-- **The main agent's environment no longer has `AUTOHELIX_PROJECT` or
-  `AUTOHELIX_RUN_DIR`** (gate, observe and stop commands keep them); it gets
-  `AUTOHELIX_ITERATION`, as commands do.
-- **Agent copies have no config file and no `prompt_template:` file**:
-  commands read the run's stored copy (`$AUTOHELIX_CONFIG`). Both are frozen,
-  so the removal is never committed or reported as discarded. Hygiene, not a
-  boundary: the agent can still find the project and runs as you.
-
-### The agent block: `cli`, `model`, `effort`
-
-- **`agent:` is `cli`, `model`, `effort`, `timeout`, `extra_args`,
-  `auto_memory`.** `backend` is now `cli`, and its value `claude` is now
-  `claude-code`; `reasoning_effort` is now `effort` (passed through: Claude
-  Code `--effort`, Codex `model_reasoning_effort`, OpenCode `--variant`);
-  `model` is passed through unchanged (unset: the CLI's own default).
-  AutoHelix keeps no list of model names.
-- **The executable comes only from the environment**: `AUTOHELIX_CLAUDE_CODE_CMD`,
-  `AUTOHELIX_CODEX_CMD`, `AUTOHELIX_OPENCODE_CMD`, else `claude`, `codex`,
-  `opencode` on PATH; `ask`, `review` and bare `autohelix` use the same
-  variables.
-- **Removed** `agent.command` (use the variables), `agent.settings` (use
-  `extra_args`) and `agent.require_notes` (with its Stop hook,
-  `check_notes.sh`). Every removed key or value is a config error naming its
-  replacement, and a set `AUTOHELIX_CLAUDE_CMD` is an error naming
-  `AUTOHELIX_CLAUDE_CODE_CMD` wherever an agent's executable is resolved
-  (`run`, `resume`, `report`, `ask`, `review`, bare `autohelix`; a `mock` run
-  ignores it), reported like a config error (no traceback). Runs whose stored config uses the old keys
-  can't be resumed; start a new run.
-- **`ask:` and `review:` entries' `agent:` take `cli`, `model`, `effort`**;
-  `autohelix ask` / `review` take `--cli` (`claude-code` or `codex`) instead
-  of `--agent`, and `--command` is gone (both are errors naming the
-  replacement).
-- The packaged config template and the setup skill write `model:` explicitly.
-
-### Which model ran
-
-- **Every agent call records which model ran**: the main agent's (in the
-  history's `calls`), each `ask`/`review` judge's and the run summary's (in
-  their usage records) carry `cli`, `model` (the model the CLI's output named:
-  Claude Code's `init` event, a `model` Codex's JSON events name; `null` when
-  it named none, as OpenCode's events do) and `executable` (the resolved path
-  started). A judge's usage record names its CLI as `cli` (was `agent`).
-- **Each segment's start record** in `segments.jsonl` records the main agent's
-  `executable`; `resume` warns when it differs from the run's last segment.
-- **The Agent line** of the `run`/`resume` header reads `Claude Code · opus ·
-  via ~/bin/claude-bedrock`: the configured model (`(its default)` without
-  `model:`), and the executable when it isn't the CLI's plain name on PATH
-  (was `claude-code (opus)`). `view`'s run screen and the web viewer's run page
-  show the model the latest main-agent call reported, else the configured one.
-- A name in `AUTOHELIX_<CLI>_CMD` is resolved on PATH, like the default.
-
-### One run/target relation
-
-- **The run's tip against its target branch is computed in one place**
-  (same, ahead, behind or diverged, with the commit counts each way) and worded
-  in one: resume's refusal and warnings, `land`, `delete`, the notices at `run`,
-  the runs table, `view --terminal` and the web run list all read it, so they
-  agree (the web list counted commits of the run's base the target lacked).
-- `view --json`'s `landing` gains `relation` and `behind`, and each run gets
-  `landing_words`: the runs table's `cell` and `text` (what it means and what
-  works; the web run list's tooltip). The web run list's landing cell now has
-  the runs table's words (`2 to land`, `2 diverged`, `landed`, `—`; was
-  `2 commits to land`, `nothing yet`, `detached`, `unavailable`).
-- **One word, "diverged", and the command that works**: a target that can't
-  fast-forward reads `diverged` everywhere (`view --terminal`'s
-  `(main has moved on)` is now `(diverged from main)`); `land`'s refusal,
-  auto landing's and `resume`'s warning name the counts each way and
-  `git merge autohelix/<id>` (and, for a run that lands automatically,
-  `autohelix resume <id> --land manual` to stop trying). `autohelix land <id>`
-  is offered (`run`'s and `view --terminal`'s `next`, the entry screen's
-  suggestion, `delete`'s refusal) only when the target can fast-forward;
-  for a diverged run they offer `git merge autohelix/<id>`.
-- Auto landing no longer refuses on its own when the target moved during the
-  segment ("Target main changed during this segment"; a manual run's warning
-  too): `land` decides, and fast-forwards a target that is still behind the
-  tip.
-- A run with no commits of its own to land is never `diverged` (it read
-  `0 diverged`): its target past its base reads `behind`.
-- The entry screen's suggestion names the state in the runs table's words
-  (`finished · 2 to land`, `finished · 2 diverged`; was `2 commits to land`).
-  `resume`'s refusal and warnings, the `run` notice about the previous run's
-  unlanded commits and `delete`'s refusal start from the same sentence the run
-  list's tooltip has ("Everything run k3f9 accepted is in main, which has 2
-  commits past its tip (committed after it)", "1 commit on autohelix/<id> not
-  in main yet; main can fast-forward: `autohelix land k3f9`"); an auto-landing
-  `resume`'s warning, `run --import`'s "land it first" and the refusal for a
-  run that never accepted a change ("main has 2 commits past run k3f9's base")
-  take their clauses from the same wording (`runs.landing_words`' `state` and
-  `missing`). `delete`'s refusal for a run whose branch is gone says what the
-  tooltip says ("Branch main is not available (`autohelix land k3f9 --into
-  <branch>` lands it on another branch)"); `--into` is offered only when the
-  target branch is the missing side, not when the run's own commits are gone.
-- One rule for "the run accepted a change", its tip isn't its base
-  (`Landing.accepted`), in every wording of a run/target relation;
-  `runs.landing_words` takes the `Landing`, and `view --json`'s
-  `landing_words` also has the end block's `note` and the `commands` that land
-  it, which the runs table, the entry screen and `view --terminal` show.
-
-### Landed stays landed after a squash-merged PR
-
-- **`autohelix land` (and auto landing) records `landed: {tip, target, at}`
-  in `run.json`.** A run whose tip is the one it landed reads `landed` when the
-  target lacks the tip but the recorded `target` is that same branch (a
-  squash-merged or rebased PR): the runs table, `view`, the web run list, the
-  entry screen and `delete` (no `--force` needed) agree. Commits accepted after
-  it count as unlanded (`1 diverged`), applied with `git cherry-pick <landed
-  tip>..autohelix/<id>` (a merge would re-apply the squashed commits); an
-  auto-landing `resume` refuses such a run, as one whose target moved on. Only
-  a landing on the run's own target is recorded, and only for a run that
-  accepted a commit: a landing on another branch (`land --into other`) leaves
-  the record alone. A squash merge without `land` stays `diverged`.
-  docs/cli.md has the PR flow (`autohelix land`, push, squash-merge, reset the
-  local branch to the remote's). The record is the answer, the code isn't
-  compared: a landed PR that is abandoned, its branch reset, still reads
-  landed. `land` takes a `behind` target as already there only when it
-  contains the tip. run.json's `base_commit` and `landed.tip` reach git only
-  as commit ids (else they count as missing).
-- The entry screen never cuts a suggested command: one that doesn't fit beside
-  its run goes on its own line.
-
-### The notices at `run` and `resume`
-
-- **`run --import ID` says one thing, about the imported run**: when its
-  accepted commits aren't in the branch you start from, "k3f9's 2 accepted
-  commits aren't in main: land it first (`autohelix land k3f9`, or `git switch
-  -c <branch> autohelix/<id>`) to start from them"; of the other runs, only
-  the "also running for this config" warning.
-  `resume`'s config-change refusal says the same for a run with unlanded
-  commits. The fork recipe in docs/cli.md uses `git switch -c`.
-- **A run without an accepted baseline is a disposable attempt**: the baseline
-  error ends "Fix it and run `autohelix run` again (`autohelix delete <id>`
-  removes this attempt)"; the config-change refusal and the "Previous run"
-  notice no longer offer `--import` or `resume` for it.
-- **`run` with auto landing warns about an uncommitted config or prompt
-  template** (untracked or modified, not ignored): "commit autohelix.yaml
-  first: a commit on main after this run lands makes `resume` refuse".
-- **`resume --group NAME` without `--land` on a run that lands automatically**
-  says "<id> still lands automatically; pass `--land manual` for a group" (the
-  landing mode doesn't change as a side effect).
-
-### Runs keep the machine awake
-
-- **`run` and `resume` keep the machine from sleeping while their segment
-  runs**: `caffeinate -i -w <pid>` on macOS, `systemd-inhibit` on Linux, with
-  no flag or setting. The block is released when the segment ends, or when the process is
-  killed; a missing or refused tool means no block and no message. A closed
-  lid still sleeps, and credentials or a VPN aren't kept alive.
-
-### One entry point: bare `autohelix`
-
-- **Bare `autohelix` in a terminal** shows the project's runs (the folder with
-  runs, else the nearest one with a config, else the checkout's top; the
-  dashboard's table, the command that applies to each: `resume`, `land`,
-  `view`; how many are archived) and offers to start Claude Code, Codex or OpenCode with the
-  bundled skill: "Ask … about these runs" (it summarizes them, then answers
-  questions) or "Set up a new experiment" (it proposes a name and saves
-  `autohelix/<name>.yaml`, or `autohelix.yaml` for the first config). A config
-  without runs is offered to check and finish. Nothing starts without a key
-  press; q or Esc quits (exit 0), Ctrl-C exits 130. Without a terminal it
-  prints the help on stderr and exits 2.
-- **Removed `autohelix setup` and `autohelix init`** (no alias), with their
-  NAME, `--agent` and `-p` and the template they wrote. `autohelix run`
-  without a config names an example, the docs' configs and the packaged
-  template; `autohelix skill install` stays.
-- **The user docs ship in the package** (`autohelix/docs` in the wheel); the
-  agent session's first prompt names them, and Claude Code gets `--add-dir`
-  for them.
-
-### Config v2
-
-A new config format: `gates:` say what can reject an iteration, `observe:`
-what the next agent reads and which numbers the run tracks. See
-[docs/config.md](docs/config.md), including the table of old and new keys.
-
-Breaking:
-
-- **Old keys are errors that name their replacement**; there are no aliases
-  and no migration:
-  - `constraints:` → `gates:` (commands, unchanged);
-  - `metrics:` / `observables:` → `observe:`, every entry with a `name:`;
-    `values:` → `metrics:`; `capture_stdout:` is gone (stdout is always saved);
-  - `acceptance.metric_gates` (`max_regression_pct`) → a `gates:` entry
-    `- metric: NAME` with `regress: N%`, compared with the last accepted
-    iteration instead of the best value;
-  - `reviewer:` → an `observe:` entry with `name:` and `review: <prompt>`;
-    the built-in reviewer, `reviews/` and `review.md` are removed;
-  - `agent.type` → `agent.backend`; `agent.settings.model` → `agent.model`;
-  - `agent.timeout_seconds` and `budget.iteration_time` → `agent.timeout`, a
-    hard kill that also gives time-left hints where the backend supports them
-    (a Codex without hook support warns and runs without them).
-- **`budget:` moved to the command line** (an error naming the flags): `run`
-  and `resume` take `-n N`, `--until N`, `--cost USD` and `--time DURATION`,
-  each counting one segment, that is one `run` or `resume` command
-  (`resume -n 10 --cost 5`: 10 more iterations, up to $5 more). Without a
-  budget flag, **1 iteration** (was 3): a bare `run` is one checked attempt,
-  loops are typed (`-n 5`); with only `--cost` or `--time`, no iteration cap.
-  Cost and time are checked before each iteration starts as well as after it.
-  Status and `--json` record the iteration and cost caps as run totals (spent
-  before + this segment's cap) and the `--time` cap as the segment's own, with
-  `segment_started_at`; while the segment runs, the dashboard shows its time
-  against the cap ("12m5s/1h", "(time up)" once past it).
-- **`land:` and `report:` moved to the command line** (errors naming the
-  flags): the config says what one iteration does, the launch how it runs and
-  is delivered. `run --land manual` (stored with the run; `resume --land`
-  changes it) replaces `land: manual`; new runs land `auto`, or `manual` with
-  `--group`. `run --no-report` replaces `report: false`; it counts for that
-  command only, so pass it to each `resume` too. A run whose stored config
-  has either key can't be resumed: continue it with `run --import <id>`.
-- Metric gate thresholds are percent strings (`regress: 5%`); a bare number
-  is an error. Durations everywhere: a bare number (or a string of digits) is
-  seconds, strings like `90s`, `30m`, `2h30m`.
-- `.autohelix/prompt.md` is not read (a run warns while it exists); use
-  `prompt_template:`, a path relative to the config file.
-- Observe output is stored by entry name,
-  `iterations/NNN/observe/<name>/` (`stdout.txt`, `stderr.txt`, captures at
-  their relative paths), so captures with one basename no longer collide.
-- Prompt template variables are renamed (see below); custom templates need
-  updating.
-
-Added:
-
-- **`gates:`**: commands, `ask:` entries (shorthand for `autohelix ask`, with
-  `yes:`/`no:` (quoted or not) and an `agent:` of their own) and `metric:` entries with
-  `regress: N%` or `improve: N%` against the last accepted iteration. Gate
-  commands run first, in order; the first failure rejects.
-- **`observe:`**: named command entries (`metrics:`, `capture:` files or
-  folders, `timeout:`) and `review:` entries, run top to bottom after the
-  gates; each metric gate is checked as soon as its number exists. A failing
-  entry is recorded and shown to the next agent, contributes no metrics, and
-  doesn't reject. Every observe command gets `$AUTOHELIX_PREVIOUS`, a copy of
-  its own output from the last accepted iteration in which it succeeded.
-- **`autohelix review`**: a read-only review of a change, as feedback text. In
-  a run it reviews its own fresh copy of exactly the candidate, with the full
-  change as `candidate.diff`; `--previous` adds its own last accepted review
-  (progress tracking), `--metric NAME:higher|lower` numbers it must report
-  (printed as `##autohelix[...]` lines by the command; the prose can't carry
-  one). By hand it reviews the working tree against `--base` (default `HEAD`).
-  Exits 2 when no valid review was produced or the reviewer changed files.
-- `autohelix ask --command`; rendered `ask`/`review` commands put the
-  question or prompt after `--`.
-- Every harness command gets `$AUTOHELIX_CANDIDATE`, `$AUTOHELIX_BASE`,
-  `$AUTOHELIX_PROJECT` and a private `$AUTOHELIX_SCRATCH`; stop commands also
-  `$AUTOHELIX_OBSERVATIONS`, a copy of the accepted iteration's observations.
-- The baseline runs every gate command and observe entry (rejecting nothing).
-  A missing metric from a command entry stops the run; one from a review only
-  if a gate uses it, otherwise it is a warning.
-- **A failed or timed-out agent call no longer ends the run**: it is a
-  rejected iteration (unchecked; `agent_error` in its record; `✗ agent failed:
-  …` / `✗ agent timed out (30m)` in the console) and the loop goes on, with
-  budgets as for any rejection. Three failed calls in a row stop the run ("the
-  agent failed 3 times in a row: …"); an accepted or gate-rejected iteration
-  resets the count.
-- **Rejected work is kept**: each rejected attempt's tree as
-  `refs/autohelix-rejected/<id>/<n>` (also failed or timed-out agent calls;
-  removed by `delete`; none when all its changes were discarded), and the next
-  agent gets the latest rejection's change as
-  `.autohelix-iteration/rejected.patch` (over 2 MiB, the `git diff` command
-  that shows it instead, `rejected_diff` in the prompt).
-- **Discarded paths are reported**: changes outside the scope are recorded
-  with the iteration (`discarded`, and `discarded_frozen` for the frozen
-  ones), named in the next prompt (frozen ones said apart), and shown in the
-  console, `view` and the viewer. `scope.editable` and `scope.frozen` can be combined (editable minus
-  frozen). A run with gate or observe commands but no scope warns.
-- **The prompt is a documented contract**: `goal`, `title`, `iteration`,
-  `copy`, `history`, `gates`, `observe`, `stop`, `editable`, `frozen`,
-  `notes_path`, `hints`, `rejected_patch`, `rejected_diff`, `discarded`,
-  `discarded_frozen`, `last` (the latest iteration's outcome, gate results and
-  observations), `time_limit`, `group`, `group_runs`, `imported`. A custom template using
-  other names gets a warning at run start. The history lines include each iteration's one-line summary.
-  The goal's first line is the run's title (validation warns when it is long).
-- History records `gates` (in list order, not reached ones as `null`),
-  `observe` (per entry: `ok`, `error`, `metrics`, and `metric_errors` with
-  how to report a declared metric an entry ran without), `summary`, `base`,
-  `tree`, `discarded`, `discarded_frozen` and `rejected_ref`; the old
-  `constraints` field is gone. `view --json` adds `gates`, `observe`,
-  `summary`, `discarded` and `discarded_frozen`. Gate failures at the baseline
-  are shown (console, `view`, viewer).
-- `##autohelix[name= 5 ]`: whitespace around the value is accepted (`wc -l`
-  pads). A stop command whose last line is just `true`/`false`/`null` (`jq -e`)
-  gives the command as the stop reason.
-- `review` and `ask` don't offer `--agent opencode` (it has no read-only mode).
-- Viewer: one section per observe entry (status, metrics, stdout, stderr,
-  captured files; a review as Markdown), gates in list order with pending
-  ones, the agent's summary per iteration, each iteration's own diff
-  (rejected attempts included), and the goal's title.
-- Console: the header lists the goal's title, agent, gates and observe
-  entries by name; one row per iteration with the rejection reason (the
-  failing gate's text) in the status column and the agent's summary
-  below; the ending is plain lines (stop reason, totals, what landed, next
-  commands), with an error printed first.
-
-Hardening:
-
-- Harness commands call `autohelix` through a launcher first on their `PATH`
-  that runs the harness's own installation in isolated mode, so candidate code
-  on the remapped `PYTHONPATH` can't replace modules inside `ask` or `review`.
-- Gate, observe and stop commands run in their own process group, killed
-  whole when the command ends or times out, so background children can't keep
-  writing after the harness checked the files.
-- Observe output is staged after the command ended and then replaces the
-  entry's folder; `capture:` paths into `.git`, `.autohelix` or
-  `.autohelix-iteration`, or leaving the copy, are config errors; symlinks are
-  never followed and only regular files and folders are copied.
-- Reviews drop symlinks pointing outside their copy, and check that
-  `candidate.diff` and `previous.md` are unchanged after the call.
-- The viewer serves files only from known run folders, opened one path
-  component at a time without following symlinks, and passes git only object
-  names that are plain hex. Agent logs too, in the web viewer and in the
-  terminal `view`: only regular, single-link files below the run's `logs/`,
-  an iteration's `agent.log` and `ask*.log`/`review*.log` transcripts, and
-  the running iteration's live transcripts in its call folders (the terminal
-  `view` followed any path the run's status file named).
-
-### Config files and `autohelix setup`
-
-Breaking:
-
-- **`autohelix setup [NAME]` replaces `init`**. `autohelix init` is another
-  name for `setup`; its old PATH argument is now `-p PATH`. It writes `autohelix.yaml`, or `autohelix/NAME.yaml`, from the
-  commented template; it never overwrites a file, doesn't need git and
-  creates no `.autohelix/`. A bare `setup` is refused when `autohelix/`
-  already has configs.
-- **`-c/--config` is removed** from `run`, `resume`, `view` and `report`,
-  with no replacement option: configs live only at `autohelix.yaml` or
-  `autohelix/<name>.yaml`. Move a config kept elsewhere into one of them.
-- **No init step.** `run` creates `.autohelix/` and the local git excludes on
-  first use; it needs a git checkout with a commit, and the first baseline no
-  uncommitted changes to tracked files. Commit the config so it's versioned,
-  and any scripts its commands use: iteration copies are made from the commit.
-  "AutoHelix not initialized" is gone.
-- **`run --name` and the `name:` key removed**: runs are named after the
-  config file (`autohelix/perf.yaml` gives `20261112-1400-perf-0mws`;
-  `autohelix.yaml` gives no name). An old `name:` is an error naming the
-  replacement.
-
-Added:
-
-- **`setup` as the front door.** In a terminal, `setup` offers to start
-  Claude Code, Codex or OpenCode with the bundled skill, or writes the
-  template. `autohelix skill install` remains for ordinary agent sessions.
-- **Proposal before setup edits.** The setup agent shows the complete config,
-  uses a consistent field order for generated configs, explains each section
-  and its defaults, and discusses revisions before
-  changing project files. Agreement to save and commit leads to writing,
-  validating, and committing only the setup files;
-  the final handoff gives saved paths, the commit, verification results, and
-  the launch command. Starting a run remains a separate request.
-- **Several configs in an `autohelix/` folder.** `autohelix run perf` uses
-  `autohelix/perf.yaml`; a bare `run` uses `autohelix.yaml`, else the only
-  config in `autohelix/`, else lists them. The folder is versioned and can hold
-  prompt templates and helper scripts in subfolders, committed with it
-  (`prompt_template:` is relative to the config's folder).
-- A bare `resume` uses the config a bare `run` would and errors when that is
-  ambiguous (name a run instead); `resume <id>` uses the config the run
-  started with. A run keeps its stored config; apply an edited one with
-  `run --import <id>`.
-
-### One config per run
-
-The config says what one iteration does; the budget flags say how long. A run
-is one config, `resume` is more of the same, anything else is a new run.
-
-Breaking:
-
-- **A run stores its config** as `.autohelix/runs/<id>/config.yaml` (the file's
-  text, the prompt template inlined) and always uses that copy; judges, the
-  report and `$AUTOHELIX_CONFIG` read it too. `resume` refuses before spending
-  anything when the file's parsed config differs (comment edits don't count),
-  naming `run --import <id>` and restoring the file as the ways on.
-- Runs started before this change have no stored config and can't be
-  resumed: continue one with `run --import <id>`.
-- **`resume` continues the run's own tip.** The silent fast-forward of a run
-  onto a target branch that moved past it is gone: with auto landing `resume`
-  refuses before writing anything, naming `run --import <id>` and
-  `resume <id> --land manual`; with manual landing it says so and continues.
-- The config file and the `prompt_template:` file are always frozen, whatever
-  `scope:` says.
-
-Added:
-
-- **`run --import RUN_ID`**: a new run with code from your checkout and state
-  from that run: its `run.json`, history and notes read-only in every copy
-  (`.autohelix-iteration/runs/<id>/`), its code's ref, and at the baseline each
-  observe entry's last output there as `$AUTOHELIX_PREVIOUS`. Its own notes,
-  budgets, baseline and metric reference start fresh; `run.json` records
-  `import`. A different config than the imported run's is a warning.
-- **`run --why TEXT`** and **`archive --why TEXT`**, kept in `run.json` and
-  shown on the dashboard.
-- `resume` after a `stop:` condition continues and says so ("Run k3f9 stopped
-  because …; it stops again after the next accepted iteration if that still
-  holds").
-- **The prompt explains the layout** with an import or a group: one "Where
-  things are" block names the run's own notes (editable) and iterations,
-  `rejected.patch`, each other run's state (read-only; the imported run and
-  group members said apart, with iterations, latest metrics and whether its
-  code is the copy's) and their refs. Plain runs' prompts are unchanged. New
-  prompt variable `imported`.
-- The "also running for this config" warning is quiet when either run lands
-  manually (only one of them lands on its own), as for group runs.
-- A segment log, `.autohelix/runs/<id>/.internal/segments.jsonl`, append-only:
-  for every `run`/`resume` command that started, a start record (time, budget
-  as given, first iteration) and an end record (time, how it ended, the stop
-  reason, iterations recorded, the last one, the error of a failed one).
-
-### Viewer
-
-- The run page shows one detail panel beside the iteration table instead of a
-  card per iteration: the selected iteration (its arrows, `j`/`k`, a row or a
-  chart point pick another), or after the last one the run summary, which is
-  also the table's last row. A finished run opens on its summary.
-- Diffs fold per file, with each file's +/− counts.
-- The status badge says when a run finished; why it ended is on hover.
-- Fixed: watching a running iteration wrote the agent's files into your
-  repository's objects on every poll; metric changes from a negative
-  baseline showed the wrong arrow.
-
-### Design-review fixes
-
-A review of everything since 0.1.1, then its agreed fixes.
-
-Breaking:
-
-- **Metrics come only from `##autohelix[name=value]` lines** on stdout, by
-  name. The `name: value` fallback and the lone-number rule are gone: a
-  command that printed `speed: 42` reports nothing (a gated metric then
-  fails). The algotune and kernelbench templates print structured lines.
-- **Configs fail early.** An unknown top-level key, a wrongly typed agent
-  value or a goal that isn't a string is an error, and a `prompt_template:`
-  that doesn't parse is a config error. A stored config that used to load
-  with a warning can now refuse to resume.
-- **Exit codes:** `run` and `resume` exit 0 when they did what was asked or
-  stopped politely (budget, `stop:`, `autohelix stop`), 1 on errors (also a
-  resume whose checks fail, a refused landing, and no run to resume; there is
-  no exit 3), and 130 when interrupted (Ctrl-C, SIGTERM, `stop --now`).
-- **No current-run pointer.** `land`, `hint`, `view` and `report` without an
-  id take the running run, else the most recently active non-archived one,
-  and always name it. `resume` takes a run id or a config name
-  (`resume perf`). Commands find the project from a subfolder.
-- An `ask:` or `review:` entry's `timeout:` must be at least 1m, and
-  `agent.timeout` on such an entry is an error (an `ask:` gate's deadline
-  defaults to 10m). `ask` / `review --timeout` take durations (`90s`, `10m`).
-- Scope patterns: a leading `./` is stripped, absolute paths and `..` are
-  errors; `*` stays within a folder and `**/` matches zero or more folders,
-  the same everywhere. An editable pattern that matches no committed file is
-  a warning, not an error.
-- The prompt template variable `worktree` is now `copy` (`worktree` is an
-  error naming it). The status file's `benchmark` phase is now `observe`.
-- `mock` is no longer listed as a backend (tests still use it).
-
-Added:
-
-- `autohelix run --check`: every check `run` makes before it writes
-  anything, then exits. The setup skill uses it.
-- `autohelix review --metric NAME`.
-- Installed skills say which AutoHelix version wrote them, and suggest
-  `skill install --force` when `autohelix --version` differs.
-- CI runs `pytest -n auto` on Linux and macOS, with Python 3.11, 3.12 and the
-  newest.
-
-Changed:
-
-- `ask` judges its own fresh copy of the candidate, like `review`, and its
-  prompt names `.autohelix-iteration/candidate.diff`; outputs a gate wants
-  judged go to `$AUTOHELIX_SCRATCH`. One write guard for both.
-- Stop commands are recorded like gates (return code, timed out).
-- Cost: every run summary's cost is counted in the run's and the segment's
-  totals; Codex cost is priced from the model Codex reports, else
-  `agent.model`, else shown as unavailable; a `--cost`-only segment stops on
-  unknown cost only if nothing was priced.
-- `autohelix wait` reads one event log per run (`segments.jsonl`), and a
-  run counts as live while its lock is held, not by pid.
-- One warning form (`  ! message`) and line wrapping that never breaks inside
-  a word (paths, branch names) on every screen.
-
-Fixed:
-
-- `agent.timeout` now kills an agent whose child closed its output but kept
-  running (and a grandchild that keeps writing).
-- Agent output in the live panels is sanitised (terminal escape sequences).
-- No run summary after the agent failed three times; a failed summary shows
-  its error and doesn't relabel the segment.
-- `auto_memory: true` also drops an inherited `CLAUDE_CODE_DISABLE_AUTO_MEMORY`.
-- "Not a git repository" is recognised in any locale (git's messages are read
-  in English).
-- A nested git repository is rejected with "nested git repository at X:
-  remove its .git or clone outside the project".
-- Rich markup in a goal (`[/bold]`) no longer crashes `--verbose`.
-
-### Changed (breaking)
-
-- **Runs.** Each `autohelix run` starts a new run, with its own id and state
-  in `.autohelix/runs/<id>/` (ids sort by start: `20261111-1432-k3f9`, with
-  the config file's name in the middle; commands accept the last part,
-  `k3f9`). `autohelix resume [<id>]` continues one (`-n` more iterations,
-  `--until` up to an iteration; exit 1 when there is none); `run` never
-  refuses, but warns about a run of the same config that is live or has
-  unlanded commits. State from earlier versions is refused: move or delete
-  `.autohelix/` first. There is no migration.
+- **A new config format.** `constraints:` is now `gates:`, `metrics:` /
+  `observables:` are `observe:` entries with a `name:`, `reviewer:` is a
+  `review:` entry, `acceptance.metric_gates` is a `metric:` gate. Every old key
+  is an error that names its replacement; there is no migration.
+- **Budgets are command-line flags**: `budget:` is now `run`/`resume` `-n`,
+  `--until`, `--cost` and `--time`, each counting one command (a segment).
+  Without a flag a segment runs 1 iteration.
+- **Runs.** Every `autohelix run` starts a new run, with its own state in
+  `.autohelix/runs/<id>/`; `autohelix resume` continues one. 0.1.1's state
+  (`.autohelix/history.jsonl`) is refused, not migrated.
 - **Your branch moves only when a run lands.** Accepted iterations are commits
-  on a hidden ref, `refs/autohelix/<id>` (`git log autohelix/<id>`). By
-  default your branch is fast-forwarded at the end of each `autohelix run`;
-  with `run --land manual` use `autohelix land`. You can keep working in your checkout while a run goes.
-- **Every phase runs in a fresh private copy outside the project**, under
-  `~/.cache/autohelix/copies/` (override with `AUTOHELIX_COPIES_ROOT`). Checks
-  run on exactly the code that would be accepted; a check, review or
-  `autohelix ask` call that changes it rejects the iteration, and the baseline
-  runs the gates once to catch a check that edits files.
-- `autohelix archive` hides runs from the dashboard and a bare `resume`,
-  keeping everything; `autohelix delete` removes a run's state and ref
-  (`--force` with unlanded commits). `clear` is gone.
-- Run ids are positional and the project folder is `-p` for every command:
-  `autohelix view k3f9 -p PATH` (was `view PATH --run ID`); likewise `report`
-  and `dashboard -p`. `hint` takes `--run`.
-- **`autohelix view` and `autohelix dashboard` are live in the terminal by
-  default**; `--web` serves the web pages (`--port` and `--open` now need
-  it). `view` shows the run's iteration table above the agent's live output,
-  so `autohelix watch` is removed: use `autohelix view`. `--once` prints one
-  snapshot as text (it replaces `--print`); `--json` is unchanged.
-- `dashboard --json`: `lifecycle` is replaced by `archived` (schema 1 was not
-  in a release yet; it is on `main`).
-- `.autohelix/` is excluded through `.git/info/exclude` instead of a
-  committed `.gitignore` change.
-- **`autohelix parallel` is removed**, replaced by groups (below). Its
-  leftover worktrees and branches are left alone; remove them by hand when
-  done: `git worktree remove ../<repo>-parallel/worker-N` and
-  `git branch -D parallel/worker-N`. The `AUTOHELIX_PEER_RUNS` variable,
-  `.autohelix/peer_notes/` and the `peers`/`peer_runs` prompt variables are
-  gone (use `group` and `group_runs`).
-- **The agent's copy keeps the harness's material in `.autohelix-iteration/`**
-  (was `.autohelix/`): `notes/`, `history.jsonl`, `hints.md`,
-  `commit_summary.txt`, `iterations/NNN/` (below), and `prompt.md`, now this
-  iteration's rendered prompt. Checks copies get only
-  `.autohelix-iteration/candidate.diff`. A copy's git lists only this run's
-  ref (and its group's), not every `refs/autohelix/*`.
-- **The agent prompt is built in; `.autohelix/prompt.md` is no longer read**
-  and `init` no longer writes it (every project had a copy of the old default,
-  which would have sent notes to the old place). To keep a custom prompt, move
-  it next to your config, set `prompt_template: <file>` (relative to the
-  config file), and change its `.autohelix/` paths to `.autohelix-iteration/`;
-  a run warns while `.autohelix/prompt.md` exists.
-- The landing mode is recorded per run when it starts (`--land`; else
-  `manual` with `--group`; else `auto`) and kept on resume; `resume --land`
-  changes it.
-- `examples/nested-autohelix/` is removed (AutoHelix running AutoHelix is
-  deferred; an agent driving runs through the CLI is the supported way).
-- **Run state has one folder per iteration** (`run.json` schema 2; earlier
-  runs are refused). `runs/<id>/iterations/NNN/` (three digits, `000` the
-  baseline) holds `record.json` (derived from `history.jsonl`, which stays the
-  source of truth), `prompt.md`, `agent.log`, `gates/<k>/` and `stop/<k>/`
-  (k: the position in `gates:`/`stop:`; `command.txt`, capped `stdout.txt` and
-  `stderr.txt`, kept for passing gates too, and the judge's `ask.log`),
-  `observe/<name>/` (with a review's `review.log`) and `rejected.patch`.
-  `report.md`/`report.html` are at the run's root; the harness's own files
-  are in `runs/<id>/.internal/` and `.autohelix/.internal/`. The agent's copy
-  gets the same `iterations/NNN/` for the last five iterations and the last
-  accepted one (records, failing gates' output, observations; no agent logs).
-  The viewer shows each gate's and stop command's output, and the viewer and
-  `view` follow `ask`/`review` transcripts live while their command runs.
+  on `refs/autohelix/<id>`; by default your branch is fast-forwarded at the end
+  of each `run`/`resume` (`--land manual`: only by `autohelix land`).
+- **Every phase runs in a private copy outside the project**
+  (`~/.cache/autohelix/copies/`, or `$AUTOHELIX_COPIES_ROOT`), not a git
+  worktree. A gate or observe command that changes the candidate rejects it.
+- **The agent's material is in `.autohelix-iteration/`** in its copy (was
+  `.autohelix/`): notes, history, hints, `commit_summary.txt`.
+- **`.autohelix/prompt.md` is no longer read**: set `prompt_template:` (a path
+  relative to the config). Several template variables are renamed
+  ([Concepts → Prompt](docs/concepts.md#prompt) has the table).
+- **Metrics come only from `##autohelix[name=value]` lines** on stdout; a
+  `name: value` line or a lone number reports nothing.
+- **Configs live at `autohelix.yaml` or `autohelix/<name>.yaml`.** `-c/--config`
+  is gone; runs are named after the config file (`name:` is an error).
+- **A run keeps the config it started with** (`runs/<id>/config.yaml`):
+  `resume` refuses when the file's settings changed; apply an edit with
+  `run --import <id>`.
+- **Agent settings**: `agent.type` is now `agent.cli` (`claude` is
+  `claude-code`); `agent.command` is replaced by `AUTOHELIX_CLAUDE_CODE_CMD`,
+  `AUTOHELIX_CODEX_CMD` and `AUTOHELIX_OPENCODE_CMD`; `agent.settings` and
+  `agent.require_notes` are gone.
+- **Time limits are `agent.timeout`**, a duration (`30m`), replacing
+  `agent.timeout_seconds` and `budget.iteration_time`. Metric gate
+  thresholds are percentages (`regress: 5%`).
+- **Removed commands**: `init` (use bare `autohelix`), `clear` (`archive`,
+  `delete`), `parallel` (`run --group`), `watch` (`view --terminal`).
+- **Exit codes**: `run` and `resume` exit 0 when a budget, a stop condition or
+  `autohelix stop` ended them, 1 on an error, 130 when interrupted.
+- `.autohelix/` is kept out of git through `.git/info/exclude`, not
+  `.gitignore`.
 
 ### Added
 
-- `autohelix dashboard`: a live list of the project's runs in the terminal;
-  with `--web`, served with the run pages (`/run/<id>/`) by one local server.
-- `--json` and `--once` on `autohelix dashboard` and `autohelix view`: a
-  one-time snapshot for scripts (versioned with a `schema` field; fields are
-  only ever added) or for the terminal.
-- `autohelix land`.
-- **Groups:** `autohelix run --group NAME` makes runs in one project share
-  notes and code. Each iteration's copy gets the other non-archived runs of the
-  group (`run.json`, `history.jsonl`, `notes/` under
-  `.autohelix-iteration/runs/<id>/`) and their refs (`git diff autohelix/<id>`),
-  and the prompt lists them with their latest accepted metrics. `resume
-  --group NAME` sets or changes a run's group, `--group ''` clears it, and
-  `archive` takes a run out. The dashboard shows the group after the id;
-  `dashboard --json` adds `group` and `land`.
-- Notes are saved as versions (`runs/<id>/.internal/notes/<n>/`, with
-  `runs/<id>/notes` a link to the latest and each iteration's `notes` link to
-  its own): a note the agent deletes stays deleted (before, it
-  came back next iteration), and every version is kept.
-- Harness git calls retry briefly when another git process holds a lock
-  (concurrent runs in one project).
-- From #16: the live run viewer (`autohelix view`), run summaries and
-  `report.html`, stop commands and `autohelix ask`, and cost accounting
-  across agents, judges and resumed runs.
+- **Bare `autohelix`** in a terminal: the project's runs, then a Claude Code,
+  Codex or OpenCode session with the bundled skill, to ask about the runs or
+  set up an experiment.
+- **`autohelix view`**: the runs on a live web page (`127.0.0.1:8765`; a page
+  per run); `--terminal` follows a run; `--once` and `--json` print the runs
+  or one run once (JSON fields are only ever added).
+- **`autohelix stop`** ends a run after its current iteration, from another
+  terminal or a script; `--now` interrupts it.
+- **`autohelix wait`** blocks until a run event (a segment started, an
+  iteration recorded, a segment ended or crashed) and prints it as JSON, with
+  a cursor to continue from; `--follow` streams them.
+- **`autohelix resume`, `land`, `archive` and `delete`** to continue, land,
+  hide and remove runs.
+- **`autohelix ask`** (a yes/no judge; `ask:` gates) and **`autohelix
+  review`** (feedback and `--metric` numbers; `review:` observe entries):
+  read-only agents, each on its own copy of the candidate.
+- **`stop:` commands**: the run ends once one exits 0 after an accepted
+  iteration.
+- **Groups** (`run --group NAME`): runs of one project share notes and code.
+- **`run --import RUN_ID`**: a new run from your checkout that reads another
+  run's notes, history and code.
+- **`run --check`** makes every check a run makes before it writes anything,
+  then exits.
+- **`run --why`** and **`archive --why`**: one line kept with the run.
+- **A summary at the end of each segment**: `runs/<id>/report.md` and
+  `report.html`, a one-file copy of the run page (`--no-report` skips the
+  summary).
+- **Cost tracking** across the agent, judges, the summary and model calls a
+  command records in `$AUTOHELIX_USAGE_FILE`; `--cost` budgets on it.
+- **Rejected work is kept** as `refs/autohelix-rejected/<id>/<n>`, and the
+  next agent gets the change as `rejected.patch`.
+- **One folder per iteration**, `runs/<id>/iterations/NNN/`: its record,
+  prompt, agent log, and each gate's, observe entry's and stop command's
+  output.
+- **The prompt has the hints' text** and names discarded out-of-scope changes.
+- **Keep-awake**: `run` and `resume` keep the machine from sleeping while a
+  segment runs (`caffeinate` on macOS, `systemd-inhibit` on Linux).
+- **SIGTERM acts as Ctrl-C** in a running segment (`kill PID`,
+  `stop --now`): the iteration is recorded and the run lands.
+- **`autohelix skill install` / `export`**: the setup skill for Claude Code,
+  Codex or OpenCode.
+- The user docs ship in the package (`autohelix/docs`).
+
+### Changed
+
+- **A failed or timed-out agent call is a rejected iteration**, and the loop
+  goes on; three in a row stop the run.
+- **Notes are saved as a version per iteration**: a note the agent deletes
+  stays deleted.
+- Gate, observe and stop commands run in their own process group, killed
+  whole when the command ends or times out.
+- Durations are accepted everywhere (`90s`, `30m`, `2h30m`; a bare number is
+  seconds).
 
 ### Fixed
 
-- Commands and agents start with Ctrl-C (SIGINT) and SIGQUIT at their
-  defaults also in a run a script started in the background (`nohup autohelix
-  run ... &`, which ignores both): before, they and what they started
-  inherited the ignored signals, so a project's own Ctrl-C tests run as a gate
-  failed. The run itself still ignores them.
-- The run table's metric values (`run`, `resume`, `view --terminal`) end under
-  the metric's name, its arrow after it; before, they ended under the arrow.
+- Commands and agents get Ctrl-C (SIGINT) and SIGQUIT at their defaults in a
+  run a script started in the background (`nohup autohelix run ... &`).
+- `agent.timeout` kills an agent whose child closed its output but kept
+  running.
+- Agent output in the live panels is sanitised (terminal escape sequences).
+- "Not a git repository" is recognised in any locale.
+- A nested git repository in the project is refused with "nested git
+  repository at X: remove its .git or clone outside the project".
+- Rich markup in a goal (`[/bold]`) no longer crashes `--verbose`.
+
+### Upgrading from 0.1.1
+
+1. **Rewrite the config** with the new keys (the table below); move `budget:`
+   to the `-n` / `--cost` / `--time` flags. `autohelix run --check` reports
+   every old key with its replacement.
+2. **Put the config at `autohelix.yaml`** or `autohelix/<name>.yaml`
+   (`autohelix run <name>`); there is no `-c`.
+3. **Set `AUTOHELIX_CLAUDE_CODE_CMD`** instead of `AUTOHELIX_CLAUDE_CMD`
+   (a set `AUTOHELIX_CLAUDE_CMD` is an error), and use the variables instead
+   of `agent.command`.
+4. **No `init` or `setup`**: run bare `autohelix` in a terminal (an agent
+   drafts the config), or start from an example or the packaged template.
+5. **No `dashboard` or `watch`**: `autohelix view` is the web page (the old
+   `.autohelix/output/dashboard.html` is no longer written); `view --terminal`
+   follows a run.
+6. **Old runs can't be resumed**: move or delete `.autohelix/`, run
+   `git worktree prune`, and start a new run. A run whose stored config uses
+   old keys continues as a new run: `autohelix run --import <id>`.
+7. **A custom prompt**: move it beside the config, set `prompt_template:`,
+   change its `.autohelix/` paths to `.autohelix-iteration/`, and rename its
+   variables.
+8. **Print metrics as `##autohelix[name=value]`** lines.
+
+Each old key is an error naming its replacement; there are no aliases.
+
+| Old | New | Error message |
+|---|---|---|
+| `constraints:` | `gates:` (commands, unchanged) | `` `constraints:` is now `gates:` `` |
+| `metrics:`, `observables:` | `observe:`, every entry with a `name:` | `` `metrics:` is now `observe:` (each entry needs a `name:`; `values:` is now `metrics:`) `` |
+| `values:` in an entry | `metrics:` in an `observe:` entry | `` `values:` is now `metrics:` `` |
+| `capture_stdout:` | removed: stdout is always saved | `` `capture_stdout:` is gone: stdout is always saved; remove it `` |
+| `acceptance.metric_gates` (`max_regression_pct`) | `gates:` entry `metric:` with `regress: N%` (vs the last accepted iteration, not the best) or `improve: N%` | `` `acceptance:` is now a `gates:` entry: ... `` |
+| `autohelix ask "..."` in `constraints:` | a `gates:` entry `ask:` (or the command, unchanged) | |
+| `reviewer:` | an `observe:` entry with `name:` and `review:` | `` `reviewer:` is now an `observe:` entry with `name:` and `review: <prompt>` `` |
+| `reviewer.model`, `reviewer.timeout_seconds` | `agent:` and `timeout:` on the review entry | |
+| `agent.type`, `agent.backend` | `agent.cli` | `` `agent.backend` is now `agent.cli` (claude-code, codex or opencode) `` |
+| `agent.backend: claude` | `agent.cli: claude-code` | `` `agent.cli: claude` is now `claude-code` `` |
+| `agent.reasoning_effort` | `agent.effort` | `` `agent.reasoning_effort` is now `agent.effort` `` |
+| `agent.command` | `$AUTOHELIX_CLAUDE_CODE_CMD`, `$AUTOHELIX_CODEX_CMD`, `$AUTOHELIX_OPENCODE_CMD` | `` `agent.command` is gone: set AUTOHELIX_CLAUDE_CODE_CMD, ... `` |
+| `$AUTOHELIX_CLAUDE_CMD` | `$AUTOHELIX_CLAUDE_CODE_CMD` | `AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD: ...` |
+| `agent.settings` | `agent.extra_args` | `` `agent.settings` is gone: pass the CLI's own options in `agent.extra_args` `` |
+| `agent.require_notes` | ask for notes in the goal or the prompt template | `` `agent.require_notes` is gone: ... `` |
+| `ask`/`review` `--agent`, `--command` | `--cli`; the variables above | `--agent is now --cli (claude-code or codex)` |
+| `agent.timeout_seconds` | `agent.timeout` (a duration) | `` `agent.timeout_seconds` is now `agent.timeout` (a duration such as 30m) `` |
+| `budget:` (`iterations`, `cost`, `time`) | the `run`/`resume` flags `-n`, `--cost`, `--time`, per segment (see [CLI → Budgets](docs/cli.md#budgets)) | `` `budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`; ...) `` |
+| `land:` | `run --land auto\|manual` (also `resume`), stored with the run; default `auto`, `manual` with `--group` | `` `land:` moved to the command line: `autohelix run --land auto\|manual` (also `resume`; ...) `` |
+| `report:` | `run --no-report` (also `resume`; per command, not stored) | `` `report:` moved to the command line: `autohelix run --no-report` (also `resume`) `` |
+| `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | as `budget:` |
+| a bare number as the threshold (`max_regression_pct: 5` was one; `regress: 5` now) | `regress: 5%` | `write the percentage with %, e.g. 5%, got 5` |
+| `timeout:` in seconds | durations everywhere (a bare number, or a string of digits like `"90"`, is still seconds) | |
+| `.autohelix/prompt.md` | `prompt_template:` (relative to the config) | a warning at run start |
+| `-c/--config FILE` on `run`, `resume`, `view`, `report` | the config at `autohelix/<name>.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
+| `name:` | the config file's name: `autohelix/<name>.yaml` (and `autohelix run <name>`) | `` `name:` is gone: runs are named after the config file; use autohelix/<name>.yaml `` |
+| `run --name NAME` | the config file's name, as for `name:` | `No such option '--name'.` |
+| the `setup [NAME]` and `init [PATH]` commands | bare `autohelix` in a terminal (an agent drafts the config; by hand: the examples in docs/config.md and the template it names) | `No such command 'setup'.` |
 
 ## 0.1.1 — 2026-09-02
 

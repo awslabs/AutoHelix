@@ -45,8 +45,8 @@ A useful loop answers five questions:
 - To see exactly what the agent received, read the prompt kept in each
   iteration's folder, `.autohelix/runs/<id>/iterations/NNN/prompt.md` (the agent
   copy, which holds it as `.autohelix-iteration/prompt.md`, is gone once the
-  iteration ends), or the built-in template
-  (`src/autohelix/templates/default_prompt.md`). See [Prompt](#prompt).
+  iteration ends), or a sample rendering of the built-in template in
+  [Phases → The main agent](phases.md#the-main-agent). See [Prompt](#prompt).
 - AutoHelix already retains iteration evidence and agent memory. When findings
   should also be user-facing and revisable, keep them in an editable,
   version-controlled file. The [research example](https://github.com/awslabs/AutoHelix/tree/main/examples/research) uses
@@ -61,93 +61,8 @@ combined.
 
 ## Candidate Copies
 
-Every phase of an iteration (agent, checks, each review, stop) runs in **its own fresh
-copy** of the code: a private folder holding one fixed tree, with its own small
-`.git`. That `.git` borrows your repository's objects and has copies of its
-branches, tags, remote branches, and the refs of this run, its imported run and its group (a snapshot taken
-when the copy is made; no stash, no remote). This means:
-
-- Whatever the agent does with git (commits, branches, config, hooks) stays in its copy.
-  AutoHelix reads the copy from outside, through your repository, and never runs git
-  inside it after a call has used it.
-- What gets checked is exactly what gets published: the agent's copy is frozen to a
-  tree, checks run on a fresh copy of that tree, and acceptance commits that tree.
-- **Only files git would add reach checks.** Ignored files the agent built (build
-  output, virtualenvs, caches, models) are deleted with the agent's copy. Gates
-  must build or install what they need; long-lived outputs such as trained models
-  belong at a fixed absolute path outside the project.
-- **Checks are read-only.** Any change a gate command, observe command, review or `ask`
-  makes to the candidate's files rejects the iteration. New files are scratch, shared between
-  commands in the checks phase (so build-then-test works) and deleted afterwards. If
-  generated code should be accepted, generating it is the agent's job.
-- In a checks copy, plain `git diff` shows changes to tracked files; new files show as
-  untracked. The complete change is in `.autohelix-iteration/candidate.diff`; that is
-  the only harness material a checks copy gets (no notes, history or prompt). A judge's
-  (`ask`) or review's own copy gets the same, a review's also `previous.md` with
-  `previous: true`.
-- Accepted commits advance the run's hidden `refs/autohelix/<id>` first.
-- A process-held per-run lock lets only one process write a run at a time.
-- PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo), and
-  `autohelix` on a command's `PATH` is a launcher for the harness's own installation
-  (see [Configuration → Command environment](config.md#command-environment)).
-- **A copy holds only committed files.** Commands get
-  their tools from the environment AutoHelix started in: run it with your virtualenv
-  activated so `python` and `pytest` resolve to it, and reference untracked data by
-  absolute path. Copies sit outside the project, so lookups in parent directories
-  (Node's `node_modules`, a `.venv` beside the project) don't find your project's.
-- **Submodule changes are not supported.** Submodules appear as empty directories in a
-  copy; changing one, or writing inside one, rejects the iteration. So does a git
-  repository of its own the agent creates or clones into the copy ("nested git
-  repository at X: remove its .git or clone outside the project").
-
-Copies live in
-`${XDG_CACHE_HOME:-~/.cache}/autohelix/copies/<project>-<hash>/<id>/` and are deleted
-after each phase; the run's folder goes when a segment ends. To put them elsewhere (for
-example on a larger disk), set `AUTOHELIX_COPIES_ROOT` to an absolute path. Each run
-records the folder it used, so `view` and `delete` find it from any shell. The
-folders below that root are private (mode 0700, owned by you); a shared root must be
-sticky like `/tmp`. Copies left by a process that was killed (or a machine that
-crashed) are removed at the start of the next `run` or `resume` in the project,
-and other projects' leftovers once their checkout has been gone for a day (each
-project's folder records which checkout it serves, and the machine); with no run
-active, the whole `copies/` folder is safe to delete. A
-baseline command that modifies the code it checks (for example a formatter without
-`--check`) stops the run with a setup error before any agent runs.
-
-### What copies protect against
-
-Copies, read-only checks and the `autohelix` launcher make the loop correct
-for a cooperative agent, and for candidate code that misbehaves by accident:
-
-- what is checked is exactly what is accepted, and a check can't change it;
-- a gate, entry or judge that edits the files it checks is caught, even if a
-  wrapper script restores them;
-- stored output (gates', observe entries' and stop commands', judge and review
-  transcripts included), `$AUTOHELIX_PREVIOUS` and `$AUTOHELIX_OBSERVATIONS` are
-  written or copied by the harness after the command ended, so what the next
-  call reads can't be rewritten in place;
-- reviews read their own copy of exactly the candidate, not files earlier
-  commands left behind;
-- `autohelix ask` and `autohelix review` run the harness's own installation,
-  not modules from the candidate's `PYTHONPATH`;
-- a command's background processes are killed when it ends.
-
-The main agent's copy has no config file or prompt template (commands read the
-run's stored config, `$AUTOHELIX_CONFIG`), and its environment doesn't name the
-project or the run folder: `AUTOHELIX_PROJECT` and `AUTOHELIX_RUN_DIR` are for
-gate, observe and stop commands; the agent gets `AUTOHELIX_RUN_ID` and
-`AUTOHELIX_ITERATION`. That is hygiene, so the agent doesn't work in the checkout
-by accident, not a boundary: its copy's `.git` alternates and the copies folder
-still lead to the project.
-
-They are not a security boundary. The agent and candidate code run as you:
-they can still reach the project, its `.git`, other runs and your home folder
-by absolute path, and write run state there (`.autohelix/runs/<id>/`, including
-the history and observations of earlier iterations) until commands run in a
-sandbox. A child process that starts a session of its own escapes the
-process-group kill. Main-checkout inspection is best effort: it logs possible
-escapes without reverting them. For stronger isolation use the
-[Docker sandbox](docker.md).
+Every phase runs in its own fresh copy of the code, outside the project; what
+each copy holds, and what is checked and committed: [Phases](phases.md).
 
 ## Notes
 
@@ -207,35 +122,7 @@ read-only mode.
 
 ## What the agent sees
 
-Each iteration's prompt (see [Prompt](#prompt)) always holds the goal, the last
-five iterations (one line each: metrics or the rejection reason, then the
-agent's one-line summary), the gates, observe entries and stop commands, the
-scope, where to read notes and hints, and where to write notes. Then, about the
-latest iteration:
-
-- **After an accepted iteration:** its gate results and where its observations
-  are (`.autohelix-iteration/iterations/NNN/observe/<name>/`, failed entries
-  marked, and an entry that ran but didn't report a declared metric named with
-  how to report it). The copy holds its code.
-- **After a rejection:** the rejected attempt's gate results (passed, failed,
-  or not reached; a failing gate with the folder holding its whole output), the
-  failure output, the observations it produced before being rejected, and
-  `.autohelix-iteration/rejected.patch` (for a change over 2 MiB, the `git diff`
-  command that shows it instead). The copy is still the last accepted code, and
-  the prompt names the folder of the last accepted iteration too.
-- **After discarded changes:** the paths that were outside the scope, frozen
-  ones said apart from the ones that aren't editable.
-
-With other runs in the copy (an [import](cli.md#continuing-from-another-run) or
-a [group](cli.md#groups)), the reading list becomes one "Where things are"
-block: the run's own notes (editable, numbered from its iteration 1), its own
-iterations, `rejected.patch` when there is one, each other run's state in
-`runs/<id>/` (read-only, the imported one and the group members said apart),
-and their code's refs. Without them the prompt has no such block.
-
-Observe commands are different: `$AUTOHELIX_PREVIOUS` (and so
-`review --previous`) always comes from the last *accepted* iteration in which
-the entry succeeded, so a tracker's status moves only with accepted code.
+What the agent's copy and prompt hold: [Phases → The agent](phases.md#the-agent).
 
 ## Rejected work
 
@@ -284,10 +171,8 @@ observe:
     # agent: {cli: codex, model: gpt-5.5}   # a review by another model family
 ```
 
-- Each review runs in its **own fresh copy of exactly the candidate**, with the
-  complete change as `.autohelix-iteration/candidate.diff`: not the checks copy,
-  where gate and observe commands leave files and run candidate code. Symlinks
-  pointing outside the copy are removed and listed in the reviewer's prompt.
+- Each review reads its own fresh, read-only copy of exactly the candidate (see
+  [Phases → Judges](phases.md#judges-ask-and-review)).
 - The prompt is the reviewer's entire request: it is not handed the goal,
   metrics, notes or other reviews, so include whatever context it should
   consider.
@@ -298,8 +183,6 @@ observe:
   timeout) is recorded and shown to the next agent, and the run continues; so
   is a reviewer that changes the files it reviews (its call fails; the change
   was in its own copy).
-- Read-only: the backend's read-only mode, one write guard around each call
-  (a change fails the call), and its own fresh copy.
 
 ## Progress tracking
 
@@ -354,10 +237,11 @@ for display and `stop:`; gating on them is not recommended.
 
 The prompt sent to the agent each iteration is built from a
 [Jinja2](https://jinja.palletsprojects.com/) template: the built-in one
-(`src/autohelix/templates/default_prompt.md`), so new features reach every
+(`src/autohelix/templates/default_prompt.md`, shown rendered in
+[Phases → The main agent](phases.md#the-main-agent)), so new features reach every
 project. Most configs only need `goal:`. To replace the whole prompt, point
 `prompt_template:` in the config at a template file (a path relative to the
-config file, so it is versioned with it); copying the built-in template is the
+config file, so it lives beside it); copying the built-in template is the
 easiest start. `.autohelix/prompt.md` is no longer read.
 
 The variables a template gets are a stable, documented contract:
@@ -375,14 +259,17 @@ The variables a template gets are a stable, documented contract:
 | `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files (always frozen) |
 | `notes_path` | Where this iteration's notes go (in the copy) |
 | `hints` | `.autohelix-iteration/hints.md` if there are hints, else empty |
+| `hints_text` | The hints' text (the lines `autohelix hint` added, oldest first), else empty |
 | `rejected_patch` | `.autohelix-iteration/rejected.patch` if the copy has one, else empty |
 | `rejected_diff` | When the latest rejected change is over 2 MiB (no patch file), the `git diff <tip> <tree>` command that shows it, else empty |
 | `discarded` | The paths whose changes the latest iteration lost to the scope |
 | `discarded_frozen` | Those of them that are frozen (the others aren't editable) |
-| `last` | The latest iteration (the baseline before iteration 1), or none: `{iteration, accepted, reason, summary, failure_output, gates: [{text, kind, status}], observe: [{name, ok, error, missing, path}]}`; `status` is `passed`, `failed` or `pending`, `missing` the declared metrics an entry ran without reporting, and `path` the entry's folder in the copy |
+| `last` | The latest iteration (the baseline before iteration 1), or none: `{iteration, accepted, reason, summary, failure_output, gates: [{text, kind, status, path}], observe: [{name, ok, error, missing, path}]}`; `status` is `passed`, `failed` or `pending`, `missing` the declared metrics an entry ran without reporting, and `path` the item's folder in the copy if it has one there, else empty (a failed gate's `.autohelix-iteration/iterations/KKK/gates/<k>/`, an observe entry's `.autohelix-iteration/iterations/KKK/observe/<name>/`; passing gates' output isn't in the copy) |
+| `last_accepted` | The latest accepted iteration (the baseline counts), or none: `{iteration, path}`, `path` being its folder in the copy (`.autohelix-iteration/iterations/KKK/`: its record and observations describe the code in the copy), or empty |
+| `recent_iterations` | How many of the latest iterations the copy has folders of (5; the last accepted one is there too) |
 | `time_limit` | `agent.timeout` as a compact duration (`15m`), or empty |
-| `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group |
-| `imported` | The run this one continues from (`run --import`), or none: `{id, short, path, description}`, `path` being its state in the copy (`.autohelix-iteration/runs/<id>/`, read-only), `description` its line as in `group_runs`; its code is at `autohelix/<id>`. Not listed in `group_runs`, even when it is in the group |
+| `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group. Members whose state failed to copy are left out |
+| `imported` | The run this one continues from (`run --import`), or none (also when its state isn't in the copy, e.g. that run was deleted): `{id, short, path, description, same_code}`, `path` being its state in the copy (`.autohelix-iteration/runs/<id>/`, read-only), `description` its line as in `group_runs`, `same_code` whether its tip holds the same tree as the copy's code (false when unknown); its code is at `autohelix/<id>`. Not listed in `group_runs`, even when it is in the group |
 
 A custom template is a copy: it won't pick up future changes to the built-in
 one. Remove `prompt_template:` to return to it. A run warns when a custom
@@ -405,147 +292,18 @@ This is a **best-effort nudge, not a security boundary.** In practice a cooperat
 
 ## Runs and run state
 
-`.autohelix/` is gitignored locally; AutoHelix leaves `.gitignore` unchanged.
-State is scoped to `.autohelix/runs/<id>/`, one folder per iteration; what the
-harness keeps for itself is in `.internal/` folders:
-
-```
-.autohelix/
-├── runs/<id>/
-│   ├── run.json                # identity (base commit, target branch, config file), archived flag
-│   ├── config.yaml             # the run's config, stored verbatim when it started
-│   ├── prompt_template.md      # its prompt_template's text, stored with it (only with one)
-│   ├── history.jsonl           # one record per iteration: the index and the source of truth
-│   ├── hints.md
-│   ├── report.md  report.html  # the run summary; the one-file run page
-│   ├── notes -> .internal/notes/<n>   # agent memory; round-trips (link to the latest version)
-│   ├── iterations/
-│   │   ├── 000/                # the baseline
-│   │   └── 001/ ...            # one folder per iteration (below)
-│   ├── logs/                   # run logs per segment, report.log
-│   └── .internal/              # status.json, segments.jsonl, stop.json (autohelix stop), usage/,
-│                               # notes versions notes/<n>/, superseded attempts attempts/,
-│                               # report.json, the copies path
-└── .internal/                  # lock files, helper scripts (bin/)
-```
-
-Every iteration's folder has the same parts; those that don't apply are absent:
-
-```
-iterations/NNN/
-├── record.json                 # its history.jsonl record, pretty-printed (written last)
-├── prompt.md  agent.log        # what the agent was given and did (not at the baseline)
-├── notes -> ../../.internal/notes/<n>   # the notes as saved with it
-├── gates/<k>/                  # gate k of gates: that ran: command.txt, stdout.txt, stderr.txt, ask.log
-├── observe/<name>/             # each observe entry: stdout.txt, stderr.txt, captures, review.log
-├── stop/<k>/                   # stop command k, after an accept: as gates/<k>/
-└── rejected.patch              # a rejected attempt's change (also kept on its ref)
-```
-
-Numbers are three digits, so `ls` and globs sort in order (past 999 the width
-grows and glob order breaks at that boundary); `ls iterations | tail -1` is the
-latest. `record.json` is derived from `history.jsonl`, which stays the source
-of truth (`jq` on it for numbers across iterations; see
-[Stored output](config.md#stored-output) for texts). A killed iteration, or a
-retried baseline, reuses its number: the earlier attempt's folder is moved to
-`.internal/attempts/NNN-<k>/` first. `delete` removes all of it.
-
-`.internal/segments.jsonl` is the run's event log (what [`autohelix
-wait`](cli.md#autohelix-wait) reads): every segment (one `run` or `resume`
-command) that started (as soon as the command held the run's lock, before its
-checks: a start they refuse is a segment that failed), append-only, JSON lines
-linked by `segment` (1, 2, … in the run) and told apart by `event`:
-
-- `"event": "start"`: `started_at` (epoch seconds), `budget` as given
-  (`iterations`, `until`, `cost_usd`, `time_seconds`, each `null` when unset,
-  and `default`: no budget flag, so the default `-n 1` applied),
-  `start_iteration` (the first iteration it may run, `0` when it captures the
-  baseline), `pid`, `host` and `executable` (the main agent's, resolved;
-  `resume` warns when it differs from the last segment's);
-- `"event": "iteration"`, one per record once it is final (after its stop
-  commands; a failed or retried baseline too): `ended_at` and the fields of
-  `wait`'s [`iteration` event](cli.md#events) (`iteration`, `accepted`,
-  `reason`, `summary`, `metrics`, `commit`, `cost_usd`, `cost_incomplete`,
-  `agent_error`). A record whose process was killed before its line (or one
-  recovered from a published commit) gets it at the next `resume`, with the
-  previous segment's number, just before the new start;
-- `"event": "end"`: `ended_at`, `state` (`finished`, `interrupted` or
-  `failed`), `stop_reason` (as in `status.json`: why the loop ended, kept when
-  Ctrl-C or an error comes later, during landing or the report; `null` only when
-  the loop itself was interrupted or failed, except by `autohelix stop --now`),
-  `iterations` (how many records the
-  segment added to `history.jsonl`, the baseline's included: `0` when none
-  completed), `last_iteration` (the run's last recorded iteration then; with
-  `iterations: 0` it is the one before the segment) and `error` (what a failed
-  segment failed with, one line, cut to 500 characters; else `null`).
-
-A stop reason has a `kind` and a `detail` (the line shown, "iteration budget
-reached (5)"), plus fields of its kind:
-
-- `budget`: `budget` is `iterations`, `cost` or `time`;
-- `condition`: a [stop command](config.md#stop) succeeded; `iteration`,
-  `command` and `reason`;
-- `agent`: the agent failed three times in a row; `iteration` and `error`;
-- `request`: [`autohelix stop`](cli.md#autohelix-stop) asked; `why` (or
-  `null`), `requested_at`, and `now: true` when `--now` interrupted the
-  segment (its state is then `interrupted`).
-
-A segment whose process died has a start and no end. Each line is written in
-one append and synced, and earlier lines are never rewritten: a damaged line
-loses only itself (readers skip it). [`autohelix wait`](cli.md#autohelix-wait)
-reports segments from this file as `started`, `ended` and `crashed` events.
-
-The temporary candidate copies themselves (`iter-N-<phase>/`) live outside the
-project; see [Candidate Copies](#candidate-copies).
-
-The agent's copy holds no `.autohelix/` (nothing in a copy looks like project
-state). What the harness provides is in `.autohelix-iteration/`, which is never
-part of a candidate (it is left out when the copy is frozen), laid out like the
-run's folder:
-
-```
-<copy>/
-├── <code at the run's tip>
-├── .git/                       private; refs: branches, tags, this run's (and its import's, group's)
-└── .autohelix-iteration/
-    ├── prompt.md  hints.md     this iteration's prompt; hints
-    ├── notes/                  this run's notes: the only thing saved back
-    ├── history.jsonl           this run's iterations
-    ├── iterations/NNN/         the last 5 iterations and the last accepted one: record.json,
-    │                           failing gates' gates/<k>/, observe/, stop/
-    ├── rejected.patch          after a rejection: the rejected attempt's change
-    ├── commit_summary.txt      written by the agent: the commit's first line
-    └── runs/<other-id>/        the imported run and other runs of the group: run.json,
-                                history.jsonl, notes/
-```
-
-A copy's `iterations/` leaves out the agent logs, prompts, `notes` links,
-passing gates' output and rejected patches; `history.jsonl` covers older
-iterations. Only `notes/` round-trips: when the copy is frozen it is saved as a
-new version, `runs/<id>/.internal/notes/<n>/`, and the `runs/<id>/notes` link
-switches to it in one step, so a note the agent deletes stays deleted and other
-runs never read a half-saved mix; the iteration's `notes` link keeps pointing at
-that version. Everything else is reference material. A checks copy gets only
-`candidate.diff`; a review's copy `candidate.diff` (and `previous.md` with
-`previous: true`); a stop copy none of it.
+A run's files are in `.autohelix/runs/<id>/` and its copies outside the
+project; [Phases → Where things live](phases.md#where-things-live) has the
+layout.
 
 A run is a line of work: `autohelix run` starts one, `autohelix resume` continues
 one (by default the config's most recently active), `autohelix stop` ends a
 running one after its current iteration, `archive` sets one aside and `delete`
-removes it. **A run keeps its config**: it stores it as `config.yaml`
-(and its prompt template as `prompt_template.md`) when it starts, and every segment, `view`, `report` and the judges
-(`$AUTOHELIX_CONFIG`) use that copy. `resume` refuses before spending anything
-when the config file's parsed config differs from it (comments, formatting and
-other spellings of the same value don't count; the prompt template's text does): `autohelix run <config> --import
-<id>` applies the new config in a new run, or restore the file to continue. A
-deleted config file isn't a change. `run --import <id>` starts a new run (code
-from your checkout, its own config, budgets, baseline and notes) whose agents
-also see the imported run's `run.json`, `history.jsonl` and notes read-only, and
-whose baseline observe entries continue from that run's outputs
-(`$AUTOHELIX_PREVIOUS`); `run.json` records it as `import: {run: <id>}`. The config file and its `prompt_template:`
-file are always frozen, so the agent can't change its own protocol. Scripts the
-config calls (`bench.py`, gate scripts) are code: they move with the run's
-commits; list them under `scope.frozen` if they must not change. A run has no other state: whether it is running comes from its
+removes it. **A run keeps its config**: the one it stored when it started
+([CLI → Config files](cli.md#config-files), which also says when `resume`
+refuses an edited one and what is frozen). `run --import <id>` starts a new run
+that also sees another run's notes and history
+([CLI → Continuing from another run](cli.md#continuing-from-another-run)). A run has no other state: whether it is running comes from its
 lock, how its last segment ended from `status.json`, and whether it has landed from
 git. One `run` or `resume` command, called a **segment**,
 holds a process lock through validation, final landing and report. Agent commits
@@ -588,47 +346,90 @@ history must be moved or deleted before run; there is no automatic migration.
 
 ## Cost Tracking
 
-Available token usage and cost are captured from agent backends:
+Available token usage and cost are captured from the agent CLIs and shown:
 
-- **Per iteration**: shown after each accepted/rejected result
-- **Cumulative**: shown in the final summary
-- **Persisted**: stored in `.autohelix/runs/<id>/history.jsonl` for later analysis
+- Per iteration (after accepted/rejected). A `+` after the amount (`$0.10+`) means part of that iteration's cost (agent or a command's model call) is unavailable, so the amount is what is known.
+- Cumulative in the final summary
+- Persisted in `.autohelix/runs/<id>/history.jsonl`
 
-Each iteration's cost includes its optimization agent and the model calls its
-commands report (`ask`, `review`). Run totals and `--cost` also include the
-baseline's. History's `calls` list records each agent and command call with
-its role, usage and log path; baseline calls and failed calls count too.
-Failed main-agent calls consume their iteration number and resume at the next one;
-setup failures before a call do not. Baseline retry calls stay in iteration 0.
-`calls` is the sole persisted usage representation; log paths are relative to the
-run directory. Every agent call's usage (the main agent's, a judge's, the run
-summary's) records `cli`, `model` (the model the CLI's output named, `null` when
-it named none) and `executable` (the resolved path started): which model ran,
-whatever `model:` asked for. `view`'s run screen and the web viewer's run page
-show the latest main-agent call's model.
-Every run summary's call is counted in the run's totals too, recorded in
-`.internal/usage/summary.jsonl` (one per call; one that never returned stays
-unknown).
-
-What's available depends on the backend:
+What each CLI reports:
 
 - **Claude Code**: input/output tokens, cost (USD), duration
 - **Codex**: input/output and available cached-input, cache-write, and reasoning
-  tokens; calculated API-equivalent cost for recognized models; measured duration
+  tokens; calculated API-equivalent cost for recognized models (below); measured
+  duration
 - **OpenCode**: input/output tokens, cost (per step, accumulated)
 
-Every backend uses the same `usage.cost_usd` field and **Cost** display.
-History also records `cost_source`: `backend` for a CLI-supplied amount,
-`calculated` for a Codex estimate. Calculated costs save their model, pricing
-basis, and rates. Codex estimates use Standard OpenAI API prices; they do not
-represent subscription or Bedrock bills. Backend-supplied amounts may also be
-estimates.
+Iteration costs include the optimization agent and model calls made by the
+commands the harness runs (`ask:` gates and `review:` entries, or
+`autohelix ask` and `autohelix review` anywhere in `gates:`, `observe:` or
+`stop:`). Run totals and `--cost` also include the baseline's commands.
+Run totals also count every summary call, recorded in
+`.internal/usage/summary.jsonl` (one line per call; one that never returned
+stays unknown; see [CLI → `autohelix report`](cli.md#autohelix-report)).
 
-Missing costs are unavailable, and totals with missing costs are incomplete.
-`--cost` uses the recorded amounts, including Codex estimates, and warns
-if some costs are unavailable. See [Cost Tracking](config.md#cost-tracking) for
-the pricing assumptions and accounting limits.
+History's `calls` list records each attempted agent call and command model call
+with its role, usage and log path (relative to the run directory); it is the
+only place usage is stored. Records from earlier versions may list `reviewer`
+calls; they count the same way. Every agent call's usage (the main agent's, a
+judge's, the run summary's) records `cli`, `model` (the model the CLI's output
+named, `null` when it named none) and `executable` (the resolved path started):
+which model ran, whatever `model:` asked for. `view`'s run screen and the web
+viewer's run page show the latest main-agent call's model.
+
+A command of your own can report its model calls the same way: append one JSON
+line per call, e.g. `{"id": "...", "source": "my-eval", "cost_usd": 0.12}`, to the
+file named by `$AUTOHELIX_USAGE_FILE` (set for every command the harness runs).
+Lines with the same `id` are one call (the last line wins), so a call can be
+recorded with `"cost_usd": null` when it starts and its cost when it ends.
+
+Interrupted or failed main-agent attempts are recorded as rejected iterations,
+including command calls and any available usage; they consume their iteration
+number. Failures before an agent call consume no iteration. Failed baseline
+attempts keep their costs in iteration 0 for a clean retry. A process killed
+before a durable history write can still lose unreturned usage; recovered
+accepted commits record that charge as unknown.
+
+The numeric field is `usage.cost_usd` for every CLI. `usage.cost_source` is
+`backend` when the CLI supplies the amount, or `calculated` when AutoHelix
+calculates it. Backend-supplied amounts can themselves be estimates; they are
+not necessarily invoice totals. Older history without this metadata still loads.
+
+**Codex costs are estimated** from reported input, cached-input, cache-write,
+and output token counts and a bundled snapshot of the model's published
+[OpenAI API rates](https://developers.openai.com/api/docs/pricing).
+For subscription and Bedrock users, these are API-equivalent amounts, not
+subscription charges or provider bills. The normal display uses the same
+**Cost** label for every CLI; provenance is saved in history:
+
+- `cost_model` identifies the model priced.
+- `cost_basis: openai_standard_api` identifies Standard pricing at ordinary
+  context lengths, with 30-minute cache writes.
+- `cost_rates` saves the rates per million tokens, cache-write lifetime, and
+  verification date used for that iteration.
+- `output_includes_reasoning` records whether separately reported reasoning
+  tokens were already included in output. They are not counted twice.
+
+The snapshot was verified on November 6, 2026. It supports listed GPT-6 models
+and common GPT-5 Codex models; unknown names and expiring promotional prices are
+not guessed. The model priced is the one Codex's JSON output names, else
+`agent.model`; with neither, the cost is unavailable ("set agent.model").
+AutoHelix doesn't read Codex's session files or guess from `extra_args`: a model
+chosen there (`-m`, a profile) is priced as `agent.model` says, so set
+`agent.model` to the model you run.
+
+Estimates exclude speed-tier and regional premiums, per-request long-context
+surcharges, separately billed tools, and usage outside the captured thread.
+Cache-write lifetimes other than 30 minutes are not inferred. External
+evaluator calls count when they record usage through `$AUTOHELIX_USAGE_FILE`.
+Codex agent duration is measured locally even when usage is unavailable.
+
+Missing, invalid, or interrupted usage remains **unavailable**, not zero, and
+totals with unavailable parts are labeled **incomplete**. `--cost` counts the
+saved amounts (Codex estimates included) and is checked between iterations, so
+it is an approximate stopping threshold, not a guaranteed spending cap; what it
+does when a cost is unavailable is in [CLI → Budgets](cli.md#budgets).
 
 ## Run page
 
-To follow a run live, open this page with [`autohelix view <id>`](cli.md#autohelix-view), or use `autohelix view --terminal` in a terminal. When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/runs/<id>/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's gates, notes and observe entries (status and metrics; a review's text), the changes from the baseline to the final code, and the run summary when there is one (see [Configuration → Report](config.md#report)). It leaves out agent activity, per-iteration diffs, and stdout, stderr and captured files; use `autohelix view <id>` (the live page) for those. `autohelix report` also rewrites it.
+To follow a run live, open this page with [`autohelix view <id>`](cli.md#autohelix-view), or use `autohelix view --terminal` in a terminal. When a run stops (finished, interrupted, or failed), AutoHelix saves the same page as one self-contained file, `.autohelix/runs/<id>/report.html`, which opens in a browser without a server. It shows the status, the metric chart, the iteration table with rejection reasons, each iteration's gates, notes and observe entries (status and metrics; a review's text), the changes from the baseline to the final code, and the run summary when there is one (see [CLI → `autohelix report`](cli.md#autohelix-report)). It leaves out agent activity, per-iteration diffs, and stdout, stderr and captured files; use `autohelix view <id>` (the live page) for those. `autohelix report` also rewrites it.

@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """Score a model on GSM8K with inspect_ai + vLLM, and emit the accuracy.
 
-The prompt format is fixed by a chat template read from --templates-dir (see
-setup_template.py, which extracts it from the base model during setup), so the
-agent's fine-tuned model is always evaluated against the same fixed format.
+The prompt format is fixed by the base model's chat template, read from the
+Hugging Face cache (--chat-template-model), not from the fine-tuned model, so the
+agent's model is always evaluated against the same format. The template isn't
+kept in this folder: a file there would have to be committed (every phase runs in
+a copy holding committed files only), and this repository doesn't ship it.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 from pathlib import Path
 
 from inspect_ai import eval as inspect_eval
 from inspect_ai.util._display import init_display_type
+from transformers import AutoTokenizer
 
 import inspect_evals.gsm8k  # noqa: F401  (import registers the gsm8k task)
 
@@ -34,9 +38,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--json-output-file", default=None)
     parser.add_argument(
-        "--templates-dir",
-        default="templates/",
-        help="Directory holding qwen3.jinja (the fixed eval chat template).",
+        "--chat-template-model",
+        default="Qwen/Qwen3-4B-Base",
+        help="Model whose chat template fixes the eval prompt format (the base "
+        "model; read from the Hugging Face cache, never downloaded).",
     )
     parser.add_argument(
         "--fewshot",
@@ -51,16 +56,31 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def chat_template(model: str) -> str:
+    """The chat template `model` ships, from the Hugging Face cache."""
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model, local_files_only=True)
+    except OSError as e:
+        raise SystemExit(
+            f"{model} is not in the Hugging Face cache — pre-cache it (README, SETUP): {e}"
+        )
+    if not tokenizer.chat_template:
+        raise SystemExit(f"{model} ships no chat_template")
+    return tokenizer.chat_template
+
+
 def main() -> None:
     args = parse_args()
     init_display_type("plain")
 
-    template = Path(args.templates_dir) / "qwen3.jinja"
-    if not template.is_file():
-        raise SystemExit(
-            f"chat template not found at {template} — run setup_template.py first"
-        )
+    # A scratch file outside the working folder, for the vLLM server to read.
+    with tempfile.TemporaryDirectory() as scratch:
+        template = Path(scratch) / "chat_template.jinja"
+        template.write_text(chat_template(args.chat_template_model), encoding="utf-8")
+        evaluate(args, template)
 
+
+def evaluate(args: argparse.Namespace, template: Path) -> None:
     model_args = {
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "chat_template": str(template),

@@ -71,7 +71,7 @@ def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, mon
     assert seen["prompt_file"] == seen["prompt"]
     # The first run (alone in its group then) was not told about anyone.
     first_prompt = first.paths.prompt(1).read_text()
-    assert "Where things are" not in first_prompt
+    assert ".autohelix-iteration/runs/<id>/" not in first_prompt
 
     # Archiving is how a run leaves its group.
     archive(first.paths)
@@ -80,7 +80,7 @@ def test_group_runs_see_each_others_state_and_code_and_nothing_else(project, mon
     watch_agent(third, monkeypatch, seen)
     third.run(Budget(until=2), report=False)
     assert seen["runs"] == [] and f"refs/autohelix/{one}" not in seen["refs"]
-    assert "Where things are" not in seen["prompt"]
+    assert ".autohelix-iteration/runs/<id>/" not in seen["prompt"]
 
 
 def test_group_and_landing_mode_are_stored_kept_and_changed(project):

@@ -1,10 +1,12 @@
 """Tests for autohelix.prompt_template module."""
 
+from pathlib import Path
+
 import pytest
 
 from autohelix.config import Config
 from autohelix.history import History
-from autohelix.prompt_template import build_prompt_variables, render_template, load_template
+from autohelix.prompt_template import VARIABLES, build_prompt_variables, render_template, load_template
 
 
 class TestRenderTemplate:
@@ -138,26 +140,39 @@ class TestBuildPromptVariables:
         (tmp_path / ".autohelix").mkdir()
         variables = build_prompt_variables(Config(goal="Title line.\nMore."), History(tmp_path), iteration=1,
                                            copy_dir=tmp_path)
-        assert set(variables) == {
-            "goal", "title", "iteration", "copy", "history", "gates", "observe", "stop", "editable",
-            "frozen", "notes_path", "hints", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted", "recent_iterations", "time_limit", "group",
-            "group_runs", "imported"}
+        assert set(variables) == VARIABLES
         assert variables["title"] == "Title line."
         assert variables["notes_path"] == str(tmp_path / ".autohelix-iteration" / "notes" / "iter-1.md")
         assert variables["last"] is None and variables["discarded"] == [] and variables["rejected_patch"] == ""
         assert variables["imported"] is None
 
+    def test_every_variable_is_in_the_docs_table(self):
+        """docs/concepts.md's variable table is the contract: it names every `VARIABLES`
+        name, and nothing else."""
+        import re
+
+        text = (Path(__file__).parent.parent / "docs" / "concepts.md").read_text()
+        section = text[text.index("| Variable |"):]
+        rows = []
+        for line in section.splitlines():
+            if not line.startswith("|"):
+                break
+            rows.append(line)
+        names = {name for row in rows[2:] for name in re.findall(r"`([a-z_]+)`", row.split("|")[1])}
+        assert names == set(VARIABLES)
+
     def test_hints_empty_when_no_file(self, tmp_path):
         (tmp_path / ".autohelix").mkdir()
         variables = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1, copy_dir=tmp_path)
-        assert variables["hints"] == ""
+        assert variables["hints"] == "" and variables["hints_text"] == ""
 
-    def test_hints_is_the_copys_file(self, tmp_path):
+    def test_hints_are_the_copys_file_and_its_text(self, tmp_path):
         ah = tmp_path / ".autohelix"
         ah.mkdir(parents=True)
-        (ah / "hints.md").write_text("- [2026-07-07 10:00] try numpy\n")
+        (ah / "hints.md").write_text("- [2026-07-07 10:00] try numpy\x1b[31m\n- [2026-07-07 11:00] then a heap\n")
         variables = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1, copy_dir=tmp_path)
         assert variables["hints"] == ".autohelix-iteration/hints.md"
+        assert variables["hints_text"] == "- [2026-07-07 10:00] try numpy\n- [2026-07-07 11:00] then a heap"
 
     def test_time_limit_is_compact_duration(self, tmp_path):
         # Must be a forward-looking duration ("15m"), NOT the timeout *message*
@@ -339,19 +354,30 @@ REJECTED = {"iteration": 1, "accepted": False, "reason": "gate failed: pytest -q
                       {"text": "speed regress 5%", "kind": "metric", "passed": None}]}
 
 
-def test_a_plain_run_has_no_layout_block(tmp_path):
+NOTES_LINE = ("- .autohelix-iteration/notes/ — your own notes from this run's past iterations (iter-1.md onward); "
+              "editable\n")
+ITERATIONS_LINE = "- .autohelix-iteration/iterations/NNN/ — this run's last 5 iterations and its last accepted one"
+RUNS_LINE = ("- .autohelix-iteration/runs/<id>/ — other runs' run.json, history.jsonl and notes/ (numbered by their own "
+             "iterations; no iterations/: their observe outputs aren't copied); read-only (a copy; edits there are "
+             "discarded)\n")
+
+
+def test_a_plain_run_has_the_same_reading_list_without_other_runs(tmp_path):
     _, rendered = _render(tmp_path, [BASELINE, REJECTED], 2, patch=True, hints=True)
-    assert "Read before starting:\n- .autohelix-iteration/notes/iter-*.md — your own notes from past iterations" in rendered
-    assert "Where things are" not in rendered and "runs/" not in rendered and "autohelix/<id>" not in rendered
-    assert "the last rejected attempt's change" not in rendered  # said once, with the rejection
-    assert rendered.count("rejected.patch") == 1
-    assert "  Older iterations: .autohelix-iteration/history.jsonl\n- .autohelix-iteration/hints.md\n" in rendered
+    assert "Where things are (read before starting):\n" + NOTES_LINE + ITERATIONS_LINE in rendered
+    assert "Read before starting:" not in rendered
+    assert "runs/" not in rendered and "autohelix/<id>" not in rendered
+    assert rendered.count("rejected.patch") == 1  # said once, with the rejection
+    assert "  Older iterations: .autohelix-iteration/history.jsonl\n\n" in rendered
 
 
-NOTES_LINE = ("- .autohelix-iteration/notes/ — yours: this run's notes, editable; numbered by this run's iterations "
-              "(iter-1.md onward), separately from other runs' iter-N.md\n")
-RUNS_LINE = ("- .autohelix-iteration/runs/<id>/ — other runs' run.json, history.jsonl and notes/ (no iterations/: their "
-             "observe outputs aren't copied); read-only (a copy; edits there are discarded)\n")
+def test_the_hints_text_is_in_the_prompt(tmp_path):
+    """The hints are short lines from a person: the prompt holds them, not a path to read."""
+    _, rendered = _render(tmp_path, [BASELINE, REJECTED], 2, hints=True)
+    assert "Hints from the person running this run (newest last):\n  - try a heap\n" in rendered
+    assert "hints.md" not in rendered
+    _, rendered = _render(tmp_path / "none", [BASELINE, REJECTED], 2)
+    assert "Hints from" not in rendered
 CODE_LINES = ("- Other runs' code: refs `autohelix/<id>` in this copy's git (not branches: `git branch` doesn't list them;\n"
               "  `git for-each-ref refs/autohelix` does): `git diff HEAD autohelix/<id>`, `git show autohelix/<id>:<file>`,\n"
               "  `git checkout autohelix/<id> -- <file>`.")
@@ -361,14 +387,13 @@ def test_group_runs(tmp_path):
     (tmp_path / ".autohelix").mkdir()
     variables, rendered = _render(tmp_path, [BASELINE], 1, group="perf", members=[MEMBER])
     assert variables["group"] == "perf" and len(variables["group_runs"]) == 1
-    assert ("Where things are (read before starting):\n" + NOTES_LINE +
-            "- .autohelix-iteration/iterations/NNN/ — this run's own last 5 iterations and its last accepted one") in rendered
+    assert "Where things are (read before starting):\n" + NOTES_LINE + ITERATIONS_LINE in rendered
     assert (RUNS_LINE +
             "  - Group `perf` members (other runs alongside this one, running or finished; their state as of this iteration's start):\n"
             f"    `.autohelix-iteration/runs/{MEMBER}/` (0 iterations, finished; code at `autohelix/{MEMBER}`)\n"
             + CODE_LINES) in rendered
     assert "name that run in your summary" in rendered
-    assert "Imported" not in rendered and "Read before starting:" not in rendered
+    assert "Imported" not in rendered
 
 
 def test_a_member_whose_state_isnt_in_the_copy_is_left_out(tmp_path):
@@ -377,7 +402,7 @@ def test_a_member_whose_state_isnt_in_the_copy_is_left_out(tmp_path):
     assert [line.split("`")[1] for line in variables["group_runs"]] == [f".autohelix-iteration/runs/{MEMBER}/"]
     assert other not in rendered
     _, rendered = _render(tmp_path / "alone", [BASELINE], 1, group="perf", members=[other], missing=[other])
-    assert "Where things are" not in rendered and "Read before starting:" in rendered
+    assert "runs/" not in rendered and "Other runs' code" not in rendered
 
 
 def test_an_import(tmp_path):
@@ -431,18 +456,18 @@ def test_an_import_in_a_group_after_a_rejection(tmp_path):
                           imported=PARENT, hints=True)
     imported = rendered.index("  - Imported (this run continues from a1b2")
     assert imported < rendered.index("  - Group `perf` members") < rendered.index("- Other runs' code:")
-    assert ("  Older iterations: .autohelix-iteration/history.jsonl\n"
-            "- .autohelix-iteration/rejected.patch — the last rejected attempt's change\n"
-            "- .autohelix-iteration/hints.md — hints from the person running this run\n" + RUNS_LINE) in rendered
+    assert "  Older iterations: .autohelix-iteration/history.jsonl\n" + RUNS_LINE in rendered
     assert "Its changes are in `.autohelix-iteration/rejected.patch`; `git apply` it" in rendered
+    assert rendered.count("rejected.patch") == 1  # the rejected change is named once
+    assert "Hints from the person running this run (newest last):\n  - try a heap\n" in rendered
     assert "name that run in your summary" in rendered
 
 
 def test_a_large_rejected_change_is_in_the_block(tmp_path):
     _, rendered = _render(tmp_path, [BASELINE, REJECTED], 2, imported=PARENT, rejected_diff="git diff abc def")
-    assert ("- `git diff abc def` — the last rejected attempt's change (too large for a file)\n" + RUNS_LINE) in rendered
+    assert rendered.count("git diff abc def") == 1 and "too large for a patch file" in rendered
     _, plain = _render(tmp_path / "plain", [BASELINE, REJECTED], 2, rejected_diff="git diff abc def")
-    assert "too large for a file" not in plain and "too large for a patch file" in plain
+    assert plain.count("git diff abc def") == 1 and "too large for a patch file" in plain
 
 
 def test_the_prompt_names_only_folders_that_are_in_the_copy(tmp_path):
@@ -470,11 +495,11 @@ def test_the_prompt_names_only_folders_that_are_in_the_copy(tmp_path):
 
 def test_the_prompt_describes_the_copys_iteration_folders(tmp_path):
     _, rendered = _render(tmp_path, [BASELINE], 1)
-    assert ("- .autohelix-iteration/iterations/NNN/ — the last 5 iterations and the last accepted one: record.json,\n"
+    assert ("- .autohelix-iteration/iterations/NNN/ — this run's last 5 iterations and its last accepted one: record.json,\n"
             "  gates/<k>/ of failed gates (k: position in the list above; stdout.txt, stderr.txt, ask.log),\n"
             "  observe/<name>/ (stdout.txt, stderr.txt, captured files, review.log). "
             "ask.log/review.log are judge transcripts, often long.\n"
             "  Older iterations: .autohelix-iteration/history.jsonl") in rendered
     from autohelix.iteration import SEEDED_ITERATIONS
 
-    assert f"the last {SEEDED_ITERATIONS} iterations" in rendered
+    assert f"this run's last {SEEDED_ITERATIONS} iterations" in rendered
