@@ -454,8 +454,10 @@ Stop conditions only end a run early: the command line's budget still applies. I
 already meets one, no iterations run. If you interrupt a run while its stop
 commands are running, the iteration is kept but not checked; the next accepted
 iteration is. A stop pauses the run: `autohelix resume` continues it (and it
-stops again after the next accepted iteration if the condition still holds);
-raise the target or remove the condition first.
+stops again after the next accepted iteration if the condition still holds).
+Changing or removing the condition changes the config, which `resume` refuses
+([CLI → `autohelix resume`](cli.md#autohelix-resume)): to go on past it with
+the new condition, start `autohelix run <config> --import <id>`.
 
 Why a run ended is shown at the end of the run, in `autohelix view` (the web page
 and `--terminal`), the run summary, and `.autohelix/runs/<id>/.internal/status.json`

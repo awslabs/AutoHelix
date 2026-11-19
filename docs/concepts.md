@@ -300,8 +300,9 @@ A run is a line of work: `autohelix run` starts one, `autohelix resume` continue
 one (by default the config's most recently active), `autohelix stop` ends a
 running one after its current iteration, `archive` sets one aside and `delete`
 removes it. **A run keeps its config**: the one it stored when it started
-([CLI → Config files](cli.md#config-files), which also says when `resume`
-refuses an edited one and what is frozen). `run --import <id>` starts a new run
+([CLI → Config files](cli.md#config-files), which also says what is frozen;
+[CLI → `autohelix resume`](cli.md#autohelix-resume) says when `resume` refuses
+an edited one). `run --import <id>` starts a new run
 that also sees another run's notes and history
 ([CLI → Continuing from another run](cli.md#continuing-from-another-run)). A run has no other state: whether it is running comes from its
 lock, how its last segment ended from `status.json`, and whether it has landed from
@@ -313,12 +314,8 @@ user's branch and staged files alone. No-op accepts retain the same tip.
 
 Resuming repairs an interrupted final record and recovers accepted commits whose
 record was not finished. Other history corruption is refused. **`resume` only
-continues the same run**: its stored config, its own tip, more budget. When the
-target branch has moved past the run's tip (you or another run committed on it), an
-auto-landing `resume` refuses before writing anything and names the ways on: a
-new run that continues from it, `autohelix run <config> --import <id>` (your
-checkout's code, that run's notes and history), or `resume <id> --land manual`,
-which continues from the run's own tip without your commits. Auto landing
+continues the same run**: its stored config, its own tip, more budget; what it does when
+the target branch has moved past the run's tip is in [CLI → `autohelix resume`](cli.md#autohelix-resume). Auto landing
 fast-forwards the target at segment end before report; manual mode retains code
 on the run ref until `autohelix land`. Divergence, a branch being rebased or checked
 out elsewhere, and dirty files that would be overwritten require user resolution.

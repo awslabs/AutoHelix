@@ -5,8 +5,10 @@ tests render them and compare, so the page can't drift from the code."""
 import re
 from pathlib import Path
 
+import yaml
+
 from autohelix import review
-from autohelix.config import Config
+from autohelix.config import load_config
 from autohelix.history import History, IterationResult
 from autohelix.judge import Target, build_system_prompt, describe_change
 from autohelix.prompt_template import build_prompt_variables, load_template, render_template
@@ -64,7 +66,8 @@ def main_agent_prompt(tmp_path: Path) -> str:
         for name in ("bench", "clarity"):
             (state / "iterations" / f"{n:03d}" / "observe" / name).mkdir(parents=True)
     (state / "iterations" / "002" / "gates" / "1").mkdir(parents=True)
-    config = Config.from_dict(CONFIG)
+    (project / "autohelix.yaml").write_text(yaml.safe_dump(CONFIG, sort_keys=False))
+    config = load_config(project)  # as a run loads it: its config file is frozen
     variables = build_prompt_variables(config, history, 3, copy)
     return render_template(load_template(config), variables).replace(str(copies), COPIES)
 
@@ -120,7 +123,7 @@ def test_the_samples_show_every_part(tmp_path):
     the review's previous output and number."""
     agent = main_agent_prompt(tmp_path)
     for part in ("Iteration 2 was rejected", "rejected.patch", "Negative numbers break radix sort",
-                 "Your changes to test_sort.py were discarded", "30m"):
+                 "Your changes to test_sort.py were discarded", "30m", "Frozen (", "autohelix.yaml"):
         assert part in agent, part
     assert "Your own review from the last accepted iteration" in review_prompt(tmp_path / "r")
     assert "Also report these numbers: remaining." in review_prompt(tmp_path / "s")

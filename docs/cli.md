@@ -142,7 +142,8 @@ or `autohelix/<name>.yaml` for several loops.
 
 - The `autohelix/` folder can also hold prompt templates and helper scripts
   (`autohelix/prompts/perf.md`; `prompt_template:` is relative to the config's
-  folder). Commit the scripts
+  folder). Commit the scripts (outside `autohelix/` if you keep it private:
+  [Configuration → Where configs live](config.md#where-configs-live))
   ([Phases → Candidate copies](phases.md#candidate-copies)).
 - Whether to commit the configs:
   [Configuration → Where configs live](config.md#where-configs-live).
@@ -163,11 +164,8 @@ Which config a command uses:
   (`.autohelix/runs/<id>/config.yaml`, its prompt template beside it as
   `prompt_template.md`), and `resume`, `view`, `report` and the
   judges (`$AUTOHELIX_CONFIG`) use that copy.
-- `resume` refuses before spending anything when the file's parsed config has
-  changed since (comment, formatting and spelling edits don't count; the
-  prompt template's text does): apply an edited config with a new run,
-  `autohelix run perf --import <id>`, or restore the file to continue. A
-  deleted file (or template) is fine: the run continues with its stored copy.
+- `resume` refuses when the file's config has changed since: see
+  [`autohelix resume`](#autohelix-resume) (Its config).
 - The config file and its `prompt_template:` file are always frozen, whatever
   `scope:` says. Scripts the config calls (`bench.py`, gate scripts) are code:
   they move with the run's commits; list them under `scope.frozen` if they
@@ -877,13 +875,15 @@ With `RUN_ID`:
 - `runs`, most recently active first. Each run has:
   - `id`, `name`, `archived` (true or false), `created_at`, `last_activity`;
   - `group` (`null` outside a group) and `land` (`auto` or `manual`: the run's landing mode);
-  - `config_file`, `goal` and `title` (the goal's first line, cut to about 80 characters), read from the config file as it is now in the checkout;
+  - `config_file`, the config file the run was started from (project-relative), and `goal` and `title` (the goal's first line, cut to about 80 characters), read from the run's stored config (`.autohelix/runs/<id>/config.yaml`), never the checkout's file;
+  - `config_invalid`: true when that stored config can't be read or parsed (`goal` and `title` are then `null`);
   - `status`, the last segment's, `null` before the first segment:
     - `state`: `running`, `finished`, `interrupted`, `failed`, or `crashed` when its process is gone;
     - `phase`, `iteration`, `iteration_started_at`, `phase_started_at`, `stopped_at`;
     - `stop_reason` (`kind`, `detail`, …; see [Stop reasons](#stop-reasons));
     - that segment's caps `max_iterations`, `max_cost_usd` and `max_time_seconds` (as in `progress`);
     - `segment_started_at`, when that segment started (its `--time` counts from there), and `segment`, its number (1, 2, … in the run);
+    - `entry`: the name of the observe entry running, else `null`;
   - `stop_requested`: while the running segment has been asked to end by [`autohelix stop`](#autohelix-stop), `requested_at`, `why` and `now`; else `null`;
   - `accepted`: the number of accepted iterations;
   - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
