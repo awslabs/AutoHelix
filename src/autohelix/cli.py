@@ -1016,21 +1016,26 @@ def review(prompt: str, previous: bool, metrics: list[str], cli_name: str | None
         click.echo(f"autohelix review: ok · {used} · {format_cost(result.cost_usd, precision=4)}", err=True)
 
 
-@main.command()
+@main.command(context_settings={"allow_extra_args": True})  # refused below, with --run's spelling
 @click.argument("message")
 @_path_option()
 @click.option("--run", "run_id", help="Run id or its last part (default: the running run, else the most recently "
                                       "active one).")
-def hint(message: str, path: Path, run_id: str | None):
+@click.pass_context
+def hint(ctx: click.Context, message: str, path: Path, run_id: str | None):
     """Send a hint to a run's agent (picked up next iteration).
 
     Appends a timestamped message to the run's hints.md (--run, else the
-    running run, else the most recently active one that isn't archived). The
-    agent's prompt lists this file among what to read before starting; a run
-    that isn't running reads it when it is resumed.
+    running run, else the most recently active one that isn't archived). Each
+    iteration's prompt holds the hints' text, under "Hints from the person
+    running this run (newest last)"; a run that isn't running gets it when it
+    is resumed.
     """
     from datetime import datetime
 
+    if ctx.args:
+        given = f'--run {message} "{" ".join(ctx.args)}"' if len(ctx.args) == 1 else '--run ID "MESSAGE"'
+        raise click.UsageError(f"hint takes one message (quoted); the run goes in --run: autohelix hint {given}", ctx)
     paths = _chosen_run(_project(path), run_id)
     try:
         paths.read_identity()

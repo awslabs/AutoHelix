@@ -786,7 +786,7 @@ autohelix view RUN_ID [-p PATH] --once | --json
 
 - `RUN_ID` (or its last part) picks a run. Without it, the web page and `--once`/`--json` show the project's runs, and `--terminal` follows the [running or latest run](#which-run-a-command-acts-on), chosen when the view starts.
 - Use one of `--terminal`, `--once` and `--json` at a time. `--port` and `--open` go with the web page, `--metric` with the runs table.
-- Everything `view` does only reads `.autohelix/`, so it is safe alongside `autohelix run`.
+- Everything `view` does only reads `.autohelix/` (and, while a judge or review call is running, its transcript in the run's copies folder), so it is safe alongside `autohelix run`.
 
 ### The web page
 
@@ -835,13 +835,12 @@ A section you open or close stays so as you move between iterations. Notes that 
    - the header: goal, agent, gates, observe entries, scope, budget, the group and the run's notes, and the run's state in the title line;
    - one row per iteration under the column header: outcome, time, cost, each metric with its change from the baseline, why a rejection was rejected. The rows come from the run's history, so they read as `run` printed them; if the history can't be read, a yellow `!` line says so and the end block has only how the run ended;
    - while an iteration is under way, its live row: its time so far (ticking, with a spinner) and phase (agent, gates, `observe · <entry>`, stop);
-   - once the run stopped, its end block: how it ended, each metric's baseline → latest accepted value, totals, what landed, what to type next, and the run's report.html and report.md once written.
-   - Commits waiting on the run's branch read `unlanded  3 commits on autohelix/<id> (manual landing)` with `autohelix land` among the next commands, as in `run`'s end block; on a branch that diverged from its target, `(diverged from main)` with `git merge autohelix/<id>` instead (`autohelix land` only fast-forwards).
+   - once the run stopped, its end block, as in `run`: how it ended, each metric's baseline → latest accepted value, totals, what landed (commits still waiting read `unlanded  3 commits on autohelix/<id> (manual landing)`, or `(diverged from main)` when the run diverged from its target), what to type next (`autohelix land`, or `git merge autohelix/<id>` for a diverged run, since `autohelix land` only fast-forwards), and the run's report.html and report.md once written.
 2. Live output (tool calls, text, elapsed time) of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end. Works with Claude Code, Codex and OpenCode logs.
 3. A status line: the iteration, the phase (in the live row's words: agent, gates, observe, stop) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`.
-4. While the run goes, a last line that says what Ctrl-C does there: `Ctrl-C quits this view · autohelix stop krp3 stops the run · hint --run krp3 "…"`.
+4. While the run goes, a last line: `Ctrl-C quits this view · autohelix stop krp3 stops the run · hint --run krp3 "…"`. Ctrl-C quits the view, never the run.
 
-On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out (the baseline stays). When the run stops, the view says how and when, and waits for the next segment; Ctrl-C stops watching, not the run. It only reads `.autohelix/` (and, for a judge or review call still running, its transcript in the run's copies folder).
+On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out (the baseline stays). When the run stops, the view says how and when, and waits for the next segment.
 
 ### Printed once
 

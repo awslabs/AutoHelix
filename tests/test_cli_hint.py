@@ -125,3 +125,23 @@ def test_from_a_subfolder_the_project_above_is_used(runner, tmp_path):
     assert result.exit_code == 0, result.output
     assert "Using project ../.." in result.output
     assert RunPaths(tmp_path, "test-1234").hints.exists()
+
+
+def test_the_help_says_the_prompt_holds_the_hints_text(runner):
+    result = runner.invoke(main, ["hint", "--help"])
+    assert result.exit_code == 0, result.output
+    text = " ".join(result.output.split())
+    assert "Each iteration's prompt holds the hints' text" in text
+    assert "Hints from the person running this run (newest last)" in text
+    assert "lists this file" not in text
+
+
+def test_a_run_id_as_an_argument_points_at_run(runner, initialized_project):
+    """`hint 7bne "message"` is refused, naming --run; nothing is written."""
+    result = runner.invoke(main, ["hint", "--path", str(initialized_project), "1234", "try numpy"])
+    assert result.exit_code == 2
+    assert 'the run goes in --run: autohelix hint --run 1234 "try numpy"' in result.output
+    assert not RunPaths(initialized_project, "test-1234").hints.exists()
+    several = runner.invoke(main, ["hint", "--path", str(initialized_project), "try", "numpy", "now"])
+    assert several.exit_code == 2
+    assert 'hint takes one message (quoted); the run goes in --run: autohelix hint --run ID "MESSAGE"' in several.output

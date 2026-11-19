@@ -13,7 +13,8 @@ has the checklist.
   is an error that names its replacement; there is no migration.
 - **Budgets are command-line flags**: `budget:` is now `run`/`resume` `-n`,
   `--until`, `--cost` and `--time`, each counting one command (a segment).
-  Without a flag a segment runs 1 iteration.
+  Without a flag a segment runs 1 iteration (0.1.1 ran until iteration
+  `budget.iterations`, default 5, of the project's one history).
 - **Runs.** Every `autohelix run` starts a new run, with its own state in
   `.autohelix/runs/<id>/`; `autohelix resume` continues one. 0.1.1's state
   (`.autohelix/history.jsonl`) is refused, not migrated.
@@ -80,6 +81,10 @@ has the checklist.
   summary).
 - **Cost tracking** across the agent, judges, the summary and model calls a
   command records in `$AUTOHELIX_USAGE_FILE`; `--cost` budgets on it.
+- **Gate, observe and stop commands get the run's context** in their environment
+  (`$AUTOHELIX_CANDIDATE`, `$AUTOHELIX_BASE`, `$AUTOHELIX_SCRATCH`,
+  `$AUTOHELIX_PREVIOUS`, `$AUTOHELIX_OBSERVATIONS` and more): see
+  [Phases → Command environment](docs/phases.md#command-environment).
 - **Rejected work is kept** as `refs/autohelix-rejected/<id>/<n>`, and the
   next agent gets the change as `rejected.patch`.
 - **One folder per iteration**, `runs/<id>/iterations/NNN/`: its record,
@@ -127,9 +132,9 @@ has the checklist.
 3. **Set `AUTOHELIX_CLAUDE_CODE_CMD`** instead of `AUTOHELIX_CLAUDE_CMD`
    (a set `AUTOHELIX_CLAUDE_CMD` is an error), and use the variables instead
    of `agent.command`.
-4. **No `init` or `setup`**: run bare `autohelix` in a terminal (an agent
+4. **No `init`**: run bare `autohelix` in a terminal (an agent
    drafts the config), or start from an example or the packaged template.
-5. **No `dashboard` or `watch`**: `autohelix view` is the web page (the old
+5. **No `watch`**: `autohelix view` is the web page (the old
    `.autohelix/output/dashboard.html` is no longer written); `view --terminal`
    follows a run.
 6. **Old runs can't be resumed**: move or delete `.autohelix/`, run
@@ -171,7 +176,7 @@ Each old key is an error naming its replacement; there are no aliases.
 | `-c/--config FILE` on `run`, `resume`, `view`, `report` | the config at `autohelix/<name>.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
 | `name:` | the config file's name: `autohelix/<name>.yaml` (and `autohelix run <name>`) | `` `name:` is gone: runs are named after the config file; use autohelix/<name>.yaml `` |
 | `run --name NAME` | the config file's name, as for `name:` | `No such option '--name'.` |
-| the `setup [NAME]` and `init [PATH]` commands | bare `autohelix` in a terminal (an agent drafts the config; by hand: the examples in docs/config.md and the template it names) | `No such command 'setup'.` |
+| the `init [PATH]` command | bare `autohelix` in a terminal (an agent drafts the config; by hand: the examples in docs/config.md and the template it names) | `No such command 'init'.` |
 
 ## 0.1.1 — 2026-09-02
 
