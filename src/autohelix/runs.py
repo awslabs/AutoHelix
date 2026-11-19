@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 from pathlib import Path
 
-from autohelix.config import ENTRY_NAME, load_config, project_configs, run_command, template_text
+from autohelix.config import ENTRY_NAME, config_name, load_config, project_configs, run_command, template_text
 
 SCHEMA = 2
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
@@ -1159,11 +1159,11 @@ def load_run_config(paths: RunPaths, data: dict | None = None):
     return config
 
 
-def new_run_name(config: Path, name: str | None) -> str | None:
-    """A new run's readable name: `name`, else the config file's (none for autohelix.yaml)."""
-    if name is None:
-        stem = config.stem
-        name = None if stem == "autohelix" else re.sub(r"[^a-z0-9-]", "-", stem.lower()).strip("-")[:32] or None
+def new_run_name(config_path: str, name: str | None) -> str | None:
+    """A new run's readable name: `name`, else its experiment's (`config_name` of the
+    project-relative `config_path`; none for autohelix.yaml)."""
+    if name is None and (experiment := config_name(config_path)):
+        name = re.sub(r"[^a-z0-9-]", "-", experiment.lower()).strip("-")[:32] or None
     if name is not None and not _NAME.fullmatch(name):
         raise RuntimeError(f"Run name {name!r}: use lowercase letters, digits or hyphens, starting with a letter "
                            "or digit, at most 32 characters.")
@@ -1250,7 +1250,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
                 return (paths, *_owned(paths))
             if not create:
                 raise NoRunToResume(no_run_to_resume(config_path))
-        name = new_run_name(config, name)
+        name = new_run_name(config_path, name)
         # Refused first starts must not leave an identity, owned ref or pointer.
         if ready is not None:
             ready()

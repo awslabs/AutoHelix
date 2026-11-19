@@ -21,12 +21,12 @@ CONFIG = {
 
 
 def private_configs(project, folder, exclude):
-    """Move the project's config to `folder`/perf.yaml as its own repository's commit,
+    """Move the project's config to `folder`/perf/autohelix.yaml as its own repository's commit,
     take autohelix.yaml out of the project's history and ignore `exclude` there."""
-    folder.mkdir(parents=True)
-    (folder / "perf.yaml").write_text(yaml.safe_dump(CONFIG))
+    (folder / "perf").mkdir(parents=True)
+    (folder / "perf" / "autohelix.yaml").write_text(yaml.safe_dump(CONFIG))
     git(folder, "init", "-q")
-    git(folder, "add", "perf.yaml")
+    git(folder, "add", "perf/autohelix.yaml")
     git(folder, "commit", "-qm", "perf config")
     git(project, "rm", "-q", "autohelix.yaml")
     git(project, "commit", "-qm", "configs are private")
@@ -52,7 +52,7 @@ def run_and_resume(project, config_path, warned=False):
 
 def test_autohelix_folder_as_its_own_repository(project):
     private_configs(project, project / "autohelix", "/autohelix/")
-    run_and_resume(project, "autohelix/perf.yaml")
+    run_and_resume(project, "autohelix/perf/autohelix.yaml")
 
 
 def test_autohelix_symlink_into_a_personal_repository(project, tmp_path):
@@ -60,7 +60,7 @@ def test_autohelix_symlink_into_a_personal_repository(project, tmp_path):
     private_configs(project, personal, "/autohelix")  # a symlink is a file to git: no trailing slash
     (project / "autohelix").symlink_to(personal)
     # run.json names the config by its resolved path, outside the project.
-    run_and_resume(project, str((personal / "perf.yaml").resolve()), warned=True)
+    run_and_resume(project, str((personal / "perf" / "autohelix.yaml").resolve()), warned=True)
 
 
 def test_untracked_root_config(project):

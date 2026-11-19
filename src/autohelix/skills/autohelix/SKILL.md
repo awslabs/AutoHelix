@@ -34,7 +34,7 @@ with no preamble and no mention of this skill. First take a quick look and run
 nothing that changes anything: the README and project instructions, how the
 code is tested and measured (test folders, benchmarks, evaluators, CI config),
 task or spec files (`TODO`, `TASKS.md`, a PRD), and any AutoHelix configs
-(`autohelix.yaml`, `autohelix/*.yaml`).
+(`autohelix.yaml`, `autohelix/*/autohelix.yaml`).
 
 - **With current runs**: the user has just seen them in a table (state,
   iterations, landing, cost), from bare `autohelix`; don't repeat it. Read the
@@ -46,7 +46,7 @@ task or spec files (`TODO`, `TASKS.md`, a PRD), and any AutoHelix configs
 - **Without runs**: a sentence on what you found that matters for a loop (what
   can check or measure a change), then "What should AutoHelix work on?" with
   two or three one-line goals drawn from the project. Configs no run has used
-  are worth one of them ("check and finish `autohelix/perf.yaml`"). In an empty
+  are worth one of them ("check and finish `autohelix/perf/autohelix.yaml`"). In an empty
   or unfamiliar project, ask with general examples.
 
 For example:
@@ -131,15 +131,16 @@ Name the config's path:
 
 - the path you were given (the session's first prompt may name it); a config
   that still holds the commented template is completed where it is;
-- else `autohelix.yaml` for the project's one loop, or `autohelix/<name>.yaml`
-  when it has or will have several. Never `autohelix.yaml` beside existing
-  `autohelix/` configs: it would take over a bare `autohelix run`. A name is
-  lowercase letters, digits or hyphens, at most 32 characters, starts with a
-  letter or digit, and isn't `autohelix`. Runs are named after it, and the
-  launch command names it: `autohelix run` for `autohelix.yaml`,
-  `autohelix run <name>` for `autohelix/<name>.yaml`.
-- Prompt templates and helper scripts go in subfolders (`autohelix/prompts/`):
-  every `.yaml` directly in `autohelix/` is a config.
+- else `autohelix.yaml` for the project's one loop, or
+  `autohelix/<name>/autohelix.yaml` (an experiment folder) when it has or will
+  have several. Never `autohelix.yaml` beside existing `autohelix/` experiments:
+  it would take over a bare `autohelix run`. A name is lowercase letters,
+  digits or hyphens, at most 32 characters, and starts with a letter or digit.
+  Runs are named after the folder, and the launch command names it:
+  `autohelix run` for `autohelix.yaml`, `autohelix run <name>` for
+  `autohelix/<name>/autohelix.yaml`.
+- A folder in `autohelix/` without `autohelix.yaml` (`autohelix/lib/`) isn't an
+  experiment, nor is a `.yaml` file directly in `autohelix/`.
 
 Preserve other configs and the run state in `.autohelix/`. A config in the
 first format (`constraints:`, `metrics:`, `reviewer:`, ...) no longer loads:
@@ -201,7 +202,7 @@ gates that use them, scope and input paths, environments and import paths,
 where outputs and captures will be. Metrics come only from
 `##autohelix[name=value]` lines on stdout; check that something prints them.
 Then `autohelix run --check` from the project root (`autohelix run perf --check`
-for `autohelix/perf.yaml`): every check `autohelix run` makes before writing
+for `autohelix/perf/autohelix.yaml`): every check `autohelix run` makes before writing
 anything, starting nothing; it exits 0 when the run would start. Resolve its
 errors and explain material warnings.
 

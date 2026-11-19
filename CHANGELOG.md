@@ -38,8 +38,10 @@ has the checklist.
   the metric's name. 0.1.1 also took a `name: value` or `name=value` line, and,
   with one declared metric, a single `##autohelix[...]` line whatever its
   name; those now report nothing.
-- **Configs live at `autohelix.yaml` or `autohelix/<name>.yaml`.** `-c/--config`
-  is gone; runs are named after the config file (`name:` is an error).
+- **Configs live at `autohelix.yaml` or in an experiment folder,
+  `autohelix/<name>/autohelix.yaml`** (`autohelix run <name>`; a
+  `autohelix/<name>.yaml` file is not a config). `-c/--config` is gone; runs
+  are named after the experiment folder (`name:` is an error).
 - **A run keeps the config it started with** (`runs/<id>/config.yaml`):
   `resume` refuses when the file's settings changed; apply an edit with
   `run --import <id>`.
@@ -143,8 +145,8 @@ has the checklist.
    to the command line: `budget.iterations` (and an old `-n`) is `--until`,
    `budget.cost` / `budget.time` are `--cost` / `--time`, now per command.
    `autohelix run --check` reports every old key with its replacement.
-2. **Put the config at `autohelix.yaml`** or `autohelix/<name>.yaml`
-   (`autohelix run <name>`); there is no `-c`.
+2. **Put the config at `autohelix.yaml`** or
+   `autohelix/<name>/autohelix.yaml` (`autohelix run <name>`); there is no `-c`.
 3. **Set `AUTOHELIX_CLAUDE_CODE_CMD`** instead of `AUTOHELIX_CLAUDE_CMD`
    (a set `AUTOHELIX_CLAUDE_CMD` is an error), and use the variables instead
    of `agent.command`.
@@ -185,7 +187,7 @@ Each old key is an error naming its replacement; there are no aliases.
 | `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | as `budget:` |
 | `timeout:` in seconds | durations everywhere (a bare number, or a string of digits like `"90"`, is still seconds) | |
 | `.autohelix/prompt.md` | `prompt_template:` (relative to the config) | a warning at run start |
-| `-c/--config FILE` on `run`, `report` | the config at `autohelix/<name>.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
+| `-c/--config FILE` on `run`, `report` | the config at `autohelix/<name>/autohelix.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
 | the `init [PATH]` command | bare `autohelix` in a terminal (an agent drafts the config; by hand: the examples in docs/config.md and the template it names) | `No such command 'init'.` |
 
 #### Prompt template variables

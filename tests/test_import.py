@@ -88,14 +88,14 @@ def test_import_shows_the_runs_state_and_continues_its_observations(project, mon
 
 def test_import_by_suffix_warns_when_the_config_differs(project):
     parent, _ = started(project)
-    other = project / "autohelix" / "perf.yaml"
-    other.parent.mkdir()
+    other = project / "autohelix" / "perf" / "autohelix.yaml"
+    other.parent.mkdir(parents=True)
     shutil.copy(project / "autohelix.yaml", other)
     git(project, "add", ".")
     git(project, "commit", "-qm", "perf")
     result = cli(project, "run", "perf", "-n", "1", "--no-report", "--import", short_id(parent.run_id))
     assert result.exit_code == 0, result.output
-    assert f"Run {short_id(parent.run_id)} used autohelix.yaml; this run uses autohelix/perf.yaml." in result.output
+    assert f"Run {short_id(parent.run_id)} used autohelix.yaml; this run uses autohelix/perf/autohelix.yaml." in result.output
     same = cli(project, "run", "-n", "1", "--no-report", "--import", short_id(parent.run_id))
     assert same.exit_code == 0 and " used " not in same.output
     missing = cli(project, "run", "-n", "1", "--import", "zzzz")

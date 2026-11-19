@@ -42,7 +42,7 @@ The project is, whichever subfolder you are in:
 1. the folder with runs (the current folder or the nearest one above it with
    `.autohelix/runs/`, within the git checkout, as for `view`);
 2. else the current folder or the nearest one above it with a config
-   (`autohelix.yaml` or `autohelix/*.yaml`, the folder `autohelix run` there
+   (`autohelix.yaml` or `autohelix/*/autohelix.yaml`, the folder `autohelix run` there
    would use);
 3. else the top of the git checkout.
 
@@ -122,10 +122,10 @@ config names all three.
 ### Config files
 
 A project's configs live in exactly two places: `autohelix.yaml` at its root,
-or `autohelix/<name>.yaml` for several loops.
+or an experiment folder's `autohelix/<name>/autohelix.yaml` for several loops.
 
-- The `autohelix/` folder can also hold prompt templates and helper scripts
-  (`autohelix/prompts/perf.md`; `prompt_template:` is relative to the config's
+- An experiment folder can also hold its prompt template and helper scripts
+  (`autohelix/perf/prompt.md`; `prompt_template:` is relative to the config's
   folder). Commit the scripts (outside `autohelix/` if you keep it private:
   [Configuration → Where configs live](config.md#where-configs-live))
   ([Phases → Candidate copies](phases.md#candidate-copies)).
@@ -137,12 +137,13 @@ or `autohelix/<name>.yaml` for several loops.
 
 Which config a command uses:
 
-- The configs in `autohelix/` are the `.yaml` files directly in it; keep
-  other YAML files in subfolders.
-- `autohelix run perf` uses `autohelix/perf.yaml`.
-- A bare `autohelix run` uses `autohelix.yaml`, else the only config in
+- An experiment in `autohelix/` is a folder holding `autohelix.yaml`:
+  `autohelix/perf/autohelix.yaml`. Folders without one (`autohelix/lib/`),
+  dot-folders and `.yaml` files directly in `autohelix/` aren't configs.
+- `autohelix run perf` uses `autohelix/perf/autohelix.yaml`.
+- A bare `autohelix run` uses `autohelix.yaml`, else the only experiment in
   `autohelix/`, else stops with the list of configs.
-- Runs are named after the config file, so runs of `autohelix/perf.yaml` are
+- Runs are named after the experiment folder, so runs of `autohelix/perf/` are
   named like `20261112-1400-perf-0mws`; `autohelix.yaml` gives runs no name.
 - A run has exactly one config: it stores the file's text when it starts
   (`.autohelix/runs/<id>/config.yaml`, its prompt template beside it as
@@ -172,9 +173,9 @@ autohelix run [CONFIG] [-n N | --until N] [--cost USD] [--time DURATION] [-p PAT
 autohelix run [CONFIG] --check
 ```
 
-`CONFIG` names a config in `autohelix/` (`perf` for `autohelix/perf.yaml`);
-without it, the run uses `autohelix.yaml`, else the only config in
-`autohelix/` (see [Config files](#config-files)). The project must be a git
+`CONFIG` names an experiment folder in `autohelix/` (`perf` for
+`autohelix/perf/autohelix.yaml`); without it, the run uses `autohelix.yaml`,
+else the only experiment in `autohelix/` (see [Config files](#config-files)). The project must be a git
 checkout with a commit, and the first baseline needs no uncommitted changes to
 tracked files.
 
@@ -535,7 +536,7 @@ Other options as for `run`, and it keeps the machine awake the same way.
 
 - `resume k3f9` continues that run.
 - `resume perf` (a config name, as `run perf` takes) continues the latest run
-  of `autohelix/perf.yaml`; a run id takes precedence over a config of the
+  of `autohelix/perf/autohelix.yaml`; a run id takes precedence over a config of the
   same name.
 - Without either, the config is the one a bare `autohelix run` would use (with
   several configs and no `autohelix.yaml`, `resume` stops: name a run or a
@@ -1105,7 +1106,7 @@ stop:
 - **What it judges, by hand**: the current directory in place; the change, named in the prompt, is its working tree against `HEAD` (computed as for `review`). Outside a git repository there is no diff: the judge judges the files as they are.
 - **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox, with `project_doc_max_bytes=0` so it loads no `AGENTS.md` from the judged files (unconfirmed against a real Codex call). OpenCode can't be used as a judge yet: it has no read-only mode.
 - **Costs and logs, in a run.** Each call's cost counts toward the iteration's cost and `--cost`. Its transcript is saved with the output of the command that ran it: `.autohelix/runs/<id>/iterations/NNN/gates/<k>/ask.log` for an `ask:` gate (`stop/<k>/` for a stop command, `observe/<name>/` for an observe entry; `ask-2.log`, … for further calls). While the command runs it is written to the command's private `$AUTOHELIX_LOG_DIR`.
-- **Costs, outside a run.** A line on stderr gives the answer, the agent and where its settings came from, and the cost: `autohelix ask: yes · codex gpt-5 (autohelix/a.yaml) · $0.0120`, or `· claude-code (defaults: several configs here) · …`, so a by-hand answer from other settings than a run's is visible.
+- **Costs, outside a run.** A line on stderr gives the answer, the agent and where its settings came from, and the cost: `autohelix ask: yes · codex gpt-5 (autohelix/a/autohelix.yaml) · $0.0120`, or `· claude-code (defaults: several configs here) · …`, so a by-hand answer from other settings than a run's is visible.
 - An invalid answer or failed call is retried once. The command stays inside the timeout of the command that runs it.
 - **Scripts own the exit code.** `ask` exits non-zero when it can't answer; a script that swallows that (`autohelix ask ... || true`) and exits 0 passes.
 - **One write guard.** Each call fingerprints the judged files first (git's tracked and non-ignored untracked files, modes, symlinks and submodule contents; outside a repository, every file but cache folders); only the call's own transcript and the usage file may change.

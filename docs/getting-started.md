@@ -95,7 +95,7 @@ skill bundled with AutoHelix; the agent takes a quick look at the project and
 asks what AutoHelix should work on, with a few goals that fit it. The skill helps design the experiment from your existing code,
 checks, and evidence. The agent saves the config as `autohelix.yaml` (the
 project's first config; for later ones it proposes a short name for the goal
-and saves them as `autohelix/<name>.yaml`), checks it with `autohelix run --check`, commits it, and
+and saves them as `autohelix/<name>/autohelix.yaml`), checks it with `autohelix run --check`, commits it, and
 gives the `autohelix run` command to start. The agent you choose becomes
 `agent.cli`, the loop's agent, unless you decide otherwise.
 
@@ -116,7 +116,7 @@ preserving its results. The agent can propose suitable tests and benchmarks;
 you do not need to specify the evaluation in the initial request.
 
 The agent inspects the project, then shows the complete proposed YAML and its
-intended path (`autohelix.yaml`, or `autohelix/<name>.yaml`) before changing
+intended path (`autohelix.yaml`, or `autohelix/<name>/autohelix.yaml`) before changing
 project files. A numbered walkthrough follows the YAML in configuration order:
 what each section controls, why its settings were chosen, and how to adjust
 them. It covers the goal, scope, gates, observations and evidence, backend,
@@ -179,8 +179,8 @@ The following steps prepare the same kind of experiment without the skill.
 
 ### 1. Write the config
 
-Write `autohelix.yaml` at the project root (or `autohelix/perf.yaml`, one of
-[several configs](#5-several-configs)). Start from the config below, an
+Write `autohelix.yaml` at the project root (or `autohelix/perf/autohelix.yaml`,
+one of [several configs](#5-several-configs)). Start from the config below, an
 [example](https://github.com/awslabs/AutoHelix/tree/main/examples), or the commented template shipped in the package:
 
 ```bash
@@ -236,7 +236,7 @@ The configuration must reference implemented checks and measurements that use
 the intended environment. Then launch:
 
 ```bash
-autohelix run -n 5       # autohelix run perf -n 5 for autohelix/perf.yaml
+autohelix run -n 5       # autohelix run perf -n 5 for autohelix/perf/autohelix.yaml
 ```
 
 It prints a header (goal, agent, gates, observe, scope, budget), then one row per
@@ -294,20 +294,23 @@ changes and any commits you made on that branch since the run started.
 
 ### 5. Several configs
 
-A project can have several loops: one config each, in an `autohelix/` folder
-at the project root. Commit the configs, or keep the folder private
+A project can have several loops: one experiment folder each, in an
+`autohelix/` folder at the project root. Commit the configs, or keep the folder private
 ([Where configs live](config.md#where-configs-live)), and commit any scripts
 their commands use.
 
 ```
 autohelix/
-  perf.yaml              # autohelix run perf
-  docs.yaml              # autohelix run docs
-  prompts/perf.md        # prompt_template: prompts/perf.md, in perf.yaml
+  perf/
+    autohelix.yaml       # autohelix run perf
+    prompt.md            # prompt_template: prompt.md, in perf/autohelix.yaml
+  docs/
+    autohelix.yaml       # autohelix run docs
+  lib/                   # no autohelix.yaml: not an experiment
 ```
 
-Runs are named after the file (`20261112-1400-perf-0mws`). A bare
-`autohelix run` uses `autohelix.yaml`, else the only config in `autohelix/`;
+Runs are named after the folder (`20261112-1400-perf-0mws`). A bare
+`autohelix run` uses `autohelix.yaml`, else the only experiment in `autohelix/`;
 with several, it stops with the list (`autohelix run <name>` picks one). See
 [CLI → Config files](cli.md#config-files) for the rules.
 
@@ -318,8 +321,8 @@ per variant, commit them, and start one run per config in its own terminal,
 landing manually so that none lands before you compare:
 
 ```bash
-autohelix run a --land manual     # autohelix/a.yaml
-autohelix run b --land manual     # autohelix/b.yaml
+autohelix run a --land manual     # autohelix/a/autohelix.yaml
+autohelix run b --land manual     # autohelix/b/autohelix.yaml
 ```
 
 Compare them with `autohelix view`, then land the winner and archive the

@@ -81,9 +81,9 @@ def files(project):
 
 
 def mock_config(project, name=None, commit=True):
-    """A mock-agent config (autohelix.yaml, or autohelix/NAME.yaml), committed."""
-    path = project / (f"autohelix/{name}.yaml" if name else "autohelix.yaml")
-    path.parent.mkdir(exist_ok=True)
+    """A mock-agent config (autohelix.yaml, or autohelix/NAME/autohelix.yaml), committed."""
+    path = project / (f"autohelix/{name}/autohelix.yaml" if name else "autohelix.yaml")
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump({"goal": "Make a checked change", "agent": {"cli": "mock", "mock": {
         "change_file": "main.py", "change_content": "x = {iteration}\n", "cost_usd": 0.1}}}))
     if commit:
@@ -230,7 +230,7 @@ def test_the_project_is_the_nearest_folder_with_a_config(project, monkeypatch, e
     assert lines(result)[1].endswith(f" · {app.resolve()}")
     [(_, argv, cwd)] = execs
     assert Path(cwd) == app.resolve() and f"in this project ({app.resolve()})" in argv[-1]
-    assert "Its configs: autohelix/perf.yaml (no runs yet)." in argv[-1]
+    assert "Its configs: autohelix/perf/autohelix.yaml (no runs yet)." in argv[-1]
 
 
 # --- configs without runs ---------------------------------------------------------
@@ -241,13 +241,14 @@ def test_configs_without_runs_are_named_in_the_prompt_and_asked_as_ever(project,
     (the skill offers to finish them)."""
     agents(["claude"])(monkeypatch)
     mock_config(project, "perf", commit=False)
-    (project / "autohelix" / "fast.yaml").write_text("goal: half done\n")  # hand-written
+    (project / "autohelix" / "fast").mkdir()
+    (project / "autohelix" / "fast" / "autohelix.yaml").write_text("goal: half done\n")  # hand-written
     result = entry(input="\n")
     assert result.exit_code == 0, result.output
     assert "Start Claude Code with AutoHelix? Enter/q" in flat(result.output)
     assert "no runs yet" not in result.output and not any(re.match(r"  \d\. ", line) for line in lines(result))
     prompt = execs[0][1][-1]
-    assert "Its configs: autohelix/fast.yaml (no runs yet), autohelix/perf.yaml (no runs yet)." in prompt
+    assert "Its configs: autohelix/fast/autohelix.yaml (no runs yet), autohelix/perf/autohelix.yaml (no runs yet)." in prompt
 
 
 def flat_lines(result):
@@ -518,7 +519,7 @@ def test_run_with_a_missing_name_says_where_to_look(project):
     mock_config(project)
     result = CliRunner().invoke(main, ["run", "perf"])
     assert result.exit_code == 1
-    assert "Write autohelix/perf.yaml: run `autohelix` in a terminal" in flat(result.output)
+    assert "Write autohelix/perf/autohelix.yaml: run `autohelix` in a terminal" in flat(result.output)
 
 
 def test_the_template_is_a_valid_config_once_it_has_a_goal(project):

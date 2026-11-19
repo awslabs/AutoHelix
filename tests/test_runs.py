@@ -33,7 +33,8 @@ def test_identity_selection_new_and_explicit_config(project):
     assert re.fullmatch(r"\d{8}-\d{4}-second-[0-9a-z]{4}", named.paths.run_id)
     assert named.paths.run_id != run_id
     named.close()
-    other = project / "other.yaml"
+    other = project / "autohelix" / "other" / "autohelix.yaml"  # named after its experiment folder
+    other.parent.mkdir(parents=True)
     other.write_text((project / "autohelix.yaml").read_text())
     git(project, "add", ".")
     git(project, "commit", "-qm", "other config")

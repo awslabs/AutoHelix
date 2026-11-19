@@ -176,8 +176,8 @@ class Harness:
         A new run records its landing mode (`land_mode`, else manual with a
         `group`, else auto) and its `group`. On resume `land_mode`
         and `group` change the stored ones (`group=''` clears it) once the segment
-        starts; otherwise the run keeps its own. A new run is named after the config
-        file (`name` replaces that, for library callers and tests).
+        starts; otherwise the run keeps its own. A new run is named after its experiment
+        folder (`config.config_name`; `name` replaces that, for library callers and tests).
 
         A new run may import another (`import_run`, a full id: `run --import`): every
         agent copy shows that run's state read-only, and the baseline's observe entries
@@ -240,7 +240,7 @@ class Harness:
                              f"`{run_command(config_relative(self.project_path, config_file))} --import {short}`.")
         self._preflight_done = False
         if creating:
-            name = new_run_name(config_file, name)
+            name = new_run_name(config_relative(self.project_path, config_file), name)
             self._new_run_ready()
         else:  # a run continues its own tip: refused before anything is written
             data = planned.read_identity()

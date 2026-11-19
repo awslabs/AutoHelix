@@ -1,7 +1,8 @@
 # Configuration
 
 A loop's configuration lives in `autohelix.yaml` at the project root, or in
-`autohelix/<name>.yaml` when a project has several (`autohelix run <name>`; see
+an experiment folder's `autohelix/<name>/autohelix.yaml` when a project has
+several (`autohelix run <name>`; see
 [CLI → Config files](cli.md#config-files)). Bare `autohelix` in a terminal
 starts a coding agent that drafts one with you; to write one by hand, start from
 the examples below or the commented template shipped in the package
@@ -42,7 +43,7 @@ repository:
 
 ```bash
 echo /autohelix/ >> .git/info/exclude
-cd autohelix && git init && git add perf.yaml && git commit -m "perf config"
+cd autohelix && git init && git add perf/autohelix.yaml && git commit -m "perf config"
 ```
 
 or make it a symlink into a personal repository of configs:

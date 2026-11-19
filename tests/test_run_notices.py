@@ -90,16 +90,16 @@ def test_an_untracked_prompt_template_warns_under_auto_landing(project):
 
 
 def test_an_untracked_config_warns_and_an_ignored_one_doesnt(project):
-    (project / "autohelix").mkdir()
+    (project / "autohelix" / "perf").mkdir(parents=True)
     config = yaml.safe_load((project / "autohelix.yaml").read_text())
-    (project / "autohelix" / "perf.yaml").write_text(yaml.safe_dump(config))
+    (project / "autohelix" / "perf" / "autohelix.yaml").write_text(yaml.safe_dump(config))
     _, result = started(project, "perf")
-    assert "commit autohelix/perf.yaml first" in before_header(result)
+    assert "commit autohelix/perf/autohelix.yaml first" in before_header(result)
     (project / ".gitignore").write_text("autohelix/\n")
     git(project, "add", ".gitignore")
     git(project, "commit", "-qm", "ignore")
     _, result = started(project, "perf")
-    assert "commit autohelix/perf.yaml first" not in result.output
+    assert "commit autohelix/perf/autohelix.yaml first" not in result.output
 
 
 def test_a_committed_config_doesnt_warn(project):
