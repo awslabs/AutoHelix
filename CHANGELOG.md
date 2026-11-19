@@ -178,7 +178,7 @@ Each old key is an error naming its replacement; there are no aliases.
 | `agent.settings` | `agent.extra_args` | `` `agent.settings` is gone: pass the CLI's own options in `agent.extra_args` `` |
 | `agent.require_notes` | ask for notes in the goal or the prompt template | `` `agent.require_notes` is gone: ... `` |
 | `agent.timeout_seconds` | `agent.timeout` (a duration) | `` `agent.timeout_seconds` is now `agent.timeout` (a duration such as 30m) `` |
-| `budget:` (`iterations`, `cost`, `time`) | the `run`/`resume` flags `--until` (a run total, as `iterations` was), `--cost` and `--time` (per segment, where they counted the whole history); see [CLI → Budgets](docs/cli.md#budgets) | `` `budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`; ...) `` |
+| `budget:` (`iterations`, `cost`, `time`) | the `run`/`resume` flags `--until` (a run total, as `iterations` was), `--cost` and `--time` (per segment, where they counted the whole history); see [CLI → Budgets](docs/cli.md#budgets) | `` `budget:` moved to the command line: `autohelix run --until N --cost USD --time DURATION` (also `resume`; ...) `` |
 | `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | as `budget:` |
 | `timeout:` in seconds | durations everywhere (a bare number, or a string of digits like `"90"`, is still seconds) | |
 | `.autohelix/prompt.md` | `prompt_template:` (relative to the config) | a warning at run start |

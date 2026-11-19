@@ -266,7 +266,7 @@ class TestOldKeys:
         ({"agent": {"timeout_seconds": 60}}, "`agent.timeout_seconds` is now `agent.timeout`"),
         ({"agent": {"settings": {"model": "m"}}}, "`agent.settings` is gone: pass the CLI's own options in `agent.extra_args`"),
         ({"budget": {"iterations": 3}},
-         "`budget:` moved to the command line: `autohelix run -n N --cost USD --time DURATION` (also `resume`"),
+         "`budget:` moved to the command line: `autohelix run --until N --cost USD --time DURATION` (the run's total, as `budget.iterations` was; `-n N` for N more; also `resume`"),
         ({"budget": None}, "`budget:` moved to the command line"),
         ({"budget": {"iteration_time": "1h"}}, "`agent.timeout` limits one iteration"),
         ({"land": "manual"}, "`land:` moved to the command line: `autohelix run --land auto|manual` (also `resume`"),
