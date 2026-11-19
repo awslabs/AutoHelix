@@ -94,7 +94,8 @@ without explaining its state. Report accepted/rejected attempts, actual
 measurements, retained changes, failures, and useful evidence paths. Execute
 post-run checks only under the entrypoint's existing cheap/authorized policy.
 
-Use available usage records and the [accounting boundaries](config.md#budgets-and-run-state).
+Use available usage records and what each limit counts (the docs' `concepts.md`,
+Cost Tracking).
 Missing dollar usage is unknown, not zero; supervisor/setup expenditure is
 separate from the current loop counter. Do not start additional review,
 report, or improvement calls merely to complete the handoff when existing

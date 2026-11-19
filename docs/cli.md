@@ -70,55 +70,39 @@ The screen has:
 
   1 archived · autohelix --help: all commands
 
-  ❯ Ask Claude Code about these runs
-    Set up a new experiment with Claude Code   it drafts a config with you
-  (q: quit)
+  Start Claude Code with AutoHelix? Enter/q
 ```
 
-(At 80 columns the first option's note, "it summarizes them, then answers
-questions", doesn't fit whole, so it is left out.)
-
-Choose with ↑/↓ and Enter, or an option's number; Enter alone takes the first,
-q or Esc quits (exit 0), Ctrl-C interrupts (exit 130). Keys typed before the
-screen is drawn are dropped. Nothing starts without a key press, so
-`autohelix` is also a quick look at a project. The question depends on what
-the project has:
-
-| The project has | The question |
-|---|---|
-| runs that aren't archived | Ask *agent* about these runs / Set up a new experiment with *agent* |
-| configs, no runs (a hand-written or half-finished `autohelix.yaml`) | autohelix.yaml, no runs yet: check and finish it with *agent* / Set up a new experiment with *agent* |
-| neither (archived runs aside: "no current runs, 2 archived") | Set up an experiment with *agent*? Enter/q |
+Enter starts the session; q or Esc quits (exit 0), Ctrl-C interrupts (exit
+130). Keys typed before the screen is drawn are dropped. Nothing starts
+without a key press, so `autohelix` is also a quick look at a project.
 
 - With several agents installed (looked for in the order `claude`, `codex`,
-  `opencode`), the labels say "an agent" and "Which agent?" follows, every
-  time. Without any, the screen says what to install and exits 1.
+  `opencode`), the question is which one: "Start an agent with AutoHelix:",
+  chosen with ↑/↓ and Enter or its number. Without any, the screen says what
+  to install and exits 1.
 - Outside a git checkout the screen says so (a run refuses the folder) and
   offers nothing to start (exit 1). Other git problems, such as no commit yet,
   are in the header's Git line and in the agent's first prompt.
 
-Every option starts the same session: `autohelix` is replaced by the agent's
-usual interactive CLI, started in the project. Its first prompt points at the
-bundled skill, names AutoHelix's own CLI and Python and the user docs shipped
-in the package, lists the project's runs (id, state, last iteration) and
-configs, and says which option you picked; you can switch at any point.
+`autohelix` is replaced by the agent's usual interactive CLI, started in the
+project. Its first prompt points at the bundled skill, names AutoHelix's own CLI and Python and the user docs shipped
+in the package, lists the project's runs (id, config, goal, state, accepted
+iterations, cost, commits to land) and configs, and names the agent CLI. How
+the session goes is the skill's: the agent takes a quick look at the project
+and opens with one short message.
 
-- **Ask about these runs**: the agent opens with a summary of the live runs
-  plus the latest one (what was accepted, what was rejected and why, anything
-  odd), then answers your questions from the run records. It sends `hint` or
-  `stop` only when you ask.
-- **Set up a new experiment**: the agent asks what you want to achieve, then
-  shows the complete proposed config and walks through each section before
-  changing project files: what it controls, why it was chosen, and how to
-  adjust it, including effective defaults.
-  - It proposes a short name for the goal and saves the config as
-    `autohelix/<name>.yaml` (`autohelix.yaml` for the project's first config),
-    with `agent.cli` set to that agent unless you decide otherwise.
-  - When you agree, it writes the config, checks it with
-    `autohelix run NAME --check`, commits it, and gives the
-    `autohelix run NAME` command (with a budget) for you to run; it starts a
-    run only when asked.
-- **Check and finish** an existing config works the same way on that file.
+- **With runs**, it doesn't repeat the table: it says what the table doesn't
+  show (why recent iterations were rejected, anything odd) and asks what next,
+  with examples from the runs (a question about one, the command that applies,
+  a new experiment). It changes a run (`hint`, `stop`, `land`, ...) only when
+  you ask.
+- **Without runs**, it asks what AutoHelix should work on, with goals drawn
+  from the project (configs no run has used among them). Then it shows the
+  complete proposed config and walks through it before changing project
+  files. When you agree, it writes the config, checks it with
+  `autohelix run --check`, commits it, and gives the `autohelix run` command
+  (with a budget) for you to run; it starts a run only when asked.
 
 Nothing is installed into the agent's settings, and the skill always matches
 the installed AutoHelix (`autohelix skill install` puts a copy where your own
@@ -1241,31 +1225,45 @@ Its time and cost are shown next to the summary in `autohelix view` and
 `autohelix report` refuses a run that is running. It replaces the previous
 summary only if the agent writes a new one.
 
-## `autohelix skill`
+## `autohelix docs`
 
-Install or export the packaged `autohelix-setup` skill and all its references.
-It helps your coding agent design and verify performance, writing, and research
-experiments using the installed CLI. A source checkout is not required.
+Prints the folder of the user docs that came with this AutoHelix (the package
+ships them; an editable install prints the checkout's `docs/`). `README.md` in
+it is their index. An installed copy of the skill finds the docs this way.
+Without docs on disk it exits 1 and names the online copy.
 
 ```bash
-autohelix skill install --agent claude --scope project --path /path/to/project
-autohelix skill install --agent codex --scope user
-autohelix skill export /path/to/autohelix-setup
+$ autohelix docs
+/path/to/site-packages/autohelix/docs
 ```
 
-`--agent` is required and accepts `claude`, `codex`, or `opencode`. `--scope`
+## `autohelix skill`
+
+Install or export the packaged `autohelix` skill and all its references. It
+helps your coding agent set up experiments, explain a project's runs, and, when
+asked, launch and supervise one, using the installed CLI. A source checkout is
+not required.
+
+```bash
+autohelix skill install --agent claude-code --scope project --path /path/to/project
+autohelix skill install --agent codex --scope user
+autohelix skill export /path/to/autohelix
+```
+
+`--agent` is required and accepts `claude-code`, `codex`, or `opencode` (the
+names `agent.cli` uses). `--scope`
 defaults to `project`. Project installation uses the current directory or
 `--path`; user installation uses your home directory and rejects `--path`.
 Skill installation does not require a git repository.
 
 | Agent | Project skill folder | User skill folder |
 | --- | --- | --- |
-| Claude Code | `.claude/skills/autohelix-setup/` | `~/.claude/skills/autohelix-setup/` |
-| Codex | `.agents/skills/autohelix-setup/` | `~/.agents/skills/autohelix-setup/` |
-| OpenCode | `.opencode/skills/autohelix-setup/` | `~/.config/opencode/skills/autohelix-setup/` |
+| Claude Code | `.claude/skills/autohelix/` | `~/.claude/skills/autohelix/` |
+| Codex | `.agents/skills/autohelix/` | `~/.agents/skills/autohelix/` |
+| OpenCode | `.opencode/skills/autohelix/` | `~/.config/opencode/skills/autohelix/` |
 
 Export writes the full skill directly into `DESTINATION`; it does not append
-another `autohelix-setup` directory. Use it for custom discovery directories.
+another `autohelix` directory. Use it for custom discovery directories.
 
 Both commands refuse any existing destination by default, including an empty
 directory.
@@ -1282,8 +1280,8 @@ front matter), and tells the agent to point out a different `autohelix
 --version` and suggest reinstalling with `--force`: an installed copy stays as
 it was when AutoHelix is upgraded.
 
-After installation, ask your agent to use `autohelix-setup` to prepare your
-experiment (or run bare [`autohelix`](#autohelix) in a terminal: it starts the
+After installation, ask your agent to use the `autohelix` skill to prepare your
+experiment (or to explain the project's runs) (or run bare [`autohelix`](#autohelix) in a terminal: it starts the
 agent with the bundled skill, without installing anything). The agent:
 
 - inspects the project and proposes scope, gates, observe entries (commands

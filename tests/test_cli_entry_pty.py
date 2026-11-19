@@ -87,8 +87,8 @@ class Terminal:
 
 @pytest.fixture
 def screen(tmp_path):
-    """Start bare `autohelix` in a committed checkout with a config and no runs (two
-    options: check and finish it, set up a new one), fake agents on PATH; yields a
+    """Start bare `autohelix` in a committed checkout with a config and no runs (one
+    question: Enter/q with one agent, which agent with several), fake agents on PATH; yields a
     function taking the agents' names that returns the Terminal."""
     project = tmp_path / "project"
     project.mkdir()
@@ -121,24 +121,33 @@ def screen(tmp_path):
         terminal.close()
 
 
-def test_down_then_enter_starts_the_agent_with_the_second_request(screen):
+def test_enter_starts_the_agent(screen):
     terminal = screen()
-    terminal.read_until("(q: quit)")
-    terminal.type(b"\x1b[B")
+    terminal.read_until("Enter/q")
     terminal.type(b"\r")
     terminal.read_until("FAKE-AGENT-STARTED")
     assert terminal.exit_code() == 0
     argv = screen.argv()
     assert argv[0] == "--add-dir" and argv[-2] == "--"
     prompt = argv[-1]
-    assert 'I picked "Set up a new experiment with Claude Code"' in prompt
-    assert "My first request: set up a new experiment. Propose a short name for this goal" in prompt
+    assert "Its configs: autohelix.yaml (no runs yet)." in prompt and prompt.endswith("open as the skill says.")
+
+
+def test_down_then_enter_picks_the_second_agent(screen):
+    terminal = screen(("claude", "codex"))
+    terminal.read_until("(q: quit)")
+    terminal.type(b"\x1b[B")
+    terminal.type(b"\r")
+    terminal.read_until("FAKE-AGENT-STARTED")
+    assert terminal.exit_code() == 0
+    assert screen.started("codex") and not screen.started("claude")
+    assert "This session runs in Codex (`agent.cli: codex`)." in screen.argv("codex")[-1]
 
 
 @pytest.mark.parametrize("key, code", [(b"q", 0), (b"\x1b", 0), (b"\x03", 130)])
 def test_q_esc_and_ctrl_c(screen, key, code):
     terminal = screen()
-    terminal.read_until("(q: quit)")
+    terminal.read_until("Enter/q")
     terminal.type(key)
     assert terminal.exit_code() == code
     assert not screen.started() and b"Aborted" not in terminal.output
@@ -147,9 +156,8 @@ def test_q_esc_and_ctrl_c(screen, key, code):
 @pytest.mark.parametrize("key, code", [(b"\x1b", 0), (b"\x03", 130)])
 def test_esc_and_ctrl_c_at_which_agent(screen, key, code):
     terminal = screen(("claude", "codex"))
+    terminal.read_until("Start an agent with AutoHelix:")
     terminal.read_until("(q: quit)")
-    terminal.type(b"\r")
-    terminal.read_until("Which agent?")  # drawn after the earlier keys were dropped
     terminal.type(key)
     assert terminal.exit_code() == code
     assert not screen.started("claude") and not screen.started("codex") and b"Aborted" not in terminal.output
@@ -159,7 +167,7 @@ def test_keys_typed_before_the_menu_are_dropped(screen):
     """An impatient Enter while the screen loads doesn't start an agent session."""
     terminal = screen()
     terminal.type(b"\r")  # before the child has even started Python
-    terminal.read_until("(q: quit)")
+    terminal.read_until("Enter/q")
     time.sleep(0.3)
     assert terminal.process.poll() is None and not screen.started()
     terminal.type(b"q")

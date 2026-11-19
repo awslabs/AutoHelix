@@ -1,4 +1,4 @@
-"""Portable setup skill resources and explicit CLI installation."""
+"""Portable AutoHelix skill resources and explicit CLI installation."""
 
 import os
 import re
@@ -14,22 +14,21 @@ from autohelix.cli import main
 from autohelix.config import Config
 
 
-SKILL_NAME = "autohelix-setup"
+SKILL_NAME = "autohelix"
 RESOURCE_PATHS = [
     "SKILL.md",
-    "references/config.md",
     "references/loop-design.md",
     "references/examples.md",
     "references/managed-runs.md",
     "references/reading-runs.md",
 ]
 PROJECT_DIRS = {
-    "claude": ".claude/skills",
+    "claude-code": ".claude/skills",
     "codex": ".agents/skills",
     "opencode": ".opencode/skills",
 }
 USER_DIRS = {
-    "claude": ".claude/skills",
+    "claude-code": ".claude/skills",
     "codex": ".agents/skills",
     "opencode": ".config/opencode/skills",
 }
@@ -141,7 +140,7 @@ def test_force_updates_bundled_files_and_preserves_local_files(
     result = runner.invoke(main, args)
     assert result.exit_code == 0, result.output
     (destination / "SKILL.md").write_bytes(b"old instructions")
-    (destination / "references/config.md").write_bytes(b"old config")
+    (destination / "references/loop-design.md").write_bytes(b"old design")
     (destination / "references/local.md").write_bytes(b"local reference")
     (destination / "other").mkdir()
     (destination / "other/local.txt").write_bytes(b"local notes")
@@ -189,7 +188,7 @@ def test_force_rejects_type_conflicts_before_writing(runner, tmp_path, conflict)
         elif conflict == "references-file":
             (destination / "references").write_bytes(b"local file")
         else:
-            (destination / "references/config.md").mkdir(parents=True)
+            (destination / "references/loop-design.md").mkdir(parents=True)
     before = snapshot(tmp_path)
     result = runner.invoke(main, ["skill", "export", str(destination), "--force"])
     assert result.exit_code == 1, result.output
@@ -197,7 +196,7 @@ def test_force_rejects_type_conflicts_before_writing(runner, tmp_path, conflict)
     assert snapshot(tmp_path) == before
 
 
-@pytest.mark.parametrize("link_path", [".", "SKILL.md", "references", "references/config.md"])
+@pytest.mark.parametrize("link_path", [".", "SKILL.md", "references", "references/loop-design.md"])
 @pytest.mark.parametrize("dangling", [False, True])
 def test_force_rejects_symlinks_before_writing(runner, tmp_path, link_path, dangling):
     destination = tmp_path / "skill"
@@ -266,6 +265,7 @@ def test_io_error_is_actionable(runner, tmp_path, monkeypatch):
     [
         ["install"],
         ["install", "--agent", "other"],
+        ["install", "--agent", "claude"],  # `agent.cli`'s name is claude-code
         ["install", "--agent", "codex", "--scope", "other"],
         ["export"],
     ],
@@ -309,7 +309,7 @@ def test_portable_skill_frontmatter_and_reference_links(resources):
             assert relative in resources, f"Missing portable reference: {relative}"
 
 
-@pytest.mark.parametrize("name", ["references/config.md", "references/examples.md"])
+@pytest.mark.parametrize("name", ["references/examples.md"])
 def test_documented_yaml_validates(resources, name):
     snippets = re.findall(r"```yaml\n(.*?)```", resources[name].decode(), re.DOTALL)
     assert snippets

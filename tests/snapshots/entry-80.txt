@@ -14,6 +14,4 @@
 
   1 archived · autohelix --help: all commands
 
-  ❯ Ask Claude Code about these runs
-    Set up a new experiment with Claude Code   it drafts a config with you
-  (q: quit)
+  Start Claude Code with AutoHelix? Enter/q

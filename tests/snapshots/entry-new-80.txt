@@ -3,4 +3,4 @@
 
   autohelix --help: all commands
 
-  Set up an experiment with Claude Code? Enter/q
+  Start Claude Code with AutoHelix? Enter/q
