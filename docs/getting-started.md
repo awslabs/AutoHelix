@@ -2,7 +2,7 @@
 
 ## Installation
 
-Install the CLI and setup skill from PyPI:
+Install the CLI and its agent skill from PyPI:
 
 ```bash
 pip install autohelix
@@ -25,8 +25,8 @@ install the portable skill into your target project:
 autohelix skill install --agent codex --scope project --path /path/to/my-project
 ```
 
-Choose `claude`, `codex`, or `opencode`, then ask the agent to use
-`autohelix-setup` to prepare and verify your experiment. The skill includes
+Choose `claude-code`, `codex`, or `opencode`, then ask the agent to use the
+`autohelix` skill to prepare and verify your experiment. The skill includes
 performance, writing, and research patterns. Preparation does not start the
 optimization loop. See [CLI → skill](cli.md#autohelix-skill) for user installation,
 export, and update behavior.
@@ -88,11 +88,11 @@ In your project, run:
 autohelix
 ```
 
-`autohelix` shows the project's runs (none yet), then asks "Set up an experiment
-with Claude Code? Enter/q" (or names the agent you have: Codex or OpenCode; it
+`autohelix` shows the project's runs (none yet), then asks "Start Claude Code
+with AutoHelix? Enter/q" (or names the agent you have: Codex or OpenCode; it
 asks which when there are several). Enter starts your coding agent with the
-setup skill bundled with AutoHelix, and the agent starts by asking what you
-want to achieve. The skill helps design the experiment from your existing code,
+skill bundled with AutoHelix; the agent takes a quick look at the project and
+asks what AutoHelix should work on, with a few goals that fit it. The skill helps design the experiment from your existing code,
 checks, and evidence. The agent saves the config as `autohelix.yaml` (the
 project's first config; for later ones it proposes a short name for the goal
 and saves them as `autohelix/<name>.yaml`), checks it with `autohelix run --check`, commits it, and
@@ -100,9 +100,9 @@ gives the `autohelix run` command to start. The agent you choose becomes
 `agent.cli`, the loop's agent, unless you decide otherwise.
 
 Later, `autohelix` lists the project's runs with the command that applies to
-each (`resume`, `land`, `view`), and offers to ask the agent about them (it
-summarizes what was accepted and rejected, then answers questions) or to set up
-another experiment. See [CLI → autohelix](cli.md#autohelix).
+each (`resume`, `land`, `view`), and the same question starts the agent: it
+says what the table doesn't show (why iterations were rejected, anything odd)
+and asks what next, whether a question about the runs or another experiment. See [CLI → autohelix](cli.md#autohelix).
 
 With the skill installed as described above, you can also start from an
 ordinary agent session. The installation's `--agent` selects the agent that

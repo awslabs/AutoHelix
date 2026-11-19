@@ -81,17 +81,10 @@ require evidence for a predetermined conclusion.
 
 ## Choose a budget that fits the work
 
-The budget is the launch command's flags, not config: `autohelix run perf -n 10
---cost 20`. Retain the user's stated budgets and agent/model preferences. By
-default, suggest only an iteration count and no `--cost` or `--time`: `-n 3`
-for an open-ended goal ("make X faster", "improve Y"), `-n 1` for a single task
-that gates (commands or `ask:`) can check (one checked attempt; also what no
-flag means). Reviews never reject, and their feedback reaches only a next
-iteration, so a goal judged by a review alone needs `-n` above 1. Leave timeouts at their defaults. Add any of these when the user asks
-or the work calls for it (expensive evaluations, a deadline), and say why. Hand over the complete command line with the budget
-explained; the user can change it without touching the config, and `autohelix
-resume <id> -n N` gives a run more later. See
-[budgets](config.md#budgets-and-run-state).
+The budget is the launch command's flags, not config. The default choices
+(iterations, landing, no `--cost` or `--time` unless the user asks) are in
+`SKILL.md`, under Choose the design; keep the user's stated budgets and
+agent/model preferences. The flags are in the docs' `cli.md`, Budgets.
 
 For launch/autonomous requests, use given/existing bounds and resolve material
 budget ambiguity before execution. When choosing bounds is part of the agreed
@@ -115,8 +108,8 @@ and supervising/setup-agent expenditure are outside `--cost`. If reporting is un
 or unreliable, say that a dollar budget cannot reliably bound spend. Do not
 invent a token price or interpret missing cost as free usage. Use iteration/time
 limits to bound attempts and duration, explain any unmet financial requirement,
-and distinguish them from a strict all-inclusive financial limit. See
-[budget fields and their actual boundaries](config.md#budgets-and-run-state).
+and distinguish them from a strict all-inclusive financial limit. The docs' `cli.md` (Budgets) and `concepts.md` (Cost Tracking) say what each
+limit counts.
 
 ## Check the lifecycle
 

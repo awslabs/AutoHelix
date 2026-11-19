@@ -66,6 +66,8 @@ autohelix ask          # Yes/no judgment by a read-only agent (exit 0/1/2); `ask
 autohelix review       # Read-only review of a change (feedback + ##autohelix metrics); `review:` observe entries use it
 autohelix report       # Agent-written analysis of the run
 autohelix wait         # Block until a run event (iteration, start, end, crash), print it as JSON; --follow, --after CURSOR
+autohelix docs         # Print the folder of the user docs shipped with the package (how an installed skill finds them)
+autohelix skill        # install / export the bundled `autohelix` skill into an agent's skill folder
 ```
 
 ## Testing

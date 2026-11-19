@@ -27,8 +27,7 @@ clear:
 The first request finishes at preparation; the second includes launch within
 the stated authorization and the entrypoint's execution rules. Budgets are not
 part of the config: every handoff ends with the complete launch command, its
-budget flags included (`autohelix run -n 3`; see
-[budgets](config.md#budgets-and-run-state)). The launch commands in the
+budget flags included (`autohelix run -n 3`). The launch commands in the
 patterns below illustrate possible run designs rather than required defaults.
 Present the config as the proposed agreement on behavior and evaluation,
 including its limits, rather than treating a general goal as permission for

@@ -1,5 +1,5 @@
 """`autohelix run --check`: every check `run` makes before it writes anything, then
-nothing (the setup skill's validation step)."""
+nothing (the skill's validation step)."""
 
 import pytest
 
@@ -43,7 +43,7 @@ def test_a_named_config_is_checked(project):
     ({"prompt_template": "p.md"}, "prompt_template p.md, line 1: Unexpected end of template"),
 ])
 def test_what_run_would_refuse_fails_the_check(project, values, message, monkeypatch):
-    """These passed the setup skill's old Python check (a warning or nothing) and then
+    """These passed the skill's old Python check (a warning or nothing) and then
     failed `run` (or, for the template, reached the agent)."""
     (project / "p.md").write_text("{% if hints %}\n")
     values = dict(values)

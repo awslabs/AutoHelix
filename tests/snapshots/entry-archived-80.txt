@@ -3,4 +3,7 @@
 
   no current runs, 1 archived · autohelix --help: all commands
 
-  Set up an experiment with an agent? Enter/q
+  Start an agent with AutoHelix:
+  ❯ Claude Code
+    Codex
+  (q: quit)

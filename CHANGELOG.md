@@ -63,8 +63,8 @@ has the checklist.
 ### Added
 
 - **Bare `autohelix`** in a terminal: the project's runs, then a Claude Code,
-  Codex or OpenCode session with the bundled skill, to ask about the runs or
-  set up an experiment.
+  Codex or OpenCode session with the bundled skill, which asks what next: a
+  question about the runs, or a new experiment.
 - **`autohelix view`**: the runs on a live web page (`127.0.0.1:8765`; a page
   per run); `--terminal` follows a run; `--once` and `--json` print the runs
   or one run once (JSON fields are only ever added).
@@ -105,9 +105,12 @@ has the checklist.
   segment runs (`caffeinate` on macOS, `systemd-inhibit` on Linux).
 - **SIGTERM acts as Ctrl-C** in a running segment (`kill PID`,
   `stop --now`): the iteration is recorded and the run lands.
-- **`autohelix skill install` / `export`**: the setup skill for Claude Code,
-  Codex or OpenCode.
-- The user docs ship in the package (`autohelix/docs`).
+- **`autohelix skill install` / `export`**: the `autohelix` skill (set up an
+  experiment, explain runs, supervise one when asked) for Claude Code, Codex or
+  OpenCode; `--agent` takes `agent.cli`'s names (`claude-code`, `codex`,
+  `opencode`).
+- The user docs ship in the package (`autohelix/docs`); **`autohelix docs`**
+  prints their folder.
 
 ### Changed
 

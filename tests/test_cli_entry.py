@@ -152,14 +152,15 @@ def test_nothing_yet_asks_one_question_and_enter_starts_the_session(project, mon
     assert shown[1].startswith("  AutoHelix  ") and shown[1].endswith(f" · {project.resolve()}")
     assert "  autohelix --help: all commands" in shown
     assert "run   state" not in result.output  # no table
-    assert "Set up an experiment with Claude Code? Enter/q" in flat(result.output)
+    assert "Start Claude Code with AutoHelix? Enter/q" in flat(result.output)
     assert "  Starting Claude Code with the AutoHelix skill…" in shown
     [(file, argv, cwd)] = execs
     assert file == "claude" and Path(cwd) == project.resolve()
     prompt = argv[-1]
     assert "The project has no runs yet." in prompt and "It has no AutoHelix config yet." in prompt
-    assert "This is the project's first config: save it as `autohelix.yaml`" in prompt
-    assert "`autohelix run` command (with its budget flags) for me to run" in prompt
+    assert prompt.endswith("This session runs in Claude Code (`agent.cli: claude-code`). I started it from "
+                           "AutoHelix's start screen; open as the skill says.")  # no table without runs
+    assert "--check" not in prompt and "commit" not in prompt and "request" not in prompt  # facts only
     assert files(project) == ["main.py"]  # nothing written
 
 
@@ -227,40 +228,25 @@ def test_the_project_is_the_nearest_folder_with_a_config(project, monkeypatch, e
     result = entry(input="\n")
     assert result.exit_code == 0, result.output
     assert lines(result)[1].endswith(f" · {app.resolve()}")
-    assert "autohelix/perf.yaml, no runs yet: check and finish it" in flat(result.output)
     [(_, argv, cwd)] = execs
     assert Path(cwd) == app.resolve() and f"in this project ({app.resolve()})" in argv[-1]
+    assert "Its configs: autohelix/perf.yaml (no runs yet)." in argv[-1]
 
 
 # --- configs without runs ---------------------------------------------------------
 
 
-def test_a_config_without_runs_is_named_and_offered_to_finish(project, monkeypatch, execs, tty):
-    agents(["claude"])(monkeypatch)
-    (project / "autohelix.yaml").write_text("goal: half done\n")  # hand-written, uncommitted
-    result = entry(input="\n")
-    assert result.exit_code == 0, result.output
-    assert "  1. autohelix.yaml, no runs yet: check and finish it with Claude Code" in lines(result)
-    assert " 2. Set up a new experiment with Claude Code it drafts a config with you" in flat_lines(result)
-    prompt = execs[0][1][-1]
-    assert "Its configs: autohelix.yaml (no runs yet)." in prompt
-    assert 'I picked "autohelix.yaml, no runs yet: check and finish it with Claude Code"' in prompt
-    assert 'I may switch to the other option ("Set up a new experiment with Claude Code")' in prompt
-    assert "My first request: check and finish `autohelix.yaml`" in prompt
-    assert "run --check` from the project root, committed, and the `autohelix run` command" in prompt
-
-
-def test_new_beside_configs_proposes_a_name(project, monkeypatch, execs, tty):
+def test_configs_without_runs_are_named_in_the_prompt_and_asked_as_ever(project, monkeypatch, execs, tty):
+    """One question whatever the project holds; the prompt says which configs no run has used
+    (the skill offers to finish them)."""
     agents(["claude"])(monkeypatch)
     mock_config(project, "perf", commit=False)
-    mock_config(project, "fast", commit=False)
-    result = entry(input="2\n")
+    (project / "autohelix" / "fast.yaml").write_text("goal: half done\n")  # hand-written
+    result = entry(input="\n")
     assert result.exit_code == 0, result.output
-    assert ("1. autohelix/fast.yaml, autohelix/perf.yaml, no runs yet: check and finish them with Claude Code"
-            in flat(result.output))
+    assert "Start Claude Code with AutoHelix? Enter/q" in flat(result.output)
+    assert "no runs yet" not in result.output and not any(re.match(r"  \d\. ", line) for line in lines(result))
     prompt = execs[0][1][-1]
-    assert "Propose a short name for this goal" in prompt and "`autohelix/<name>.yaml`" in prompt
-    assert "run NAME --check` from the project root" in prompt and "`autohelix run NAME` command" in prompt
     assert "Its configs: autohelix/fast.yaml (no runs yet), autohelix/perf.yaml (no runs yet)." in prompt
 
 
@@ -272,7 +258,7 @@ def flat_lines(result):
 # --- with runs ------------------------------------------------------------------
 
 
-def test_with_runs_the_table_the_next_commands_and_ask_first(project, monkeypatch, execs, tty):
+def test_with_runs_the_table_the_next_commands_and_one_question(project, monkeypatch, execs, tty):
     agents(["claude"])(monkeypatch)
     mock_config(project)
     first = start_run(project, "--land", "manual")  # its commit waits for `autohelix land`
@@ -282,17 +268,13 @@ def test_with_runs_the_table_the_next_commands_and_ask_first(project, monkeypatc
     assert any(line.startswith("  run ") and " state " in line for line in shown)  # the dashboard's table
     assert any(re.fullmatch(rf"  {first}  finished · 1 to land +next: autohelix land {first}", line)
                for line in shown), shown
-    assert " 1. Ask Claude Code about these runs it summarizes them, then answers questions" in flat_lines(result)
-    assert " 2. Set up a new experiment with Claude Code it drafts a config with you" in flat_lines(result)
+    assert "Start Claude Code with AutoHelix? Enter/q" in flat(result.output)
     [(file, argv, _)] = execs
     prompt = argv[-1]
-    assert re.search(rf"^- {first} \(\d{{8}}-\d{{4}}-{first}, autohelix.yaml\): finished, last iteration 1, "
-                     r"1 to land$", prompt, re.M), prompt
-    assert 'I picked "Ask Claude Code about these runs"' in prompt
-    assert 'I may switch to the other option ("Set up a new experiment with Claude Code")' in prompt
-    assert "Open with a short summary of the live runs plus the most recent one" in prompt
-    cli_name = str(cli._launcher() or "autohelix")
-    assert f"Send `{cli_name} hint` or `{cli_name} stop`" in prompt and "only when I ask" in prompt
+    assert re.search(rf'^- {first} \(\d{{8}}-\d{{4}}-{first}, autohelix.yaml\) "Make a checked change": '
+                     r"finished, 1 of 1 iterations accepted, \$0\.\d\d, 1 to land$", prompt, re.M), prompt
+    assert prompt.endswith("I started it from AutoHelix's start screen, which showed me these runs as a table; "
+                           "open as the skill says.")
     assert "The project's runs (live ones first, then by last activity;" in prompt
 
 
@@ -361,13 +343,9 @@ def test_archived_runs_are_counted(project, monkeypatch, execs, tty):
     result = entry(input="\n")
     assert result.exit_code == 0, result.output
     assert "  no current runs, 2 archived · autohelix --help: all commands" in lines(result)  # not as none
-    # Nothing current to ask about: asked as without runs (its config has runs: no "no runs yet").
-    assert "Ask Claude Code" not in result.output and "no runs yet" not in result.output
-    assert "Set up an experiment with Claude Code? Enter/q" in flat(result.output)
-    prompt = execs[0][1][-1]
+    prompt = execs[0][1][-1]  # its config has runs: no "no runs yet"
     assert "The project has no current runs, 2 archived" in prompt and "Its configs: autohelix.yaml." in prompt
-    assert 'I picked "Set up an experiment with Claude Code"; I may ask anything else' in prompt
-    assert "save the config as `autohelix/<name>.yaml`" in prompt
+    assert "showed me these runs" not in prompt
 
 
 def test_runs_in_a_subfolder_are_found(project, monkeypatch, execs, tty):
@@ -390,18 +368,17 @@ def test_runs_in_a_subfolder_are_found(project, monkeypatch, execs, tty):
 # --- agents ----------------------------------------------------------------------
 
 
-def test_several_agents_say_an_agent_then_ask_which(project, monkeypatch, execs, tty):
+def test_several_agents_the_question_is_which(project, monkeypatch, execs, tty):
     agents(["claude", "codex", "opencode", "mock"])(monkeypatch)
     mock_config(project)
     start_run(project)
-    result = entry(input="\n2\n")
+    result = entry(input="2\n")
     assert result.exit_code == 0, result.output
-    assert "1. Ask an agent about these runs" in flat(result.output)
-    assert "2. Set up a new experiment with an agent" in flat(result.output)
-    assert "  Which agent?\n  1. Claude Code\n  2. Codex\n  3. OpenCode\n  Choose (q: quit) [1]:" in "\n".join(lines(result))
+    assert ("  Start an agent with AutoHelix:\n  1. Claude Code\n  2. Codex\n  3. OpenCode\n  Choose (q: quit) [1]:"
+            in "\n".join(lines(result)))
     assert "Mock" not in result.output and "mock" not in flat(result.output).lower().replace("autohelix", "")
-    assert execs[0][1][0] == "codex" and "`agent.cli: codex`" not in execs[0][1][-1]  # ask: no backend
-    result = entry(input="2\nq\n")  # q at "Which agent?" quits too
+    assert execs[0][1][0] == "codex" and "This session runs in Codex (`agent.cli: codex`)." in execs[0][1][-1]
+    result = entry(input="q\n")  # q quits
     assert result.exit_code == 0 and len(execs) == 1
 
 
@@ -423,7 +400,7 @@ def test_codex_and_opencode_argv(project, monkeypatch, execs, tty, agent):
         assert len(argv) == 2
     else:
         assert argv[:3] == ["opencode", str(project.resolve()), "--prompt"] and len(argv) == 4
-    assert f"with `agent.cli: {agent}` unless we decide otherwise" in argv[-1]
+    assert f"(`agent.cli: {agent}`)" in argv[-1]
 
 
 def test_claude_gets_the_skill_and_the_docs(project, monkeypatch, execs, tty):
@@ -435,11 +412,10 @@ def test_claude_gets_the_skill_and_the_docs(project, monkeypatch, execs, tty):
     assert (skill_dir / "SKILL.md").is_file() and (docs / "concepts.md").is_file()
     prompt = argv[5]
     assert prompt.startswith(f"Read `{skill_dir / 'SKILL.md'}` and follow it")
-    assert f"its user docs are in `{docs}`: read them when needed." in prompt
+    assert f"AutoHelix's user docs are in `{docs}`: read them when needed." in prompt
     launcher = cli._launcher()
-    assert f"AutoHelix's CLI is `{launcher or 'autohelix'}` and its Python `{sys.executable}`" in prompt
-    assert f"checked by `{launcher or 'autohelix'} run --check` from the project root" in prompt
-    assert 'I picked "Set up an experiment with Claude Code"' in prompt
+    assert (f"`autohelix` below means `{launcher}`, and AutoHelix's Python is `{sys.executable}`" if launcher
+            else f"AutoHelix's Python is `{sys.executable}`: use it") in prompt
 
 
 def test_the_prompt_names_the_launcher_it_was_started_as(project, monkeypatch, execs, tty, tmp_path):
@@ -449,7 +425,7 @@ def test_the_prompt_names_the_launcher_it_was_started_as(project, monkeypatch, e
     launcher.write_text("#!/usr/bin/env python\n")
     monkeypatch.setattr(sys, "argv", [str(launcher)])
     assert entry(input="\n").exit_code == 0
-    assert f"checked by `{launcher.resolve()} run --check` from the project root" in execs[0][1][-1]
+    assert f"`autohelix` below means `{launcher.resolve()}`, and AutoHelix's Python" in execs[0][1][-1]
 
 
 def test_an_agent_that_cannot_start(project, monkeypatch, tty):
@@ -469,7 +445,7 @@ def test_a_skill_not_on_disk_is_a_clear_error(project, monkeypatch, execs, tty):
     monkeypatch.setattr(cli, "pkg_files", lambda package: Path("/nonexistent/autohelix"))
     result = entry(input="\n")
     assert result.exit_code == 1
-    assert "The bundled setup skill isn't a folder on disk" in result.output
+    assert "The bundled AutoHelix skill isn't a folder on disk" in result.output
     assert not execs
 
 
@@ -573,8 +549,17 @@ def test_docs_dir_prefers_the_packaged_copy(monkeypatch, tmp_path):
 
 
 def test_the_skill_points_at_the_docs():
-    skill = (Path(cli.__file__).parent / "skills" / "autohelix-setup" / "SKILL.md").read_text()
-    assert "The user docs are at the path the session's first\nprompt gives; read them when needed." in skill
+    """An installed copy of the skill has no first prompt: it finds the docs with `autohelix docs`."""
+    skill = (Path(cli.__file__).parent / "skills" / "autohelix" / "SKILL.md").read_text()
+    assert "Its user docs are in\nthe folder `autohelix docs` prints" in skill
+
+
+def test_docs_prints_the_folder(monkeypatch, tmp_path):
+    result = CliRunner().invoke(main, ["docs"])
+    assert result.exit_code == 0 and result.output == f"{cli.docs_dir()}\n"
+    monkeypatch.setattr(cli, "docs_dir", lambda: None)
+    result = CliRunner().invoke(main, ["docs"])
+    assert result.exit_code == 1 and "https://github.com/awslabs/AutoHelix/tree/main/docs" in result.output
 
 
 @pytest.mark.skipif(not shutil.which("uv"), reason="needs uv")

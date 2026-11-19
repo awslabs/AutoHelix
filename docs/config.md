@@ -65,16 +65,6 @@ goal: |
   Make sort_list faster in sort.py.
   Keep the public API; don't add dependencies.
 
-# prompt_template: prompts/agent.md   # rare: replaces the built-in agent prompt
-
-agent:
-  cli: claude-code        # claude-code (default), codex or opencode
-  model: opus             # passed through unchanged; unset = the CLI's default
-  # effort: high
-  # timeout: 30m          # per iteration: a hard kill, with time-left hints
-  # extra_args: []        # extra CLI arguments for the main agent
-  # auto_memory: false    # Claude Code's built-in memory (off by default)
-
 scope:
   editable: [sort.py]     # only these may change
   # frozen: [tests/]      # never these (also inside editable)
@@ -101,6 +91,16 @@ observe:                  # feedback for the next agent, numbers for the harness
 
 stop:                     # end the run early once one exits 0
   - jq -e '.speed >= 5000' "$AUTOHELIX_METRICS"
+
+agent:
+  cli: claude-code        # claude-code (default), codex or opencode
+  model: opus             # passed through unchanged; unset = the CLI's default
+  # effort: high
+  # timeout: 30m          # per iteration: a hard kill, with time-left hints
+  # extra_args: []        # extra CLI arguments for the main agent
+  # auto_memory: false    # Claude Code's built-in memory (off by default)
+
+# prompt_template: prompts/agent.md   # rare: replaces the built-in agent prompt
 ```
 
 How a launch goes is not in the config either: how long (`autohelix run -n 10
@@ -109,8 +109,8 @@ How a launch goes is not in the config either: how long (`autohelix run -n 10
 whether it writes a summary (`--no-report`, see
 [CLI → `autohelix report`](cli.md#autohelix-report)).
 
-Top-level keys: `goal`, `prompt_template`, `agent`,
-`scope`, `gates`, `observe` and `stop`. An unknown key is an error (a
+Top-level keys, in the order generated configs use: `goal`, `scope`,
+`gates`, `observe`, `stop`, `agent` and `prompt_template` (any order loads). An unknown key is an error (a
 misspelt `stop:` or `gates:` would otherwise do nothing); a key of the old
 format is an error that names its replacement.
 `goal:` must be a string (`|` for several lines), `agent.cli`, `model` and

@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Export the packaged setup skill to an agent's discovery directory."""
+"""Export the packaged AutoHelix skill to an agent's discovery directory."""
 
 import os
 import stat
@@ -12,14 +12,14 @@ from pathlib import Path
 
 import click
 
-SKILL_NAME = "autohelix-setup"
+SKILL_NAME = "autohelix"
 PROJECT_LOCATIONS = {
-    "claude": Path(".claude/skills"),
+    "claude-code": Path(".claude/skills"),
     "codex": Path(".agents/skills"),
     "opencode": Path(".opencode/skills"),
 }
 USER_LOCATIONS = {
-    "claude": Path(".claude/skills"),
+    "claude-code": Path(".claude/skills"),
     "codex": Path(".agents/skills"),
     "opencode": Path(".config/opencode/skills"),
 }
@@ -107,7 +107,7 @@ def export_skill(destination: Path, *, force: bool = False) -> None:
 
 @click.group()
 def skill():
-    """Install or export the AutoHelix setup skill."""
+    """Install or export the AutoHelix skill."""
 
 
 @skill.command("install")
@@ -133,8 +133,8 @@ def install(agent: str, scope: str, path: Path | None, force: bool):
             raise click.UsageError("--path is only supported with --scope project.")
         destination = Path.home() / USER_LOCATIONS[agent] / SKILL_NAME
     export_skill(destination, force=force)
-    click.echo(f"Installed AutoHelix setup skill at {destination}")
-    click.echo("Ask your agent to use autohelix-setup to prepare an improvement run.")
+    click.echo(f"Installed the AutoHelix skill at {destination}")
+    click.echo("Ask your agent to use the autohelix skill: to set up an experiment, or about the project's runs.")
 
 
 @skill.command("export")
@@ -144,4 +144,4 @@ def export(destination: Path, force: bool):
     """Copy the skill into DESTINATION, including SKILL.md and references."""
     target = destination.absolute()
     export_skill(target, force=force)
-    click.echo(f"Exported AutoHelix setup skill to {target}")
+    click.echo(f"Exported the AutoHelix skill to {target}")

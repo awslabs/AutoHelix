@@ -143,11 +143,22 @@ def docs_dir() -> Path | None:
     return checkout if (checkout / "concepts.md").is_file() else None
 
 
+@main.command("docs")
+def docs_command():
+    """Print the folder of the user docs that came with this AutoHelix (README.md is
+    their index). For people and for agents: an installed skill finds them this way."""
+    folder = docs_dir()
+    if folder is None:
+        raise click.ClickException("This AutoHelix has no user docs on disk; they are at "
+                                   "https://github.com/awslabs/AutoHelix/tree/main/docs")
+    click.echo(folder)
+
+
 def _skill_dir() -> Path:
-    """The bundled setup skill's folder (installs are unpacked, so it is on disk)."""
+    """The bundled AutoHelix skill's folder (installs are unpacked, so it is on disk)."""
     bundled = pkg_files("autohelix") / "skills" / SKILL_NAME
     if not (isinstance(bundled, Path) and (bundled / "SKILL.md").is_file()):
-        raise click.ClickException(f"The bundled setup skill isn't a folder on disk ({bundled}); reinstall "
+        raise click.ClickException(f"The bundled AutoHelix skill isn't a folder on disk ({bundled}); reinstall "
                                    "AutoHelix, or `autohelix skill install` it and ask your agent to use it.")
     return bundled.resolve()
 
@@ -237,101 +248,77 @@ def _unrun(configs: list[str], runs: list[dict]) -> list[str]:
     return [config for config in configs if config not in used]
 
 
-def entry_options(agents: list[str], has_runs: bool, unrun: list[str]) -> list[tuple[str, str, str]]:
-    """The entry screen's options, (pick, label, detail): with current (non-archived)
-    runs, ask about them or set up a new experiment; with configs no run was started
-    from, check and finish them or set up a new one; else none (`entry_question` asks instead). With several agents the labels say
-    "an agent" (`Which agent?` follows)."""
-    who = AGENTS[agents[0]] if len(agents) == 1 else "an agent"
-    new = ("new", f"Set up a new experiment with {who}", "it drafts a config with you")
-    if has_runs:
-        return [("ask", f"Ask {who} about these runs", "it summarizes them, then answers questions"), new]
-    if unrun:
-        them = "it" if len(unrun) == 1 else "them"
-        return [("finish", f"{', '.join(unrun)}, no runs yet: check and finish {them} with {who}", ""), new]
-    return []
+def entry_question(agent: str) -> str:
+    """The entry screen's one question with one agent installed (Enter/q)."""
+    return f"Start {AGENTS[agent]} with AutoHelix?"
 
 
-def entry_question(agents: list[str]) -> str:
-    """The one question without runs or configs."""
-    return f"Set up an experiment with {AGENTS[agents[0]] if len(agents) == 1 else 'an agent'}?"
+# With several agents the question is which one (q quits).
+ENTRY_TITLE = "Start an agent with AutoHelix:"
 
 
 def _run_line(run: dict) -> str:
-    """A run as the first prompt lists it: id, config, state, last iteration."""
+    """A run as the first prompt lists it: id, config, title; its state (while running,
+    with the iteration under way and its phase), accepted of finished iterations, cost,
+    commits to land."""
     if run.get("error"):
         return f"- {run['id']}: unreadable ({run['error']})"
     config = f", {run['config_file']}" if run.get("config_file") else ""
-    to_land = f", {run_table._landing(run)}" if (run.get("landing") or {}).get("commits") else ""  # `2 diverged`
-    return (f"- {short_id(run['id'])} ({run['id']}{config}): {run_table._word(run)}, "
-            f"last iteration {run['progress']['iterations']}{to_land}")
+    title = f' "{run["title"]}"' if run.get("title") else ""
+    progress = run["progress"]
+    state = run_table._word(run)
+    if run_table._live(run):
+        under_way = run_table._under_way(run)
+        doing = ", ".join(filter(None, [under_way and f"iteration {under_way}", run_table._phase(run)]))
+        state += f" ({doing})" if doing else ""
+    done = progress["iterations"]
+    facts = [state, f"{run.get('accepted') or 0} of {done} iterations accepted" if done else "baseline only"]
+    cost = progress.get("cost_usd")
+    if isinstance(cost, (int, float)) and cost:
+        facts.append(f"${cost:.2f}" + ("+ (some calls unpriced)" if progress.get("cost_incomplete") else ""))
+    if (run.get("landing") or {}).get("commits"):
+        facts.append(run_table._landing(run))  # `2 to land`, `2 diverged`
+    return f"- {short_id(run['id'])} ({run['id']}{config}){title}: {', '.join(facts)}"
 
 
-def first_prompt(agent: str, project: Path, pick: str, runs: list[dict], configs: list[str],
+def first_prompt(agent: str, project: Path, runs: list[dict], configs: list[str],
                  git: tuple[str, str | None] | None = None) -> str:
-    """The session's first prompt: the bundled skill, AutoHelix's own CLI, Python and
-    docs, any git problem, the project's runs and configs, which option was picked (the
-    user may switch), then the request it stands for."""
+    """The session's first prompt: facts only; how the session opens and goes on is the
+    skill's (SKILL.md). The bundled skill, AutoHelix's own CLI, Python and docs, any git
+    problem, the project's runs and configs, and which agent CLI the session runs in."""
     skill_dir = _skill_dir()
     launcher = _launcher()
-    cli = shlex.quote(str(launcher)) if launcher else "autohelix"
     docs = docs_dir()
     current = run_table.current_runs(runs)
     archived = len(runs) - len(current)
     unrun = _unrun(configs, runs)
-    options = {p: label for p, label, _ in entry_options([agent], bool(current), unrun)} or \
-        {"new": entry_question([agent]).rstrip("?")}
-    other = next((label for p, label in options.items() if p != pick), "")
+    python = shlex.quote(sys.executable)
+    tools = (f"`autohelix` below means `{shlex.quote(str(launcher))}`, and AutoHelix's Python is `{python}`: "
+             "use them rather than whatever `autohelix` or `python` your shell finds." if launcher else
+             f"AutoHelix's Python is `{python}`: use it rather than whatever `python` your shell finds.")
     parts = [f"Read `{skill_dir / 'SKILL.md'}` and follow it: you are helping me with AutoHelix in this "
              f"project ({project}).",
-             f"AutoHelix's CLI is `{cli}` and its Python `{shlex.quote(sys.executable)}` (use them where "
-             "`autohelix` or a plain `python` would find another install or none)"
-             + (f"; its user docs are in `{docs}`: read them when needed." if docs else ".")]
+             tools + (f" AutoHelix's user docs are in `{docs}`: read them when needed." if docs else "")]
     if git:
         problem, fix = git
         parts.append(f"Git: {problem.removesuffix('.')}" + (f" (`{fix}` fixes it)" if fix else "")
                      + ". `autohelix run` refuses until that is fixed.")
     if current:
         listed = "\n".join(_run_line(run) for run in current)
-        parts.append(f"The project's runs (live ones first, then by last activity; `{cli} view ID --json` and "
-                     f".autohelix/runs/ID/ have their records):\n{listed}"
-                     + (f"\n({archived} archived, not listed: `{cli} view --json` has them.)" if archived else ""))
+        parts.append("The project's runs (live ones first, then by last activity; `autohelix view ID --json` and "
+                     f"`.autohelix/runs/ID/` have their records):\n{listed}"
+                     + (f"\n({archived} archived, not listed: `autohelix view --json` has them.)" if archived else ""))
     elif archived:
-        parts.append(f"The project has no current runs, {archived} archived (`{cli} view --json` lists them).")
+        parts.append(f"The project has no current runs, {archived} archived (`autohelix view --json` lists them).")
     else:
         parts.append("The project has no runs yet.")
     if configs:
         parts.append("Its configs: " + ", ".join(f"{c} (no runs yet)" if c in unrun else c for c in configs) + ".")
     else:
         parts.append("It has no AutoHelix config yet.")
-    parts.append(f"On AutoHelix's start screen I picked \"{options[pick]}\""
-                 + (f"; I may switch to the other option (\"{other}\") or ask anything else at any point."
-                    if other else "; I may ask anything else at any point."))
-    finish = ("End with the config checked by `{check}` from the project root, committed, and the "
-              "`{run}` command (with its budget flags) for me to run. Don't start a run unless I ask.")
-    agreed = (f"with `agent.cli: {agent}` unless we decide otherwise. Show the complete proposal and "
-              "explain its sections, choices and effective defaults before changing project files; discuss "
-              "revisions, then write, validate and commit it when we agree.")
-    if pick == "ask":
-        parts.append("My first request: tell me about these runs. Open with a short summary of the live runs plus "
-                     "the most recent one: what was accepted, what was rejected and why, anything odd. Take it from "
-                     f"the records, then answer my questions from them. Send `{cli} hint` or `{cli} stop` "
-                     "(or anything else that changes a run) only when I ask.")
-    elif pick == "finish":
-        command = run_command(unrun[0]) if len(unrun) == 1 else "autohelix run NAME"
-        parts.append(f"My first request: check and finish {', '.join(f'`{c}`' for c in unrun)} (perhaps still the "
-                     f"commented template, or half-finished): propose what to complete or change, {agreed} "
-                     + finish.format(check=command.replace("autohelix", cli, 1) + " --check", run=command))
-    else:
-        if configs:
-            where = ("Propose a short name for this goal (lowercase letters, digits and hyphens) and save the "
-                     "config as `autohelix/<name>.yaml`")
-            command = "autohelix run NAME"
-        else:
-            where = "This is the project's first config: save it as `autohelix.yaml`"
-            command = "autohelix run"
-        parts.append(f"My first request: set up a new experiment. {where}, {agreed} "
-                     + finish.format(check=command.replace("autohelix", cli, 1) + " --check", run=command))
+    parts.append(f"This session runs in {AGENTS[agent]} (`agent.cli: {agent}`). I started it from AutoHelix's "
+                 "start screen" + (", which showed me these runs as a table" if current else "")
+                 + "; open as the skill says.")
     return "\n\n".join(parts)
 
 
@@ -382,18 +369,16 @@ def _entry(ctx: click.Context) -> None:
                       "or OpenCode (`opencode`). To write a config by hand, start from the packaged template "
                       f"({TEMPLATE}) or getting-started.md" + (f" in {docs_dir()}" if docs_dir() else "") + ".")
         ctx.exit(1)
-    options = entry_options(found, bool(run_table.current_runs(runs)), _unrun(configs, runs))
     console.print()
     try:
-        if options:
-            pick = options[menu.choose("", [(label, detail) for _, label, detail in options])][0]
+        if len(found) == 1:
+            menu.confirm(entry_question(found[0]))
+            agent = found[0]
         else:
-            menu.confirm(entry_question(found))
-            pick = "new"
-        agent = found[0] if len(found) == 1 else found[menu.choose("Which agent?", [(AGENTS[a], "") for a in found])]
+            agent = found[menu.choose(ENTRY_TITLE, [(AGENTS[a], "") for a in found])]
     except menu.Quit:
         ctx.exit(0)
-    argv = _agent_argv(agent, project, first_prompt(agent, project, pick, runs, configs, git))
+    argv = _agent_argv(agent, project, first_prompt(agent, project, runs, configs, git))
     console.print(f"\n  Starting {AGENTS[agent]} with the AutoHelix skill…", style="dim", highlight=False)
     sys.stdout.flush()
     sys.stderr.flush()

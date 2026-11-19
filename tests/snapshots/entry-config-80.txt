@@ -4,6 +4,4 @@
 
   autohelix --help: all commands
 
-  ❯ autohelix.yaml, no runs yet: check and finish it with Claude Code
-    Set up a new experiment with Claude Code
-  (q: quit)
+  Start Claude Code with AutoHelix? Enter/q
