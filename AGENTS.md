@@ -14,11 +14,11 @@ the conventions in [`CLAUDE.md`](./CLAUDE.md) — read that for full detail.
 
 - **Setup:** activate the venv first (`source .venv/bin/activate`). The package is an
   editable install — edits under `src/autohelix/` are live, no reinstall needed.
-- **Test before you finish:** `pytest` (fast suite). Use `pytest -m slow` only when a
-  real agent is needed.
+- **Test before you finish:** `pytest -n auto` (the fast suite, in parallel). Use
+  `pytest -m slow` only when a real agent is needed.
 - **Do not commit optimized example code** — `examples/` must keep the slow baseline so
   users can see the optimization potential.
-- **Don't break backward compatibility** in config parsing: new config keys should be
-  optional and gated, so existing `autohelix.yaml` files keep working.
+- **No backward-compatibility shims:** an old config form or key stops working;
+  a renamed key or flag is an error naming its replacement. New keys are optional.
 
 For architecture notes, gotchas, and project layout, see [`CLAUDE.md`](./CLAUDE.md).
