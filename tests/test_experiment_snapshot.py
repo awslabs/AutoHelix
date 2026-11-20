@@ -132,12 +132,21 @@ def test_links_into_dot_names_inside_autohelix_are_refused(project, folder):
 def test_a_link_to_a_folder_holding_it_is_refused(project, folder):
     (folder / "sub").mkdir()
     (folder / "sub" / "loop").symlink_to("..")
-    with pytest.raises(ConfigError, match=r"sub/loop \(a link to a folder that contains it\)"):
+    with pytest.raises(ConfigError, match=r"sub/loop \(a link to \.\., a folder holding autohelix/exp/\)"):
         names(project, folder)
 
 
-def test_a_second_way_to_a_folder_is_refused_without_walking_each(project, folder):
+def test_a_link_back_to_a_linked_folder_is_refused(project, folder):
+    (project / "autohelix" / "lib" / "sub").mkdir(parents=True)
+    (project / "autohelix" / "lib" / "sub" / "loop").symlink_to("..")
+    (folder / "lib").symlink_to("../lib")
+    with pytest.raises(ConfigError, match=r"lib/sub/loop \(a link to a folder that contains it\)"):
+        names(project, folder)
+
+
+def test_a_second_way_to_a_folder_is_refused_without_walking_each(project, folder, monkeypatch):
     """22 folders, each with two links to the next: 2^22 paths if each were walked."""
+    monkeypatch.setattr(experiment, "MAX_REFUSED", 100)
     chain = project / "autohelix" / "chain"
     for level in range(1, 23):
         (chain / f"d{level}").mkdir(parents=True)
@@ -150,8 +159,9 @@ def test_a_second_way_to_a_folder_is_refused_without_walking_each(project, folde
     with pytest.raises(ConfigError) as caught:
         names(project, folder)
     message = str(caught.value)
-    assert f"run: {'a/' * 21}b (the same folder as {'a/' * 22}, stored already); " in message  # the deepest first
-    assert message.count("stored already") == 20 and message.count(" and 2 more.") == 1  # the list is capped
+    assert "; b (the same folder as a/, stored already)" in message
+    assert "a/b (the same folder as a/a/, stored already)" in message
+    assert message.count("stored already") == 22
 
 
 def test_the_walk_stops_at_the_cap(project, folder, monkeypatch):
@@ -226,12 +236,20 @@ def test_a_linked_experiment_folder_follows_the_link_rule(project, tmp_path):
         (where / "data.txt").write_text("d\n")
     link = project / "autohelix" / "exp"
     link.symlink_to(tmp_path / "outside")
-    with pytest.raises(ConfigError, match=rf"autohelix/exp/ \(a link to {tmp_path / 'outside'}, outside autohelix/\)"):
+    with pytest.raises(ConfigError) as caught:
         names(project, link)
+    assert str(caught.value) == (f"autohelix/exp/ can't be stored with the run: it is a link to {tmp_path / 'outside'} "
+                                 "(outside autohelix/). An experiment must be a folder inside autohelix/, not a link "
+                                 "out of it.")
     link.unlink()
     link.symlink_to(".hidden")
-    with pytest.raises(ConfigError, match=r"autohelix/exp/ \(a link to .hidden, into .hidden\)"):
+    with pytest.raises(ConfigError, match=r"it is a link to \.hidden \(into \.hidden\)\. An experiment"):
         names(project, link)
+    link.unlink()
+    link.symlink_to(".")  # autohelix/ itself
+    (project / "autohelix" / "autohelix.yaml").write_text((project / "autohelix.yaml").read_text())
+    with pytest.raises(ConfigError, match=r"it is a link to \. \(autohelix/ itself\)\. An experiment"):
+        snapshot_files(load_config(project, project / "autohelix" / "exp" / "autohelix.yaml"), project)
     link.unlink()
     link.symlink_to("real")
     assert names(project, link) == ["data.txt"]
@@ -246,7 +264,8 @@ def test_a_link_to_autohelix_or_above_is_refused_by_its_name(project, folder):
     with pytest.raises(ConfigError) as caught:
         names(project, folder)
     message = str(caught.value)
-    assert "self (a link to a folder that contains it); up (a link to a folder that contains it)." in message
+    assert ("self (a link to ., a folder holding autohelix/exp/); up (a link to .., a folder holding "
+            "autohelix/exp/).") in message
     assert "other" not in message
 
 
@@ -256,6 +275,19 @@ def test_many_refusals_are_listed_up_to_the_cap(project, folder, monkeypatch):
     monkeypatch.setattr(experiment, "MAX_REFUSED", 2)
     with pytest.raises(ConfigError, match=r"pipe0 \(not a regular file\); pipe1 \(not a regular file\) and 2 more\. "):
         names(project, folder)
+
+
+def test_the_walk_stops_after_many_refusals(project, folder, monkeypatch):
+    for n in range(6):
+        (folder / f"data{n}.csv").symlink_to(f"../../../dataset/{n}.csv")  # outside autohelix/
+    monkeypatch.setattr(experiment, "MAX_FILES", 3)
+    monkeypatch.setattr(experiment, "MAX_REFUSED", 2)
+    with pytest.raises(ConfigError) as caught:
+        names(project, folder)
+    message = str(caught.value)
+    assert "data0.csv (a link to ../../../dataset/0.csv, outside autohelix/); data1.csv (" in message
+    assert ", outside autohelix/) and more. Move these" in message
+    assert "data2.csv" not in message
 
 
 def test_a_killed_runs_staging_folder_is_removed_by_the_next_run(project, folder, tmp_path):
@@ -773,7 +805,7 @@ def test_names_the_snapshot_leaves_out_are_said_to_be_left_out(project, folder):
                        "the run doesn't store it in `$AUTOHELIX_EXPERIMENT`: the config is `$AUTOHELIX_CONFIG`.")
     for name in (".env", "prompt.md"):
         assert (f"autohelix/exp/{name} (named by a command) isn't in the commit, so not in the copy: the run "
-                "doesn't store it in `$AUTOHELIX_EXPERIMENT` (it leaves out the prompt template, dotfiles and "
+                "doesn't store it in `$AUTOHELIX_EXPERIMENT` (it leaves out the config, its template, dotfiles and "
                 "`__pycache__/`): commit it.") in said
     # The folder holds only its config (and what is left out): its runs get no variable.
     assert said[-1] == ("autohelix/exp (named by a command) isn't in the commit, so not in the copy: commit it (it "
@@ -794,3 +826,28 @@ def test_the_advice_holds_with_a_linked_autohelix_folder(project, tmp_path):
     assert uncommitted_command_paths(config, project) == [
         "autohelix/exp/render.py (named by a command) isn't in the commit, so not in the copy: use "
         "`$AUTOHELIX_EXPERIMENT/render.py`."]
+
+
+def test_the_advice_follows_what_the_snapshot_stores(project, folder):
+    """`cfg.yaml -> autohelix.yaml` is left out like the config; a stored link's names
+    are under it."""
+    from autohelix.checks import uncommitted_command_paths
+    from autohelix.config import CommandSpec
+
+    (folder / "cfg.yaml").symlink_to("autohelix.yaml")
+    (project / "autohelix" / "lib").mkdir()
+    (project / "autohelix" / "lib" / "m.py").write_text("m\n")
+    (folder / "lib").symlink_to("../lib")
+    config = load_config(project, folder / "autohelix.yaml")
+    config.gates = [CommandSpec(command="cat autohelix/exp/cfg.yaml && python autohelix/exp/lib/m.py")]
+    assert uncommitted_command_paths(config, project) == [
+        "autohelix/exp/cfg.yaml (named by a command) isn't in the commit, so not in the copy: the run doesn't store "
+        "it in `$AUTOHELIX_EXPERIMENT` (it leaves out the config, its template, dotfiles and `__pycache__/`): "
+        "commit it.",
+        "autohelix/exp/lib/m.py (named by a command) isn't in the commit, so not in the copy: use "
+        "`$AUTOHELIX_EXPERIMENT/lib/m.py`."]
+
+
+def test_a_file_named_autohelix_shows_no_folder_as_frozen(project):
+    (project / "autohelix").write_text("not a folder\n")
+    assert load_config(project).frozen_names() == ["autohelix.yaml"]

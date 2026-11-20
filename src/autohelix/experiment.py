@@ -21,7 +21,7 @@ from autohelix.config import CONFIG_DIR, CONFIG_FILE, Config, ConfigError
 MAX_FILES = 200
 MAX_FOLDERS = 200
 MAX_BYTES = 10 * 1024 * 1024
-MAX_REFUSED = 20  # refusals a message lists
+MAX_REFUSED = 20  # refusals a message lists; the walk stops after MAX_FILES of them
 SKIPPED_FOLDERS = ("__pycache__",)
 
 
@@ -71,7 +71,8 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
     ConfigError, naming the files, for other links (or links to nothing), a folder
     reached twice (a link to one that holds it, or a second way to one stored already),
     files that aren't regular (a FIFO, a socket) or can't be read, and, as soon as the
-    walk passes it, the cap (`MAX_FILES`, `MAX_FOLDERS`, `MAX_BYTES`)."""
+    walk passes it, the cap (`MAX_FILES`, `MAX_FOLDERS`, `MAX_BYTES`; `MAX_FILES`
+    refusals stop it too). The folder itself must be inside autohelix/, not a link out."""
     folder = config.experiment
     if folder is None:
         return None
@@ -82,20 +83,25 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
         left_out.add(os.path.realpath(config.prompt_template))
     where = shown(project, folder)
 
-    def refuse(refused: list[str]) -> ConfigError:
+    def refuse(refused: list[str], stopped: bool = False) -> ConfigError:
         more = len(refused) - MAX_REFUSED
         return ConfigError(f"{where} can't be stored with the run: " + "; ".join(refused[:MAX_REFUSED])
-                           + (f" and {more} more" if more > 0 else "") + ". "
+                           + (" and more" if stopped else f" and {more} more" if more > 0 else "") + ". "
                            f"Move these out of it, or link only to files inside {CONFIG_DIR}/ (name a project "
                            "file by its path in a command instead).")
 
     # The folder itself (a link, `config._experiments` accepts one) follows the links' rule.
     pointed = os.readlink(folder) if os.path.islink(folder) else root
-    if not Path(root).is_relative_to(allowed) or Path(root) == allowed:
-        place = f"{CONFIG_DIR}/ itself" if Path(root) == allowed else f"outside {CONFIG_DIR}/"
-        raise refuse([f"{where} (a link to {pointed}, {place})"])
-    if hidden := next((part for part in Path(root).relative_to(allowed).parts if part.startswith(".")), None):
-        raise refuse([f"{where} (a link to {pointed}, into {hidden})"])
+    place = None
+    if Path(root) == allowed:
+        place = f"{CONFIG_DIR}/ itself"
+    elif not Path(root).is_relative_to(allowed):
+        place = f"outside {CONFIG_DIR}/"
+    elif hidden := next((part for part in Path(root).relative_to(allowed).parts if part.startswith(".")), None):
+        place = f"into {hidden}"
+    if place is not None:
+        raise ConfigError(f"{where} can't be stored with the run: it is a link to {pointed} ({place}). An "
+                          f"experiment must be a folder inside {CONFIG_DIR}/, not a link out of it.")
     found: list[SnapshotFile] = []
     refused: list[str] = []
     visited = {root: ""}  # each folder walked, by real path: its name in the snapshot
@@ -119,6 +125,8 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
             refused.append(f"{prefix or 'the folder itself'} (can't be read: {e.strerror or e})")
             return
         for entry in entries:
+            if len(refused) >= MAX_FILES:
+                raise _Stopped
             if entry.name.startswith("."):
                 continue
             name = prefix + entry.name
@@ -147,11 +155,12 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
                     continue
                 if directory_entry:
                     if target == root or root.startswith(target + os.sep):  # autohelix/, or the folder
-                        refused.append(f"{name} ({'a link to ' if link else ''}a folder that contains it)")
+                        through = f"a link to {pointed}, " if link else ""
+                        refused.append(f"{name} ({through}a folder holding {where})")
                         continue
                     if target in visited:
                         first = visited[target]
-                        if first == "" or name.startswith(first + "/"):
+                        if name.startswith(first + "/"):
                             refused.append(f"{name} ({'a link to ' if link else ''}a folder that contains it)")
                         else:
                             refused.append(f"{name} (the same folder as {first}/, stored already)")
@@ -175,10 +184,17 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
             except OSError as e:  # vanished meanwhile, a name too long, ...
                 refused.append(f"{name} (can't be read: {e.strerror or e})")
 
-    visit(folder, "")
+    try:
+        visit(folder, "")
+    except _Stopped:
+        raise refuse(refused, stopped=True) from None
     if refused:
         raise refuse(refused)
     return found
+
+
+class _Stopped(Exception):
+    """`snapshot_files`' walk stopping at `MAX_FILES` refusals."""
 
 
 STAGING_PREFIX = ".experiment-"
@@ -197,16 +213,17 @@ def build_snapshot(files: list[SnapshotFile], beside: Path) -> Path:
     try:
         for file in files:
             destination = staging / file.name
-            destination.parent.mkdir(parents=True, exist_ok=True)
             try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(file.source, destination)
+                size = destination.stat().st_size
+                os.chmod(destination, file.mode & 0o555)
             except OSError as e:  # removed or made unreadable since the walk, a full disk
                 raise ConfigError(f"The experiment folder's {file.name} can't be stored with the run: "
                                   f"{e.strerror or e}.") from None
-            if destination.stat().st_size != file.size:
+            if size != file.size:
                 raise ConfigError(f"The experiment folder's {file.name} changed while being stored; "
                                   "start the run again.")
-            os.chmod(destination, file.mode & 0o555)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise

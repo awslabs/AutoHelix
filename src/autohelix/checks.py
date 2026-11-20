@@ -3,6 +3,7 @@
 
 """Run gate, observe and stop commands; compare metric gates."""
 
+import functools
 import logging
 import math
 import os
@@ -22,7 +23,7 @@ from autohelix.agents.runner import _kill_process_group, child_signals, end_grou
 from autohelix.agents import command_path
 from autohelix.config import (CONFIG_FILE, DEFAULT_CHECK_TIMEOUT, CommandSpec, Config, ConfigError, MetricGate,
                               ObserveEntry)
-from autohelix.experiment import SKIPPED_FOLDERS, snapshot_files
+from autohelix.experiment import snapshot_files
 from autohelix.sandbox import build_copy_env
 from autohelix.workspace import git_env, path_in_scope, run_git
 
@@ -114,7 +115,8 @@ def uncommitted_command_paths(config: Config, project_path: Path) -> list[str]:
     name that isn't a file here (a run's ref, `autohelix/<id>`) is left out; one
     warning per path. The experiment folder and what it stores are named as
     `$AUTOHELIX_EXPERIMENT` (not a config-only folder, whose runs get none); what it
-    leaves out (the config is `$AUTOHELIX_CONFIG`) is said to be left out. `ask:` and
+    leaves out (`snapshot_files`, walked only when a command names the folder; the
+    config is `$AUTOHELIX_CONFIG`) is said to be left out. `ask:` and
     `review:` entries are left out: their text is a question for a judge, which reads the
     folder as `experiment/` in its own copy."""
     commands = [spec.command for spec in config.gate_commands() if spec.label is None] + [
@@ -128,17 +130,22 @@ def uncommitted_command_paths(config: Config, project_path: Path) -> list[str]:
     if listed.returncode != 0:
         return []  # no commit (or no repository): the clean-checkout check says so
     committed = [name for name in os.fsdecode(listed.stdout).split("\0") if name]
-    folder, stores = None, True
+    folder = None
     if config.experiment is not None:
         root = Path(os.path.normpath(Path(project_path).absolute()))  # as `load_config` names it
         experiment = Path(os.path.normpath(config.experiment.absolute()))
         if experiment.is_relative_to(root):
             folder = experiment.relative_to(root).as_posix()
-        try:  # a folder holding only its config: no `$AUTOHELIX_EXPERIMENT`
-            stores = bool(snapshot_files(config, project_path))
+
+    @functools.cache
+    def stored() -> list[str] | None:
+        """The names the run would store of the folder; None when it is refused (the
+        run's own checks say why)."""
+        try:
+            return [file.name for file in snapshot_files(config, project_path) or []]
         except ConfigError:
-            pass  # refused: the run's own checks say why
-    template = os.path.realpath(config.prompt_template) if config.prompt_template is not None else None
+            return None
+
     warnings = []
     for path in named:
         bare = path.rstrip("/")
@@ -147,14 +154,15 @@ def uncommitted_command_paths(config: Config, project_path: Path) -> list[str]:
         if any(name == bare or name.startswith(bare + "/") for name in committed):
             continue
         inside = bare[len(folder) + 1:] if folder and bare.startswith(folder + "/") else None
+        names = stored() if folder and (bare == folder or inside is not None) else None
         if folder and bare == folder:
-            advice = ("use `$AUTOHELIX_EXPERIMENT`" if stores else
-                      "commit it (it holds only its config, so commands get no `$AUTOHELIX_EXPERIMENT`)")
+            advice = ("commit it (it holds only its config, so commands get no `$AUTOHELIX_EXPERIMENT`)"
+                      if names == [] else "use `$AUTOHELIX_EXPERIMENT`")
         elif inside == CONFIG_FILE:
             advice = "the run doesn't store it in `$AUTOHELIX_EXPERIMENT`: the config is `$AUTOHELIX_CONFIG`"
-        elif inside is not None and (os.path.realpath(Path(project_path) / bare) == template or any(
-                part.startswith(".") or part in SKIPPED_FOLDERS for part in inside.split("/"))):
-            advice = ("the run doesn't store it in `$AUTOHELIX_EXPERIMENT` (it leaves out the prompt "
+        elif inside is not None and names is not None and not any(
+                name == inside or name.startswith(inside + "/") for name in names):
+            advice = ("the run doesn't store it in `$AUTOHELIX_EXPERIMENT` (it leaves out the config, its "
                       "template, dotfiles and `__pycache__/`): commit it")
         elif inside is not None:
             advice = f"use `$AUTOHELIX_EXPERIMENT/{inside}`"

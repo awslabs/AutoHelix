@@ -813,7 +813,7 @@ def load_config(project_path: Path, config_file: Path | None = None, *,
         config.experiment = named_at.parent
     config.protected += [f"{name}/" for name in _project_relative(Path(project_path), [root / CONFIG_DIR])
                          if f"{name}/" not in config.protected]
-    config.config_dir_exists = os.path.lexists(root / CONFIG_DIR)
+    config.config_dir_exists = os.path.isdir(root / CONFIG_DIR)
     return config
 
 

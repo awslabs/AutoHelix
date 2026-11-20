@@ -132,8 +132,8 @@ or an experiment folder's `autohelix/<name>/autohelix.yaml` for several loops.
   ([Phases → Candidate copies](phases.md#candidate-copies)).
 - Whether to commit the configs:
   [Concepts → Where configs live](concepts.md#where-configs-live).
-- Keep `autohelix/` out of `scope.editable` (or list it under `frozen:`), so
-  the agent can't edit its own gates.
+- `autohelix/` is always frozen, whatever `scope:` says, so the agent can't
+  edit its own gates.
 - `.autohelix/` is the runs' state, kept out of git.
 
 Which config a command uses:
