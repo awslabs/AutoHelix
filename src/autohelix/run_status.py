@@ -86,11 +86,14 @@ class SegmentLog:
     def start(self, *, segment: int, started_at: float, budget: dict, start_iteration: int,
               executable: str | None = None) -> None:
         """The start record of segment `segment` (`next_number()`, taken under the run lock),
-        with the main agent's executable (resolved; None for one that starts nothing)."""
+        with the main agent's executable (resolved; None for one that starts nothing) and
+        the AutoHelix version running it (as the header shows it, `terminal.version`)."""
+        from autohelix.terminal import version
+
         self.segment = segment
         self._append({"segment": self.segment, "event": "start", "started_at": started_at, "pid": os.getpid(),
                       "host": socket.gethostname(), "budget": budget, "start_iteration": start_iteration,
-                      "executable": executable})
+                      "executable": executable, "autohelix_version": version()})
 
     def iteration(self, *, ended_at: float | None, **fields) -> None:
         """An iteration's record is final (`events.iteration_fields`; nothing outside a

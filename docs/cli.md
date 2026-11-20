@@ -42,7 +42,7 @@ The project is, whichever subfolder you are in:
 1. the folder with runs (the current folder or the nearest one above it with
    `.autohelix/runs/`, within the git checkout, as for `view`);
 2. else the current folder or the nearest one above it with a config
-   (`autohelix.yaml` or `autohelix/*.yaml`, the folder `autohelix run` there
+   (`autohelix.yaml` or `autohelix/*/autohelix.yaml`, the folder `autohelix run` there
    would use);
 3. else the top of the git checkout.
 
@@ -122,38 +122,51 @@ config names all three.
 ### Config files
 
 A project's configs live in exactly two places: `autohelix.yaml` at its root,
-or `autohelix/<name>.yaml` for several loops.
+or an experiment folder's `autohelix/<name>/autohelix.yaml` for several loops.
 
-- The `autohelix/` folder can also hold prompt templates and helper scripts
-  (`autohelix/prompts/perf.md`; `prompt_template:` is relative to the config's
-  folder). Commit the scripts (outside `autohelix/` if you keep it private:
-  [Configuration → Where configs live](config.md#where-configs-live))
+- An experiment folder can also hold its prompt template and helper scripts
+  (`autohelix/perf/prompt.md`; `prompt_template:` is relative to the config's
+  folder). Commands run the folder's scripts from `$AUTOHELIX_EXPERIMENT`
+  ([Configuration → Experiment folder](config.md#experiment-folder)); other
+  scripts they run must be committed
   ([Phases → Candidate copies](phases.md#candidate-copies)).
 - Whether to commit the configs:
-  [Configuration → Where configs live](config.md#where-configs-live).
-- Keep `autohelix/` out of `scope.editable` (or list it under `frozen:`), so
-  the agent can't edit its own gates.
+  [Concepts → Where configs live](concepts.md#where-configs-live).
+- `autohelix/` is always frozen, whatever `scope:` says, so the agent can't
+  edit its own gates.
 - `.autohelix/` is the runs' state, kept out of git.
 
 Which config a command uses:
 
-- The configs in `autohelix/` are the `.yaml` files directly in it; keep
-  other YAML files in subfolders.
-- `autohelix run perf` uses `autohelix/perf.yaml`.
-- A bare `autohelix run` uses `autohelix.yaml`, else the only config in
+- An experiment in `autohelix/` is a folder holding `autohelix.yaml`:
+  `autohelix/perf/autohelix.yaml`. Folders without one (`autohelix/lib/`),
+  dot-folders and `.yaml` files directly in `autohelix/` aren't configs.
+- `autohelix run perf` uses `autohelix/perf/autohelix.yaml`.
+- A bare `autohelix run` uses `autohelix.yaml`, else the only experiment in
   `autohelix/`, else stops with the list of configs.
-- Runs are named after the config file, so runs of `autohelix/perf.yaml` are
+- Runs are named after the experiment folder, so runs of `autohelix/perf/` are
   named like `20261112-1400-perf-0mws`; `autohelix.yaml` gives runs no name.
 - A run has exactly one config: it stores the file's text when it starts
   (`.autohelix/runs/<id>/config.yaml`, its prompt template beside it as
   `prompt_template.md`), and `resume`, `view`, `report` and the
   judges (`$AUTOHELIX_CONFIG`) use that copy.
+- A run of an experiment folder also stores the folder's other files, read-only,
+  as `.autohelix/runs/<id>/experiment/`: its scripts and material, without the
+  config, the template, dotfiles, dot-folders and `__pycache__/`. A link is
+  followed when it points inside `autohelix/` (`metrics.py ->
+  ../lib/metrics.py`); `run` refuses a link out of it (the folder itself too; a
+  committed project file is named by its path instead), a link to a folder
+  holding the experiment folder (`up -> ..`), a folder reached twice through links, a
+  file that isn't a regular file or can't be read, and a folder over 200
+  files, 200 folders or 10 MB, before it writes anything (`run --check` too).
+  Keep datasets out of the folder: name them by path.
 - `resume` refuses when the file's config has changed since: see
   [`autohelix resume`](#autohelix-resume) (Its config).
-- The config file and its `prompt_template:` file are always frozen, whatever
-  `scope:` says. Scripts the config calls (`bench.py`, gate scripts) are code:
-  they move with the run's commits; list them under `scope.frozen` if they
-  must not change.
+- The config file, its `prompt_template:` file and all of `autohelix/` are
+  always frozen, whatever `scope:` says (a committed folder is in the agent's
+  copy, but edits to it are discarded). Other scripts the config calls
+  (`bench.py`, gate scripts) are code: they move with the run's commits; list
+  them under `scope.frozen` if they must not change.
 
 There is no `--config` option, and nothing to initialize: the first
 `autohelix run` creates `.autohelix/` and adds `.autohelix/` and
@@ -172,16 +185,16 @@ autohelix run [CONFIG] [-n N | --until N] [--cost USD] [--time DURATION] [-p PAT
 autohelix run [CONFIG] --check
 ```
 
-`CONFIG` names a config in `autohelix/` (`perf` for `autohelix/perf.yaml`);
-without it, the run uses `autohelix.yaml`, else the only config in
-`autohelix/` (see [Config files](#config-files)). The project must be a git
+`CONFIG` names an experiment folder in `autohelix/` (`perf` for
+`autohelix/perf/autohelix.yaml`); without it, the run uses `autohelix.yaml`,
+else the only experiment in `autohelix/` (see [Config files](#config-files)). The project must be a git
 checkout with a commit, and the first baseline needs no uncommitted changes to
 tracked files.
 
-Commit the scripts its commands use
+Commit the scripts its commands use, or keep them in its experiment folder
 ([Phases → Candidate copies](phases.md#candidate-copies)), and commit the config
 before the first `run` or keep it private
-([Where configs live](config.md#where-configs-live)).
+([Where configs live](concepts.md#where-configs-live)).
 
 While the segment runs, `run` (and `resume`) keeps the machine from sleeping:
 `caffeinate -i -w <pid>` on macOS, `systemd-inhibit` (idle and sleep) on Linux.
@@ -201,7 +214,7 @@ VPN alive.
   Agent    Claude Code · sonnet
   Gates    pytest -q test_sort.py · speed regress 5%
   Observe  bench (speed ↑, mem_mb ↓)
-  Scope    editable: sort.py
+  Scope    editable: sort.py · frozen: autohelix.yaml
   Budget   7 iterations · $10.00 · 30m each
   ────────────────────────────────────────────────────────────────────────────
              time    cost   speed ↑         mem_mb ↓
@@ -223,6 +236,7 @@ VPN alive.
   run       7 iterations · 3 accepted · 38m 43s · $2.65
   landed    3 commits on main
   next      autohelix view krp3 · autohelix resume krp3
+            .autohelix/runs/20261115-1402-sorting-krp3/
   page      .autohelix/runs/20261115-1402-sorting-krp3/report.html
   summary   .autohelix/runs/20261115-1402-sorting-krp3/report.md
 ```
@@ -250,8 +264,9 @@ VPN alive.
 - **The end block** says how the segment ended (`Done`, `Stopped`,
   `Interrupted`, `Error`), each metric from the baseline to the run's tip, the
   totals, what landed (`landing  failed: …` in yellow when auto landing
-  couldn't, the commits then waiting for `autohelix land`), what to type next
-  and the files written.
+  couldn't, the commits then waiting for `autohelix land`), what to type next,
+  then the run's folder (`report.md`, `history.jsonl`, `iterations/` are in
+  it; on its own line when it doesn't fit), and the files written.
 - **`resume`** shows the baseline and the last 5 rows before `resumed HH:MM`.
 
 Wide terminals (where a reason still fits after the values) space the columns out;
@@ -274,7 +289,7 @@ pipe, a log file) or colours there is no mark and no live row. The renders at 80
 | `--why TEXT` | Why this run is started: one line (at most 300 characters), stored in `run.json` and shown by `autohelix view` |
 | `--verbose` | Show agent command details, file paths, heartbeats |
 | `--no-report` | Don't write the run summary when this segment finishes (not stored: pass it to each `resume` too) |
-| `--check` | Start nothing: make every check the run makes before writing anything (the config and its prompt template, a clean checkout, the agent command, scope patterns, `--import`'s run), print what it finds, exit 0 when the run would start, else 1. For setup and CI |
+| `--check` | Start nothing: make every check the run makes before writing anything (the config and its prompt template, the experiment folder, a clean checkout, the agent command, scope patterns, commands naming an `autohelix/` path the commit lacks, `--import`'s run), print what it finds, exit 0 when the run would start, else 1. For setup and CI |
 
 `run` always starts a **new** run, with its own notes and history; to
 continue one, use [`autohelix resume`](#autohelix-resume) (scripts that want
@@ -535,7 +550,7 @@ Other options as for `run`, and it keeps the machine awake the same way.
 
 - `resume k3f9` continues that run.
 - `resume perf` (a config name, as `run perf` takes) continues the latest run
-  of `autohelix/perf.yaml`; a run id takes precedence over a config of the
+  of `autohelix/perf/autohelix.yaml`; a run id takes precedence over a config of the
   same name.
 - Without either, the config is the one a bare `autohelix run` would use (with
   several configs and no `autohelix.yaml`, `resume` stops: name a run or a
@@ -562,6 +577,12 @@ anything, `resume` compares it with the config file:
   `- pytest` for `- command: pytest`) are not changes.
 - A deleted file, or a deleted prompt template, isn't a change: the run
   continues with its copy (other keys are still compared).
+- The experiment folder is compared with the run's copy
+  (`runs/<id>/experiment/`), file by file: a changed file (its bytes or exec
+  bit), an added one or a removed one refuses, naming them, with the same two
+  ways out (restore the files). Edits to files the folder links to count. A
+  deleted folder isn't a change, and a run without a stored folder resumes
+  as before.
 - A run started before runs stored their config can't be resumed: continue it
   with `run --import <id>`.
 
@@ -1035,8 +1056,9 @@ start is written as soon as its command holds the run's lock, before its checks
 - `"event": "start"` (`started`): `started_at` (Unix seconds), `budget` as
   given (`iterations`, `until`, `cost_usd`, `time_seconds`, each `null` when
   unset, and `default`: no budget flag, so the default `-n 1` applied),
-  `start_iteration`, `pid`, `host` and `executable` (the main agent's,
-  resolved).
+  `start_iteration`, `pid`, `host`, `executable` (the main agent's,
+  resolved) and `autohelix_version` (the AutoHelix that ran the segment, as
+  the header shows it).
 - `"event": "iteration"` (`iteration`): `ended_at` and the `iteration`
   event's fields. A record whose process was killed before its line (or one
   recovered from a published commit) gets it at the next `resume`, with the
@@ -1105,7 +1127,7 @@ stop:
 - **What it judges, by hand**: the current directory in place; the change, named in the prompt, is its working tree against `HEAD` (computed as for `review`). Outside a git repository there is no diff: the judge judges the files as they are.
 - **Read-only.** Claude Code gets only its read, grep and glob tools, and loads only user-level settings (no project `CLAUDE.md`, settings or hooks) and no MCP servers. Codex runs in its read-only sandbox, with `project_doc_max_bytes=0` so it loads no `AGENTS.md` from the judged files (unconfirmed against a real Codex call). OpenCode can't be used as a judge yet: it has no read-only mode.
 - **Costs and logs, in a run.** Each call's cost counts toward the iteration's cost and `--cost`. Its transcript is saved with the output of the command that ran it: `.autohelix/runs/<id>/iterations/NNN/gates/<k>/ask.log` for an `ask:` gate (`stop/<k>/` for a stop command, `observe/<name>/` for an observe entry; `ask-2.log`, … for further calls). While the command runs it is written to the command's private `$AUTOHELIX_LOG_DIR`.
-- **Costs, outside a run.** A line on stderr gives the answer, the agent and where its settings came from, and the cost: `autohelix ask: yes · codex gpt-5 (autohelix/a.yaml) · $0.0120`, or `· claude-code (defaults: several configs here) · …`, so a by-hand answer from other settings than a run's is visible.
+- **Costs, outside a run.** A line on stderr gives the answer, the agent and where its settings came from, and the cost: `autohelix ask: yes · codex gpt-5 (autohelix/a/autohelix.yaml) · $0.0120`, or `· claude-code (defaults: several configs here) · …`, so a by-hand answer from other settings than a run's is visible.
 - An invalid answer or failed call is retried once. The command stays inside the timeout of the command that runs it.
 - **Scripts own the exit code.** `ask` exits non-zero when it can't answer; a script that swallows that (`autohelix ask ... || true`) and exits 0 passes.
 - **One write guard.** Each call fingerprints the judged files first (git's tracked and non-ignored untracked files, modes, symlinks and submodule contents; outside a repository, every file but cache folders); only the call's own transcript and the usage file may change.

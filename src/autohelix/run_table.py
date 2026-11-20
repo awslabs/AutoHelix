@@ -159,6 +159,7 @@ class Saved:
     config: object = None
     rows: list[Row] | None = field(default_factory=list)
     files: list[tuple[str, str]] = field(default_factory=list)
+    folder: str = ""  # the run's folder, as the end block names it
 
     @classmethod
     def read(cls, paths) -> "Saved":
@@ -176,7 +177,7 @@ class Saved:
             rows = None
         files = [(label, terminal.shown_path(path))
                  for label, path in (("page", paths.report_html), ("summary", paths.report)) if path.is_file()]
-        return cls(config, rows, files)
+        return cls(config, rows, files, terminal.shown_path(paths.run_dir) + "/")
 
 
 def _outcome(run: dict) -> tuple[str, str, str | None]:
@@ -263,7 +264,8 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
         commands = terminal.next_commands(short, view=False, also=_words(run).commands)
         tail = table.ending(_outcome(run), spent=terminal.money(run["progress"]["cost_usd"],
                                                                  run["progress"]["cost_incomplete"]),
-                            landing=_landed(run, accepted), commands=commands, files=list(saved.files))
+                            landing=_landed(run, accepted), commands=commands, files=list(saved.files),
+                            folder=saved.folder)
     return head, rows, tail
 
 

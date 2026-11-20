@@ -22,8 +22,8 @@ def test_a_ready_config_passes_and_nothing_is_written(project):
 
 
 def test_a_named_config_is_checked(project):
-    (project / "autohelix").mkdir()
-    (project / "autohelix" / "perf.yaml").write_text((project / "autohelix.yaml").read_text())
+    (project / "autohelix" / "perf").mkdir(parents=True)
+    (project / "autohelix" / "perf" / "autohelix.yaml").write_text((project / "autohelix.yaml").read_text())
     (project / "autohelix.yaml").unlink()
     from autohelix.runs import git
 

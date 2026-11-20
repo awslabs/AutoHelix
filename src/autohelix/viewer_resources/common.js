@@ -101,6 +101,12 @@ function runNotes(run) {
     run.archive_why && `archived: ${run.archive_why}`].filter(Boolean).join(' · ');
 }
 
+// Where the run's files are (report.md, history.jsonl, iterations/), from the project's
+// folder, as the end block of `run` names it.
+function runFolder(runId) {
+  return runId ? `.autohelix/runs/${runId}/` : '';
+}
+
 // The theme button: Auto (follow the system) -> Light -> Dark, remembered in this
 // browser (both pages share the key); the logo follows the theme in use.
 const THEMES = { auto: '◐ Auto', light: '☀ Light', dark: '☾ Dark' };
@@ -129,5 +135,5 @@ function themeButton(logos = { light: '/logo-light.svg', dark: '/logo-dark.svg' 
 
 if (typeof module !== 'undefined') {
   module.exports = { fmtNumber, formatDelta, better, fmtDuration, fmtLimit, fmtMoney, fmtCap, plural,
-    splitRunId, runNotes, themeButton };
+    splitRunId, runNotes, runFolder, themeButton };
 }

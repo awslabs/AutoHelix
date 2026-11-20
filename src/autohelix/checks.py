@@ -3,6 +3,7 @@
 
 """Run gate, observe and stop commands; compare metric gates."""
 
+import functools
 import logging
 import math
 import os
@@ -20,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 from autohelix.agents.runner import _kill_process_group, child_signals, end_group
 from autohelix.agents import command_path
-from autohelix.config import DEFAULT_CHECK_TIMEOUT, CommandSpec, Config, MetricGate, ObserveEntry
+from autohelix.config import (CONFIG_FILE, DEFAULT_CHECK_TIMEOUT, CommandSpec, Config, ConfigError, MetricGate,
+                              ObserveEntry)
+from autohelix.experiment import snapshot_files
 from autohelix.sandbox import build_copy_env
 from autohelix.workspace import git_env, path_in_scope, run_git
 
@@ -91,7 +94,84 @@ def preflight_check(config: Config, project_path: Path) -> list[PreflightIssue]:
                         message=f"scope.{label} '{pattern}' matches no committed file",
                     ))
 
+    # 4. Commands naming a path under autohelix/ the commit lacks (a private folder's
+    # helper): copies are built from the commit, so the command would fail in them.
+    issues.extend(PreflightIssue(level="warning", message=message)
+                  for message in uncommitted_command_paths(config, project_path))
+
     return issues
+
+
+# A path under autohelix/ in a command's text, `./` allowed in front: not part of a longer
+# path (`src/autohelix/`, `$AUTOHELIX_PROJECT/autohelix/`, `.autohelix/`), up to a space,
+# quote or shell operator. The group is the path without the `./`.
+_AUTOHELIX_PATH = re.compile(r"(?<![\w./$~-])(?:\./)?(autohelix/[^\s'\"`;|&<>()]*)")
+
+
+def uncommitted_command_paths(config: Config, project_path: Path) -> list[str]:
+    """`run --check`'s and preflight's warnings for gate, observe and stop commands that
+    name a path under autohelix/ that is here but isn't in the commit (`python
+    autohelix/perf/render.py`): the copy they run in lacks it. A textual check, so a
+    name that isn't a file here (a run's ref, `autohelix/<id>`) is left out; one
+    warning per path. The experiment folder and what it stores are named as
+    `$AUTOHELIX_EXPERIMENT` (not a config-only folder, whose runs get none); what it
+    leaves out (`snapshot_files`, walked only when a command names the folder; the
+    config is `$AUTOHELIX_CONFIG`) is said to be left out. `ask:` and
+    `review:` entries are left out: their text is a question for a judge, which reads the
+    folder as `experiment/` in its own copy."""
+    commands = [spec.command for spec in config.gate_commands() if spec.label is None] + [
+        entry.command for entry in config.observe if entry.review is None] + [spec.command for spec in config.stop]
+    named = dict.fromkeys(match.rstrip(".,:") for command in commands for match in _AUTOHELIX_PATH.findall(command))
+    named = [path for path in named if path.rstrip("/") != "autohelix" and not any(c in path for c in "*?[{$")]
+    if not named:
+        return []
+    listed = run_git(["git", "ls-tree", "-r", "-z", "--name-only", "HEAD"], cwd=project_path,
+                     capture_output=True, env=git_env())
+    if listed.returncode != 0:
+        return []  # no commit (or no repository): the clean-checkout check says so
+    committed = [name for name in os.fsdecode(listed.stdout).split("\0") if name]
+    folder = None
+    if config.experiment is not None:
+        root = Path(os.path.normpath(Path(project_path).absolute()))  # as `load_config` names it
+        experiment = Path(os.path.normpath(config.experiment.absolute()))
+        if experiment.is_relative_to(root):
+            folder = experiment.relative_to(root).as_posix()
+
+    @functools.cache
+    def stored() -> list[str] | None:
+        """The names the run would store of the folder; None when it is refused (the
+        run's own checks say why)."""
+        try:
+            return [file.name for file in snapshot_files(config, project_path) or []]
+        except ConfigError:
+            return None
+
+    warnings = []
+    for path in named:
+        bare = path.rstrip("/")
+        if not os.path.lexists(Path(project_path) / bare):
+            continue  # not a file here (a ref, `autohelix/<run-id>`; a name the command makes)
+        if any(name == bare or name.startswith(bare + "/") for name in committed):
+            continue
+        inside = bare[len(folder) + 1:] if folder and bare.startswith(folder + "/") else None
+        names = stored() if folder and (bare == folder or inside is not None) else None
+        if folder and bare == folder:
+            advice = ("commit it (it holds only its config, so commands get no `$AUTOHELIX_EXPERIMENT`)"
+                      if names == [] else "use `$AUTOHELIX_EXPERIMENT`")
+        elif inside == CONFIG_FILE:
+            advice = "the run doesn't store it in `$AUTOHELIX_EXPERIMENT`: the config is `$AUTOHELIX_CONFIG`"
+        elif inside is not None and names is not None and not any(
+                name == inside or name.startswith(inside + "/") for name in names):
+            advice = ("the run doesn't store it in `$AUTOHELIX_EXPERIMENT` (it leaves out the config, its "
+                      "template, dotfiles and `__pycache__/`): commit it")
+        elif inside is not None:
+            advice = f"use `$AUTOHELIX_EXPERIMENT/{inside}`"
+        elif folder:
+            advice = f"commit it, or link it into {folder}/ and use `$AUTOHELIX_EXPERIMENT/...`"
+        else:
+            advice = "commit it"
+        warnings.append(f"{path} (named by a command) isn't in the commit, so not in the copy: {advice}.")
+    return warnings
 
 
 @dataclass

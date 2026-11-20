@@ -277,7 +277,8 @@ def _ending(output: str) -> list[str]:
     return lines[next(i for i, line in enumerate(lines) if line.startswith(("  Done", "  Stopped", "  Error"))):]
 
 
-def test_ending_after_landing(project):
+def test_ending_after_landing(project, monkeypatch):
+    monkeypatch.chdir(project)  # the run's folder is shown relative to here, as the page is
     _configure(project, observe=[{"name": "bench", "command": "echo '##autohelix[speed=3]'",
                                   "metrics": {"speed": "higher"}}], scope={"editable": ["hello.py"]})
     result, short, run_id = _run(project)
@@ -288,8 +289,24 @@ def test_ending_after_landing(project):
     assert ending[2].startswith("  run        1 iteration · 1 accepted")
     assert ending[3] == "  landed     1 commit on main"
     assert ending[4] == f"  next       autohelix view {short} · autohelix resume {short}"
-    assert ending[5].startswith("  page       ") and ending[5].endswith(f"{run_id}/report.html")
-    assert len(ending) == 6
+    assert ending[5] == f"             .autohelix/runs/{run_id}/"  # the run's folder: too long for the line above
+    assert ending[6].startswith("  page       ") and ending[6].endswith(f"{run_id}/report.html")
+    assert len(ending) == 7
+
+
+def test_ending_from_a_subfolder_names_the_run_folder_absolutely(project, monkeypatch):
+    # Paths are relative to the current folder, not to the project: from a subfolder the
+    # run's folder is absolute, as the page is.
+    (project / "sub").mkdir()
+    monkeypatch.chdir(project / "sub")
+    _configure(project, scope={"editable": ["hello.py"]})
+    result, short, run_id = _run(project)
+    assert result.exit_code == 0, result.output
+    ending = _ending(result.output)
+    folder = project / ".autohelix" / "runs" / run_id
+    assert f"{folder}/" in [part for line in ending for part in line.split()]
+    assert f" .autohelix/runs/{run_id}/" not in "\n".join(ending)
+    assert ending[-1].startswith("  page       ") and ending[-1].endswith(f"{folder}/report.html")
 
 
 def test_ending_when_nothing_landed(project):
@@ -330,7 +347,7 @@ def test_ending_when_landing_fails(project, monkeypatch):
 
 def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):
     _configure(project, stop=["echo broken; exit 3"], scope={"editable": ["hello.py"]})
-    result, short, _ = _run(project)
+    result, short, run_id = _run(project)
     assert result.exit_code == 1
     ending = _ending(result.output)
     # The exit code and the command's last output lines, which used to be printed apart;
@@ -341,7 +358,9 @@ def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):
     assert ending[0].startswith("  Error      Stop command exited 3 on the baseline: echo broken;")
     totals = next(i for i, line in enumerate(ending) if line.startswith("  run "))
     assert " ".join(" ".join(ending[:totals]).split()) == f"Error {message}"  # wrapped, not cut
-    assert [line.split()[0] for line in ending[totals:]] == ["run", "landed", "next", "page"]
+    # Run from outside the project: the run's folder is absolute, as the page is.
+    assert [line.split()[0] for line in ending[totals:]] == ["run", "landed", "next",
+                                                             f"{project / '.autohelix' / 'runs' / run_id}/", "page"]
     assert result.output.count("Error") == 1  # not repeated by the CLI
 
 

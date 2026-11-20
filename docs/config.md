@@ -1,7 +1,8 @@
 # Configuration
 
 A loop's configuration lives in `autohelix.yaml` at the project root, or in
-`autohelix/<name>.yaml` when a project has several (`autohelix run <name>`; see
+an experiment folder's `autohelix/<name>/autohelix.yaml` when a project has
+several (`autohelix run <name>`; see
 [CLI → Config files](cli.md#config-files)). Bare `autohelix` in a terminal
 starts a coding agent that drafts one with you; to write one by hand, start from
 the examples below or the commented template shipped in the package
@@ -21,40 +22,11 @@ see [Phases → Candidate copies](phases.md#candidate-copies).
 
 ## Where configs live
 
-A run stores its config when it starts
-([CLI → Config files](cli.md#config-files)), so git is only for sharing
-configs. Either choice is fine, per experiment:
-
-- **Shared** (a team's benchmark): commit `autohelix.yaml` or `autohelix/` with
-  the project. Commit it before the first `run`: with auto landing, a commit on
-  the branch after the run lands puts the branch past the run's tip, and
-  `resume` refuses (`run` warns when the config isn't committed).
-- **Private**: put `/autohelix/` (or `/autohelix.yaml`) in `.git/info/exclude`
-  (your clone only) or `.gitignore`. An ignored config is never committed, so it
-  can't move the branch. A config that is already committed must be untracked
-  first (`git rm -r --cached autohelix`, then commit), or the exclude has no
-  effect. Scripts the commands run must still be committed in the project,
-  outside `autohelix/`: an ignored `autohelix/` isn't in the copies
-  ([Phases → Candidate copies](phases.md#candidate-copies)).
-
-For a private history of your configs, either make `autohelix/` its own git
-repository:
-
-```bash
-echo /autohelix/ >> .git/info/exclude
-cd autohelix && git init && git add perf.yaml && git commit -m "perf config"
-```
-
-or make it a symlink into a personal repository of configs:
-
-```bash
-ln -s ~/configs/myproject autohelix
-echo /autohelix >> .git/info/exclude    # no trailing slash: git sees a symlink as a file
-```
-
-AutoHelix follows the link. Two differences: `run.json` names the config by
-its resolved, absolute path, and with auto landing `run` warns "commit
-… first"; the warning doesn't apply to a file outside the project.
+A run stores its config when it starts, so git is only for sharing configs.
+Setup keeps `autohelix/` private (`/autohelix/` in the local exclude file,
+`git rev-parse --git-path info/exclude`) unless
+you share an experiment by committing it. The setups, and how to share one experiment
+out of a private folder: [Concepts → Where configs live](concepts.md#where-configs-live).
 
 ## Full Reference
 
@@ -406,6 +378,41 @@ may be flakiness, not setup).
 Where gate, observe and stop commands run and the variables they get:
 [Phases → Command environment](phases.md#command-environment).
 
+### Experiment folder
+
+A config in an experiment folder (`autohelix/NAME/autohelix.yaml`) can keep its
+evaluator scripts and material beside it. The run stores the folder when it
+starts, as `.autohelix/runs/<id>/experiment/` (without the config and its
+template), and each gate, observe and stop command gets its own copy of that
+as `$AUTOHELIX_EXPERIMENT`:
+
+```
+autohelix/console/
+  autohelix.yaml
+  render.py
+```
+
+```yaml
+observe:
+  - name: screens
+    command: python "$AUTOHELIX_EXPERIMENT/render.py"
+```
+
+The copy's files are read-only and keep their read and exec bits; a command
+that changes its copy changes nothing stored. `$AUTOHELIX_EXPERIMENT` is unset
+for a config without a folder (the project's `autohelix.yaml`), and for a
+folder holding only its config, so a command using it fails visibly. Links are
+followed only inside `autohelix/` (`metrics.py -> ../lib/metrics.py`); a
+committed project file is named by its path (`python scripts/bench.py`). The agent gets the same files in `.autohelix-iteration/experiment/`
+(in its prompt's reading list), and `ask`/`review` in a run in
+`.autohelix-iteration/experiment/` of their own copy.
+
+A command that names the folder by its project path (`python
+autohelix/console/render.py`) works only for committed files: copies are built
+from the commit. `run --check` and the start's checks warn about such a path:
+"autohelix/console/render.py (named by a command) isn't in the commit, so not
+in the copy: use `$AUTOHELIX_EXPERIMENT/render.py`."
+
 ## Stop
 
 `stop:` lists commands that end the run early. Each entry is a string, or a
@@ -493,8 +500,9 @@ changes to tests/x.py were discarded: outside the editable scope", or "...:
 frozen" for frozen paths). A rejected attempt whose changes were all discarded
 keeps no tree and gives the next agent no `rejected.patch`.
 
-The config file and its `prompt_template:` file are always frozen (the run keeps
-the config it started with: [CLI → Config files](cli.md#config-files)). Scripts
+The config file, its `prompt_template:` file and `autohelix/` are
+always frozen (the run keeps the config it started with:
+[CLI → Config files](cli.md#config-files)). Scripts
 the config calls are code: list them under `frozen:` if they must not change.
 
 With no scope, the agent may edit the tests and benchmarks that gate it; a run

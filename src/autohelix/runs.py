@@ -21,7 +21,8 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 from pathlib import Path
 
-from autohelix.config import ENTRY_NAME, load_config, project_configs, run_command, template_text
+from autohelix.config import ENTRY_NAME, config_name, load_config, project_configs, run_command, template_text
+from autohelix.experiment import build_snapshot, snapshot_files, sweep_staging
 
 SCHEMA = 2
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
@@ -86,7 +87,7 @@ class RunPaths:
     Without an id, only the project's paths (`root`, `runs`, `locks`, ...) mean
     anything; which run a command acts on is `default_run`'s choice, never a pointer.
 
-    A run's folder holds what people read (run.json, config.yaml, history.jsonl, hints.md,
+    A run's folder holds what people read (run.json, config.yaml, experiment/, history.jsonl, hints.md,
     report.md/.html, the `notes` link, `iterations/NNN/`, `logs/`); everything the
     harness keeps for itself is in its `.internal/`, and the project's own
     (locks, helper scripts) in `.autohelix/.internal/`.
@@ -123,6 +124,8 @@ class RunPaths:
     def config(self): return self.run_dir / "config.yaml"  # the run's config, stored when it started
     @property
     def template(self): return self.run_dir / "prompt_template.md"  # its prompt_template's text, if it has one
+    @property
+    def experiment(self): return self.run_dir / "experiment"  # its experiment folder's copy, stored when it started
     @property
     def history(self): return self.run_dir / "history.jsonl"
     @property
@@ -1159,11 +1162,11 @@ def load_run_config(paths: RunPaths, data: dict | None = None):
     return config
 
 
-def new_run_name(config: Path, name: str | None) -> str | None:
-    """A new run's readable name: `name`, else the config file's (none for autohelix.yaml)."""
-    if name is None:
-        stem = config.stem
-        name = None if stem == "autohelix" else re.sub(r"[^a-z0-9-]", "-", stem.lower()).strip("-")[:32] or None
+def new_run_name(config_path: str, name: str | None) -> str | None:
+    """A new run's readable name: `name`, else its experiment's (`config_name` of the
+    project-relative `config_path`; none for autohelix.yaml)."""
+    if name is None and (experiment := config_name(config_path)):
+        name = re.sub(r"[^a-z0-9-]", "-", experiment.lower()).strip("-")[:32] or None
     if name is not None and not _NAME.fullmatch(name):
         raise RuntimeError(f"Run name {name!r}: use lowercase letters, digits or hyphens, starting with a letter "
                            "or digit, at most 32 characters.")
@@ -1234,10 +1237,15 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
     # Serialize selection/creation for this project. The per-run lock remains
     # authoritative throughout the segment, including final landing.
     with RunLock(RunPaths(project).selection_lock, blocking=True):
-        try:
-            sweep_copies(project)
-        except Exception:  # noqa: BLE001 - a backstop; never blocks a run
-            pass
+        # Backstops, each on its own; neither blocks a run.
+        for sweep in (
+            lambda: sweep_staging(RunPaths(project).runs),  # a killed `run`'s; built only under this lock
+            lambda: sweep_copies(project),
+        ):
+            try:
+                sweep()
+            except Exception:  # noqa: BLE001
+                pass
         config_path = config_relative(project, config)
         if run_id:
             paths = RunPaths(project, run_id)
@@ -1250,12 +1258,14 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
                 return (paths, *_owned(paths))
             if not create:
                 raise NoRunToResume(no_run_to_resume(config_path))
-        name = new_run_name(config, name)
+        name = new_run_name(config_path, name)
         # Refused first starts must not leave an identity, owned ref or pointer.
         if ready is not None:
             ready()
         stored = config.read_text()  # verbatim; its template's text beside it (`RunPaths.template`)
-        template = template_text(load_config(project, config))
+        loaded = load_config(project, config)
+        template = template_text(loaded)
+        files = snapshot_files(loaded, project)  # refused here, before anything is written
         base = git(project, "rev-parse", "HEAD").stdout.strip()
         target = git(project, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip().removeprefix("refs/heads/") or None
         notices = _new_run_notices(project, config_path, target, group, imported, base, land_mode)
@@ -1263,44 +1273,53 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
         taken = {short_id(ref) for ref in git(project, "for-each-ref", "--format=%(refname:lstrip=2)",
                                               "refs/autohelix/").stdout.split()}
         taken |= {short_id(p.name) for p in RunPaths(project).runs.glob("*")}
-        while True:
-            suffix = "".join(secrets.choice(_ALPHABET) for _ in range(4))
-            if suffix in taken:
-                continue
-            candidate = "-".join(part for part in (time.strftime("%Y%m%d-%H%M"), name, suffix) if part)
-            paths = RunPaths(project, candidate)
-            paths.runs.mkdir(parents=True, exist_ok=True)
-            try:
-                paths.run_dir.mkdir()
-            except FileExistsError:
-                continue
-            lock = RunLock(paths.lock)
-            created = git(project, "update-ref", "--no-deref", "--create-reflog", "-m", "AutoHelix create run",
-                          paths.ref, base, "0" * len(base), check=False)
-            if created.returncode:
-                lock.close()
-                paths.run_dir.rmdir()
-                if git(project, "rev-parse", "--verify", paths.ref, check=False).returncode == 0:
+        # The experiment folder's copy, built beside the run folders (a dot-name no listing
+        # reads) and renamed into the new run's folder.
+        staging = None if files is None else build_snapshot(files, RunPaths(project).runs)
+        try:
+            while True:
+                suffix = "".join(secrets.choice(_ALPHABET) for _ in range(4))
+                if suffix in taken:
                     continue
-                raise RuntimeError(created.stderr.strip())
-            data = {"schema": SCHEMA, "id": candidate, "name": name, "config_path": config_path,
-                    "created_at": time.time(), "base_commit": base, "target_branch": target,
-                    "ref": paths.ref, **({"group": group} if group else {}),
-                    **({"land": land_mode} if land_mode else {}),
-                    **({"import": {"run": imported}} if imported else {}),
-                    **({"why": why} if why else {})}
-            try:
-                # First: a readable run (run.json) has its config. Never edited: a run keeps
-                # the config it started with.
-                for path, text in ((paths.config, stored), (paths.template, template)):
-                    if text is not None:
-                        write_text(path, text)
-                        os.chmod(path, 0o444)
-                write_json(paths.identity, data)
-            except BaseException:
-                lock.close()
-                raise
-            return paths, data, lock, notices
+                candidate = "-".join(part for part in (time.strftime("%Y%m%d-%H%M"), name, suffix) if part)
+                paths = RunPaths(project, candidate)
+                paths.runs.mkdir(parents=True, exist_ok=True)
+                try:
+                    paths.run_dir.mkdir()
+                except FileExistsError:
+                    continue
+                lock = RunLock(paths.lock)
+                created = git(project, "update-ref", "--no-deref", "--create-reflog", "-m", "AutoHelix create run",
+                              paths.ref, base, "0" * len(base), check=False)
+                if created.returncode:
+                    lock.close()
+                    paths.run_dir.rmdir()
+                    if git(project, "rev-parse", "--verify", paths.ref, check=False).returncode == 0:
+                        continue
+                    raise RuntimeError(created.stderr.strip())
+                data = {"schema": SCHEMA, "id": candidate, "name": name, "config_path": config_path,
+                        "created_at": time.time(), "base_commit": base, "target_branch": target,
+                        "ref": paths.ref, **({"group": group} if group else {}),
+                        **({"land": land_mode} if land_mode else {}),
+                        **({"import": {"run": imported}} if imported else {}),
+                        **({"why": why} if why else {})}
+                try:
+                    # First: a readable run (run.json) has its config and experiment folder.
+                    # Never edited: a run keeps the config it started with.
+                    if staging is not None:
+                        os.rename(staging, paths.experiment)
+                    for path, text in ((paths.config, stored), (paths.template, template)):
+                        if text is not None:
+                            write_text(path, text)
+                            os.chmod(path, 0o444)
+                    write_json(paths.identity, data)
+                except BaseException:
+                    lock.close()
+                    raise
+                return paths, data, lock, notices
+        finally:
+            if staging is not None and staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
 
 
 def repair_history(paths: RunPaths) -> None:

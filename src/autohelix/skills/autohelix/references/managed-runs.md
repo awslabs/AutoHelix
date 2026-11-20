@@ -139,7 +139,7 @@ interrupted run, `autohelix report` writes one when requested.
 **Compare** approaches (models, prompts, or the same setup several times) with
 separate runs that land manually: they must not share notes or code, or the
 comparison measures their mix. Write one config per approach
-(`autohelix/a.yaml`, `autohelix/b.yaml`; runs are named after the file; repeats
+(`autohelix/a/autohelix.yaml`, `autohelix/b/autohelix.yaml`; runs are named after the folder; repeats
 of one setup share a config), commit them, and start each run in its own
 background session with the same budget flags:
 

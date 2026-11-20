@@ -251,7 +251,7 @@ class TestTitle:
 class TestOldKeys:
     @pytest.mark.parametrize("data, message", [
         ({"constraints": ["pytest"]}, "`constraints:` is now `gates:`"),
-        ({"name": "perf"}, "`name:` is gone: runs are named after the config file; use autohelix/<name>.yaml"),
+        ({"name": "perf"}, "`name:` is gone: runs are named after the experiment folder; use autohelix/<name>/autohelix.yaml"),
         ({"constraint": "pytest"}, "`constraint:` is now `gates:`"),
         ({"metrics": []}, "`metrics:` is now `observe:`"),
         ({"observables": []}, "`observables:` is now `observe:`"),

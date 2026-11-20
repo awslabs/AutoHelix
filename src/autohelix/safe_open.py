@@ -93,17 +93,18 @@ def open_run_log(paths, value, running: int | None = None) -> int | None:
     return open_file(*found, single_link=True)
 
 
-def copy_dir(root: Path, parts, target: Path) -> bool:
+def copy_dir(root: Path, parts, target: Path, *, read_only: bool = False) -> bool:
     """Copy the folder `root/parts...` (opened as `open_dir` opens it) to `target`, a new
     folder: only regular single-link files and folders, each opened relative to the one
     above it without following symlinks; anything else (symlinks, FIFOs, devices, hard
-    links to elsewhere) is skipped, and so is a tree too deep to walk. Returns whether
-    the folder was copied."""
+    links to elsewhere) is skipped, and so is a tree too deep to walk. With `read_only`,
+    each file keeps its source's read and exec bits and has no write bits (folders stay
+    writable, so the copy can be removed). Returns whether the folder was copied."""
     fd = open_dir(root, parts)
     if fd is None:
         return False
     try:
-        _copy_fd(fd, target)
+        _copy_fd(fd, target, read_only)
     except RecursionError:  # a planted tree too deep to walk: skipped whole
         shutil.rmtree(target, ignore_errors=True)
         return False
@@ -124,7 +125,7 @@ def copy_file(root: Path, parts, target: Path) -> bool:
     return True
 
 
-def _copy_fd(fd: int, target: Path) -> None:
+def _copy_fd(fd: int, target: Path, read_only: bool = False) -> None:
     target.mkdir()
     for entry in os.scandir(fd):
         try:
@@ -132,7 +133,7 @@ def _copy_fd(fd: int, target: Path) -> None:
             if stat.S_ISDIR(mode):
                 child = os.open(entry.name, _OPEN | os.O_DIRECTORY, dir_fd=fd)
                 try:
-                    _copy_fd(child, target / entry.name)
+                    _copy_fd(child, target / entry.name, read_only)
                 finally:
                     os.close(child)
             elif stat.S_ISREG(mode):
@@ -144,5 +145,7 @@ def _copy_fd(fd: int, target: Path) -> None:
                 with os.fdopen(child, "rb") as source, open(target / entry.name, "xb") as out:
                     while chunk := source.read(1 << 20):
                         out.write(chunk)
+                    if read_only:
+                        os.fchmod(out.fileno(), stat.S_IMODE(info.st_mode) & 0o555)
         except OSError:  # gone or swapped meanwhile: skipped
             continue

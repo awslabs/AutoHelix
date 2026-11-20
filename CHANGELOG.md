@@ -38,8 +38,10 @@ has the checklist.
   the metric's name. 0.1.1 also took a `name: value` or `name=value` line, and,
   with one declared metric, a single `##autohelix[...]` line whatever its
   name; those now report nothing.
-- **Configs live at `autohelix.yaml` or `autohelix/<name>.yaml`.** `-c/--config`
-  is gone; runs are named after the config file (`name:` is an error).
+- **Configs live at `autohelix.yaml` or in an experiment folder,
+  `autohelix/<name>/autohelix.yaml`** (`autohelix run <name>`; a
+  `autohelix/<name>.yaml` file is not a config). `-c/--config` is gone; runs
+  are named after the experiment folder (`name:` is an error).
 - **A run keeps the config it started with** (`runs/<id>/config.yaml`):
   `resume` refuses when the file's settings changed; apply an edit with
   `run --import <id>`.
@@ -62,9 +64,35 @@ has the checklist.
 
 ### Added
 
+- **A run keeps its experiment folder's files** (`runs/<id>/experiment/`):
+  the scripts and material beside `autohelix/<name>/autohelix.yaml`, links
+  inside `autohelix/` followed (`metrics.py -> ../lib/metrics.py`; a
+  committed project file is named by its path instead). `run` refuses a folder
+  with a link out of `autohelix/` (the folder itself too) or into a dot-name
+  inside it (`autohelix/.git/`, `.env`), a link to a folder holding it
+  (`up -> ..`), a folder reached twice through links, a
+  non-regular or unreadable file, or over 200 files, 200 folders or 10 MB.
+  The stored files keep their read and exec bits, without write bits. A folder
+  holding only its config gives commands, the agent and judges no copy.
+  `resume` refuses
+  when the folder's files changed since, naming them. Gate, observe and stop
+  commands get a copy of it as `$AUTOHELIX_EXPERIMENT`
+  (`python "$AUTOHELIX_EXPERIMENT/render.py"`); the agent gets one in
+  `.autohelix-iteration/experiment/`, `ask`/`review` in their own copy
+  (read-only files). All of `autohelix/` is always frozen, for every config:
+  an agent's edit to a committed experiment or `autohelix/lib/` is discarded.
+  `run --check` warns about a command that names an `autohelix/` path that
+  exists but the commit lacks.
+- **The end block's `next` line and the web run page name the run's folder**
+  (`.autohelix/runs/<id>/`: `report.md`, `history.jsonl`, `iterations/`).
+  Each segment's start record in `segments.jsonl` has `autohelix_version`.
 - **Bare `autohelix`** in a terminal: the project's runs, then a Claude Code,
   Codex or OpenCode session with the bundled skill, which asks what next: a
-  question about the runs, or a new experiment.
+  question about the runs, or a new experiment. The skill keeps a new
+  experiment folder private (`/autohelix/` in the local exclude file,
+  `git rev-parse --git-path info/exclude`) unless you
+  want it shared, and keeps the coordinator's notes in `autohelix/README.md`
+  (the session reads it first).
 - **`autohelix view`**: the runs on a live web page (`127.0.0.1:8765`; a page
   per run); `--terminal` follows a run; `--once` and `--json` print the runs
   or one run once (JSON fields are only ever added).
@@ -143,8 +171,8 @@ has the checklist.
    to the command line: `budget.iterations` (and an old `-n`) is `--until`,
    `budget.cost` / `budget.time` are `--cost` / `--time`, now per command.
    `autohelix run --check` reports every old key with its replacement.
-2. **Put the config at `autohelix.yaml`** or `autohelix/<name>.yaml`
-   (`autohelix run <name>`); there is no `-c`.
+2. **Put the config at `autohelix.yaml`** or
+   `autohelix/<name>/autohelix.yaml` (`autohelix run <name>`); there is no `-c`.
 3. **Set `AUTOHELIX_CLAUDE_CODE_CMD`** instead of `AUTOHELIX_CLAUDE_CMD`
    (a set `AUTOHELIX_CLAUDE_CMD` is an error), and use the variables instead
    of `agent.command`.
@@ -185,7 +213,7 @@ Each old key is an error naming its replacement; there are no aliases.
 | `budget.iteration_time` | `agent.timeout` (always a hard kill, with time-left hints) | as `budget:` |
 | `timeout:` in seconds | durations everywhere (a bare number, or a string of digits like `"90"`, is still seconds) | |
 | `.autohelix/prompt.md` | `prompt_template:` (relative to the config) | a warning at run start |
-| `-c/--config FILE` on `run`, `report` | the config at `autohelix/<name>.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
+| `-c/--config FILE` on `run`, `report` | the config at `autohelix/<name>/autohelix.yaml` and `autohelix run <name>` (or `autohelix.yaml` and a bare `run`); `resume <id>` uses the run's own | `No such option '-c'.` |
 | the `init [PATH]` command | bare `autohelix` in a terminal (an agent drafts the config; by hand: the examples in docs/config.md and the template it names) | `No such command 'init'.` |
 
 #### Prompt template variables

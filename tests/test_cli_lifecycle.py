@@ -156,8 +156,8 @@ def test_delete_refuses_unlanded_commits_unless_forced(project):
 
 
 def test_ids_sort_by_start_and_commands_accept_the_suffix(project, tmp_path, monkeypatch):
-    (project / "autohelix").mkdir()
-    git(project, "mv", "autohelix.yaml", "autohelix/perf.yaml")
+    (project / "autohelix" / "perf").mkdir(parents=True)
+    git(project, "mv", "autohelix.yaml", "autohelix/perf/autohelix.yaml")
     git(project, "commit", "-qm", "named config")
     paths = started(project, "perf")
     assert paths.run_id.startswith(time.strftime("%Y%m%d-")) and paths.run_id.split("-")[2] == "perf"

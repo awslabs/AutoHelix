@@ -15,8 +15,8 @@ from pathlib import Path
 
 import click
 
-from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFound, find_config,
-                              project_configs, run_command)
+from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFound, config_name,
+                              experiment_config, find_config, project_configs, run_command)
 from autohelix.agents import CLI_NAMES, JUDGE_CLIS, RENAMED_CLIS, executable
 from autohelix.awake import keep_awake
 from autohelix.harness import DEFAULT_ITERATIONS, Budget, Harness
@@ -284,8 +284,9 @@ def _run_line(run: dict) -> str:
 def first_prompt(agent: str, project: Path, runs: list[dict], configs: list[str],
                  git: tuple[str, str | None] | None = None) -> str:
     """The session's first prompt: facts only; how the session opens and goes on is the
-    skill's (SKILL.md). The bundled skill, AutoHelix's own CLI, Python and docs, any git
-    problem, the project's runs and configs, and which agent CLI the session runs in."""
+    skill's (SKILL.md). The bundled skill, AutoHelix's own CLI, Python and docs, the
+    coordinator's notes (`autohelix/README.md`, when there is one), any git problem, the
+    project's runs and configs, and which agent CLI the session runs in."""
     skill_dir = _skill_dir()
     launcher = _launcher()
     docs = docs_dir()
@@ -299,6 +300,8 @@ def first_prompt(agent: str, project: Path, runs: list[dict], configs: list[str]
     parts = [f"Read `{skill_dir / 'SKILL.md'}` and follow it: you are helping me with AutoHelix in this "
              f"project ({project}).",
              tools + (f" AutoHelix's user docs are in `{docs}`: read them when needed." if docs else "")]
+    if (project / "autohelix" / "README.md").is_file():
+        parts.append("The coordinator's notes are in `autohelix/README.md`: read it first.")
     if git:
         problem, fix = git
         parts.append(f"Git: {problem.removesuffix('.')}" + (f" (`{fix}` fixes it)" if fix else "")
@@ -455,7 +458,7 @@ def _ancestor_configs(project: Path) -> str:
 def _how_to_write(name: str | None = None) -> str:
     """Where to look for writing a config (`run` without one): bare `autohelix` with an
     agent, an example, the docs' configs, the packaged template."""
-    file = f"{CONFIG_DIR}/{name}.yaml" if name else CONFIG_FILE
+    file = experiment_config(name) if name else CONFIG_FILE
     docs = docs_dir()
     where = f" (in {docs})" if docs else ""
     return (f"Write {file}: run `autohelix` in a terminal to set it up with an agent, or start from an example "
@@ -480,7 +483,7 @@ def _segment_config(project: Path, name: str | None, command: str) -> Path:
         else:
             advice = _ancestor_configs(project) or (" " + pick if resume else write)
         raise click.ClickException(str(e) + advice) from e
-    others = [Path(c).stem for c in project_configs(project) if c != CONFIG_FILE]
+    others = [other for c in project_configs(project) if (other := config_name(c))]
     if name is None and config == project / CONFIG_FILE and others:
         example = f"`autohelix {'resume' if resume else 'run'} {others[0]}`"
         click.echo(click.style(f"Using {CONFIG_FILE}; {CONFIG_DIR}/ also has: {', '.join(others)} ({example})",
@@ -658,9 +661,9 @@ def run(config_name: str | None, path: Path, verbose: bool, no_report: bool, lan
     """Start a new run of the optimization loop.
 
     Always a new run, with its own notes and history; to continue one, use
-    `autohelix resume`. CONFIG names a config in autohelix/ (`perf` for
-    autohelix/perf.yaml); without it, the run reads autohelix.yaml, else the
-    only config in autohelix/.
+    `autohelix resume`. CONFIG names an experiment folder in autohelix/ (`perf`
+    for autohelix/perf/autohelix.yaml); without it, the run reads autohelix.yaml,
+    else the config of the only experiment in autohelix/.
 
     The config says what one iteration does; the budget flags say how long this
     command (a segment of the run) goes on: -n N iterations (or --until N),
@@ -704,7 +707,7 @@ def run(config_name: str | None, path: Path, verbose: bool, no_report: bool, lan
 
 def _resume_target(project: Path, value: str | None) -> tuple[str | None, Path | None]:
     """What `resume VALUE` continues: (run id, None) for a run id or its last part, else
-    (None, the config) for a config name (`perf`: autohelix/perf.yaml), whose latest run
+    (None, the config) for a config name (`perf`: autohelix/perf/autohelix.yaml), whose latest run
     resumes, as a bare `resume` does for the config a bare `run` reads."""
     if value is None:
         return None, _segment_config(project, None, "resume")
@@ -718,7 +721,7 @@ def _resume_target(project: Path, value: str | None) -> tuple[str | None, Path |
                 raise click.ClickException(str(error)) from error
             raise click.ClickException(
                 f"No run or config {value!r} in {project}: name a run (its id or last part, e.g. k3f9) or a config "
-                f"(`perf` for {CONFIG_DIR}/perf.yaml); `autohelix view --once` lists runs.") from error
+                f"(`perf` for {experiment_config('perf')}); `autohelix view --once` lists runs.") from error
     return None, _segment_config(project, value, "resume")
 
 

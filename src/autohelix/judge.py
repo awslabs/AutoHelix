@@ -41,6 +41,7 @@ from typing import Any, Callable
 
 from autohelix.agents import AgentConfig, AgentEvent, create_agent, executable
 from autohelix.config import ASK_TIMEOUT, ConfigNotFound, find_config
+from autohelix.safe_open import copy_dir
 from autohelix.workspace import ITERATION_DIR, Copy, Fingerprint, Repo, diff_args, git_env
 from autohelix.usage_log import append_usage, new_call_id
 
@@ -54,6 +55,7 @@ BASE_ENV = "AUTOHELIX_BASE"  # the commit the candidate is built on
 PROJECT_ENV = "AUTOHELIX_PROJECT"  # the project root, in the user's repository
 SCRATCH_ENV = "AUTOHELIX_SCRATCH"  # a private, empty folder for this command
 PREVIOUS_ENV = "AUTOHELIX_PREVIOUS"  # this entry's output from the last accepted iteration
+EXPERIMENT_ENV = "AUTOHELIX_EXPERIMENT"  # the command's copy of the run's experiment folder
 MARGIN = 10  # seconds kept before the command's deadline, to record usage
 COPY_MARGIN = 30  # ... and to remove the judge's copy
 MIN_BUDGET = 5  # less than this left: fail before copying anything
@@ -134,7 +136,7 @@ def load_base_config(cwd: Path) -> AgentConfig:
 
 def base_config(cwd: Path) -> tuple[AgentConfig, str]:
     """`load_base_config`'s settings, with where they came from, for a by-hand `ask` or
-    `review` to say ("autohelix/a.yaml", "defaults: several configs", ...).
+    `review` to say ("autohelix/a/autohelix.yaml", "defaults: several configs", ...).
 
     A set but unreadable $AUTOHELIX_CONFIG, or a malformed `agent:`, is an error
     rather than a silent fallback to other settings. No config, or several, is
@@ -165,7 +167,7 @@ def base_config(cwd: Path) -> tuple[AgentConfig, str]:
 
 
 def describe_agent(config: AgentConfig, source: str) -> str:
-    """The agent a by-hand `ask`/`review` used, for its stderr line: `codex gpt-5 (autohelix/a.yaml)`."""
+    """The agent a by-hand `ask`/`review` used, for its stderr line: `codex gpt-5 (autohelix/a/autohelix.yaml)`."""
     return " ".join(part for part in (config.cli, config.model) if part) + f" ({source})"
 
 
@@ -443,12 +445,14 @@ def _ignore_event(event: AgentEvent) -> None:
 class Target:
     """What one judge call looks at: the agent's directory, the directory guarded for
     changes, the diff file (None outside a git repository), the previous review's
-    file (`review --previous`) and symlinks removed as (name, target)."""
+    file (`review --previous`), the experiment folder's copy (in a run with one) and
+    symlinks removed as (name, target)."""
 
     cwd: Path
     guarded: Path
     diff: Path | None
     previous: Path | None = None
+    experiment: Path | None = None
     removed_links: list[tuple[str, str]] = field(default_factory=list)
 
 
@@ -474,6 +478,9 @@ def describe_change(target: Target | None, *, judging: str) -> str:
     else:
         text = (f"{change.replace('The', 'The complete', 1)} (new files included) is the diff in `{target.diff}`; "
                 "the current directory holds the code with the change applied.")
+    if target.experiment is not None:
+        text += (f"\n\nThe experiment's folder, as the run stored it (the scripts and material its "
+                 f"commands use), is in `{target.experiment}`; it is not part of the change.")
     links = target.removed_links
     if links:
         text += (f"\n\nThese symlinks point outside the {tree} tree; they were not followed "
@@ -516,7 +523,8 @@ def candidate_target(previous: bool) -> Iterator[Target]:
     """A fresh copy of $AUTOHELIX_CANDIDATE with HEAD at $AUTOHELIX_BASE, in its own
     folder in $AUTOHELIX_SCRATCH, with the change as `.autohelix-iteration/candidate.diff`
     and, with `previous`, `$AUTOHELIX_PREVIOUS/stdout.txt` (less its metric lines) as
-    `.autohelix-iteration/previous.md`."""
+    `.autohelix-iteration/previous.md`; with `$AUTOHELIX_EXPERIMENT` (a run with an
+    experiment folder), a copy of it as `.autohelix-iteration/experiment/`."""
     env = {name: os.environ.get(name) for name in (BASE_ENV, PROJECT_ENV, SCRATCH_ENV)}
     missing = [f"${name}" for name, value in env.items() if not value]
     if missing:
@@ -545,9 +553,14 @@ def candidate_target(previous: bool) -> Iterator[Target]:
                 # Its `##autohelix[...]` lines are the command's own numbers, not review text.
                 shown.write_bytes(b"".join(line for line in stdout.read_bytes().splitlines(keepends=True)
                                            if not line.lstrip().startswith(b"##autohelix[")))
+        experiment = None  # the command may have changed its copy: only regular files and folders
+        if (source := os.environ.get(EXPERIMENT_ENV)) and copy_dir(Path(source), [], state / "experiment",
+                                                                       read_only=True):
+            experiment = state / "experiment"
         # If the judge's copy loses its .git, discovery must not climb out of it.
         os.environ["GIT_CEILING_DIRECTORIES"] = str(folder)
-        yield Target(cwd=copy.working_dir, guarded=copy.path, diff=diff, previous=shown, removed_links=removed)
+        yield Target(cwd=copy.working_dir, guarded=copy.path, diff=diff, previous=shown, experiment=experiment,
+                     removed_links=removed)
     finally:
         if saved is None:
             os.environ.pop("GIT_CEILING_DIRECTORIES", None)

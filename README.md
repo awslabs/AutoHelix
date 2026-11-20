@@ -91,7 +91,7 @@ the work is done.
 <summary>What a config looks like</summary>
 
 ```yaml
-# autohelix/perf.yaml
+# autohelix/perf/autohelix.yaml
 goal: Make the data pipeline faster without changing its output.
 
 scope:

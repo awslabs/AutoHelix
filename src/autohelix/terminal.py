@@ -549,11 +549,12 @@ class Table:
                              width or self._label_width(word))
 
     def ending(self, outcome: tuple[str, str, str | None], *, spent: str, landing: tuple[str, str, str | None] | None,
-               commands: list[str], files: list[tuple[str, str]]) -> list[Text]:
+               commands: list[str], files: list[tuple[str, str]], folder: str = "") -> list[Text]:
         """After a rule: the outcome, each metric's baseline → tip value with its change,
         the run's totals, what landed (`landing`: label, text, style; the commits'
-        summaries are on the run page), then what to type next and the files written
-        (label, path)."""
+        summaries are on the run page), then what to type next, ending with the run's
+        `folder` (`.autohelix/runs/<id>/`; on a line of its own when it doesn't fit), and
+        the files written (label, path)."""
         iterations = [row for row in self.rows if row.iteration > 0]
         accepted = sum(row.accepted for row in iterations)
         seconds = sum(row.seconds or 0 for row in iterations)
@@ -585,9 +586,14 @@ class Table:
             parts: list[tuple[str, str | None]] = []
             for i, command in enumerate(commands):
                 parts += [(" · ", "dim")] * bool(i) + [(command, TEAL)]
+            if folder and 2 + width + len(" · ".join([*commands, folder])) <= self.width:
+                parts += [(" · ", "dim")] * bool(commands) + [(clean(folder), None)]
+                folder = ""
             lines.append(field("next", *parts))
         else:  # one per line
             lines += [field("next" if i == 0 else "", (command, TEAL)) for i, command in enumerate(commands)]
+        if folder:  # not cut: a path is only useful whole
+            lines.append(_parts(("  ", None), (" " * width, None), (clean(folder), None)))
         for label, path in files:  # not cut: a path is only useful whole
             lines.append(_parts(("  ", None), (f"{label:<{width}}", "dim"), (clean(path), None)))
         return lines

@@ -33,7 +33,8 @@ def test_identity_selection_new_and_explicit_config(project):
     assert re.fullmatch(r"\d{8}-\d{4}-second-[0-9a-z]{4}", named.paths.run_id)
     assert named.paths.run_id != run_id
     named.close()
-    other = project / "other.yaml"
+    other = project / "autohelix" / "other" / "autohelix.yaml"  # named after its experiment folder
+    other.parent.mkdir(parents=True)
     other.write_text((project / "autohelix.yaml").read_text())
     git(project, "add", ".")
     git(project, "commit", "-qm", "other config")
@@ -816,6 +817,7 @@ def test_refused_first_start_creates_no_identity(project, problem, capsys, monke
 def test_manual_mode_says_diverged_when_target_moves_during_segment(project, monkeypatch, capsys):
     """A commit on the target during the segment: the ending says the run diverged and
     offers `git merge`, not `autohelix land` (which only fast-forwards)."""
+    monkeypatch.chdir(project)  # the run's folder is shown relative to here
     harness = Harness(project, land_mode="manual")
     target = harness.run_info["target_branch"]
     real = harness.run_agent
@@ -829,7 +831,8 @@ def test_manual_mode_says_diverged_when_target_moves_during_segment(project, mon
     out = " ".join(capsys.readouterr().out.replace(" · ", " ").split())  # the next line wraps
     run_id, short = harness.paths.run_id, short_id(harness.paths.run_id)
     assert f"unlanded 1 commit on autohelix/{run_id} (diverged from {target})" in out
-    assert f"next autohelix view {short} autohelix resume {short} git merge autohelix/{run_id} page" in out
+    assert (f"next autohelix view {short} autohelix resume {short} git merge autohelix/{run_id} "
+            f".autohelix/runs/{run_id}/ page") in out
     assert "changed during this segment" not in out and f"autohelix land {short}" not in out
 
 

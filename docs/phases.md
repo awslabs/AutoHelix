@@ -11,12 +11,12 @@ number in three digits, `<id>` the run's id.
 | Phase | Copy: files, HEAD | Harness material in the copy | Environment | Writes | Time limit | Output |
 |---|---|---|---|---|---|---|
 | Baseline (iteration 0) | `iter-0-checks` for its gate and observe commands: files and HEAD at A; `iter-0-stop` for stop commands, the same | `.autohelix-iteration/candidate.diff` (empty) in the checks copy; none in the stop copy | The [command environment](#command-environment), `AUTOHELIX_ITERATION=0` | Read-only: a gate or observe command that changes the code, or a stop command's change or error, stops the run with a setup error | Each entry's `timeout:` | `iterations/000/` |
-| Agent | `iter-N-agent`: files and HEAD at A, without the config file and its prompt template | [`.autohelix-iteration/`](#the-agent): `prompt.md`, `notes/`, `history.jsonl`, `hints.md`, `iterations/NNN/`, `rejected.patch` after a rejection, `runs/<id>/` of other runs | `AUTOHELIX_RUN_ID`, `AUTOHELIX_ITERATION`, the time-left hint's variables with `agent.timeout`; not `AUTOHELIX_PROJECT` or `AUTOHELIX_RUN_DIR` | Its change, frozen to T: changes outside the scope are discarded; `notes/` is saved back; the first line of `commit_summary.txt` becomes the commit's first line | `agent.timeout` (a hard kill; none if unset) | `iterations/NNN/prompt.md`, `agent.log`; notes in `notes/`; T as the commit, or on `refs/autohelix-rejected/<id>/<n>` |
+| Agent | `iter-N-agent`: files and HEAD at A, without the config file and its prompt template | [`.autohelix-iteration/`](#the-agent): `prompt.md`, `notes/`, `history.jsonl`, `hints.md`, `iterations/NNN/`, `rejected.patch` after a rejection, `runs/<id>/` of other runs, `experiment/` | `AUTOHELIX_RUN_ID`, `AUTOHELIX_ITERATION`, the time-left hint's variables with `agent.timeout`; not `AUTOHELIX_PROJECT` or `AUTOHELIX_RUN_DIR` | Its change, frozen to T: changes outside the scope are discarded; `notes/` is saved back; the first line of `commit_summary.txt` becomes the commit's first line | `agent.timeout` (a hard kill; none if unset) | `iterations/NNN/prompt.md`, `agent.log`; notes in `notes/`; T as the commit, or on `refs/autohelix-rejected/<id>/<n>` |
 | Gate and observe commands | `iter-N-checks`, one for the iteration's gate and observe commands: files at T, HEAD at A | `.autohelix-iteration/candidate.diff` | The [command environment](#command-environment); observe commands also `AUTOHELIX_PREVIOUS` | Read-only: a change to a candidate file rejects the iteration; new files are scratch, shared by the phase's commands | Each entry's `timeout:` (default 30m) | [`gates/<k>/`](config.md#stored-gate-output) (stdout and stderr capped), [`observe/<name>/`](config.md#stored-output) |
-| `ask` (an `ask:` gate) | Its own copy in `$AUTOHELIX_SCRATCH`: files at T, HEAD at A | `candidate.diff` | The command's | Read-only: a change fails the call, so the gate fails | The entry's `timeout:` (default 10m) | `ask.log` in the gate's `gates/<k>/` |
-| `review` (a `review:` entry) | Its own copy in `$AUTOHELIX_SCRATCH`: files at T, HEAD at A | `candidate.diff`; `previous.md` with `previous: true` | The command's | Read-only: a change fails the call (recorded; the run continues) | The entry's `timeout:` (default 30m) | `observe/<name>/`: `stdout.txt` is the review, `review.log` its transcript |
+| `ask` (an `ask:` gate) | Its own copy in `$AUTOHELIX_SCRATCH`: files at T, HEAD at A | `candidate.diff`; `experiment/` | The command's | Read-only: a change fails the call, so the gate fails | The entry's `timeout:` (default 10m) | `ask.log` in the gate's `gates/<k>/` |
+| `review` (a `review:` entry) | Its own copy in `$AUTOHELIX_SCRATCH`: files at T, HEAD at A | `candidate.diff`; `previous.md` with `previous: true`; `experiment/` | The command's | Read-only: a change fails the call (recorded; the run continues) | The entry's `timeout:` (default 30m) | `observe/<name>/`: `stdout.txt` is the review, `review.log` its transcript |
 | Stop commands | `iter-N-stop`, after an accept: files and HEAD at the accepted commit | None | The [command environment](#command-environment), `AUTOHELIX_METRICS`, `AUTOHELIX_OBSERVATIONS` | Read-only: a change is an error; the acceptance stays | Each entry's `timeout:` (default 30m) | `iterations/NNN/stop/<k>/` |
-| Run summary | `iter-report`: files and HEAD at the run's tip | None (its prompt names the run's folder) | The harness's | It writes the summary into the run's folder; a change to the copy's code is discarded, with an error | `agent.timeout`, at most 15m (15m when unset) | `report.md`, `logs/report.log` |
+| Run summary | `iter-report`: files and HEAD at the run's tip | None (its prompt names the run's folder, `experiment/` included) | The harness's | It writes the summary into the run's folder; a change to the copy's code is discarded, with an error | `agent.timeout`, at most 15m (15m when unset) | `report.md`, `logs/report.log` |
 
 Output paths are relative to `.autohelix/runs/<id>/` (and `iterations/NNN/`
 for gate and observe output).
@@ -77,22 +77,25 @@ when the copy is made; no stash, no remote). This means:
 ## Where things live
 
 In the project, `.autohelix/` (gitignored locally; AutoHelix leaves
-`.gitignore` unchanged) holds each run's state in `.autohelix/runs/<id>/`; what the harness keeps
-for itself is in `.internal/` folders:
+`.gitignore` unchanged) holds each run's state in `.autohelix/runs/<id>/`
+(the end of `run`, `resume` and `view` names it). Read `report.md`,
+`history.jsonl` and `iterations/NNN/` first; what the harness keeps for itself
+is in `.internal/` folders:
 
 ```
 .autohelix/
 ├── runs/<id>/
-│   ├── run.json                # identity (base commit, target branch, config file), archived flag
-│   ├── config.yaml             # the run's config, stored verbatim when it started
-│   ├── prompt_template.md      # its prompt_template's text, stored with it (only with one)
-│   ├── history.jsonl           # one record per iteration: the index and the source of truth
-│   ├── hints.md
 │   ├── report.md  report.html  # the run summary; the one-file run page
-│   ├── notes -> .internal/notes/<n>   # agent memory; round-trips (link to the latest version)
+│   ├── history.jsonl           # one record per iteration: the index and the source of truth
 │   ├── iterations/
 │   │   ├── 000/                # the baseline
 │   │   └── 001/ ...            # one folder per iteration (below)
+│   ├── run.json                # identity (base commit, target branch, config file), archived flag
+│   ├── config.yaml             # the run's config, stored verbatim when it started
+│   ├── prompt_template.md      # its prompt_template's text, stored with it (only with one)
+│   ├── experiment/             # its experiment folder's files, stored with it (autohelix/NAME/ only)
+│   ├── hints.md
+│   ├── notes -> .internal/notes/<n>   # agent memory; round-trips (link to the latest version)
 │   ├── logs/                   # run logs per segment, report.log
 │   └── .internal/              # status.json, segments.jsonl, stop.json (autohelix stop), usage/,
 │                               # notes versions notes/<n>/, superseded attempts attempts/,
@@ -145,8 +148,8 @@ for a cooperative agent, and for candidate code that misbehaves by accident:
 - a gate, entry or judge that edits the files it checks is caught, even if a
   wrapper script restores them;
 - stored output (gates', observe entries' and stop commands', judge and review
-  transcripts included), `$AUTOHELIX_PREVIOUS` and `$AUTOHELIX_OBSERVATIONS` are
-  written or copied by the harness after the command ended, so what the next
+  transcripts included), `$AUTOHELIX_PREVIOUS`, `$AUTOHELIX_OBSERVATIONS` and
+  `$AUTOHELIX_EXPERIMENT` are written or copied by the harness after the command ended, so what the next
   call reads can't be rewritten in place;
 - reviews read their own copy of exactly the candidate, not files earlier
   commands left behind;
@@ -200,7 +203,8 @@ numbered from its iteration 1) and its own iterations. With other runs in the
 copy (an [import](cli.md#continuing-from-another-run) or a
 [group](cli.md#groups)) it also names each other run's state in `runs/<id>/`
 (read-only, the imported one and the group members said apart) and their
-code's refs.
+code's refs. With an [experiment folder](config.md#experiment-folder), it names
+`.autohelix-iteration/experiment/` too.
 
 The agent's copy holds no `.autohelix/` (nothing in a copy looks like project
 state). What the harness provides is in `.autohelix-iteration/`, which is never
@@ -219,6 +223,7 @@ run's folder:
     │                           failing gates' gates/<k>/, observe/, stop/
     ├── rejected.patch          after a rejection: the rejected attempt's change
     ├── commit_summary.txt      written by the agent: the commit's first line
+    ├── experiment/             the run's stored experiment folder (a copy), if it has one
     └── runs/<other-id>/        the imported run and other runs of the group: run.json,
                                 history.jsonl, notes/
 ```
@@ -252,6 +257,7 @@ started is killed. Each gets:
 | `AUTOHELIX_USAGE_FILE` | Where model calls record their cost (see [Cost Tracking](concepts.md#cost-tracking)) |
 | `AUTOHELIX_COMMAND_DEADLINE` | The command's deadline, in Unix seconds |
 | `AUTOHELIX_PREVIOUS` | Observe commands only: see [Previous output](config.md#previous-output) |
+| `AUTOHELIX_EXPERIMENT` | A copy, made for this call, of the run's stored experiment folder; unset without one: see [Experiment folder](config.md#experiment-folder) |
 | `AUTOHELIX_METRICS`, `AUTOHELIX_OBSERVATIONS` | Stop commands only: see [Stop](config.md#stop) |
 
 The main agent gets fewer: `AUTOHELIX_RUN_ID`, `AUTOHELIX_ITERATION` and, with
@@ -282,6 +288,10 @@ review` (a `review:` entry) judge the same target:
   outside the copy are removed and listed in the judge's prompt.
 - `review --previous` (`previous: true`) also gets the entry's previous output,
   without its `##autohelix[...]` lines, as `.autohelix-iteration/previous.md`.
+- In a run with an [experiment folder](config.md#experiment-folder), the
+  command's `$AUTOHELIX_EXPERIMENT` is copied in as
+  `.autohelix-iteration/experiment/` (regular files and folders only), named in
+  the prompt.
 - Read-only: the backend's read-only mode, one write guard around each call
   (a change fails the call), and its own fresh copy.
 

@@ -41,6 +41,7 @@ from autohelix.launcher import command_path
 from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning, StopCheckResult)
 from autohelix.events import iteration_fields
+from autohelix.experiment import shown, snapshot_changes, snapshot_files
 from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read_segments, read_stop_request
 from autohelix.usage_log import ENV as USAGE_ENV, append_usage, read_usage, superseded_marker
 from autohelix.formatting import clean_block, format_cap, format_cost, format_duration, format_total_cost
@@ -152,9 +153,11 @@ def _terminate_interrupts():
 
 def _call_env(folders: dict) -> dict[str, str]:
     """The variables of one command call (`IterationWorkspace.call_folder`): its scratch
-    and transcript folders, its call name and the `autohelix` launcher first on PATH."""
+    and transcript folders, its call name, its copy of the experiment folder (unset
+    without one) and the `autohelix` launcher first on PATH."""
     return {"AUTOHELIX_SCRATCH": str(folders["scratch"]), "AUTOHELIX_LOG_DIR": str(folders["logs"]),
-            "AUTOHELIX_CALL": folders["call"], "PATH": command_path(folders["bin"])}
+            "AUTOHELIX_CALL": folders["call"], "PATH": command_path(folders["bin"]),
+            "AUTOHELIX_EXPERIMENT": str(folders["experiment"]) if "experiment" in folders else None}
 
 
 def _tail(output: str, lines: int = 15) -> str:
@@ -176,8 +179,8 @@ class Harness:
         A new run records its landing mode (`land_mode`, else manual with a
         `group`, else auto) and its `group`. On resume `land_mode`
         and `group` change the stored ones (`group=''` clears it) once the segment
-        starts; otherwise the run keeps its own. A new run is named after the config
-        file (`name` replaces that, for library callers and tests).
+        starts; otherwise the run keeps its own. A new run is named after its experiment
+        folder (`config.config_name`; `name` replaces that, for library callers and tests).
 
         A new run may import another (`import_run`, a full id: `run --import`): every
         agent copy shows that run's state read-only, and the baseline's observe entries
@@ -240,7 +243,7 @@ class Harness:
                              f"`{run_command(config_relative(self.project_path, config_file))} --import {short}`.")
         self._preflight_done = False
         if creating:
-            name = new_run_name(config_file, name)
+            name = new_run_name(config_relative(self.project_path, config_file), name)
             self._new_run_ready()
         else:  # a run continues its own tip: refused before anything is written
             data = planned.read_identity()
@@ -330,13 +333,29 @@ class Harness:
             raise
 
     def _uncommitted_config(self) -> list[str]:
-        """A new auto-landing run's warning when its config file or prompt template is
-        untracked or modified (not ignored): committing it after the run lands puts the
-        branch past the run's tip, and `resume` then refuses."""
+        """A new auto-landing run's warning when its config file, prompt template or a file
+        the snapshot stores of its experiment folder is untracked or modified (not ignored): committing it
+        after the run lands puts the branch past the run's tip, and `resume` then refuses."""
         branch = self.run_info.get("target_branch")
         files = [f for f in (self.config_file, self.config.prompt_template) if f is not None]
         if not branch or not files:
             return []
+        consequence = f"a commit on {branch} after this run lands makes `resume` refuse."
+        warnings = []
+        if (folder := self.config.experiment) is not None and folder.is_dir():
+            # What the run stored (a link, as git lists it, by the files under it) that is
+            # untracked and not ignored (tracked files are clean: `require_clean`).
+            where = config_relative(self.project_path, folder)
+            snapshot = self.paths.experiment
+            stored = [path.relative_to(snapshot).as_posix() for path in snapshot.rglob("*") if path.is_file()]
+            listed = git(self.project_path, "--no-optional-locks", "ls-files", "-z", "--others", "--exclude-standard",
+                         "--", where, check=False).stdout.split("\0")
+            changed = {name[len(where) + 1:] for name in listed if name.startswith(f"{where}/")}
+            others = sorted(name for name in changed
+                            if name in stored or any(file.startswith(f"{name}/") for file in stored))
+            if others:
+                listing = ", ".join(others[:5]) + (f" and {len(others) - 5} more" if len(others) > 5 else "")
+                warnings.append(f"commit {where}/ first ({listing}): {consequence}")
 
         def uncommitted(path: Path) -> bool:
             def fails(*args: str) -> bool:
@@ -344,14 +363,16 @@ class Harness:
             if not fails("check-ignore", "-q"):
                 return False  # ignored: committing it never moves the branch
             return fails("ls-files", "--error-unmatch") or fails("diff", "--quiet", "HEAD")
-        return [f"commit {config_relative(self.project_path, f)} first: a commit on {branch} after this run lands "
-                "makes `resume` refuse." for f in files if uncommitted(f)]
+        return [f"commit {config_relative(self.project_path, f)} first: {consequence}"
+                for f in files if uncommitted(f)] + warnings
 
     def _run_config(self, paths: RunPaths, check: bool = True):
         """A run's stored config (`load_run_config`). With `check`, refuses, before
         anything is spent, when the file it came from parses differently now, or its
-        template's text differs (`config_changes`); a deleted file, or a deleted prompt
-        template (the other settings still compared), continues from the stored copy."""
+        template's text differs (`config_changes`), or its experiment folder differs
+        from the run's snapshot (`snapshot_changes`); a deleted file, a deleted prompt
+        template (the other settings still compared) or a deleted folder continues from
+        the stored copy, and so does a run without a snapshot."""
         data = paths.read_identity()
         config = load_run_config(paths, data)
         source = self.project_path / data["config_path"]
@@ -361,6 +382,7 @@ class Harness:
         if not source.is_file():
             terminal.show(self.console, f"{data['config_path']} is gone; run {short} continues "
                           "with the config it stored when it started.", style="dim")
+            self._check_experiment(paths, data, config)
             return config
         try:
             current = load_config(self.project_path, source)
@@ -378,17 +400,39 @@ class Harness:
         except ConfigError as e:
             changed = f"it no longer reads: {e}"
         if changed:
-            said = f"{data['config_path']} changed since run {short} started ({changed}); "
-            if not has_baseline(paths):  # a failed first attempt: nothing to continue or import
-                raise RuntimeError(f"{said}run {short} has no accepted baseline: start a new run, "
-                                   f"`{run_command(data['config_path'])}` (`autohelix delete {short}` removes "
-                                   "this attempt).")
-            first = land_first(paths, data, data.get("target_branch"))
-            raise RuntimeError(
-                f"{said}the run keeps the config it started with. To apply the new config, start a new run "
-                f"that continues from this one: `{run_command(data['config_path'])} --import {short}`"
-                f"{'. ' + first if first else '.'} To continue this run, restore the file.")
+            self._refuse_changed(paths, data, f"{data['config_path']} changed since run {short} started ({changed}); ",
+                                 "the run keeps the config it started with", "config", "file")
+        self._check_experiment(paths, data, config)
         return config
+
+    def _check_experiment(self, paths: RunPaths, data: dict, config) -> None:
+        """`_run_config`'s comparison of the experiment folder with the run's snapshot:
+        a deleted folder continues (dim note), a changed one refuses; nothing for a run
+        without a snapshot."""
+        if config.experiment is None or not paths.experiment.is_dir():
+            return
+        folder, short = shown(self.project_path, config.experiment), short_id(paths.run_id)
+        if not config.experiment.is_dir():
+            terminal.show(self.console, f"{folder} is gone; run {short} continues with the files it "
+                          "stored when it started.", style="dim")
+        elif changed := snapshot_changes(config, self.project_path, paths.experiment):
+            self._refuse_changed(paths, data, f"{folder} changed since run {short} started ({changed}); ",
+                                 "the run keeps the experiment folder it started with", "folder", "files")
+
+    @staticmethod
+    def _refuse_changed(paths: RunPaths, data: dict, said: str, keeps: str, what: str, restore: str):
+        """`_run_config`'s refusal of a changed config or experiment folder (`said`, how):
+        with a baseline, `run --import`, else a new run."""
+        short = short_id(paths.run_id)
+        if not has_baseline(paths):  # a failed first attempt: nothing to continue or import
+            raise RuntimeError(f"{said}run {short} has no accepted baseline: start a new run, "
+                               f"`{run_command(data['config_path'])}` (`autohelix delete {short}` removes "
+                               "this attempt).")
+        first = land_first(paths, data, data.get("target_branch"))
+        raise RuntimeError(
+            f"{said}{keeps}. To apply the new {what}, start a new run "
+            f"that continues from this one: `{run_command(data['config_path'])} --import {short}`"
+            f"{'. ' + first if first else '.'} To continue this run, restore the {restore}.")
 
     def _metric_label(self, name: str) -> str:
         """Format metric name with direction arrow."""
@@ -832,7 +876,7 @@ class Harness:
         the first rejection."""
         if self.verbose:
             self._status("Creating agent copy...")
-        agent_copy = workspace.agent_copy(hidden=self.config.protected)
+        agent_copy = workspace.agent_copy(hidden=self.config.hidden)
         if self.verbose:
             terminal.show(self.console, str(agent_copy.working_dir), "  Working dir: ")
         self.run_status.note(copy=str(agent_copy.working_dir))
@@ -1511,8 +1555,10 @@ class Harness:
         self.close()
 
     def _new_run_ready(self) -> None:
-        """Readiness checks for a first start, run before any run state exists: a run
-        starts from a commit, so tracked files must be clean."""
+        """Readiness checks for a first start, run before any run state exists: the
+        experiment folder can be stored (`experiment.snapshot_files`), and a run starts
+        from a commit, so tracked files must be clean."""
+        snapshot_files(self.config, self.project_path)
         require_clean(self.project_path)
         if not self._preflight():
             raise RuntimeError("Preflight checks failed. Fix the issues above before running.")
@@ -1821,7 +1867,8 @@ class Harness:
             # `autohelix land` when the target can fast-forward, else `git merge`.
             commands = terminal.next_commands(short, also=self._relation()[1].commands)
             lines = table.ending(outcome, spent=format_total_cost(self.history.cost_usages), landing=self._landing,
-                                 commands=commands, files=self._files)
+                                 commands=commands, files=self._files,
+                                 folder=terminal.shown_path(self.paths.run_dir) + "/")
         except Exception as e:  # noqa: BLE001 - the outcome line still shows
             self.log.warn(f"Could not render the ending: {e}")
             lines = [Text(f"  {outcome[0]}  {outcome[1]}")]

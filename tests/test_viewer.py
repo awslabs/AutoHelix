@@ -603,6 +603,7 @@ def test_view_json_and_once(measured_project, monkeypatch):
     assert f"Run {short_id(second)} (the most recently active run" in chosen.stderr
     assert f"run {short_id(second)} · " in chosen.stdout
 
+    monkeypatch.chdir(project)  # the run's folder is shown relative to here
     text = _cli("view", first, "-p", project, "--once").output
     lines = [line.rstrip() for line in text.splitlines()]
     assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(f" · run {short_id(first)} · test_project · finished")
@@ -613,10 +614,11 @@ def test_view_json_and_once(measured_project, monkeypatch):
     assert "  Done       iteration budget reached (2)" in lines
     assert "  speed      100 → 120  +20%  iter 2" in lines
     assert f"  landed     2 commits on {data['branch']}" in lines
-    assert f"  next       autohelix resume {short_id(first)}" in lines
+    assert f"  next       autohelix resume {short_id(first)} · .autohelix/runs/{first}/" in lines
     manual = [line.rstrip() for line in _cli("view", second, "-p", project, "--once").output.splitlines()]
     assert f"  unlanded   1 commit on autohelix/{second} (manual landing)" in manual  # as run says it
-    assert f"  next       autohelix resume {short_id(second)} · autohelix land {short_id(second)}" in manual
+    assert (f"  next       autohelix resume {short_id(second)} · autohelix land {short_id(second)} · "
+            f".autohelix/runs/{second}/") in manual
 
     missing = _cli("view", "missing-zzzz", "-p", project, "--json")
     assert missing.exit_code == 1 and "missing-zzzz" in missing.output
