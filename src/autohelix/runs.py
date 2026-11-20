@@ -22,7 +22,7 @@ from typing import NamedTuple
 from pathlib import Path
 
 from autohelix.config import ENTRY_NAME, config_name, load_config, project_configs, run_command, template_text
-from autohelix.experiment import build_snapshot, snapshot_files
+from autohelix.experiment import build_snapshot, snapshot_files, sweep_staging
 
 SCHEMA = 2
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,50}\Z")  # YYYYMMDD-HHMM-<name>-xxxx
@@ -1239,6 +1239,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
     with RunLock(RunPaths(project).selection_lock, blocking=True):
         try:
             sweep_copies(project)
+            sweep_staging(RunPaths(project).runs)  # a killed `run`'s; built only under this lock
         except Exception:  # noqa: BLE001 - a backstop; never blocks a run
             pass
         config_path = config_relative(project, config)

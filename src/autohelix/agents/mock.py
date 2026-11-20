@@ -145,7 +145,8 @@ class MockAgent:
     def _judge(self, settings: dict, log_path: Path, prompt: str, cwd: Path) -> AgentRunResult:
         """Answer a judge prompt. Settings: `judge_answer` ("yes"/"no", default "yes"),
         `judge_reason`, `judge_output` (raw final text, overrides both), `judge_fail`,
-        `judge_requires` (a path under the judge's folder: "no" when it's missing)."""
+        `judge_requires` (a path under the judge's folder: "no" when it's missing, over
+        `judge_answer`; `judge_fail` and `judge_output` come first)."""
         log_path.write_text(f"Mock judge\nSystem: {self.config.system_prompt}\nPrompt: {prompt}\n")
         if settings.get("judge_change_file"):
             path = cwd / settings["judge_change_file"]

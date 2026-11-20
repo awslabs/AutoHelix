@@ -120,13 +120,16 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
     return found
 
 
+STAGING_PREFIX = ".experiment-"
+
+
 def build_snapshot(files: list[SnapshotFile], beside: Path) -> Path:
     """Copy `files` into a new folder in `beside`, named with a leading dot (no run
     listing reads it), and return it for the caller to rename into place. Files lose
     their write bits and keep their exec bit; folders stay writable by their owner, so
     the snapshot can be deleted. On failure, nothing is left."""
     beside.mkdir(parents=True, exist_ok=True)
-    staging = beside / f".experiment-{secrets.token_hex(4)}"
+    staging = beside / f"{STAGING_PREFIX}{secrets.token_hex(4)}"
     staging.mkdir(mode=0o755)
     try:
         for file in files:
@@ -138,6 +141,14 @@ def build_snapshot(files: list[SnapshotFile], beside: Path) -> Path:
         shutil.rmtree(staging, ignore_errors=True)
         raise
     return staging
+
+
+def sweep_staging(beside: Path) -> None:
+    """Remove the copies `build_snapshot` left in `beside` when its process was killed
+    before the rename. Only for a caller that holds the lock every build is made under."""
+    for path in beside.glob(f"{STAGING_PREFIX}*"):
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def snapshot_changes(config: Config, project: Path, stored: Path) -> str | None:

@@ -123,6 +123,17 @@ def test_a_failed_copy_leaves_nothing(project, folder, tmp_path):
     assert list((tmp_path / "beside").iterdir()) == []
 
 
+def test_a_killed_runs_staging_folder_is_removed_by_the_next_run(project, folder, tmp_path):
+    runs = RunPaths(project).runs
+    leftover = build_snapshot(snapshot_files(load_config(project, folder / "autohelix.yaml"), project), runs)
+    (tmp_path / "elsewhere").mkdir()
+    (runs / ".experiment-link").symlink_to(tmp_path / "elsewhere")  # removed only by a real build
+    result = cli(project, "run", "exp", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert not leftover.exists()
+    assert (runs / ".experiment-link").is_symlink() and (tmp_path / "elsewhere").is_dir()
+
+
 def test_a_new_run_stores_the_folder_and_delete_removes_it(project, folder):
     (folder / "render.sh").write_text("#!/bin/sh\n")
     (folder / "render.sh").chmod(0o755)
