@@ -41,10 +41,11 @@ has the checklist.
 - **Every experiment is a folder in `autohelix/`, and its config is the
   folder's `config.yaml`: `autohelix/<name>/config.yaml`** (`autohelix run
   <name>`; a bare `autohelix run` runs the only experiment, or lists them
-  when there are several). The top-level `autohelix.yaml` is no longer a config, nor is
-  `autohelix/<name>.yaml`; development builds' `autohelix/<name>/autohelix.yaml`
-  is now `autohelix/<name>/config.yaml`, the name the run's stored copy
-  (`runs/<id>/config.yaml`) and `$AUTOHELIX_CONFIG` have. A run whose config
+  when there are several). The top-level `autohelix.yaml` is no longer a
+  config, nor is `autohelix/<name>.yaml`; development builds'
+  `autohelix/<name>/autohelix.yaml` is now `autohelix/<name>/config.yaml`,
+  the name the run's stored copy (`runs/<id>/config.yaml`) and
+  `$AUTOHELIX_CONFIG` have. A run whose config
   isn't an experiment's is refused, so a development build's run of either
   old file can't be resumed: continue from it with `autohelix run <name>
   --import <id>`. `-c/--config` is gone; runs are named after the

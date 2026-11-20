@@ -311,6 +311,26 @@ def test_a_run_needs_an_experiment_config(folder_project):
     assert_untouched(folder_project)
 
 
+def test_load_config_and_select_run_agree_on_the_experiment_however_the_path_is_named(folder_project, tmp_path):
+    """`load_config` names the experiment with the test `select_run` uses
+    (`config_relative`): a project named through a link with the config resolved, and a
+    config reached through a link outside the project, are both autohelix/perf/."""
+    from autohelix.config import load_config
+
+    config = folder_project / "autohelix" / "perf" / "config.yaml"
+    linked = tmp_path / "linked-project"
+    linked.symlink_to(folder_project)
+    outside = tmp_path / "outside.yaml"
+    outside.symlink_to(config)
+    for project, file in ((linked, config.resolve()), (folder_project, outside)):
+        loaded = load_config(project, config_file=file)
+        assert loaded.experiment is not None and loaded.experiment.name == "perf"
+        assert loaded.experiment.parent.name == "autohelix"
+    paths, _, lock, _ = select_run(linked, config.resolve(), new=True)
+    lock.close()
+    assert paths.read_identity()["config_path"] == "autohelix/perf/config.yaml"
+
+
 def test_select_run_refuses_a_config_that_isnt_an_experiments(folder_project):
     """The run state's own check, for library callers that skip the Harness."""
     other = write(folder_project / "other.yaml", (folder_project / "autohelix" / "perf" / "config.yaml").read_text())

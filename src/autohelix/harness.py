@@ -24,7 +24,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import (ConfigError, MetricGate, config_changes, find_config, load_config,
+from autohelix.config import (ConfigError, MetricGate, config_changes, config_relative, find_config, load_config,
                               not_an_experiment, run_command)
 from autohelix.costs import summarize_costs
 from autohelix import terminal
@@ -32,7 +32,7 @@ from autohelix.display import LiveDisplay, clean
 from autohelix.terminal import LiveRow, Row, budget_text
 from autohelix.history import History, IterationResult
 from autohelix.runs import (RunPaths, RunState, select_run, reconcile, land, git,
-                            claim_copies, config_relative, critical_section, new_run_name,
+                            claim_copies, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, landing,
                             Landing, LandingWords, landing_words, WHY_LIMIT,
                             imported_run, is_live, group_landing_note, has_baseline, land_first, target_ahead_refusal,
@@ -230,7 +230,7 @@ class Harness:
                 self._warn(f"Run {short_id(import_run)} used {source}; this run uses {used}.")
         if creating:
             self.config = load_config(self.project_path, config_file=config_file)
-            if self.config.experiment is None:  # the path as named: autohelix/ may be a link
+            if self.config.experiment is None:  # as `select_run` names it (`config_relative`)
                 raise RuntimeError(not_an_experiment(config_relative(self.project_path, config_file)))
         else:
             self.config = self._run_config(planned)

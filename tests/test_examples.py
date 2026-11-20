@@ -4,6 +4,7 @@ in the project `examples/setup_example.py` makes of it."""
 
 import importlib.util
 import subprocess
+import types
 from pathlib import Path
 
 import pytest
@@ -66,8 +67,8 @@ def test_algotune_setup_writes_its_config_as_the_only_experiment(tmp_path, monke
     monkeypatch.setattr(module, "find_algotune_root", lambda: None)
     monkeypatch.setattr(module, "download_task", download)
     monkeypatch.setattr(module, "git_init", lambda directory: None)
-    monkeypatch.setattr(module.subprocess, "run",
-                        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout="", stderr=""))
+    monkeypatch.setattr(module, "subprocess", types.SimpleNamespace(  # this module's calls only
+        run=lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout="", stderr="")))
     project = tmp_path / "toy"
     assert module.setup("toy", project, problem_size=10)
     assert project_configs(project) == [experiment_config("algotune")]

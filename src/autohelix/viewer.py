@@ -42,10 +42,10 @@ from markdown_it import MarkdownIt
 from autohelix import run_table
 from autohelix.agents import AgentEventKind
 from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained, open_dir as _open_dir, open_file as _open_file, open_run_log
-from autohelix.config import ConfigError, MetricGate, load_config, template_text
+from autohelix.config import ConfigError, MetricGate, config_relative, load_config, template_text
 from autohelix.costs import summarize_costs
 from autohelix.history import History, latest_agent_call, record_seconds
-from autohelix.runs import (COMMIT, RunPaths, config_relative, git, is_archived, is_transcript, landing, landing_words,
+from autohelix.runs import (COMMIT, RunPaths, git, is_archived, is_transcript, landing, landing_words,
                             last_activity, load_run_config)
 from autohelix.replay import LogTail
 from autohelix.report import read_report_info

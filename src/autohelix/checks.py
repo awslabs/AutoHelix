@@ -125,14 +125,18 @@ def uncommitted_command_paths(config: Config, project_path: Path) -> list[str]:
     named = [path for path in named if path.rstrip("/") != "autohelix" and not any(c in path for c in "*?[{$")]
     if not named:
         return []
-    if config.experiment is None:  # a Config not loaded from autohelix/NAME/config.yaml (`from_dict`)
-        raise ValueError("A command names a path under autohelix/, but the config isn't an experiment's: "
-                         "load it from autohelix/NAME/config.yaml.")
     listed = run_git(["git", "ls-tree", "-r", "-z", "--name-only", "HEAD"], cwd=project_path,
                      capture_output=True, env=git_env())
     if listed.returncode != 0:
         return []  # no commit (or no repository): the clean-checkout check says so
     committed = [name for name in os.fsdecode(listed.stdout).split("\0") if name]
+    named = [path for path in named if os.path.lexists(Path(project_path) / path.rstrip("/"))
+             and not any(name == path.rstrip("/") or name.startswith(path.rstrip("/") + "/") for name in committed)]
+    if not named:
+        return []  # each is committed or not a file here (a ref, `autohelix/<run-id>`; a name the command makes)
+    if config.experiment is None:  # a Config not loaded from autohelix/NAME/config.yaml (`from_dict`)
+        raise ValueError("A command names a path under autohelix/, but the config isn't an experiment's: "
+                         "load it from autohelix/NAME/config.yaml.")
     folder = f"{CONFIG_DIR}/{config.experiment.name}"  # as `load_config` names it
 
     @functools.cache
@@ -147,10 +151,6 @@ def uncommitted_command_paths(config: Config, project_path: Path) -> list[str]:
     warnings = []
     for path in named:
         bare = path.rstrip("/")
-        if not os.path.lexists(Path(project_path) / bare):
-            continue  # not a file here (a ref, `autohelix/<run-id>`; a name the command makes)
-        if any(name == bare or name.startswith(bare + "/") for name in committed):
-            continue
         inside = bare[len(folder) + 1:] if bare.startswith(folder + "/") else None
         names = stored() if bare == folder or inside is not None else None
         if bare == folder:

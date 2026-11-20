@@ -862,12 +862,14 @@ def test_a_file_named_autohelix_is_frozen_as_the_folder_would_be(project):
 
 def test_a_config_not_from_an_experiment_is_refused_by_the_path_check(project):
     """`uncommitted_command_paths` advises in terms of the experiment folder, so a Config
-    without one (`from_dict`) whose command names an autohelix/ path is refused, not
-    an AttributeError."""
+    without one (`from_dict`) whose command names an uncommitted autohelix/ file is
+    refused, not an AttributeError; a name that isn't a file here (a run's ref) is not."""
     from autohelix.checks import uncommitted_command_paths
     from autohelix.config import Config
 
     assert uncommitted_command_paths(Config.from_dict({"goal": "g", "gates": ["sh run.sh"]}), project) == []
     config = Config.from_dict({"goal": "g", "gates": ["sh autohelix/run.sh"]})
+    assert uncommitted_command_paths(config, project) == []  # no such file
+    (project / "autohelix" / "run.sh").write_text("true\n")
     with pytest.raises(ValueError, match="isn't an experiment's"):
         uncommitted_command_paths(config, project)

@@ -16,7 +16,7 @@ from pathlib import Path
 import click
 
 from autohelix.config import (ConfigError, ConfigNotFound,
-                              experiment_config, find_config, project_configs, run_command)
+                              config_relative, experiment_config, find_config, project_configs, run_command)
 from autohelix.agents import CLI_NAMES, JUDGE_CLIS, RENAMED_CLIS, executable
 from autohelix.awake import keep_awake
 from autohelix.harness import DEFAULT_ITERATIONS, Budget, Harness
@@ -25,7 +25,7 @@ from autohelix.run_status import read_run_status
 from autohelix.runs import (RunPaths, planned_run, RunLock, archive as archive_run, check_group, check_why,
                             default_run, delete as delete_run, find_project, is_live,
                             load_run_config, land as land_run, project_runs, resolve_run, resolve_runs,
-                            config_relative, group_landing_note, run_tip, set_options, short_id)
+                            group_landing_note, run_tip, set_options, short_id)
 from autohelix import run_table
 from autohelix.skill import SKILL_NAME, skill
 from autohelix.workspace import SCRUBBED_GIT_ENV, run_git
