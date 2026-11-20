@@ -189,6 +189,8 @@ class Config:
     # The experiment folder (autohelix/NAME/ for autohelix/NAME/autohelix.yaml, `config_name`),
     # absolute; None for the project's autohelix.yaml. A run stores it (`experiment.snapshot_files`).
     experiment: Path | None = None
+    # Whether the project has an autohelix/ (`load_config`): only then is it shown as frozen.
+    config_dir_exists: bool = field(default=False, repr=False)
     _parse_errors: list[str] = field(default_factory=list, repr=False)
 
     @property
@@ -204,12 +206,16 @@ class Config:
 
     def frozen_names(self) -> list[str]:
         """What is frozen, as shown (header, prompt): `scope.frozen`, then the config and
-        template files and autohelix/."""
-        return self.frozen + [path for path in self.protected if path not in self.frozen]
+        template files and autohelix/, which is shown only when the project has one, and
+        then stands for the files in it."""
+        folders = [path for path in self.protected if path.endswith("/")] if self.config_dir_exists else []
+        shown = [path for path in self.protected if path in folders or (
+            not path.endswith("/") and not any(path.startswith(folder) for folder in folders))]
+        return self.frozen + [path for path in shown if path not in self.frozen]
 
     def frozen_patterns(self) -> list[str]:
-        """What the harness matches as frozen: `frozen_names` with the files' glob
-        characters escaped."""
+        """What the harness matches as frozen: `scope.frozen`, then all of `protected`
+        (autohelix/ whether or not it exists), glob characters escaped."""
         return self.frozen + [globmod.escape(path) for path in self.protected if path not in self.frozen]
 
     def gate_commands(self) -> list[CommandSpec]:
@@ -807,6 +813,7 @@ def load_config(project_path: Path, config_file: Path | None = None, *,
         config.experiment = named_at.parent
     config.protected += [f"{name}/" for name in _project_relative(Path(project_path), [root / CONFIG_DIR])
                          if f"{name}/" not in config.protected]
+    config.config_dir_exists = os.path.lexists(root / CONFIG_DIR)
     return config
 
 

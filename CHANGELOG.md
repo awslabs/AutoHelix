@@ -68,8 +68,9 @@ has the checklist.
   the scripts and material beside `autohelix/<name>/autohelix.yaml`, links
   inside `autohelix/` followed (`metrics.py -> ../lib/metrics.py`; a
   committed project file is named by its path instead). `run` refuses a folder
-  with a link out of `autohelix/` or into a dot-name inside it
-  (`autohelix/.git/`, `.env`), a folder reached twice through links, a
+  with a link out of `autohelix/` (the folder itself too) or into a dot-name
+  inside it (`autohelix/.git/`, `.env`), a link to a folder holding it
+  (`up -> ..`), a folder reached twice through links, a
   non-regular or unreadable file, or over 200 files, 200 folders or 10 MB.
   The stored files keep their read and exec bits, without write bits. A folder
   holding only its config gives commands, the agent and judges no copy.

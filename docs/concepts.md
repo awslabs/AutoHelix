@@ -256,7 +256,7 @@ The variables a template gets are a stable, documented contract:
 | `gates` | Every gate in list order: `{text, kind}`, `kind` being `command` or `metric`; a metric gate's text says what it compares ("speed: at most 5% worse than the last accepted iteration"). Elsewhere (console header, `view ID --json`, the `gates` of history records) a metric gate goes by its short text, `speed regress 5%` or `speed improve 0%` |
 | `observe` | Every observe entry: `{name, kind, metric_labels}`, `kind` being `command` (with `command`) or `review` (with `prompt`, on one line); `metric_labels` like `speed (↑)` |
 | `stop` | The stop commands |
-| `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files and `autohelix/` (always frozen, for every config) |
+| `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files and `autohelix/` (always frozen, for every config; listed when the project has one, and then instead of the files in it) |
 | `notes_path` | Where this iteration's notes go (in the copy) |
 | `hints` | `.autohelix-iteration/hints.md` if there are hints, else empty |
 | `hints_text` | The hints' text (the lines `autohelix hint` added, oldest first), else empty |

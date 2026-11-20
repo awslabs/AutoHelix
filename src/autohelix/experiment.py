@@ -21,6 +21,7 @@ from autohelix.config import CONFIG_DIR, CONFIG_FILE, Config, ConfigError
 MAX_FILES = 200
 MAX_FOLDERS = 200
 MAX_BYTES = 10 * 1024 * 1024
+MAX_REFUSED = 20  # refusals a message lists
 SKIPPED_FOLDERS = ("__pycache__",)
 
 
@@ -80,6 +81,21 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
     if config.prompt_template is not None:
         left_out.add(os.path.realpath(config.prompt_template))
     where = shown(project, folder)
+
+    def refuse(refused: list[str]) -> ConfigError:
+        more = len(refused) - MAX_REFUSED
+        return ConfigError(f"{where} can't be stored with the run: " + "; ".join(refused[:MAX_REFUSED])
+                           + (f" and {more} more" if more > 0 else "") + ". "
+                           f"Move these out of it, or link only to files inside {CONFIG_DIR}/ (name a project "
+                           "file by its path in a command instead).")
+
+    # The folder itself (a link, `config._experiments` accepts one) follows the links' rule.
+    pointed = os.readlink(folder) if os.path.islink(folder) else root
+    if not Path(root).is_relative_to(allowed) or Path(root) == allowed:
+        place = f"{CONFIG_DIR}/ itself" if Path(root) == allowed else f"outside {CONFIG_DIR}/"
+        raise refuse([f"{where} (a link to {pointed}, {place})"])
+    if hidden := next((part for part in Path(root).relative_to(allowed).parts if part.startswith(".")), None):
+        raise refuse([f"{where} (a link to {pointed}, into {hidden})"])
     found: list[SnapshotFile] = []
     refused: list[str] = []
     visited = {root: ""}  # each folder walked, by real path: its name in the snapshot
@@ -130,6 +146,9 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
                 if directory_entry and entry.name in SKIPPED_FOLDERS:
                     continue
                 if directory_entry:
+                    if target == root or root.startswith(target + os.sep):  # autohelix/, or the folder
+                        refused.append(f"{name} ({'a link to ' if link else ''}a folder that contains it)")
+                        continue
                     if target in visited:
                         first = visited[target]
                         if first == "" or name.startswith(first + "/"):
@@ -158,9 +177,7 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
 
     visit(folder, "")
     if refused:
-        raise ConfigError(f"{where} can't be stored with the run: " + "; ".join(refused) + ". "
-                          f"Move these out of it, or link only to files inside {CONFIG_DIR}/ (name a project "
-                          "file by its path in a command instead).")
+        raise refuse(refused)
     return found
 
 
@@ -172,7 +189,8 @@ def build_snapshot(files: list[SnapshotFile], beside: Path) -> Path:
     listing reads it), and return it for the caller to rename into place. Files lose
     their write bits and keep the others (a private file stays private); folders stay
     writable by their owner, so the snapshot can be deleted. On failure, nothing is
-    left."""
+    left; a file that can't be read now, or whose size differs from the walk's, is a
+    ConfigError naming it."""
     beside.mkdir(parents=True, exist_ok=True)
     staging = beside / f"{STAGING_PREFIX}{secrets.token_hex(4)}"
     staging.mkdir(mode=0o755)
@@ -180,7 +198,14 @@ def build_snapshot(files: list[SnapshotFile], beside: Path) -> Path:
         for file in files:
             destination = staging / file.name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(file.source, destination)
+            try:
+                shutil.copyfile(file.source, destination)
+            except OSError as e:  # removed or made unreadable since the walk, a full disk
+                raise ConfigError(f"The experiment folder's {file.name} can't be stored with the run: "
+                                  f"{e.strerror or e}.") from None
+            if destination.stat().st_size != file.size:
+                raise ConfigError(f"The experiment folder's {file.name} changed while being stored; "
+                                  "start the run again.")
             os.chmod(destination, file.mode & 0o555)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)

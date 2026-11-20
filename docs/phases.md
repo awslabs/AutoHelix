@@ -343,7 +343,7 @@ Stop conditions (the run ends once one of these exits 0 after an accepted iterat
   jq -e '.speed >= 50' "$AUTOHELIX_METRICS"
 
 Editable (only changes to these files will be kept): sort.py
-Frozen (changes to these files will be reverted, even inside the editable ones): autohelix.yaml, autohelix/
+Frozen (changes to these files will be reverted, even inside the editable ones): autohelix.yaml
 
 Where things are (read before starting):
 - .autohelix-iteration/notes/ — your own notes from this run's past iterations (iter-1.md onward); editable

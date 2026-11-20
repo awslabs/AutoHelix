@@ -154,8 +154,9 @@ Which config a command uses:
   as `.autohelix/runs/<id>/experiment/`: its scripts and material, without the
   config, the template, dotfiles, dot-folders and `__pycache__/`. A link is
   followed when it points inside `autohelix/` (`metrics.py ->
-  ../lib/metrics.py`); `run` refuses a link out of it (a committed project
-  file is named by its path instead), a folder reached twice through links, a
+  ../lib/metrics.py`); `run` refuses a link out of it (the folder itself too; a
+  committed project file is named by its path instead), a link to a folder
+  holding the experiment folder (`up -> ..`), a folder reached twice through links, a
   file that isn't a regular file or can't be read, and a folder over 200
   files, 200 folders or 10 MB, before it writes anything (`run --check` too).
   Keep datasets out of the folder: name them by path.
@@ -213,7 +214,7 @@ VPN alive.
   Agent    Claude Code · sonnet
   Gates    pytest -q test_sort.py · speed regress 5%
   Observe  bench (speed ↑, mem_mb ↓)
-  Scope    editable: sort.py
+  Scope    editable: sort.py · frozen: autohelix.yaml
   Budget   7 iterations · $10.00 · 30m each
   ────────────────────────────────────────────────────────────────────────────
              time    cost   speed ↑         mem_mb ↓
