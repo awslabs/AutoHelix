@@ -38,7 +38,7 @@ def test_each_iteration_trains_from_the_last_accepted_iterations_folder(project,
     (folder / "paths.sh").write_text(paths_script().replace("/data/x", str(artifacts)))
     config = yaml.safe_load((project / "autohelix.yaml").read_text())
     config["gates"] = [  # as eval.sh does: the command's own copy of the folder
-        'source "$AUTOHELIX_EXPERIMENT/paths.sh"; [ -z "${start+set}" ] && '
+        '. "$AUTOHELIX_EXPERIMENT/paths.sh"; [ -z "${start+set}" ] && '
         '{ [ "$AUTOHELIX_ITERATION" = 0 ] || [ -f "$out/weights" ]; }',
         '[ "$AUTOHELIX_ITERATION" != 2 ]']  # iteration 2 is rejected
     (folder / "autohelix.yaml").write_text(yaml.safe_dump(config))
@@ -47,7 +47,7 @@ def test_each_iteration_trains_from_the_last_accepted_iterations_folder(project,
     # The agent's steps as the page gives them, each its own shell (an agent's
     # commands share no variables): clear $out, then "train": the start's weights
     # plus this iteration's number.
-    source = "source .autohelix-iteration/experiment/paths.sh && "
+    source = ". .autohelix-iteration/experiment/paths.sh && "
     steps = [source + 'rm -rf "$out"',
              source + 'mkdir -p "$out" && { cat "$start/weights" 2>/dev/null || echo base; } '
              '| sed "s/$/+$AUTOHELIX_ITERATION/" > "$out/weights"']
@@ -55,7 +55,7 @@ def test_each_iteration_trains_from_the_last_accepted_iterations_folder(project,
 
     def run(self, copy_path, prompt, iteration, *args, **kwargs):
         for step in steps:
-            subprocess.run(["bash", "-euc", step], cwd=copy_path, env=dict(os.environ), check=True)
+            subprocess.run(["sh", "-euc", step], cwd=copy_path, env=dict(os.environ), check=True)
         return real(self, copy_path, prompt, iteration, *args, **kwargs)
 
     monkeypatch.setattr(MockAgent, "run", run)

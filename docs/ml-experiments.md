@@ -61,24 +61,25 @@ if [ -f "$history" ]; then  # only the agent's copy has the run's history
 fi
 ```
 
-- **The agent** runs `source .autohelix-iteration/experiment/paths.sh`, then
+- **The agent** runs `. .autohelix-iteration/experiment/paths.sh`, then
   `rm -rf "$out"` (a killed iteration or a retried baseline reuses its number),
   and trains from `$start` into `$out`. Its shell commands don't share
   variables, so each command that uses `$out` or `$start` sources the script
-  first (`source … && rm -rf "$out" && python train.py …`, one command). `$start` is the last accepted
-  iteration's folder (in the history a number can appear on more than one line;
+  first (`. … && rm -rf "$out" && python train.py …`, one command). `$start`
+  is the last accepted iteration's folder (in the history a number can appear on more than one line;
   the last line for it counts); when that is the baseline, it doesn't exist:
   start from the base model. Put these steps in the goal, so the agent knows
   them.
-- **Gate and observe commands** run `source "$AUTOHELIX_EXPERIMENT/paths.sh"`
-  and evaluate `$out`: `AUTOHELIX_RUN_ID` and `AUTOHELIX_ITERATION` are in
+- **Gate and observe commands** run `. "$AUTOHELIX_EXPERIMENT/paths.sh"` (`.`,
+  not `source`: commands run under `/bin/sh`, which is `dash` on Debian and
+  Ubuntu) and evaluate `$out`: `AUTOHELIX_RUN_ID` and `AUTOHELIX_ITERATION` are in
   their [environment](phases.md#command-environment), with the values the
   agent had. At the baseline (`AUTOHELIX_ITERATION` is `0`) no agent has
   trained, so evaluate the base model there:
 
   ```bash
   # autohelix/train/eval.sh
-  source "$AUTOHELIX_EXPERIMENT/paths.sh"
+  . "$AUTOHELIX_EXPERIMENT/paths.sh"
   if [ "$AUTOHELIX_ITERATION" = 0 ]; then out=/data/base-model; fi
   python evaluate.py --model "$out"   # prints ##autohelix[accuracy=...]
   ```

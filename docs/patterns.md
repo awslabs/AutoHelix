@@ -201,10 +201,10 @@ agent's shell commands don't share variables, so every command that uses
 goal: |
   Improve validation accuracy by changing the training code in train.py.
   Train in the foreground, in one command:
-  source .autohelix-iteration/experiment/paths.sh && rm -rf "$out" &&
+  . .autohelix-iteration/experiment/paths.sh && rm -rf "$out" &&
   python train.py --start "$start" --out "$out"
   (train.py starts from the base model when "$start" doesn't exist). Start
-  any other command that uses $out or $start with the same `source`.
+  any other command that uses $out or $start with the same `.` line.
 scope:
   editable: [train.py]
 gates:
