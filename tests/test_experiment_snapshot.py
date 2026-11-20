@@ -134,6 +134,20 @@ def test_a_killed_runs_staging_folder_is_removed_by_the_next_run(project, folder
     assert (runs / ".experiment-link").is_symlink() and (tmp_path / "elsewhere").is_dir()
 
 
+def test_the_staging_sweep_runs_when_the_copies_sweep_fails(project, folder, monkeypatch):
+    from autohelix import runs as runs_module
+
+    def broken(project):
+        raise OSError("copies base unreadable")
+
+    monkeypatch.setattr(runs_module, "sweep_copies", broken)
+    leftover = build_snapshot(
+        snapshot_files(load_config(project, folder / "autohelix.yaml"), project), RunPaths(project).runs)
+    result = cli(project, "run", "exp", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert not leftover.exists()
+
+
 def test_a_new_run_stores_the_folder_and_delete_removes_it(project, folder):
     (folder / "render.sh").write_text("#!/bin/sh\n")
     (folder / "render.sh").chmod(0o755)

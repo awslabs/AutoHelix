@@ -1237,11 +1237,15 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
     # Serialize selection/creation for this project. The per-run lock remains
     # authoritative throughout the segment, including final landing.
     with RunLock(RunPaths(project).selection_lock, blocking=True):
-        try:
-            sweep_copies(project)
-            sweep_staging(RunPaths(project).runs)  # a killed `run`'s; built only under this lock
-        except Exception:  # noqa: BLE001 - a backstop; never blocks a run
-            pass
+        # Backstops, each on its own; neither blocks a run.
+        for sweep in (
+            lambda: sweep_staging(RunPaths(project).runs),  # a killed `run`'s; built only under this lock
+            lambda: sweep_copies(project),
+        ):
+            try:
+                sweep()
+            except Exception:  # noqa: BLE001
+                pass
         config_path = config_relative(project, config)
         if run_id:
             paths = RunPaths(project, run_id)
