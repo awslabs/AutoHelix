@@ -304,7 +304,7 @@ which fails when they differ from what the code renders.
 
 The built-in template, `src/autohelix/templates/default_prompt.md` (its
 variables: [Concepts → Prompt](concepts.md#prompt); `prompt_template:` replaces
-it). Rendered for iteration 3 of a run of `autohelix.yaml` (always frozen) whose
+it). Rendered for iteration 3 of a run of `autohelix/demo/config.yaml` (`autohelix/` always frozen) whose
 iteration 2 was rejected, after one hint, with `agent.timeout: 30m`:
 
 <!-- prompt: agent -->
@@ -343,7 +343,7 @@ Stop conditions (the run ends once one of these exits 0 after an accepted iterat
   jq -e '.speed >= 50' "$AUTOHELIX_METRICS"
 
 Editable (only changes to these files will be kept): sort.py
-Frozen (changes to these files will be reverted, even inside the editable ones): autohelix.yaml
+Frozen (changes to these files will be reverted, even inside the editable ones): autohelix/
 
 Where things are (read before starting):
 - .autohelix-iteration/notes/ — your own notes from this run's past iterations (iter-1.md onward); editable

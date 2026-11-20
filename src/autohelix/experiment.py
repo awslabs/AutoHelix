@@ -62,7 +62,7 @@ def has_files(stored: Path) -> bool:
 
 def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
     """What the run stores of the config's experiment folder, by name; None without one
-    (the project's autohelix.yaml).
+    (a config file loaded from outside autohelix/, by a library caller).
 
     Left out: the config file and the prompt template (stored already), dotfiles and
     dot-folders, `__pycache__/`. A link is followed when its target is inside the

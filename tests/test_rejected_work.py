@@ -10,7 +10,7 @@ from autohelix import runs
 from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.workspace import ITERATION_DIR
-from tests.helpers import git, latest_run
+from tests.helpers import git, latest_run, write_config
 
 
 @pytest.fixture
@@ -33,9 +33,7 @@ def _configure(project, settings=None, **sections) -> None:
                                                         "change_content": "# iteration {iteration}",
                                                         **(settings or {})}},
               **sections}
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    git(project, "add", "-A")
-    git(project, "commit", "-m", "config")
+    write_config(project, yaml.safe_dump(config, sort_keys=False))
 
 
 class Spy:

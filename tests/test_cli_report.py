@@ -13,7 +13,7 @@ from autohelix.config import load_config
 from autohelix.history import History, IterationResult
 from autohelix.report import WRITE_TO, build_report_prompt, read_report_info
 from autohelix.runs import RunPaths, git, write_json
-from tests.helpers import latest_run
+from tests.helpers import config_file, latest_run, write_config
 
 
 @pytest.fixture
@@ -34,10 +34,10 @@ def project(tmp_path, run_paths):
             metrics:
               speed: higher
     """)
-    (tmp_path / "autohelix.yaml").write_text(config)
+    git(tmp_path, "init", "-q")
+    write_config(tmp_path, config)
     run_paths.config.write_text(config)  # the run's stored copy
     run_paths.notes.mkdir()
-    git(tmp_path, "init", "-q")
     git(tmp_path, "config", "user.email", "test@example.com")
     git(tmp_path, "config", "user.name", "Test")
     (tmp_path / ".gitignore").write_text(".autohelix/\n")
@@ -60,7 +60,8 @@ def project(tmp_path, run_paths):
 
 class TestReportCommand:
     def test_no_history_exits(self, runner, tmp_path):
-        (tmp_path / "autohelix.yaml").write_text("goal: test\n")
+        config_file(tmp_path).parent.mkdir(parents=True)  # not a checkout: nothing to keep private
+        config_file(tmp_path).write_text("goal: test\n")
         (tmp_path / ".autohelix").mkdir()
 
         result = runner.invoke(main, ["report", "-p", str(tmp_path)])
@@ -68,7 +69,8 @@ class TestReportCommand:
         assert "No runs in" in result.output  # nothing to report on
 
     def test_a_run_without_iterations_exits(self, runner, tmp_path):
-        (tmp_path / "autohelix.yaml").write_text("goal: test\n")
+        config_file(tmp_path).parent.mkdir(parents=True)  # not a checkout: nothing to keep private
+        config_file(tmp_path).write_text("goal: test\n")
         paths = RunPaths(tmp_path, "test-1234")
         write_json(paths.identity, {"schema": 2, "id": paths.run_id})
         result = runner.invoke(main, ["report", "-p", str(tmp_path)])
@@ -100,12 +102,12 @@ class TestReportCommand:
 
     def test_errors_when_agent_changes_files(self, runner, project):
         def change(**kwargs):
-            (kwargs["copy_path"] / "autohelix.yaml").write_text("goal: changed\n")
+            (kwargs["copy_path"] / ".gitignore").write_text("changed\n")
         touch = change
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok", also=touch)):
             result = runner.invoke(main, ["report", "-p", str(project)])
         assert "changed accepted code files" in result.output
-        assert "autohelix.yaml" in result.output
+        assert ".gitignore" in result.output
 
     def test_timeout_is_capped(self, runner, project):
         config = latest_run(project).config
@@ -115,7 +117,7 @@ class TestReportCommand:
         assert create.call_args[0][0].timeout == 15 * 60
 
     def test_reads_the_stored_config_and_refuses_without_one(self, runner, project):
-        (project / "autohelix.yaml").write_text("goal: edited\nagent:\n  cli: codex\n")
+        config_file(project).write_text("goal: edited\nagent:\n  cli: codex\n")
         with patch("autohelix.agents.create_agent", return_value=self._agent("ok")) as create:
             result = runner.invoke(main, ["report", "-p", str(project)])
         assert result.exit_code == 0, result.output

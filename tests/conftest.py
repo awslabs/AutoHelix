@@ -1,17 +1,19 @@
 """Shared fixtures: a run layout for file-only observer tests, and a committed
-project with a mock-agent config for run tests (`tests.helpers.configure` edits it)."""
+project with a mock-agent config for run tests: autohelix/demo/config.yaml, private
+as setup makes it (`tests.helpers.configure` edits it)."""
 
 import pytest
 import yaml
 
 from autohelix.runs import SCHEMA, RunPaths, git, write_json, write_text
+from tests.helpers import CONFIG, config_file, private
 
 
 @pytest.fixture
 def run_paths(tmp_path):
     paths = RunPaths(tmp_path, "test")
     write_json(paths.identity, {
-        "schema": SCHEMA, "id": "test", "config_path": "autohelix.yaml",
+        "schema": SCHEMA, "id": "test", "config_path": CONFIG,
         "base_commit": "0" * 40, "target_branch": None,
     })
     return paths
@@ -29,7 +31,9 @@ def project(tmp_path):
     git(project, "config", "maintenance.auto", "false")
     git(project, "config", "gc.auto", "0")
     (project / "code.py").write_text("print('baseline')\n")
-    (project / "autohelix.yaml").write_text(yaml.safe_dump({
+    private(project)
+    config_file(project).parent.mkdir(parents=True)
+    config_file(project).write_text(yaml.safe_dump({
         "goal": "Make a checked change",
         "agent": {"cli": "mock", "mock": {
             "change_file": "code.py", "change_content": "# iteration {iteration}", "cost_usd": 0.1,

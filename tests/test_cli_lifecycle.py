@@ -11,7 +11,7 @@ from autohelix.harness import Budget, Harness
 from autohelix.history import History, record_seconds
 from autohelix.runs import (PROJECT_RECORD, RunLock, RunPaths, copies_base, git, project_key, project_runs, short_id,
                             sweep_copies)
-from tests.helpers import cli, configure, latest_run
+from tests.helpers import CONFIG, NAME, cli, config_file, configure, latest_run
 
 
 def started(project, *args):
@@ -82,7 +82,7 @@ def test_resume_until_is_a_total_and_n_with_until_is_refused(project):
 def test_resume_with_nothing_to_resume_exits_1(project):
     result = cli(project, "resume")
     assert result.exit_code == 1
-    assert "No run to resume for autohelix.yaml; start one with `autohelix run`." in result.output
+    assert f"No run to resume for {CONFIG}; start one with `autohelix run {NAME}`." in result.output
 
 
 def test_bare_resume_skips_archived_runs_and_prefers_a_baseline(project):
@@ -156,9 +156,7 @@ def test_delete_refuses_unlanded_commits_unless_forced(project):
 
 
 def test_ids_sort_by_start_and_commands_accept_the_suffix(project, tmp_path, monkeypatch):
-    (project / "autohelix" / "perf").mkdir(parents=True)
-    git(project, "mv", "autohelix.yaml", "autohelix/perf/autohelix.yaml")
-    git(project, "commit", "-qm", "named config")
+    config_file(project).parent.rename(project / "autohelix" / "perf")
     paths = started(project, "perf")
     assert paths.run_id.startswith(time.strftime("%Y%m%d-")) and paths.run_id.split("-")[2] == "perf"
     result = cli(project, "view", short_id(paths.run_id), "--json")
@@ -173,11 +171,11 @@ def test_ids_sort_by_start_and_commands_accept_the_suffix(project, tmp_path, mon
 
 def test_a_run_refuses_another_config(project):
     paths = started(project)
-    other = project / "other.yaml"
-    other.write_text((project / "autohelix.yaml").read_text())
-    git(project, "add", ".")
-    git(project, "commit", "-qm", "other config")
-    with pytest.raises(RuntimeError, match="was started with autohelix.yaml, not other.yaml; a run keeps its config"):
+    other = project / "autohelix" / "other" / "config.yaml"
+    other.parent.mkdir()
+    other.write_text(config_file(project).read_text())
+    with pytest.raises(RuntimeError, match=f"was started with {CONFIG}, not autohelix/other/config.yaml; "
+                                           "a run keeps its config"):
         Harness(project, run_id=paths.run_id, config_file=other)  # the API only: the CLI has no -c
 
 

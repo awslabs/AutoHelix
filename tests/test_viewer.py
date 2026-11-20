@@ -19,7 +19,7 @@ from autohelix.runs import RunLock
 from autohelix.viewer import make_server
 from autohelix.runs import RunPaths, short_id
 from tests.test_integration import integration_project  # noqa: F401  (fixture)
-from tests.helpers import latest_run, with_words
+from tests.helpers import CONFIG, NAME, config_file, latest_run, with_words
 
 
 # ---------- run status ----------
@@ -184,7 +184,7 @@ def test_state_lists_iterations_and_status(viewer):
     assert all(r["accepted"] for r in state["iterations"])
     assert state["status"]["state"] == "finished"
     assert state["goal"].startswith("Test the integration")
-    assert state["config"]["file"] == "autohelix.yaml"
+    assert state["config"]["file"] == CONFIG
     assert state["config"]["gates"] == ["true"]
     assert state["goal"].startswith("Test the integration")
     assert "goal: Test the integration" in state["config"]["text"]
@@ -216,7 +216,7 @@ def test_rejects_non_loopback_host(viewer):
 
 
 def test_no_arbitrary_file_routes(viewer):
-    for path in ("/history.jsonl", "/../autohelix.yaml", "/api/iteration/..%2fhistory", "/api/file"):
+    for path in ("/history.jsonl", f"/../{CONFIG}", "/api/iteration/..%2fhistory", "/api/file"):
         assert get(viewer + path)[0] == 404
     for path in ("/iteration/..%2fhistory", "/file", "/history.jsonl"):
         assert get(viewer.api + path)[0] == 404
@@ -378,8 +378,7 @@ def test_tampered_commit_is_never_passed_to_git(viewer, integration_project):  #
 
 def test_preflight_failure_is_not_recorded_as_a_run(integration_project, monkeypatch):  # noqa: F811
     monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", "/nonexistent/agent")
-    (integration_project / "autohelix.yaml").write_text("goal: g\nagent:\n  cli: claude-code\ngates: ['true']\n")
-    subprocess.run(["git", "commit", "-qam", "Use a missing agent"], cwd=integration_project, check=True)
+    config_file(integration_project).write_text("goal: g\nagent:\n  cli: claude-code\ngates: ['true']\n")
     with pytest.raises(RuntimeError, match="Preflight checks failed"):
         Harness(integration_project)
     assert read_run_status(integration_project, latest_run(integration_project).run_id) is None
@@ -457,7 +456,7 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
         assert two["landing_words"]["cell"] == "1 to land" and one["landing_words"]["cell"] == "landed"
         assert two["landing_words"]["text"].endswith(f"main can fast-forward: `autohelix land {short}`.")
         assert two["accepted"] == 1 and two["metrics"] is None
-        assert two["config_file"] == "autohelix.yaml" and two["goal"] == "Test the integration"
+        assert two["config_file"] == CONFIG and two["goal"] == "Test the integration"
         assert listing["schema"] == 1 and listing["path"] == str(integration_project.resolve())
 
         # A user commit on the target: the manual run can no longer fast-forward.
@@ -535,7 +534,7 @@ def _cli(*args):
 @pytest.fixture
 def measured_project(integration_project):  # noqa: F811
     """Three runs with a metric: one finished and landed, one manual and unlanded, one archived."""
-    config = integration_project / "autohelix.yaml"
+    config = config_file(integration_project)
     config.write_text(config.read_text() + """
 observe:
   - name: bench
@@ -543,7 +542,6 @@ observe:
     metrics:
       speed: higher
 """)
-    subprocess.run(["git", "commit", "-qam", "metric"], cwd=integration_project, check=True)
     first = Harness(integration_project)
     first.run(Budget(until=2), report=False)
     second = Harness(integration_project, new=True, land_mode="manual")
@@ -577,9 +575,9 @@ def test_runs_json_and_once(measured_project):
     assert lines[4].split() == ["run", "state", "iter", "speed", "↑", "landing", "cost", "activity", "goal"]
     rows = {line.split()[0]: line for line in lines[5:]}
     assert set(rows) == {short_id(first), short_id(second)}  # one line each
-    assert rows[short_id(first)].split()[1:5] == ["finished", "2/2", "120", "landed"]
+    assert rows[short_id(first)].split()[1:6] == [NAME, "finished", "2/2", "120", "landed"]  # named after its folder
     assert rows[short_id(first)].endswith("Test the integration")
-    assert rows[short_id(second)].split()[1:6] == ["finished", "1/1", "130", "1", "to"]
+    assert rows[short_id(second)].split()[1:7] == [NAME, "finished", "1/1", "130", "1", "to"]
 
     assert "no run has metric" in _cli("view", "-p", project, "--once", "--metric", "nope").output.lower()
     assert _cli("view", "-p", project, "--metric", "speed", "--json").exit_code == 2
@@ -606,7 +604,7 @@ def test_view_json_and_once(measured_project, monkeypatch):
     monkeypatch.chdir(project)  # the run's folder is shown relative to here
     text = _cli("view", first, "-p", project, "--once").output
     lines = [line.rstrip() for line in text.splitlines()]
-    assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(f" · run {short_id(first)} · test_project · finished")
+    assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(f" · run {short_id(first)} · {NAME} · finished")
     assert "  Goal       Test the integration" in lines
     rows = lines[lines.index(next(line for line in lines if line.lstrip().startswith("time"))) + 1:]
     assert rows[0].split() == ["·", "base", "100"]
@@ -624,7 +622,7 @@ def test_view_json_and_once(measured_project, monkeypatch):
     assert missing.exit_code == 1 and "missing-zzzz" in missing.output
 
     # The table reads the run's stored config, not the file as it is now.
-    config = project / "autohelix.yaml"
+    config = config_file(project)
     config.write_text(config.read_text().replace("Test the integration", '" "'))
     printed = _cli("view", first, "-p", project, "--once")
     assert printed.exit_code == 0 and "  Goal       Test the integration\n" in printed.output
@@ -673,7 +671,7 @@ def test_live_view_shows_the_run_table_and_where_it_stopped(measured_project, mo
     _stop_after(monkeypatch, polls=2)
     result = _cli("view", short_id(first), "--terminal", "-p", project)
     assert result.exit_code == 0, result.output
-    assert f"run {short_id(first)} · test_project · finished" in result.output
+    assert f"run {short_id(first)} · {NAME} · finished" in result.output
     assert "  Goal       Test the integration" in result.output
     assert "Done       iteration budget reached (2)" in result.output and "Iteration 2 · agent" in result.output
     assert "Finished at " in result.output and "Stopped watching. The run is unaffected." in result.output

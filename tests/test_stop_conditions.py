@@ -11,7 +11,7 @@ from autohelix.history import History
 from autohelix.prompt_template import build_prompt_variables
 from autohelix.run_status import read_run_status
 from autohelix.live import status_line
-from tests.helpers import git, latest_run
+from tests.helpers import git, latest_run, write_config
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def project(tmp_path):
 
 
 def _configure(project, extra: str) -> None:
-    (project / "autohelix.yaml").write_text(f"""
+    write_config(project, f"""
 goal: Test stop conditions
 
 agent:
@@ -41,8 +41,6 @@ agent:
 
 {extra}
 """)
-    git(project, "add", "autohelix.yaml")
-    git(project, "commit", "-m", "config")
 
 
 def _run(project, n: int) -> list:

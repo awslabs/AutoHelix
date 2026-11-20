@@ -15,7 +15,7 @@ from pathlib import Path
 
 import click
 
-from autohelix.config import (CONFIG_DIR, CONFIG_FILE, ConfigError, ConfigNotFound, config_name,
+from autohelix.config import (ConfigError, ConfigNotFound,
                               experiment_config, find_config, project_configs, run_command)
 from autohelix.agents import CLI_NAMES, JUDGE_CLIS, RENAMED_CLIS, executable
 from autohelix.awake import keep_awake
@@ -458,7 +458,7 @@ def _ancestor_configs(project: Path) -> str:
 def _how_to_write(name: str | None = None) -> str:
     """Where to look for writing a config (`run` without one): bare `autohelix` with an
     agent, an example, the docs' configs, the packaged template."""
-    file = experiment_config(name) if name else CONFIG_FILE
+    file = experiment_config(name or "NAME")
     docs = docs_dir()
     where = f" (in {docs})" if docs else ""
     return (f"Write {file}: run `autohelix` in a terminal to set it up with an agent, or start from an example "
@@ -483,11 +483,6 @@ def _segment_config(project: Path, name: str | None, command: str) -> Path:
         else:
             advice = _ancestor_configs(project) or (" " + pick if resume else write)
         raise click.ClickException(str(e) + advice) from e
-    others = [other for c in project_configs(project) if (other := config_name(c))]
-    if name is None and config == project / CONFIG_FILE and others:
-        example = f"`autohelix {'resume' if resume else 'run'} {others[0]}`"
-        click.echo(click.style(f"Using {CONFIG_FILE}; {CONFIG_DIR}/ also has: {', '.join(others)} ({example})",
-                               dim=True))
     return config
 
 
@@ -662,8 +657,8 @@ def run(config_name: str | None, path: Path, verbose: bool, no_report: bool, lan
 
     Always a new run, with its own notes and history; to continue one, use
     `autohelix resume`. CONFIG names an experiment folder in autohelix/ (`perf`
-    for autohelix/perf/autohelix.yaml); without it, the run reads autohelix.yaml,
-    else the config of the only experiment in autohelix/.
+    for autohelix/perf/config.yaml); without it, the run reads the config of the
+    only experiment in autohelix/.
 
     The config says what one iteration does; the budget flags say how long this
     command (a segment of the run) goes on: -n N iterations (or --until N),
@@ -707,7 +702,7 @@ def run(config_name: str | None, path: Path, verbose: bool, no_report: bool, lan
 
 def _resume_target(project: Path, value: str | None) -> tuple[str | None, Path | None]:
     """What `resume VALUE` continues: (run id, None) for a run id or its last part, else
-    (None, the config) for a config name (`perf`: autohelix/perf/autohelix.yaml), whose latest run
+    (None, the config) for a config name (`perf`: autohelix/perf/config.yaml), whose latest run
     resumes, as a bare `resume` does for the config a bare `run` reads."""
     if value is None:
         return None, _segment_config(project, None, "resume")

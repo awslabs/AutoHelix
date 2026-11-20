@@ -7,7 +7,7 @@ import shutil
 
 from autohelix.harness import Budget, Harness
 from autohelix.runs import RunPaths, git, short_id
-from tests.helpers import cli, configure
+from tests.helpers import CONFIG, NAME, cli, config_file, configure
 from tests.test_groups import identity, started, watch_agent
 
 TRACKER = {"name": "tracker", "metrics": {"score": "higher"},
@@ -88,15 +88,14 @@ def test_import_shows_the_runs_state_and_continues_its_observations(project, mon
 
 def test_import_by_suffix_warns_when_the_config_differs(project):
     parent, _ = started(project)
-    other = project / "autohelix" / "perf" / "autohelix.yaml"
+    other = project / "autohelix" / "perf" / "config.yaml"
     other.parent.mkdir(parents=True)
-    shutil.copy(project / "autohelix.yaml", other)
-    git(project, "add", ".")
-    git(project, "commit", "-qm", "perf")
+    shutil.copy(config_file(project), other)
     result = cli(project, "run", "perf", "-n", "1", "--no-report", "--import", short_id(parent.run_id))
     assert result.exit_code == 0, result.output
-    assert f"Run {short_id(parent.run_id)} used autohelix.yaml; this run uses autohelix/perf/autohelix.yaml." in result.output
-    same = cli(project, "run", "-n", "1", "--no-report", "--import", short_id(parent.run_id))
+    assert (f"Run {short_id(parent.run_id)} used {CONFIG}; this run uses autohelix/perf/config.yaml."
+            in " ".join(result.output.split()))
+    same = cli(project, "run", NAME, "-n", "1", "--no-report", "--import", short_id(parent.run_id))
     assert same.exit_code == 0 and " used " not in same.output
     missing = cli(project, "run", "-n", "1", "--import", "zzzz")
     assert missing.exit_code == 1 and "No run 'zzzz'" in missing.output
@@ -175,7 +174,7 @@ def test_resume_refuses_when_the_target_moved_past_the_tip(project):
     short = short_id(paths.run_id)
     assert (f"Everything run {short} accepted is in main, which has 1 commit past its tip (committed after it). "
             f"A run continues its own code: "
-            f"start a new run that continues from it, `autohelix run --import {short}`, or continue without "
+            f"start a new run that continues from it, `autohelix run {NAME} --import {short}`, or continue without "
             f"landing: `autohelix resume {short} --land manual`.") in " ".join(result.output.split())
     assert git(project, "rev-parse", paths.ref).stdout.strip() == tip
     assert snapshot(*state) == before  # nothing written: no status, log, copies record or excludes

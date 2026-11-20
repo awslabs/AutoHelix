@@ -1164,7 +1164,7 @@ def load_run_config(paths: RunPaths, data: dict | None = None):
 
 def new_run_name(config_path: str, name: str | None) -> str | None:
     """A new run's readable name: `name`, else its experiment's (`config_name` of the
-    project-relative `config_path`; none for autohelix.yaml)."""
+    project-relative `config_path`: autohelix/NAME/config.yaml)."""
     if name is None and (experiment := config_name(config_path)):
         name = re.sub(r"[^a-z0-9-]", "-", experiment.lower()).strip("-")[:32] or None
     if name is not None and not _NAME.fullmatch(name):

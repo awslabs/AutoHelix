@@ -17,7 +17,7 @@ pty = pytest.importorskip("pty")
 termios = pytest.importorskip("termios")
 fcntl = pytest.importorskip("fcntl")
 
-from tests.helpers import git  # noqa: E402
+from tests.helpers import CONFIG, git, write_config  # noqa: E402
 
 SRC = Path(__file__).resolve().parent.parent / "src"
 # The child makes the pty its controlling terminal (so Ctrl-C there is SIGINT), then runs `autohelix`.
@@ -96,7 +96,7 @@ def screen(tmp_path):
     (project / "main.py").write_text("x = 1\n")
     git(project, "add", "-A")
     git(project, "commit", "-qm", "init")
-    (project / "autohelix.yaml").write_text("goal: half done\n")
+    write_config(project, "goal: half done\n")
     started = []
 
     def start(agents=("claude",)) -> Terminal:
@@ -130,7 +130,7 @@ def test_enter_starts_the_agent(screen):
     argv = screen.argv()
     assert argv[0] == "--add-dir" and argv[-2] == "--"
     prompt = argv[-1]
-    assert "Its configs: autohelix.yaml (no runs yet)." in prompt and prompt.endswith("open as the skill says.")
+    assert f"Its configs: {CONFIG} (no runs yet)." in prompt and prompt.endswith("open as the skill says.")
 
 
 def test_down_then_enter_picks_the_second_agent(screen):

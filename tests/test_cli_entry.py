@@ -18,7 +18,7 @@ from click.testing import CliRunner
 from autohelix import cli
 from autohelix.cli import main
 from autohelix.config import load_config
-from tests.helpers import git, with_words
+from tests.helpers import CONFIG, NAME, git, private, with_words
 
 
 @pytest.fixture
@@ -80,10 +80,13 @@ def files(project):
                   if ".git" not in p.parts and ".autohelix" not in p.parts)
 
 
-def mock_config(project, name=None, commit=True):
-    """A mock-agent config (autohelix.yaml, or autohelix/NAME/autohelix.yaml), committed."""
-    path = project / (f"autohelix/{name}/autohelix.yaml" if name else "autohelix.yaml")
+def mock_config(project, name=NAME, commit=False):
+    """A mock-agent config, autohelix/NAME/config.yaml: private as setup makes it (`private`)
+    in the checkout's top, or committed (`commit`)."""
+    path = project / f"autohelix/{name}/config.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
+    if not commit:
+        private(project)
     path.write_text(yaml.safe_dump({"goal": "Make a checked change", "agent": {"cli": "mock", "mock": {
         "change_file": "main.py", "change_content": "x = {iteration}\n", "cost_usd": 0.1}}}))
     if commit:
@@ -217,7 +220,7 @@ def test_the_project_is_the_checkouts_top(project, monkeypatch, execs, tty):
     """No runs and no config from here up to the checkout's top: the top."""
     agents(["claude"])(monkeypatch)
     (project / "src" / "deep").mkdir(parents=True)
-    mock_config(project / "src" / "deep" / "elsewhere", commit=False)  # below: not looked at
+    mock_config(project / "src" / "deep" / "elsewhere")  # below: not looked at
     monkeypatch.chdir(project / "src" / "deep")
     result = entry(input="\n")
     assert result.exit_code == 0, result.output
@@ -233,15 +236,15 @@ def test_the_project_is_the_nearest_folder_with_a_config(project, monkeypatch, e
     agents(["claude"])(monkeypatch)
     app = project / "app"
     (app / "pkg").mkdir(parents=True)
-    mock_config(app, "perf", commit=False)
-    mock_config(project, commit=False)
+    mock_config(app, "perf")
+    mock_config(project)
     monkeypatch.chdir(project / start)
     result = entry(input="\n")
     assert result.exit_code == 0, result.output
     assert lines(result)[1].endswith(f" · {app.resolve()}")
     [(_, argv, cwd)] = execs
     assert Path(cwd) == app.resolve() and f"in this project ({app.resolve()})" in argv[-1]
-    assert "Its configs: autohelix/perf/autohelix.yaml (no runs yet)." in argv[-1]
+    assert "Its configs: autohelix/perf/config.yaml (no runs yet)." in argv[-1]
 
 
 # --- configs without runs ---------------------------------------------------------
@@ -251,15 +254,15 @@ def test_configs_without_runs_are_named_in_the_prompt_and_asked_as_ever(project,
     """One question whatever the project holds; the prompt says which configs no run has used
     (the skill offers to finish them)."""
     agents(["claude"])(monkeypatch)
-    mock_config(project, "perf", commit=False)
+    mock_config(project, "perf")
     (project / "autohelix" / "fast").mkdir()
-    (project / "autohelix" / "fast" / "autohelix.yaml").write_text("goal: half done\n")  # hand-written
+    (project / "autohelix" / "fast" / "config.yaml").write_text("goal: half done\n")  # hand-written
     result = entry(input="\n")
     assert result.exit_code == 0, result.output
     assert "Start Claude Code with AutoHelix? Enter/q" in flat(result.output)
     assert "no runs yet" not in result.output and not any(re.match(r"  \d\. ", line) for line in lines(result))
     prompt = execs[0][1][-1]
-    assert "Its configs: autohelix/fast/autohelix.yaml (no runs yet), autohelix/perf/autohelix.yaml (no runs yet)." in prompt
+    assert "Its configs: autohelix/fast/config.yaml (no runs yet), autohelix/perf/config.yaml (no runs yet)." in prompt
 
 
 def flat_lines(result):
@@ -283,7 +286,7 @@ def test_with_runs_the_table_the_next_commands_and_one_question(project, monkeyp
     assert "Start Claude Code with AutoHelix? Enter/q" in flat(result.output)
     [(file, argv, _)] = execs
     prompt = argv[-1]
-    assert re.search(rf'^- {first} \(\d{{8}}-\d{{4}}-{first}, autohelix.yaml\) "Make a checked change": '
+    assert re.search(rf'^- {first} \(\d{{8}}-\d{{4}}-{NAME}-{first}, {CONFIG}\) "Make a checked change": '
                      r"finished, 1 of 1 iterations accepted, \$0\.\d\d, 1 to land$", prompt, re.M), prompt
     assert prompt.endswith("I started it from AutoHelix's start screen, which showed me these runs as a table; "
                            "open as the skill says.")
@@ -356,7 +359,7 @@ def test_archived_runs_are_counted(project, monkeypatch, execs, tty):
     assert result.exit_code == 0, result.output
     assert "  no current runs, 2 archived · autohelix --help: all commands" in lines(result)  # not as none
     prompt = execs[0][1][-1]  # its config has runs: no "no runs yet"
-    assert "The project has no current runs, 2 archived" in prompt and "Its configs: autohelix.yaml." in prompt
+    assert "The project has no current runs, 2 archived" in prompt and f"Its configs: {CONFIG}." in prompt
     assert "showed me these runs" not in prompt
 
 
@@ -520,7 +523,7 @@ def test_run_without_a_config_says_where_to_look(project):
     result = CliRunner().invoke(main, ["run"])
     assert result.exit_code == 1
     text = flat(result.output)
-    assert "Write autohelix.yaml: run `autohelix` in a terminal to set it up with an agent" in text
+    assert "Write autohelix/NAME/config.yaml: run `autohelix` in a terminal to set it up with an agent" in text
     assert cli.EXAMPLES in text and "getting-started.md or config.md" in text
     assert str(cli.TEMPLATE) in text and Path(str(cli.TEMPLATE)).is_file()
     assert files(project) == ["main.py"]
@@ -530,11 +533,12 @@ def test_run_with_a_missing_name_says_where_to_look(project):
     mock_config(project)
     result = CliRunner().invoke(main, ["run", "perf"])
     assert result.exit_code == 1
-    assert "Write autohelix/perf/autohelix.yaml: run `autohelix` in a terminal" in flat(result.output)
+    assert "Write autohelix/perf/config.yaml: run `autohelix` in a terminal" in flat(result.output)
 
 
 def test_the_template_is_a_valid_config_once_it_has_a_goal(project):
-    path = project / "autohelix.yaml"
+    path = project / CONFIG
+    path.parent.mkdir(parents=True)
     text = Path(str(cli.TEMPLATE)).read_text()
     assert not re.search(r"autohelix (setup|init)\b", text)  # removed commands
     for old in ("prompt.md", "-c "):

@@ -17,7 +17,7 @@ from autohelix.cli import main
 from autohelix.judge import JudgeError, Target, judge_config
 from autohelix.review import build_system_prompt, parse_review, review_budget, review_schema
 from autohelix.usage_log import read_usage
-from tests.helpers import git, latest_run
+from tests.helpers import CONFIG, git, latest_run, write_config
 
 def make_repo(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
@@ -27,9 +27,14 @@ def make_repo(path: Path) -> Path:
     return path
 
 
+def write(path: Path, text: str) -> None:
+    """`path`'s only experiment config (autohelix/demo/config.yaml), as `review` by hand finds it."""
+    (path / CONFIG).parent.mkdir(parents=True, exist_ok=True)
+    (path / CONFIG).write_text(text)
+
+
 def mock_config(path: Path, **settings) -> None:
-    (path / "autohelix.yaml").write_text(
-        "goal: g\nagent:\n  cli: mock\n  mock: " + json.dumps(settings) + "\n")
+    write(path, "goal: g\nagent:\n  cli: mock\n  mock: " + json.dumps(settings) + "\n")
 
 
 def invoke(args, cwd: Path, monkeypatch):
@@ -130,7 +135,7 @@ def test_prints_prose_then_metric_lines(tmp_path, monkeypatch):
     result = invoke(["--metric", "missing", "--metric", "score", "--", "Check it."], tmp_path, monkeypatch)
     assert result.exit_code == 0, result.stderr
     assert result.stdout == "Item 2 is missing.\nFix the parser.\n##autohelix[missing=1]\n##autohelix[score=0.5]\n"
-    assert "autohelix review: ok · mock (autohelix.yaml) · $0.0300" in result.stderr  # names its agent
+    assert "autohelix review: ok · mock (autohelix/demo/config.yaml) · $0.0300" in result.stderr  # names its agent
     assert parse_structured_metrics(result.stdout) == {"missing": 1, "score": 0.5}
 
 
@@ -203,7 +208,7 @@ def test_by_hand_leaves_the_index_alone_and_includes_new_files(tmp_path, monkeyp
     assert not call["diff"].is_relative_to(repo.resolve()) and not call["diff"].exists()
     text = call["diff_text"]
     assert "+two" in text and "+b changed" in text and "+brand new" in text and "new.py" in text
-    assert "ignored.txt" not in text and "autohelix.yaml" in text  # untracked, not ignored
+    assert "ignored.txt" not in text and CONFIG in text  # untracked, not ignored
     assert git(repo, "diff", "--cached") == staged_before
     assert (repo / ".git" / "index").read_bytes() == index_before
     assert "?? new.py" in git(repo, "status", "--porcelain")
@@ -269,7 +274,7 @@ def test_double_dash_makes_an_option_like_prompt_the_prompt(tmp_path, monkeypatc
 def test_opencode_is_refused(tmp_path, monkeypatch):
     result = invoke(["--cli", "opencode", "--", "Check it."], tmp_path, monkeypatch)
     assert result.exit_code == 2 and "Invalid value for '--cli'" in result.stderr  # not offered at all
-    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  cli: opencode\n")
+    write(tmp_path, "goal: g\nagent:\n  cli: opencode\n")
     assert invoke(["--", "Check it."], tmp_path, monkeypatch).exit_code == 2
 
 
@@ -307,7 +312,7 @@ def test_timeout_takes_a_duration_and_mock_isnt_offered(tmp_path, monkeypatch, c
 
 
 def test_agent_overrides_reach_the_reviewer(tmp_path, monkeypatch):
-    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  cli: claude-code\n  model: m\n")
+    write(tmp_path, "goal: g\nagent:\n  cli: claude-code\n  model: m\n")
     reviewer = Recorder()
     monkeypatch.setattr("autohelix.judge.create_agent", reviewer)
     result = invoke(["--cli", "codex", "--model", "x", "--effort", "high", "--timeout", "50s", "--metric",
@@ -356,7 +361,7 @@ def candidate(tmp_path, monkeypatch):
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     usage = tmp_path / "usage.jsonl"
-    config = tmp_path / "autohelix.yaml"
+    config = tmp_path / "config.yaml"  # the run's stored copy
     config.write_text("goal: g\nagent:\n  cli: mock\n")
     for name, value in (("AUTOHELIX_CANDIDATE", tree), ("AUTOHELIX_BASE", base), ("AUTOHELIX_PROJECT", str(repo)),
                         ("AUTOHELIX_SCRATCH", str(scratch)), ("AUTOHELIX_USAGE_FILE", str(usage)),
@@ -634,7 +639,7 @@ def test_launcher_is_immune_to_the_command_environment(tmp_path):
     evil.mkdir()
     (evil / "yaml.py").write_text(EVIL_YAML)
     (evil / "click.py").write_text(EVIL_YAML)
-    config = tmp_path / "autohelix.yaml"
+    config = tmp_path / "config.yaml"  # the run's stored copy
     config.write_text("goal: g\nagent:\n  cli: mock\n  mock: {review_metrics: {missing: 7}}\n")
     bin_dir = write_launcher(tmp_path / "bin")
     launcher = bin_dir / "autohelix"
@@ -666,7 +671,7 @@ def test_harness_commands_run_autohelix_through_the_launcher(tmp_path, monkeypat
     (project / "src" / "yaml.py").write_text(EVIL_YAML)
     (project / "hello.py").write_text("print(1)\n")
     (project / ".gitignore").write_text(".autohelix/\n")
-    (project / "autohelix.yaml").write_text("""
+    write_config(project, """
 goal: g
 agent:
   cli: mock

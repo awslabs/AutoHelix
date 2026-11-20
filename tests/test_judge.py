@@ -21,7 +21,7 @@ from autohelix.judge import (
 from autohelix.run_status import read_run_status
 from autohelix.runs import RunPaths
 from autohelix.usage_log import append_usage, read_usage
-from tests.helpers import latest_run
+from tests.helpers import CONFIG, latest_run, write_config
 from tests.test_review import candidate  # noqa: F401 - a fixture
 
 
@@ -83,10 +83,10 @@ def test_load_base_config_reads_v2_agent_and_rejects_old_keys(tmp_path, monkeypa
     from autohelix.judge import load_base_config
 
     monkeypatch.delenv("AUTOHELIX_CONFIG", raising=False)
-    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  cli: codex\n  timeout: 5m\n")
+    _write(tmp_path, "goal: g\nagent:\n  cli: codex\n  timeout: 5m\n")
     config = load_base_config(tmp_path)
     assert (config.cli, config.timeout) == ("codex", 300)
-    (tmp_path / "autohelix.yaml").write_text("goal: g\nagent:\n  backend: claude\n")
+    _write(tmp_path, "goal: g\nagent:\n  backend: claude\n")
     with pytest.raises(JudgeError, match="`agent.backend` is now `agent.cli`"):
         load_base_config(tmp_path)
 
@@ -210,9 +210,14 @@ def test_usage_records_merge_by_id_and_reject_bad_costs(tmp_path):
 # --- CLI --------------------------------------------------------------------
 
 
+def _write(path, text):
+    """`path`'s only experiment config (autohelix/demo/config.yaml), as `ask` by hand finds it."""
+    (path / CONFIG).parent.mkdir(parents=True, exist_ok=True)
+    (path / CONFIG).write_text(text)
+
+
 def _project_with_mock_agent(path, **settings):
-    (path / "autohelix.yaml").write_text(
-        "goal: g\nagent:\n  cli: mock\n  mock: " + json.dumps(settings) + "\n")
+    _write(path, "goal: g\nagent:\n  cli: mock\n  mock: " + json.dumps(settings) + "\n")
 
 
 @pytest.mark.parametrize("answer,code", [("yes", 0), ("no", 1)])
@@ -247,7 +252,7 @@ def test_ask_as_a_stop_condition_counts_its_cost(tmp_path):
     (project / "hello.py").write_text("print(1)\n")
     (project / ".gitignore").write_text(".autohelix/\n")
     ask_cmd = f'{sys.executable} -c "from autohelix.cli import main; main()" ask "Is it done?"'
-    (project / "autohelix.yaml").write_text(f"""
+    write_config(project, f"""
 goal: g
 agent:
   cli: mock
@@ -314,7 +319,7 @@ def test_retry_shares_one_overall_timeout(tmp_path, monkeypatch, usage_file):
 @pytest.mark.parametrize("config_text", ["goal: g\nagent:\n  cli: bogus\n", "goal: g\nagent:\n  type: claude\n",
                                          "goal: g\nagent: [1, 2]\n"])
 def test_cli_internal_errors_exit_2_not_no(tmp_path, monkeypatch, config_text):
-    (tmp_path / "autohelix.yaml").write_text(config_text)
+    _write(tmp_path, config_text)
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("AUTOHELIX_CONFIG", raising=False)
     result = CliRunner().invoke(main, ["ask", "Done?"])

@@ -57,7 +57,7 @@ def test_every_pattern_has_a_config_and_a_launch():
 
 
 def test_each_config_file_is_an_experiment_folder_its_launch_names():
-    """Every config is shown at `autohelix/NAME/autohelix.yaml`, and the launch
+    """Every config is shown at `autohelix/NAME/config.yaml`, and the launch
     commands name exactly those folders."""
     text = PATTERNS.read_text()
     folders = set(re.findall(r"^`autohelix/([a-z0-9-]+)/autohelix\.yaml`:$", text, re.M))

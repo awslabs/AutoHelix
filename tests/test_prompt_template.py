@@ -9,6 +9,14 @@ from autohelix.history import History
 from autohelix.prompt_template import VARIABLES, build_prompt_variables, render_template, load_template
 
 
+def _experiment_config(project: Path, text: str) -> Path:
+    """Write `project`'s experiment config, autohelix/perf/config.yaml; its path."""
+    path = project / "autohelix" / "perf" / "config.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
 class TestRenderTemplate:
     def test_basic_substitution(self):
         result = render_template("Hello {{ name }}!", {"name": "world"})
@@ -95,7 +103,7 @@ class TestLoadTemplate:
     def test_a_missing_prompt_template_is_a_config_error(self, tmp_path):
         from autohelix.config import load_config
 
-        (tmp_path / "autohelix.yaml").write_text("goal: g\nprompt_template: nope.md\n")
+        _experiment_config(tmp_path, "goal: g\nprompt_template: nope.md\n")
         config = load_config(tmp_path)
         assert any("prompt_template not found" in i.message for i in config.validate())
 
@@ -106,11 +114,11 @@ class TestLoadTemplate:
         from autohelix.config import load_config
 
         text = "ok\n{% if hints %}x\n"
-        (tmp_path / "p.md").write_text("fine" if stored else text)
-        (tmp_path / "autohelix.yaml").write_text("goal: g\nprompt_template: p.md\n")
+        source = _experiment_config(tmp_path, "goal: g\nprompt_template: p.md\n")
+        (source.parent / "p.md").write_text("fine" if stored else text)
         if stored:  # its stored text, whatever the file says now
             (tmp_path / "stored.yaml").write_text("goal: g\nprompt_template: p.md\n")
-            config = load_config(tmp_path, tmp_path / "stored.yaml", source=tmp_path / "autohelix.yaml",
+            config = load_config(tmp_path, tmp_path / "stored.yaml", source=source,
                                  template_text=text)
         else:
             config = load_config(tmp_path)
@@ -123,11 +131,11 @@ class TestLoadTemplate:
         would render empty ("Your working directory is .")."""
         from autohelix.config import load_config
 
-        (tmp_path / "p.md").write_text("Work in {{ worktree }}.\n")
-        (tmp_path / "autohelix.yaml").write_text("goal: g\nprompt_template: p.md\n")
+        template = _experiment_config(tmp_path, "goal: g\nprompt_template: p.md\n").parent / "p.md"
+        template.write_text("Work in {{ worktree }}.\n")
         found = [i.message for i in load_config(tmp_path).validate() if i.level == "error"]
         assert "prompt_template p.md: `worktree` is now `copy` ({{ copy }})" in found, found
-        (tmp_path / "p.md").write_text("Work in {{ copy }}.\n")
+        template.write_text("Work in {{ copy }}.\n")
         assert not [i for i in load_config(tmp_path).validate() if i.level == "error"]
 
 class TestBuildPromptVariables:

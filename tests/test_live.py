@@ -129,11 +129,13 @@ def test_live_view_exits_with_hints_instead_of_waiting(tmp_path):
 
     assert "No runs in" in hint() and "set one up with `autohelix` (in a terminal), then `autohelix run`." in hint()
     (tmp_path / "autohelix" / "perf").mkdir(parents=True)
-    (tmp_path / "autohelix" / "perf" / "autohelix.yaml").write_text("goal: x\n")
+    (tmp_path / "autohelix" / "perf" / "config.yaml").write_text("goal: x\n")
+    (tmp_path / "autohelix.yaml").write_text("goal: x\n")  # not a config
     assert "start one with `autohelix run perf`." in hint()
-    (tmp_path / "autohelix.yaml").write_text("goal: x\n")
-    assert ("start one with `autohelix run [CONFIG]` (configs: autohelix.yaml, autohelix/perf/autohelix.yaml)."
-            in hint())
+    (tmp_path / "autohelix" / "fast").mkdir()
+    (tmp_path / "autohelix" / "fast" / "config.yaml").write_text("goal: x\n")
+    assert ("start one with `autohelix run [CONFIG]` (configs: autohelix/fast/config.yaml, "
+            "autohelix/perf/config.yaml)." in hint())
 
 
 @pytest.mark.parametrize("flags", [["--json", "--once"], ["--terminal", "--json"], ["--once", "--terminal"]])

@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from tests.helpers import config_file, write_config
 
 import pytest
 
@@ -103,7 +104,8 @@ def test_codex_without_hook_support_warns_and_runs_without_hints(tmp_path, monke
 
     project = tmp_path / "project"
     project.mkdir()
-    (project / "autohelix.yaml").write_text("""
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True, capture_output=True)
+    write_config(project, """
 goal: test
 agent:
   cli: codex
@@ -112,9 +114,10 @@ gates:
   - "true"
 """)
 
-    for args in (["init", "-q"], ["config", "user.email", "test@example.com"],
-                 ["config", "user.name", "Test"], ["add", "autohelix.yaml"],
-                 ["commit", "-qm", "initial config"]):
+    (project / "code.py").write_text("print(1)\n")
+    for args in (["config", "user.email", "test@example.com"],
+                 ["config", "user.name", "Test"], ["add", "code.py"],
+                 ["commit", "-qm", "initial code"]):
         subprocess.run(["git", *args], cwd=project, check=True, capture_output=True)
 
     # Preflight runs before the run is allocated; let it find the agent command.
@@ -266,7 +269,7 @@ def test_the_agent_gets_its_budget_formatted(project, monkeypatch):
         return real(self, *args, **kwargs)
 
     monkeypatch.setattr(MockAgent, "run", run)
-    data = __import__("yaml").safe_load((project / "autohelix.yaml").read_text())
+    data = __import__("yaml").safe_load(config_file(project).read_text())
     configure(project, agent={**data["agent"], "timeout": "1h30m"})
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)

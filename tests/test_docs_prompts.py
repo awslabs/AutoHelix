@@ -4,6 +4,7 @@ tests render them and compare, so the page can't drift from the code."""
 
 import re
 from pathlib import Path
+from tests.helpers import config_file
 
 import yaml
 
@@ -66,7 +67,8 @@ def main_agent_prompt(tmp_path: Path) -> str:
         for name in ("bench", "clarity"):
             (state / "iterations" / f"{n:03d}" / "observe" / name).mkdir(parents=True)
     (state / "iterations" / "002" / "gates" / "1").mkdir(parents=True)
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(CONFIG, sort_keys=False))
+    config_file(project).parent.mkdir(parents=True)
+    config_file(project).write_text(yaml.safe_dump(CONFIG, sort_keys=False))
     config = load_config(project)  # as a run loads it: its config file is frozen
     variables = build_prompt_variables(config, history, 3, copy)
     return render_template(load_template(config), variables).replace(str(copies), COPIES)
@@ -123,7 +125,7 @@ def test_the_samples_show_every_part(tmp_path):
     the review's previous output and number."""
     agent = main_agent_prompt(tmp_path)
     for part in ("Iteration 2 was rejected", "rejected.patch", "Negative numbers break radix sort",
-                 "Your changes to test_sort.py were discarded", "30m", "Frozen (", "autohelix.yaml"):
+                 "Your changes to test_sort.py were discarded", "30m", "Frozen (", "ones): autohelix/"):
         assert part in agent, part
     assert "Your own review from the last accepted iteration" in review_prompt(tmp_path / "r")
     assert "Also report these numbers: remaining." in review_prompt(tmp_path / "s")

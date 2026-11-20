@@ -14,7 +14,7 @@ from autohelix.display import clean
 from autohelix.harness import Budget
 from autohelix.terminal import Row, Table, budget_text
 from autohelix.runs import RunPaths, short_id
-from tests.helpers import git, latest_run
+from tests.helpers import NAME, git, latest_run, write_config
 
 
 CONFIG = {
@@ -195,7 +195,7 @@ def test_a_warning_keeps_its_own_line_breaks():
 def test_a_wrapped_header_field_keeps_a_long_path_whole():
     """A field read whole (a path, a problem) wraps at spaces; a path wider than the
     room is neither cut nor split."""
-    path = "/Users/someone/" + "deep/" * 20 + "autohelix.yaml"
+    path = "/Users/someone/" + "deep/" * 20 + "autohelix/perf/config.yaml"
     lines = terminal.header([("t", None)], [("Config", f"{path} (exists)", None)], 60, show_mark=False)
     shown = [line.plain for line in lines[1:-1]]
     assert shown == [f"  Config     {path}", "             (exists)"]
@@ -260,9 +260,9 @@ def project(tmp_path):
 def _configure(project, settings=None, **sections):
     config = {"goal": "Test the console", "agent": {"cli": "mock", "mock": {
         "change_file": "hello.py", "change_content": "# iteration {iteration}", **(settings or {})}}, **sections}
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+    write_config(project, yaml.safe_dump(config, sort_keys=False))
     git(project, "add", "-A")
-    git(project, "commit", "-qm", "config")
+    git(project, "commit", "-qm", "init")  # the project's first commit: the config stays private
 
 
 def _run(project, *args):
@@ -353,7 +353,7 @@ def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):
     # The exit code and the command's last output lines, which used to be printed apart;
     # then, a failed first attempt, what to do (run again).
     message = ("Stop command exited 3 on the baseline: echo broken; exit 3 (expected exit 0 to stop or 1 to "
-               f"continue) broken Fix it and run `autohelix run` again (`autohelix delete {short}` removes "
+               f"continue) broken Fix it and run `autohelix run {NAME}` again (`autohelix delete {short}` removes "
                "this attempt).")
     assert ending[0].startswith("  Error      Stop command exited 3 on the baseline: echo broken;")
     totals = next(i for i, line in enumerate(ending) if line.startswith("  run "))

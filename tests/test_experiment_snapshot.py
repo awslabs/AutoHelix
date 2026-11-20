@@ -12,38 +12,35 @@ from autohelix.config import ConfigError, load_config
 from autohelix.experiment import build_snapshot, snapshot_files
 from autohelix.history import History
 from autohelix.runs import RunPaths, git, project_runs, short_id
-from tests.helpers import cli
+from tests.helpers import config_file, cli
 
 
 @pytest.fixture
 def folder(project):
-    """The project's config moved into autohelix/exp/ (untracked, as a private one is)."""
+    """The project's experiment folder renamed to autohelix/exp/ (private: ignored, untracked)."""
     folder = project / "autohelix" / "exp"
-    folder.mkdir(parents=True)
-    (folder / "autohelix.yaml").write_text((project / "autohelix.yaml").read_text())
-    git(project, "rm", "-q", "autohelix.yaml")
-    git(project, "commit", "-qm", "config moves into autohelix/exp/")
+    config_file(project).parent.rename(folder)
     return folder
 
 
 def names(project, folder):
-    config = load_config(project, folder / "autohelix.yaml")
+    config = load_config(project, folder / "config.yaml")
     return [file.name for file in snapshot_files(config, project)]
 
 
 def snapshot_of(project, folder):
-    return snapshot_files(load_config(project, folder / "autohelix.yaml"), project)
+    return snapshot_files(load_config(project, folder / "config.yaml"), project)
 
 
-def test_the_folder_is_the_experiment_and_the_project_config_has_none(project, folder):
-    assert load_config(project, folder / "autohelix.yaml").experiment == folder
-    (project / "autohelix.yaml").write_text((folder / "autohelix.yaml").read_text())
-    config = load_config(project, project / "autohelix.yaml")
+def test_the_folder_is_the_experiment_and_a_file_elsewhere_has_none(project, folder):
+    assert load_config(project, folder / "config.yaml").experiment == folder
+    (project / "other.yaml").write_text((folder / "config.yaml").read_text())  # a library caller's file
+    config = load_config(project, project / "other.yaml")
     assert config.experiment is None and snapshot_files(config, project) is None
 
 
 def test_what_goes_in_and_what_is_left_out(project, folder):
-    (folder / "autohelix.yaml").write_text((folder / "autohelix.yaml").read_text() + "prompt_template: prompt.md\n")
+    (folder / "config.yaml").write_text((folder / "config.yaml").read_text() + "prompt_template: prompt.md\n")
     (folder / "prompt.md").write_text("{{ goal }}\n")
     (folder / "render.py").write_text("print(1)\n")
     (folder / ".env").write_text("SECRET=1\n")
@@ -229,10 +226,11 @@ def test_a_file_changed_during_the_copy_is_refused(project, folder, tmp_path):
 
 def test_a_linked_experiment_folder_follows_the_link_rule(project, tmp_path):
     """`autohelix/exp` itself a link: stored only when it leads inside autohelix/."""
-    (project / "autohelix").mkdir()
+    text = config_file(project).read_text()
+    shutil.rmtree(config_file(project).parent)  # autohelix/ holds only what this test makes
     for where in (tmp_path / "outside", project / "autohelix" / ".hidden", project / "autohelix" / "real"):
         where.mkdir()
-        (where / "autohelix.yaml").write_text((project / "autohelix.yaml").read_text())
+        (where / "config.yaml").write_text(text)
         (where / "data.txt").write_text("d\n")
     link = project / "autohelix" / "exp"
     link.symlink_to(tmp_path / "outside")
@@ -247,9 +245,9 @@ def test_a_linked_experiment_folder_follows_the_link_rule(project, tmp_path):
         names(project, link)
     link.unlink()
     link.symlink_to(".")  # autohelix/ itself
-    (project / "autohelix" / "autohelix.yaml").write_text((project / "autohelix.yaml").read_text())
+    (project / "autohelix" / "config.yaml").write_text(text)
     with pytest.raises(ConfigError, match=r"it is a link to \. \(autohelix/ itself\)\. An experiment"):
-        snapshot_files(load_config(project, project / "autohelix" / "exp" / "autohelix.yaml"), project)
+        snapshot_files(load_config(project, project / "autohelix" / "exp" / "config.yaml"), project)
     link.unlink()
     link.symlink_to("real")
     assert names(project, link) == ["data.txt"]
@@ -347,9 +345,9 @@ def test_a_folder_with_only_its_config_stores_an_empty_folder_and_shows_none(pro
 
     log = tmp_path / "seen.log"
     unset = f'[ -n "${{AUTOHELIX_EXPERIMENT+set}}" ] && echo set >> {log} || echo unset >> {log}'
-    data = yaml.safe_load((folder / "autohelix.yaml").read_text())
+    data = yaml.safe_load((folder / "config.yaml").read_text())
     data.update(gates=[unset], stop=[f"{unset}; exit 1"])
-    (folder / "autohelix.yaml").write_text(yaml.safe_dump(data))
+    (folder / "config.yaml").write_text(yaml.safe_dump(data))
     assert cli(project, "run", "exp", "-n", "1", "--no-report").exit_code == 0
     [(paths, _)] = project_runs(project)
     assert paths.experiment.is_dir() and not list(paths.experiment.iterdir())
@@ -360,10 +358,10 @@ def test_a_folder_with_only_its_config_stores_an_empty_folder_and_shows_none(pro
     assert resumed(project, paths).exit_code == 0
 
 
-def test_the_project_config_stores_no_folder(project):
+def test_a_folder_with_only_its_config_stores_an_empty_one(project):
     assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
     [(paths, _)] = project_runs(project)
-    assert not paths.experiment.exists()
+    assert paths.experiment.is_dir() and not experiment.has_files(paths.experiment)
 
 
 @pytest.mark.parametrize("args", [["run", "exp", "--check"], ["run", "exp", "-n", "1", "--no-report"]])
@@ -494,9 +492,9 @@ def with_commands(folder, log, **extra):
     seen = (f'echo "$AUTOHELIX_ITERATION $AUTOHELIX_CALL $(cat "$AUTOHELIX_EXPERIMENT/data.txt") '
             f'$(test -x "$AUTOHELIX_EXPERIMENT/render.sh" && echo x)" >> {log}; '
             'rm -f "$AUTOHELIX_EXPERIMENT/data.txt"')
-    data = yaml.safe_load((folder / "autohelix.yaml").read_text())
+    data = yaml.safe_load((folder / "config.yaml").read_text())
     data.update(gates=[seen], observe=[{"name": "look", "command": seen}], stop=[f"{seen}; exit 1"], **extra)
-    (folder / "autohelix.yaml").write_text(yaml.safe_dump(data))
+    (folder / "config.yaml").write_text(yaml.safe_dump(data))
 
 
 def test_commands_get_their_own_copy_of_the_snapshot(project, folder, tmp_path):
@@ -516,16 +514,15 @@ def test_commands_get_their_own_copy_of_the_snapshot(project, folder, tmp_path):
     assert (paths.experiment / "data.txt").read_text() == "stored\n"
 
 
-def test_without_a_folder_commands_get_no_experiment(project, tmp_path, monkeypatch):
+def test_a_folder_with_only_its_config_gives_commands_no_experiment(project, tmp_path, monkeypatch):
     import yaml
 
     monkeypatch.setenv("AUTOHELIX_EXPERIMENT", str(tmp_path))  # not passed through from the user's shell
     log = tmp_path / "seen.log"
     unset = f'[ -n "${{AUTOHELIX_EXPERIMENT+set}}" ] && echo set >> {log} || echo unset >> {log}'
-    data = yaml.safe_load((project / "autohelix.yaml").read_text())
+    data = yaml.safe_load(config_file(project).read_text())
     data.update(gates=[unset], observe=[{"name": "look", "command": unset}], stop=[f"{unset}; exit 1"])
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
-    git(project, "commit", "-qam", "commands")
+    config_file(project).write_text(yaml.safe_dump(data))
     result = cli(project, "run", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     assert log.read_text().splitlines() == ["unset"] * 6
@@ -574,19 +571,19 @@ def test_the_agent_and_judge_copies_keep_the_snapshots_modes(project, folder, tm
     shutil.rmtree(tmp_path / "judge")
 
 
-def with_ask_gate(config_file):
+def with_ask_gate(path):
     """An `ask:` gate whose mock judge answers no unless its own copy has experiment/data.txt."""
     import yaml
 
-    data = yaml.safe_load(config_file.read_text())
+    data = yaml.safe_load(path.read_text())
     data["agent"]["mock"]["judge_requires"] = ".autohelix-iteration/experiment/data.txt"
     data["gates"] = [{"ask": "Does it use the stored data?"}]
-    config_file.write_text(yaml.safe_dump(data))
+    path.write_text(yaml.safe_dump(data))
 
 
 def test_an_ask_gate_in_a_run_reads_the_experiment_folder(project, folder):
     (folder / "data.txt").write_text("stored\n")
-    with_ask_gate(folder / "autohelix.yaml")
+    with_ask_gate(folder / "config.yaml")
     result = cli(project, "run", "exp", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     [(paths, _)] = project_runs(project)
@@ -596,9 +593,8 @@ def test_an_ask_gate_in_a_run_reads_the_experiment_folder(project, folder):
     assert "The experiment's folder, as the run stored it" in log
 
 
-def test_an_ask_gate_in_a_run_without_a_folder_has_no_experiment(project):
-    with_ask_gate(project / "autohelix.yaml")
-    git(project, "commit", "-qam", "ask gate")
+def test_an_ask_gate_in_a_run_of_a_folder_with_only_its_config_has_no_experiment(project):
+    with_ask_gate(config_file(project))
     result = cli(project, "run", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     [(paths, _)] = project_runs(project)
@@ -607,7 +603,7 @@ def test_an_ask_gate_in_a_run_without_a_folder_has_no_experiment(project):
     assert "experiment's folder" not in (paths.iteration_dir(1) / "gates" / "1" / "ask.log").read_text()
 
 
-def test_a_run_without_a_folder_has_none_in_the_agent_copy_or_prompt(project, tmp_path):
+def test_a_folder_with_only_its_config_has_none_in_the_agent_copy_or_prompt(project, tmp_path):
     from types import SimpleNamespace
 
     from autohelix.iteration import prepare_state
@@ -638,28 +634,28 @@ def test_the_report_prompt_names_the_stored_folder(project, folder):
 def mock_settings(folder, **settings):
     import yaml
 
-    data = yaml.safe_load((folder / "autohelix.yaml").read_text())
+    data = yaml.safe_load((folder / "config.yaml").read_text())
     data["agent"]["mock"].update(settings)
-    (folder / "autohelix.yaml").write_text(yaml.safe_dump(data))
+    (folder / "config.yaml").write_text(yaml.safe_dump(data))
 
 
 def test_the_folder_is_frozen_but_not_hidden(project, folder):
-    config = load_config(project, folder / "autohelix.yaml")
+    config = load_config(project, folder / "config.yaml")
     assert config.frozen_names() == ["autohelix/"]  # it stands for the config in it
-    assert config.frozen_patterns() == ["autohelix/exp/autohelix.yaml", "autohelix/"]
-    assert config.hidden == ["autohelix/exp/autohelix.yaml"]
-    (project / "autohelix.yaml").write_text((folder / "autohelix.yaml").read_text())
-    top = load_config(project, project / "autohelix.yaml")  # autohelix/ is frozen for it too
-    assert top.frozen_names() == ["autohelix.yaml", "autohelix/"] and top.hidden == ["autohelix.yaml"]
+    assert config.frozen_patterns() == ["autohelix/exp/config.yaml", "autohelix/"]
+    assert config.hidden == ["autohelix/exp/config.yaml"]
+    (project / "other.yaml").write_text((folder / "config.yaml").read_text())  # a library caller's file
+    other = load_config(project, project / "other.yaml")  # autohelix/ is frozen for it too
+    assert other.frozen_names() == ["other.yaml", "autohelix/"] and other.hidden == ["other.yaml"]
     shutil.rmtree(project / "autohelix")
-    top = load_config(project, project / "autohelix.yaml")  # matched, but not shown, without one
-    assert top.frozen_names() == ["autohelix.yaml"] and top.frozen_patterns() == ["autohelix.yaml", "autohelix/"]
+    other = load_config(project, project / "other.yaml")  # matched, but not shown, without one
+    assert other.frozen_names() == ["other.yaml"] and other.frozen_patterns() == ["other.yaml", "autohelix/"]
 
 
 def test_an_agent_edit_to_a_committed_folder_is_reset_and_resume_continues(project, folder):
     (folder / "render.py").write_text("print('stored')\n")
     mock_settings(folder, change_file="autohelix/exp/render.py", change_content="print('edited')")
-    git(project, "add", "autohelix")
+    git(project, "add", "-f", "autohelix")
     git(project, "commit", "-qm", "commit the experiment")
     result = cli(project, "run", "exp", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
@@ -678,7 +674,7 @@ def test_an_agent_edit_to_a_committed_lib_file_is_reset_and_resume_continues(pro
     (lib / "metrics.py").write_text("print('stored')\n")
     (folder / "metrics.py").symlink_to("../lib/metrics.py")
     mock_settings(folder, change_file="autohelix/lib/metrics.py", change_content="print('edited')")
-    git(project, "add", "autohelix")
+    git(project, "add", "-f", "autohelix")
     git(project, "commit", "-qm", "commit the experiment and its library")
     result = cli(project, "run", "exp", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
@@ -693,6 +689,7 @@ def test_an_agent_edit_to_a_committed_lib_file_is_reset_and_resume_continues(pro
 def test_uncommitted_folder_files_warn_under_auto_landing(project, folder):
     from tests.test_run_notices import before_header
 
+    (project / ".git" / "info" / "exclude").write_text("")  # autohelix/ not ignored: its files can move the branch
     git(project, "add", "autohelix")
     git(project, "commit", "-qm", "commit the config")
     for name in ("render.py", "b.py", ".env", "__pycache__/x.pyc"):
@@ -706,7 +703,7 @@ def test_uncommitted_folder_files_warn_under_auto_landing(project, folder):
     said = before_header(result)
     assert ("commit autohelix/exp/ first (b.py, lib, render.py): a commit on main after this run "
             "lands makes `resume` refuse.") in said
-    assert "commit autohelix/exp/autohelix.yaml" not in said
+    assert "commit autohelix/exp/config.yaml" not in said
     (project / ".git" / "info" / "exclude").write_text("/autohelix/\n")
     result = cli(project, "run", "exp", "-n", "1", "--no-report")
     assert "commit autohelix/exp/" not in result.output  # ignored files never move the branch
@@ -722,14 +719,14 @@ def test_check_warns_on_a_command_naming_an_uncommitted_autohelix_path(project, 
     for path in ("autohelix/exp/render.py", "autohelix/lib/metrics.py", "autohelix/shared/kept.py"):
         (project / path).parent.mkdir(exist_ok=True)
         (project / path).write_text("print(1)\n")
-    git(project, "add", "autohelix/shared/kept.py")
+    git(project, "add", "-f", "autohelix/shared/kept.py")
     git(project, "commit", "-qm", "a committed helper")
-    data = yaml.safe_load((folder / "autohelix.yaml").read_text())
+    data = yaml.safe_load((folder / "config.yaml").read_text())
     data.update(gates=["python autohelix/exp/render.py", "python autohelix/shared/kept.py",
                        'python "$AUTOHELIX_EXPERIMENT/render.py"', "ls src/autohelix/x .autohelix/runs"],
                 observe=[{"name": "m", "command": "python autohelix/lib/metrics.py"}],
                 stop=["test -f 'autohelix/exp/render.py'"])
-    (folder / "autohelix.yaml").write_text(yaml.safe_dump(data))
+    (folder / "config.yaml").write_text(yaml.safe_dump(data))
     result = cli(project, "run", "exp", "--check")
     assert result.exit_code == 0, result.output
     said = " ".join(result.output.split())
@@ -742,18 +739,18 @@ def test_check_warns_on_a_command_naming_an_uncommitted_autohelix_path(project, 
         assert f"{quiet} (named by a command)" not in said
 
 
-def test_the_project_config_is_told_to_commit_the_path(project):
+def test_a_path_outside_the_folder_is_told_to_commit_it(project):
     from autohelix.checks import uncommitted_command_paths
     from autohelix.config import CommandSpec
 
     config = load_config(project)
     config.gates = [CommandSpec(command="sh autohelix/run.sh")]
     assert uncommitted_command_paths(config, project) == []  # not here: nothing to commit
-    (project / "autohelix").mkdir()
     (project / "autohelix" / "run.sh").write_text("true\n")
     assert uncommitted_command_paths(config, project) == [
-        "autohelix/run.sh (named by a command) isn't in the commit, so not in the copy: commit it."]
-    git(project, "add", "autohelix")
+        "autohelix/run.sh (named by a command) isn't in the commit, so not in the copy: commit it, or link it "
+        "into autohelix/demo/ and use `$AUTOHELIX_EXPERIMENT/...`."]
+    git(project, "add", "-f", "autohelix/run.sh")
     git(project, "commit", "-qm", "commit it")
     assert uncommitted_command_paths(config, project) == []
 
@@ -764,7 +761,6 @@ def test_dot_slash_paths_warn_and_judge_entries_stay_quiet(project):
     from autohelix.checks import uncommitted_command_paths
     from autohelix.config import CommandSpec, ObserveEntry
 
-    (project / "autohelix").mkdir()
     (project / "autohelix" / "run.sh").write_text("true\n")
     (project / "autohelix" / "spec.md").write_text("spec\n")
     config = load_config(project)
@@ -774,7 +770,8 @@ def test_dot_slash_paths_warn_and_judge_entries_stay_quiet(project):
     config.observe = [ObserveEntry(name="r", command="autohelix review -- 'Compare with autohelix/spec.md'",
                                    review="Compare with autohelix/spec.md")]
     assert uncommitted_command_paths(config, project) == [
-        "autohelix/run.sh (named by a command) isn't in the commit, so not in the copy: commit it."]
+        "autohelix/run.sh (named by a command) isn't in the commit, so not in the copy: commit it, or link it "
+        "into autohelix/demo/ and use `$AUTOHELIX_EXPERIMENT/...`."]
 
 
 def test_ref_names_stay_quiet_and_the_folder_itself_is_named_as_the_variable(project, folder):
@@ -783,7 +780,7 @@ def test_ref_names_stay_quiet_and_the_folder_itself_is_named_as_the_variable(pro
     from autohelix.config import CommandSpec
 
     (folder / "render.sh").write_text("true\n")
-    config = load_config(project, folder / "autohelix.yaml")
+    config = load_config(project, folder / "config.yaml")
     config.gates = [CommandSpec(command="git diff autohelix/20261119-1200-exp-ab12 -- code.py"),
                     CommandSpec(command="cd autohelix/exp && ./render.sh")]
     assert uncommitted_command_paths(config, project) == [
@@ -796,12 +793,12 @@ def test_names_the_snapshot_leaves_out_are_said_to_be_left_out(project, folder):
 
     (folder / ".env").write_text("X=1\n")
     (folder / "prompt.md").write_text("{{ goal }}\n")
-    (folder / "autohelix.yaml").write_text((folder / "autohelix.yaml").read_text() + "prompt_template: prompt.md\n")
-    config = load_config(project, folder / "autohelix.yaml")
-    config.gates = [CommandSpec(command="cat autohelix/exp/autohelix.yaml autohelix/exp/.env autohelix/exp/prompt.md"),
+    (folder / "config.yaml").write_text((folder / "config.yaml").read_text() + "prompt_template: prompt.md\n")
+    config = load_config(project, folder / "config.yaml")
+    config.gates = [CommandSpec(command="cat autohelix/exp/config.yaml autohelix/exp/.env autohelix/exp/prompt.md"),
                     CommandSpec(command="cd autohelix/exp")]
     said = uncommitted_command_paths(config, project)
-    assert said[0] == ("autohelix/exp/autohelix.yaml (named by a command) isn't in the commit, so not in the copy: "
+    assert said[0] == ("autohelix/exp/config.yaml (named by a command) isn't in the commit, so not in the copy: "
                        "the run doesn't store it in `$AUTOHELIX_EXPERIMENT`: the config is `$AUTOHELIX_CONFIG`.")
     for name in (".env", "prompt.md"):
         assert (f"autohelix/exp/{name} (named by a command) isn't in the commit, so not in the copy: the run "
@@ -818,10 +815,11 @@ def test_the_advice_holds_with_a_linked_autohelix_folder(project, tmp_path):
     from autohelix.config import CommandSpec
 
     (tmp_path / "private" / "exp").mkdir(parents=True)
-    (tmp_path / "private" / "exp" / "autohelix.yaml").write_text((project / "autohelix.yaml").read_text())
+    (tmp_path / "private" / "exp" / "config.yaml").write_text(config_file(project).read_text())
     (tmp_path / "private" / "exp" / "render.py").write_text("print(1)\n")
+    shutil.rmtree(project / "autohelix")
     (project / "autohelix").symlink_to(tmp_path / "private")
-    config = load_config(project, project / "autohelix" / "exp" / "autohelix.yaml")
+    config = load_config(project, project / "autohelix" / "exp" / "config.yaml")
     config.gates = [CommandSpec(command="python autohelix/exp/render.py")]
     assert uncommitted_command_paths(config, project) == [
         "autohelix/exp/render.py (named by a command) isn't in the commit, so not in the copy: use "
@@ -829,16 +827,16 @@ def test_the_advice_holds_with_a_linked_autohelix_folder(project, tmp_path):
 
 
 def test_the_advice_follows_what_the_snapshot_stores(project, folder):
-    """`cfg.yaml -> autohelix.yaml` is left out like the config; a stored link's names
+    """`cfg.yaml -> config.yaml` is left out like the config; a stored link's names
     are under it."""
     from autohelix.checks import uncommitted_command_paths
     from autohelix.config import CommandSpec
 
-    (folder / "cfg.yaml").symlink_to("autohelix.yaml")
+    (folder / "cfg.yaml").symlink_to("config.yaml")
     (project / "autohelix" / "lib").mkdir()
     (project / "autohelix" / "lib" / "m.py").write_text("m\n")
     (folder / "lib").symlink_to("../lib")
-    config = load_config(project, folder / "autohelix.yaml")
+    config = load_config(project, folder / "config.yaml")
     config.gates = [CommandSpec(command="cat autohelix/exp/cfg.yaml && python autohelix/exp/lib/m.py")]
     assert uncommitted_command_paths(config, project) == [
         "autohelix/exp/cfg.yaml (named by a command) isn't in the commit, so not in the copy: the run doesn't store "
@@ -849,5 +847,7 @@ def test_the_advice_follows_what_the_snapshot_stores(project, folder):
 
 
 def test_a_file_named_autohelix_shows_no_folder_as_frozen(project):
+    (project / "other.yaml").write_text(config_file(project).read_text())  # a library caller's file
+    shutil.rmtree(project / "autohelix")
     (project / "autohelix").write_text("not a folder\n")
-    assert load_config(project).frozen_names() == ["autohelix.yaml"]
+    assert load_config(project, project / "other.yaml").frozen_names() == ["other.yaml"]

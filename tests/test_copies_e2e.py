@@ -8,19 +8,17 @@ import yaml
 
 from autohelix.harness import Budget, Harness
 from autohelix.runs import RunPaths, git, land
-from tests.helpers import configure
+from tests.helpers import config_file, configure
 
 
 def _judge_config(project, **settings):
-    data = yaml.safe_load((project / "autohelix.yaml").read_text())
+    data = yaml.safe_load(config_file(project).read_text())
     data["agent"]["mock"].update(settings)
     return data
 
 
 def _write(project, data):
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
-    git(project, "add", ".")
-    git(project, "commit", "-qm", "config")
+    config_file(project).write_text(yaml.safe_dump(data))
 
 
 def test_mutate_validate_restore_across_commands_is_caught(project):

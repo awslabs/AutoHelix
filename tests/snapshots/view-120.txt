@@ -13,7 +13,7 @@
   ✓ 3      2m 06s     $0.32    35,310.7  753×            96  -20%
   ✗ 4     30m 00s     $1.10    agent timed out (30m)
   ✗ 5      1m 48s     $0.29      33,002                 140            speed 6.5% worse than iter 3 (5% allowed)
-          discarded, outside the scope: autohelix.yaml (frozen), notes.txt
+          discarded, outside the scope: autohelix/bench.py (frozen), notes.txt
   ✓ 6      1m 51s     $0.31    57,520.8  1226×           95  -21%
   ✗ 7          4s              agent failed: claude exited 1: rate limited
 

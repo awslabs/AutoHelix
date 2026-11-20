@@ -110,7 +110,8 @@ def make_project(root: Path, name: str, scenario: bool) -> Path:
     if scenario:
         for path, text in FILES.items():
             (project / path).write_text(text)
-        (project / "autohelix.yaml").write_text(config())
+        (project / "autohelix" / "sorting").mkdir(parents=True)
+        (project / "autohelix" / "sorting" / "config.yaml").write_text(config())
     else:
         (project / "README.md").write_text("# sorting\n")
     git(project, "add", "-A")
@@ -370,7 +371,7 @@ def main() -> int:
                 record(f"entry-agents-{width}", live or [], width,
                        f"autohelix · two agents, ↓ Enter (then q) · {width} cols", code)
 
-                configs = make_project(root, "half-done", True)  # autohelix.yaml, no runs yet
+                configs = make_project(root, "half-done", True)  # autohelix/sorting/config.yaml, no runs yet
                 _, live, code = run_in_pty([*cli], configs, env, width, keys=[(MENU, b"q")],
                                            frame_when=showing(MENU), timeout=30)
                 record(f"entry-config-{width}", live or [], width,

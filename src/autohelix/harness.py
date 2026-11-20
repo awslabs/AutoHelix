@@ -24,7 +24,8 @@ from rich.panel import Panel
 from rich.text import Text
 
 from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import ConfigError, MetricGate, config_changes, find_config, load_config, run_command
+from autohelix.config import (ConfigError, MetricGate, config_changes, experiment_config, find_config, load_config,
+                              run_command)
 from autohelix.costs import summarize_costs
 from autohelix import terminal
 from autohelix.display import LiveDisplay, clean
@@ -229,6 +230,9 @@ class Harness:
                 self._warn(f"Run {short_id(import_run)} used {source}; this run uses {used}.")
         if creating:
             self.config = load_config(self.project_path, config_file=config_file)
+            if self.config.experiment is None:  # the path as named: autohelix/ may be a link
+                raise RuntimeError(f"{config_relative(self.project_path, config_file)} isn't an experiment's config: "
+                                   f"a run's config is {experiment_config('NAME')}.")
         else:
             self.config = self._run_config(planned)
         errors = [issue for issue in self.config.validate() if issue.level == "error"]
@@ -243,7 +247,7 @@ class Harness:
                              f"`{run_command(config_relative(self.project_path, config_file))} --import {short}`.")
         self._preflight_done = False
         if creating:
-            name = new_run_name(config_relative(self.project_path, config_file), name)
+            name = new_run_name(experiment_config(self.config.experiment.name), name)  # the folder's, as named
             self._new_run_ready()
         else:  # a run continues its own tip: refused before anything is written
             data = planned.read_identity()

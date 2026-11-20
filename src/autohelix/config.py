@@ -82,7 +82,7 @@ RENAMED_TOP_LEVEL_KEYS = {
     "acceptance": ("`acceptance:` is now a `gates:` entry: `- metric: NAME` with `regress: N%` "
                    "(was max_regression_pct) or `improve: N%`"),
     "reviewer": "`reviewer:` is now an `observe:` entry with `name:` and `review: <prompt>`",
-    "name": "`name:` is gone: runs are named after the experiment folder; use autohelix/<name>/autohelix.yaml",
+    "name": "`name:` is gone: runs are named after the experiment folder; use autohelix/<name>/config.yaml",
     "budget": ("`budget:` moved to the command line: `autohelix run --until N --cost USD --time DURATION` "
                "(the run's total, as `budget.iterations` was; `-n N` for N more; also `resume`; "
                "`agent.timeout` limits one iteration)"),
@@ -186,8 +186,9 @@ class Config:
     # (the agent can't edit its own protocol). Only the files are hidden from agent copies
     # (`hidden`).
     protected: list[str] = field(default_factory=list)
-    # The experiment folder (autohelix/NAME/ for autohelix/NAME/autohelix.yaml, `config_name`),
-    # absolute; None for the project's autohelix.yaml. A run stores it (`experiment.snapshot_files`).
+    # The experiment folder (autohelix/NAME/ for autohelix/NAME/config.yaml, `config_name`),
+    # absolute; None only for a file loaded from elsewhere (a library caller's). A run stores
+    # it (`experiment.snapshot_files`).
     experiment: Path | None = None
     # Whether the project has an autohelix/ (`load_config`): only then is it shown as frozen.
     config_dir_exists: bool = field(default=False, repr=False)
@@ -664,7 +665,7 @@ def _parse_stop(value: Any, errors: list[str]) -> list[CommandSpec]:
     return commands
 
 
-CONFIG_FILE = "autohelix.yaml"
+CONFIG_FILE = "config.yaml"
 CONFIG_DIR = "autohelix"
 
 
@@ -683,14 +684,13 @@ class ConfigNotFound(FileNotFoundError):
 
 
 def experiment_config(name: str) -> str:
-    """The project-relative config of the experiment `name`: autohelix/NAME/autohelix.yaml."""
+    """The project-relative config of the experiment `name`: autohelix/NAME/config.yaml."""
     return f"{CONFIG_DIR}/{name}/{CONFIG_FILE}"
 
 
 def config_name(config_path: str | PurePath) -> str | None:
     """The experiment's name, from its config's project-relative path: NAME for
-    autohelix/NAME/autohelix.yaml (the folder's name), None for the project's
-    autohelix.yaml (or any other path)."""
+    autohelix/NAME/config.yaml (the folder's name), None for any other path."""
     parts = PurePosixPath(config_path).parts
     if len(parts) == 3 and parts[0] == CONFIG_DIR and parts[2] == CONFIG_FILE:
         return parts[1]
@@ -708,41 +708,39 @@ def _experiments(project: Path, file: str) -> list[str]:
 
 
 def project_configs(project: Path) -> list[str]:
-    """The project's configs, project-relative: autohelix.yaml, then each experiment
-    folder's (autohelix/NAME/autohelix.yaml)."""
-    return ([CONFIG_FILE] if (project / CONFIG_FILE).is_file() else []) + _experiments(project, CONFIG_FILE)
+    """The project's configs, project-relative: each experiment folder's
+    (autohelix/NAME/config.yaml)."""
+    return _experiments(project, CONFIG_FILE)
 
 
 def run_command(config_path: str) -> str:
-    """The command that starts runs of a config (project-relative, as run.json has it)."""
+    """The command that starts runs of a config (project-relative, as run.json has it;
+    a config reached through a link is named by its resolved path: the bare command)."""
     name = config_name(config_path)
     return f"autohelix run {name}" if name else "autohelix run"
 
 
 def find_config(project: Path, name: str | None = None) -> Path:
-    """The config of the experiment `name` names (autohelix/<name>/autohelix.yaml), else
-    autohelix.yaml, else the only experiment's config in autohelix/. Raises ConfigNotFound
-    otherwise, and ValueError for a name that is a path."""
+    """The config of the experiment `name` names (autohelix/<name>/config.yaml), else
+    the only experiment's config in autohelix/. Raises ConfigNotFound otherwise, and
+    ValueError for a name that is a path."""
     configs = project_configs(project)
     listed = ", ".join(configs)
     if name is not None:
         if not re.fullmatch(r"[\w-][\w.-]*", name) or name.endswith((".yaml", ".yml")):
             raise ValueError(f"{name!r} is not a config name: name an experiment folder in {CONFIG_DIR}/ "
-                             f"(`perf` for {experiment_config('perf')}); a bare `autohelix run` "
-                             f"reads {CONFIG_FILE}.")
+                             f"(`perf` for {experiment_config('perf')}).")
         relative = experiment_config(name)
         if relative in configs:
             return project / relative
-        misnamed = f"{CONFIG_DIR}/{name}/autohelix.yml"
+        misnamed = f"{CONFIG_DIR}/{name}/config.yml"
         found = (f" (found {misnamed}; configs end in .yaml)" if (project / misnamed).is_file() else "")
         raise ConfigNotFound(f"No config {relative}{found}." + (f" Configs: {listed}." if configs else ""), configs)
-    if (project / CONFIG_FILE).is_file():
-        return project / CONFIG_FILE
     if len(configs) == 1:
         return project / configs[0]
     if configs:
         raise ConfigNotFound(f"Several configs: {listed}.", configs)
-    misnamed = (["autohelix.yml"] if (project / "autohelix.yml").is_file() else []) + _experiments(project, "autohelix.yml")
+    misnamed = _experiments(project, "config.yml")
     found = f" (found {', '.join(misnamed)}; configs end in .yaml)" if misnamed else ""
     raise ConfigNotFound(f"No config found in {project}{found}.", configs)
 

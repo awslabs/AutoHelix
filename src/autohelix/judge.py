@@ -136,7 +136,7 @@ def load_base_config(cwd: Path) -> AgentConfig:
 
 def base_config(cwd: Path) -> tuple[AgentConfig, str]:
     """`load_base_config`'s settings, with where they came from, for a by-hand `ask` or
-    `review` to say ("autohelix/a/autohelix.yaml", "defaults: several configs", ...).
+    `review` to say ("autohelix/a/config.yaml", "defaults: several configs", ...).
 
     A set but unreadable $AUTOHELIX_CONFIG, or a malformed `agent:`, is an error
     rather than a silent fallback to other settings. No config, or several, is
@@ -167,7 +167,7 @@ def base_config(cwd: Path) -> tuple[AgentConfig, str]:
 
 
 def describe_agent(config: AgentConfig, source: str) -> str:
-    """The agent a by-hand `ask`/`review` used, for its stderr line: `codex gpt-5 (autohelix/a/autohelix.yaml)`."""
+    """The agent a by-hand `ask`/`review` used, for its stderr line: `codex gpt-5 (autohelix/a/config.yaml)`."""
     return " ".join(part for part in (config.cli, config.model) if part) + f" ({source})"
 
 

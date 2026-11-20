@@ -5,6 +5,7 @@ import re
 import zipfile
 from importlib.resources import files
 from pathlib import Path
+from tests.helpers import config_file
 
 import pytest
 import yaml
@@ -90,7 +91,7 @@ def test_project_install(runner, resources, tmp_path, agent):
     assert result.exit_code == 0, result.output
     assert snapshot(project / PROJECT_DIRS[agent] / SKILL_NAME) == resources
     assert not (project / ".autohelix").exists()
-    assert not (project / "autohelix.yaml").exists()
+    assert not config_file(project).exists()
 
 
 @pytest.mark.parametrize("agent", USER_DIRS)
