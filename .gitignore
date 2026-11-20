@@ -26,9 +26,9 @@ notes/
 env.sh
 TODO.md
 
-# AutoHelix configs for working on this repo (autohelix/NAME.yaml), kept local.
-# Runs save their own copy of the config, so these need no commit. Anything a
-# run reads besides the config and its prompt template must be committed elsewhere.
+# AutoHelix experiments for working on this repo (autohelix/NAME/autohelix.yaml),
+# kept private. A run stores the folder it uses (.autohelix/runs/<id>/experiment/),
+# so its config and helpers need no commit.
 /autohelix/
 
 # uv lockfile: not used (installs go through pip / uv pip install -e .)

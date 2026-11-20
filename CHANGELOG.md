@@ -67,7 +67,7 @@ has the checklist.
 - **A run keeps its experiment folder's files** (`runs/<id>/experiment/`):
   the scripts and material beside `autohelix/<name>/autohelix.yaml`, links
   inside the checkout followed. `run` refuses a folder with a link outside the
-  checkout, a non-regular file, or over 200 files or 10 MB. `resume` refuses
+  checkout or into a dot-name inside it (`.git/`, `.env`), a non-regular file, or over 200 files or 10 MB. `resume` refuses
   when the folder's files changed since, naming them. Gate, observe and stop
   commands get a copy of it as `$AUTOHELIX_EXPERIMENT`
   (`python "$AUTOHELIX_EXPERIMENT/render.py"`); the agent gets one in

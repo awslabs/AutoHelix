@@ -77,6 +77,29 @@ def test_links_outside_the_checkout_and_non_regular_files_are_refused_by_name(pr
     assert "pipe (not a regular file)" in message
 
 
+def test_links_into_dot_names_inside_the_checkout_are_refused(project, folder):
+    """`.git/config` may hold credentials; `.autohelix/` is run state; a dot-name is
+    left out when it sits in the folder, so a link can't bring it in either."""
+    (project / ".env").write_text("TOKEN=x\n")
+    (project / "notes").mkdir(exist_ok=True)
+    (project / "notes" / "ok.md").write_text("fine\n")
+    (folder / "gitconfig").symlink_to(project / ".git" / "config")
+    (folder / "state").symlink_to("../../.autohelix")
+    (folder / "env").symlink_to("../../.env")
+    (folder / "ok.md").symlink_to("../../notes/ok.md")
+    with pytest.raises(ConfigError) as caught:
+        names(project, folder)
+    message = str(caught.value)
+    assert f"gitconfig (a link to {project / '.git' / 'config'}, into .git)" in message
+    assert "env (a link to ../../.env, into .env)" in message
+    assert "state (a link to ../../.autohelix, into .autohelix)" in message
+    assert "ok.md" not in message
+    (folder / "gitconfig").unlink()
+    (folder / "env").unlink()
+    (folder / "state").unlink()
+    assert names(project, folder) == ["ok.md"]
+
+
 def test_a_link_to_a_folder_holding_it_is_refused(project, folder):
     (folder / "sub").mkdir()
     (folder / "sub" / "loop").symlink_to("..")

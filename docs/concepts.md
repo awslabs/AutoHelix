@@ -321,7 +321,8 @@ autohelix/
 the config, its template and the rest of the folder
 ([Configuration → Experiment folder](config.md#experiment-folder)); a link is
 followed when it points inside the checkout, so `metrics.py` is stored as the
-file it points to. Use relative links: they still work in a clone of
+file it points to. A link outside the checkout, or into a dot-name inside it
+(`.git/`, `.autohelix/`, `.env`), is refused. Use relative links: they still work in a clone of
 `autohelix/`'s own repository.
 
 `autohelix/README.md` is the coordinator's notes: the current state, decisions

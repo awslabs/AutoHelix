@@ -163,7 +163,8 @@ autohelix/
 Helpers several experiments share go in `autohelix/lib/`, and each experiment
 links what it uses with a relative link (`ln -s ../lib/metrics.py
 autohelix/console/`), so it survives cloning `autohelix/` elsewhere. Links are
-followed only inside the checkout; a link outside it is refused. A helper the
+followed only inside the checkout, and not into dot-names there (`.git/`,
+`.env`); other links are refused. A helper the
 project commits can stay in the project instead (`scripts/`).
 
 A document the goal relies on (a design, a spec): link it into the folder to

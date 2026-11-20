@@ -58,7 +58,8 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
 
     Left out: the config file and the prompt template (stored already), dotfiles and
     dot-folders, `__pycache__/`. A link is followed when its target is inside the git
-    checkout. Raises ConfigError, naming the files, for links outside it (or to nothing),
+    checkout and not under a dot-name there (`.git/`, `.autohelix/`, `.env`). Raises
+    ConfigError, naming the files, for other links (or links to nothing),
     files that aren't regular (a FIFO, a socket) and a folder over the cap
     (`MAX_FILES`, `MAX_BYTES`)."""
     folder = config.experiment
@@ -87,6 +88,11 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
                 link = os.readlink(path)
                 if not Path(target).is_relative_to(checkout):
                     refused.append(f"{name} (a link to {link}, outside the checkout)")
+                    continue
+                hidden = next((part for part in Path(target).relative_to(checkout).parts if part.startswith(".")),
+                              None)
+                if hidden is not None:  # .git/ (its config may hold credentials), .autohelix/, .env, ...
+                    refused.append(f"{name} (a link to {link}, into {hidden})")
                     continue
                 if not os.path.exists(target):
                     refused.append(f"{name} (a link to {link}, which doesn't exist)")
