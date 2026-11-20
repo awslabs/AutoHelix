@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from autohelix.config import Config
+from autohelix.config import Config, find_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -186,7 +186,7 @@ def test_eval_recursively_validates_structured_outputs():
 
 
 def test_autohelix_template_splits_correctness_from_timing():
-    rendered = (TEMPLATES / "autohelix.yaml.tmpl").read_text().format(
+    rendered = (TEMPLATES / "config.yaml.tmpl").read_text().format(
         problem_name="L1_test",
         evaluation_timeout=1234,
         iterations=7,
@@ -242,7 +242,7 @@ def get_init_inputs():
     assert setup_module.setup("L1_1_Test", output_dir)
 
     expected = {
-        "autohelix.yaml",
+        "autohelix/kernelbench/config.yaml",
         "check_solution.py",
         "eval_solution.py",
         "solution.py",
@@ -311,8 +311,13 @@ def get_init_inputs():
         text=True,
         check=True,
     ).stdout == ""
+    config = output_dir / "autohelix" / "kernelbench" / "config.yaml"
+    assert find_config(output_dir) == config  # what a bare `autohelix run` runs
+    assert "autohelix/kernelbench/config.yaml" in subprocess.run(
+        ["git", "ls-files"], cwd=output_dir, capture_output=True, text=True, check=True,
+    ).stdout.split()
     assert Config.from_dict(
-        yaml.safe_load(output_dir.joinpath("autohelix.yaml").read_text())
+        yaml.safe_load(config.read_text())
     ).observe[0].command == "python eval_solution.py"
 
 
@@ -338,7 +343,7 @@ def test_download_repairs_a_partially_populated_level(tmp_path, monkeypatch):
     monkeypatch.setattr(setup_module, "DATA_DIR", data_dir)
     monkeypatch.setattr(
         setup_module,
-        "load_config",
+        "load_settings",
         lambda: {
             "source": {
                 "hf_dataset": "test/kernelbench",

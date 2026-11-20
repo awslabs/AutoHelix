@@ -36,7 +36,7 @@ coordinator's notes: see [Coordinator notes](#coordinator-notes)), the README
 and project instructions, how the
 code is tested and measured (test folders, benchmarks, evaluators, CI config),
 task or spec files (`TODO`, `TASKS.md`, a PRD), and any AutoHelix configs
-(`autohelix.yaml`, `autohelix/*/autohelix.yaml`).
+(`autohelix/*/config.yaml`).
 
 - **With current runs**: the user has just seen them in a table (state,
   iterations, landing, cost), from bare `autohelix`; don't repeat it. Read the
@@ -48,7 +48,7 @@ task or spec files (`TODO`, `TASKS.md`, a PRD), and any AutoHelix configs
 - **Without runs**: a sentence on what you found that matters for a loop (what
   can check or measure a change), then "What should AutoHelix work on?" with
   two or three one-line goals drawn from the project. Configs no run has used
-  are worth one of them ("check and finish `autohelix/perf/autohelix.yaml`"). In an empty
+  are worth one of them ("check and finish `autohelix/perf/config.yaml`"). In an empty
   or unfamiliar project, ask with general examples.
 
 For example:
@@ -142,16 +142,12 @@ Name the config's path:
 
 - the path you were given (the session's first prompt may name it); a config
   that still holds the commented template is completed where it is;
-- else `autohelix.yaml` for the project's one loop, or
-  `autohelix/<name>/autohelix.yaml` (an experiment folder) when it has or will
-  have several. Never `autohelix.yaml` beside existing `autohelix/` experiments:
-  it would take over a bare `autohelix run`. A name is lowercase letters,
-  digits or hyphens, at most 32 characters, and starts with a letter or digit.
-  Runs are named after the folder, and the launch command names it:
-  `autohelix run` for `autohelix.yaml`, `autohelix run <name>` for
-  `autohelix/<name>/autohelix.yaml`.
-- A folder in `autohelix/` without `autohelix.yaml` (`autohelix/lib/`) isn't an
-  experiment, nor is a `.yaml` file directly in `autohelix/`.
+- else `autohelix/<name>/config.yaml`, a new experiment folder. A name is
+  lowercase letters, digits or hyphens, at most 32 characters, and starts with
+  a letter or digit. Runs are named after the folder, and the launch command
+  names it: `autohelix run <name>`.
+- Only `autohelix/<name>/config.yaml` is a config: a folder in `autohelix/`
+  without one (`autohelix/lib/`) isn't an experiment.
 
 An experiment folder holds its config and what only it uses: its prompt
 template, evaluators, metric adapters, sketches. The run stores the folder
@@ -161,7 +157,7 @@ when it starts (dotfiles and `__pycache__/` left out; at most 200 files and
 ```
 autohelix/
   console/
-    autohelix.yaml
+    config.yaml
     render.py                  # its evaluator
     metrics.py -> ../lib/metrics.py
   lib/                         # helpers several experiments share (not an experiment)
@@ -193,7 +189,7 @@ candidate code, not an editable install of the original checkout; an absolute
 path to an agent or Python executable can select the environment, but candidate
 code, inputs and captured outputs must resolve in the copy. Make external output
 locations deliberate: rejecting code doesn't restore files outside the project.
-A script kept in the config's experiment folder is stored with the run;
+A script kept in the experiment folder is stored with the run;
 commands run it from their copy of the folder:
 `python "$AUTOHELIX_EXPERIMENT/render.py"`.
 
@@ -245,10 +241,10 @@ Check it without running its commands: its structure, metric names and the
 gates that use them, scope and input paths, environments and import paths,
 where outputs and captures will be. Metrics come only from
 `##autohelix[name=value]` lines on stdout; check that something prints them.
-Then `autohelix run --check` from the project root (`autohelix run perf --check`
-for `autohelix/perf/autohelix.yaml`): every check `autohelix run` makes before writing
-anything, starting nothing; it exits 0 when the run would start. Resolve its
-errors and explain material warnings.
+Then `autohelix run <name> --check` from the project root (`autohelix run perf
+--check` for `autohelix/perf/config.yaml`): every check `autohelix run` makes
+before writing anything, starting nothing; it exits 0 when the run would
+start. Resolve its errors and explain material warnings.
 
 Run the configured commands only when they are known to be cheap in time,
 resources and model cost. Otherwise describe the verification and its likely
@@ -268,8 +264,7 @@ autohelix/ for history". Commit only when the user wants the experiment shared
 (`git add -f autohelix/<name>/` plus the `lib/` files it links: an excluded
 file needs `-f`), or into `autohelix/`'s own repository when it has one. Pick
 one of the two per project: with `autohelix/.git` present, `git add -f
-autohelix/...` in the project stages nothing. A top-level `autohelix.yaml` is
-committed with the project.
+autohelix/...` in the project stages nothing.
 
 Iteration copies are made from the commit: every script a command runs is
 committed in the project, or in the experiment folder and run from

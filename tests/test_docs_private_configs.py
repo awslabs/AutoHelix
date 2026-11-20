@@ -2,7 +2,7 @@
 (excluded by the project) runs (clean checkout, no nested-repository rejection),
 lands automatically, and `resume` continues it, without the uncommitted-config
 warning. Also `autohelix` as a symlink into a personal repository of configs, which
-the docs don't describe (run.json names its config by the resolved path): it runs,
+the docs don't describe (run.json names its config as named, through the link): it runs,
 with the warning (its file is outside the project, which `git check-ignore`
 refuses)."""
 
@@ -59,8 +59,9 @@ def test_autohelix_symlink_into_a_personal_repository(project, tmp_path):
     personal = tmp_path / "configs" / "project"
     private_configs(project, personal, "/autohelix")  # a symlink is a file to git: no trailing slash
     (project / "autohelix").symlink_to(personal)
-    # run.json names the config by its resolved path, outside the project.
-    run_and_resume(project, str((personal / "perf" / "config.yaml").resolve()), warned=True)
+    # run.json names the config as named, through the link, and the run is named after its folder.
+    run_and_resume(project, "autohelix/perf/config.yaml", warned=True)
+    assert latest_run(project).read_identity()["name"] == "perf"
 
 
 def test_a_committed_experiment_made_private(project):
@@ -86,7 +87,6 @@ def test_the_page_shows_the_tested_exclude_entries():
     section = " ".join(page[page.index("### Where configs live"):page.index("## Runs and run state")].split())
     for line in ('echo /autohelix/ >> "$(git rev-parse --git-path info/exclude)"',
                  "`/<subfolder>/autohelix/`",
-                 "`/autohelix.yaml`",
                  "git rm -r --cached autohelix",
                  "git add -f autohelix/bench/",
                  "`/autohelix/*` and `!/autohelix/bench/`"):

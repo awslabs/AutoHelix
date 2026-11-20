@@ -21,7 +21,7 @@ MAX_TOKENS="${MAX_TOKENS:-4000}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.9}"
 
 # Use the trained model if present, else the base model (baseline).
-# TODO(setup): keep BASE_MODEL in sync with the goal in autohelix.yaml.
+# TODO(setup): keep BASE_MODEL in sync with the goal in autohelix/posttrain/config.yaml.
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-4B-Base}"
 if [ -f "$ARTIFACTS/final_model/config.json" ]; then
   MODEL="$ARTIFACTS/final_model"

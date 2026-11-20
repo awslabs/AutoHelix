@@ -114,7 +114,7 @@ def test_protected_names_are_shown_plain_and_matched_escaped(tmp_path):
     (project / "b.yaml").write_text("goal: g\nprompt_template: ../outside.md\n")
     config = load_config(project, project / "a.yaml")
     assert config.protected == ["a.yaml", "p[1].md", "autohelix/"]
-    assert config.frozen_names() == ["a.yaml", "p[1].md"]  # autohelix/ is shown only when there is one
+    assert config.frozen_names() == ["a.yaml", "p[1].md", "autohelix/"]  # shown for every config
     assert config.frozen_patterns() == ["a.yaml", "p[[]1].md", "autohelix/"]
     assert not Scope(frozen=tuple(config.frozen_patterns())).allows("p[1].md")
     assert Scope(frozen=tuple(config.frozen_patterns())).allows("p1.md")

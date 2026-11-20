@@ -11,7 +11,7 @@ from autohelix import experiment
 from autohelix.config import ConfigError, load_config
 from autohelix.experiment import build_snapshot, snapshot_files
 from autohelix.history import History
-from autohelix.runs import RunPaths, git, project_runs, short_id
+from autohelix.runs import RunPaths, git, project_runs, select_run, short_id
 from tests.helpers import config_file, cli
 
 
@@ -36,7 +36,9 @@ def test_the_folder_is_the_experiment_and_a_file_elsewhere_has_none(project, fol
     assert load_config(project, folder / "config.yaml").experiment == folder
     (project / "other.yaml").write_text((folder / "config.yaml").read_text())  # a library caller's file
     config = load_config(project, project / "other.yaml")
-    assert config.experiment is None and snapshot_files(config, project) is None
+    assert config.experiment is None
+    with pytest.raises(RuntimeError, match="other.yaml isn't an experiment's config"):  # no run of it
+        select_run(project, project / "other.yaml", new=True)
 
 
 def test_what_goes_in_and_what_is_left_out(project, folder):
@@ -648,8 +650,9 @@ def test_the_folder_is_frozen_but_not_hidden(project, folder):
     other = load_config(project, project / "other.yaml")  # autohelix/ is frozen for it too
     assert other.frozen_names() == ["other.yaml", "autohelix/"] and other.hidden == ["other.yaml"]
     shutil.rmtree(project / "autohelix")
-    other = load_config(project, project / "other.yaml")  # matched, but not shown, without one
-    assert other.frozen_names() == ["other.yaml"] and other.frozen_patterns() == ["other.yaml", "autohelix/"]
+    other = load_config(project, project / "other.yaml")  # shown and matched without one too
+    assert other.frozen_names() == ["other.yaml", "autohelix/"]
+    assert other.frozen_patterns() == ["other.yaml", "autohelix/"]
 
 
 def test_an_agent_edit_to_a_committed_folder_is_reset_and_resume_continues(project, folder):
@@ -846,8 +849,9 @@ def test_the_advice_follows_what_the_snapshot_stores(project, folder):
         "`$AUTOHELIX_EXPERIMENT/lib/m.py`."]
 
 
-def test_a_file_named_autohelix_shows_no_folder_as_frozen(project):
+def test_a_file_named_autohelix_is_frozen_as_the_folder_would_be(project):
+    """Every config's autohelix/ is frozen and shown (a run's config is always in it)."""
     (project / "other.yaml").write_text(config_file(project).read_text())  # a library caller's file
     shutil.rmtree(project / "autohelix")
     (project / "autohelix").write_text("not a folder\n")
-    assert load_config(project, project / "other.yaml").frozen_names() == ["other.yaml"]
+    assert load_config(project, project / "other.yaml").frozen_names() == ["other.yaml", "autohelix/"]

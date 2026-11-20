@@ -60,14 +60,15 @@ def test_each_config_file_is_an_experiment_folder_its_launch_names():
     """Every config is shown at `autohelix/NAME/config.yaml`, and the launch
     commands name exactly those folders."""
     text = PATTERNS.read_text()
-    folders = set(re.findall(r"^`autohelix/([a-z0-9-]+)/autohelix\.yaml`:$", text, re.M))
+    folders = set(re.findall(r"^`autohelix/([a-z0-9-]+)/config\.yaml`:$", text, re.M))
     assert not re.search(r"autohelix/[a-z0-9-]+\.yaml", text)  # not a config any more
     assert folders == {shlex.split(command)[2] for command in launches()}
 
 
 @pytest.mark.parametrize("heading, config", configs(), ids=[h for h, _ in configs()])
 def test_the_configs_validate(heading, config, tmp_path):
-    path = tmp_path / "autohelix.yaml"
+    path = tmp_path / "autohelix" / "demo" / "config.yaml"
+    path.parent.mkdir(parents=True)
     path.write_text(yaml.safe_dump(config, sort_keys=False))
     loaded = load_config(tmp_path, config_file=path)
     assert [issue.message for issue in loaded.validate() if issue.level == "error"] == []

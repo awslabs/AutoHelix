@@ -187,11 +187,10 @@ class Config:
     # (`hidden`).
     protected: list[str] = field(default_factory=list)
     # The experiment folder (autohelix/NAME/ for autohelix/NAME/config.yaml, `config_name`),
-    # absolute; None only for a file loaded from elsewhere (a library caller's). A run stores
-    # it (`experiment.snapshot_files`).
+    # absolute, as named. A run's config always has one (`not_an_experiment`); None only for
+    # a Config not loaded from an experiment (`from_dict`, or a file elsewhere that tests and
+    # library callers load to parse it). A run stores it (`experiment.snapshot_files`).
     experiment: Path | None = None
-    # Whether the project has an autohelix/ (`load_config`): only then is it shown as frozen.
-    config_dir_exists: bool = field(default=False, repr=False)
     _parse_errors: list[str] = field(default_factory=list, repr=False)
 
     @property
@@ -207,9 +206,8 @@ class Config:
 
     def frozen_names(self) -> list[str]:
         """What is frozen, as shown (header, prompt): `scope.frozen`, then the config and
-        template files and autohelix/, which is shown only when the project has one, and
-        then stands for the files in it."""
-        folders = [path for path in self.protected if path.endswith("/")] if self.config_dir_exists else []
+        template files and autohelix/, which stands for the files in it."""
+        folders = [path for path in self.protected if path.endswith("/")]
         shown = [path for path in self.protected if path in folders or (
             not path.endswith("/") and not any(path.startswith(folder) for folder in folders))]
         return self.frozen + [path for path in shown if path not in self.frozen]
@@ -714,10 +712,14 @@ def project_configs(project: Path) -> list[str]:
 
 
 def run_command(config_path: str) -> str:
-    """The command that starts runs of a config (project-relative, as run.json has it;
-    a config reached through a link is named by its resolved path: the bare command)."""
-    name = config_name(config_path)
-    return f"autohelix run {name}" if name else "autohelix run"
+    """The command that starts runs of an experiment's config (project-relative, as
+    run.json has it: autohelix/NAME/config.yaml)."""
+    return f"autohelix run {config_name(config_path)}"
+
+
+def not_an_experiment(config_path: str) -> str:
+    """Why a run can't use `config_path` (project-relative): it isn't autohelix/NAME/config.yaml."""
+    return f"{config_path} isn't an experiment's config: a run's config is {experiment_config('NAME')}."
 
 
 def find_config(project: Path, name: str | None = None) -> Path:
@@ -811,7 +813,6 @@ def load_config(project_path: Path, config_file: Path | None = None, *,
         config.experiment = named_at.parent
     config.protected += [f"{name}/" for name in _project_relative(Path(project_path), [root / CONFIG_DIR])
                          if f"{name}/" not in config.protected]
-    config.config_dir_exists = os.path.isdir(root / CONFIG_DIR)
     return config
 
 

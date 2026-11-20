@@ -22,7 +22,8 @@ Scope is `frozen:`-only, protecting just the eval harness, which ships with the 
 
 ```
 posttrain/
-├── autohelix.yaml        # config: goal, gates (model check, metric gate), eval observe entry
+├── autohelix/posttrain/  # frozen — like all of autohelix/
+│   └── config.yaml       # config: goal, gates (model check, metric gate), eval observe entry
 ├── config.sh             # paths (ARTIFACTS / UV_ENV / HF_HOME) — EDIT before running
 ├── .gitignore            # training by-products (checkpoints, wandb/, *.safetensors, …)
 ├── run_native.sh         # frozen — env + GPU pin entrypoint; run everything through this
@@ -80,7 +81,7 @@ posttrain/
    template from there and never downloads it).
 
 4. **Set the GPU** in `gpu_device.txt` (defaults to `0`), and confirm `BASE_MODEL` in
-   `run_eval.sh` matches the goal in `autohelix.yaml`.
+   `run_eval.sh` matches the goal in `autohelix/posttrain/config.yaml`.
 
 Sanity-check the harness before handing it to the agent:
 

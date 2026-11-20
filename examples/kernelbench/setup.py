@@ -2,7 +2,8 @@
 """Set up a KernelBench GPU-kernel task as a standalone AutoHelix project.
 
 Reads problems from a one-time HuggingFace download (`--download`), scaffolds a
-solution stub + evaluation harness from templates, and git-inits the project.
+solution stub + evaluation harness and the AutoHelix config
+(autohelix/kernelbench/config.yaml) from templates, and git-inits the project.
 
 KernelBench tasks are plain PyTorch modules: a reference `Model(nn.Module)` with
 `get_inputs()` / `get_init_inputs()`. The agent writes an equivalent `ModelNew`
@@ -30,8 +31,13 @@ from pathlib import Path
 import yaml
 
 SETUP_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = SETUP_DIR / "config.yaml"
+# This script's own settings (upstream source, scaffold defaults): not an AutoHelix config.
+SETTINGS_PATH = SETUP_DIR / "setup.yaml"
 TEMPLATES_DIR = SETUP_DIR / "templates"
+# The scaffolded project's AutoHelix config: templates/config.yaml.tmpl, written as
+# the experiment autohelix/kernelbench/config.yaml (`autohelix run` finds the only one).
+CONFIG_TEMPLATE = "config.yaml.tmpl"
+EXPERIMENT_CONFIG = Path("autohelix") / "kernelbench" / "config.yaml"
 DATA_DIR = SETUP_DIR / "data"
 
 
@@ -54,8 +60,8 @@ def render_template(template_path: Path, variables: dict) -> str:
     return template_path.read_text().format(**variables)
 
 
-def load_config() -> dict:
-    return yaml.safe_load(CONFIG_PATH.read_text())
+def load_settings() -> dict:
+    return yaml.safe_load(SETTINGS_PATH.read_text())
 
 
 def _level_key(level: int) -> str:
@@ -83,9 +89,9 @@ def download(levels: list[int] | None = None) -> bool:
         print("Error: 'datasets' package required. Install with: pip install datasets")
         return False
 
-    config = load_config()
-    hf_dataset = config["source"]["hf_dataset"]
-    all_levels = config["source"]["levels"]
+    settings = load_settings()
+    hf_dataset = settings["source"]["hf_dataset"]
+    all_levels = settings["source"]["levels"]
     levels = levels or all_levels
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -175,8 +181,8 @@ def setup(task_name: str, output_dir: Path) -> bool:
     reference_code = (problem_dir / "reference.py").read_text()
     problem_name = task_name
 
-    config = load_config()
-    defaults = config["defaults"]
+    settings = load_settings()
+    defaults = settings["defaults"]
 
     variables = {
         "problem_name": problem_name,
@@ -190,8 +196,12 @@ def setup(task_name: str, output_dir: Path) -> bool:
     for tmpl_file in TEMPLATES_DIR.iterdir():
         if not tmpl_file.name.endswith(".tmpl"):
             continue
-        output_name = tmpl_file.name[:-5]  # strip .tmpl
-        (output_dir / output_name).write_text(render_template(tmpl_file, variables))
+        if tmpl_file.name == CONFIG_TEMPLATE:
+            output_path = output_dir / EXPERIMENT_CONFIG
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            output_path = output_dir / tmpl_file.name[:-5]  # strip .tmpl
+        output_path.write_text(render_template(tmpl_file, variables))
 
     (output_dir / ".gitignore").write_text(
         "__pycache__/\n*.pyc\n.autohelix/\nbuild/\n"

@@ -84,9 +84,6 @@ fi
   python evaluate.py --model "$out"   # prints ##autohelix[accuracy=...]
   ```
 
-With a top-level `autohelix.yaml` (no experiment folder), put the same lines in
-the goal and in the commands.
-
 What it gives you: rollback. A rejected iteration's model stays in its own
 folder, the next agent starts again from the last accepted one, and every
 accepted iteration's model stays on disk.
@@ -147,7 +144,7 @@ mid-run surprises.
 
 ## Copy-paste goal-prompt rules
 
-A starting point — drop these into a cell's `autohelix.yaml` `goal:` and adapt
+A starting point — drop these into an experiment's `config.yaml` `goal:` and adapt
 freely. (See `posttrain` for these in context.)
 
 ```

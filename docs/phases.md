@@ -93,7 +93,7 @@ is in `.internal/` folders:
 │   ├── run.json                # identity (base commit, target branch, config file), archived flag
 │   ├── config.yaml             # the run's config, stored verbatim when it started
 │   ├── prompt_template.md      # its prompt_template's text, stored with it (only with one)
-│   ├── experiment/             # its experiment folder's files, stored with it (autohelix/NAME/ only)
+│   ├── experiment/             # its experiment folder's other files, stored with it
 │   ├── hints.md
 │   ├── notes -> .internal/notes/<n>   # agent memory; round-trips (link to the latest version)
 │   ├── logs/                   # run logs per segment, report.log
@@ -203,8 +203,8 @@ numbered from its iteration 1) and its own iterations. With other runs in the
 copy (an [import](cli.md#continuing-from-another-run) or a
 [group](cli.md#groups)) it also names each other run's state in `runs/<id>/`
 (read-only, the imported one and the group members said apart) and their
-code's refs. With an [experiment folder](config.md#experiment-folder), it names
-`.autohelix-iteration/experiment/` too.
+code's refs. When the [experiment folder](config.md#experiment-folder) holds
+more than its config, it names `.autohelix-iteration/experiment/` too.
 
 The agent's copy holds no `.autohelix/` (nothing in a copy looks like project
 state). What the harness provides is in `.autohelix-iteration/`, which is never
@@ -223,7 +223,7 @@ run's folder:
     │                           failing gates' gates/<k>/, observe/, stop/
     ├── rejected.patch          after a rejection: the rejected attempt's change
     ├── commit_summary.txt      written by the agent: the commit's first line
-    ├── experiment/             the run's stored experiment folder (a copy), if it has one
+    ├── experiment/             the run's stored experiment folder (a copy), unless it holds only its config
     └── runs/<other-id>/        the imported run and other runs of the group: run.json,
                                 history.jsonl, notes/
 ```
@@ -257,7 +257,7 @@ started is killed. Each gets:
 | `AUTOHELIX_USAGE_FILE` | Where model calls record their cost (see [Cost Tracking](concepts.md#cost-tracking)) |
 | `AUTOHELIX_COMMAND_DEADLINE` | The command's deadline, in Unix seconds |
 | `AUTOHELIX_PREVIOUS` | Observe commands only: see [Previous output](config.md#previous-output) |
-| `AUTOHELIX_EXPERIMENT` | A copy, made for this call, of the run's stored experiment folder; unset without one: see [Experiment folder](config.md#experiment-folder) |
+| `AUTOHELIX_EXPERIMENT` | A copy, made for this call, of the run's stored experiment folder; unset when the folder holds only its config: see [Experiment folder](config.md#experiment-folder) |
 | `AUTOHELIX_METRICS`, `AUTOHELIX_OBSERVATIONS` | Stop commands only: see [Stop](config.md#stop) |
 
 The main agent gets fewer: `AUTOHELIX_RUN_ID`, `AUTOHELIX_ITERATION` and, with
@@ -288,8 +288,8 @@ review` (a `review:` entry) judge the same target:
   outside the copy are removed and listed in the judge's prompt.
 - `review --previous` (`previous: true`) also gets the entry's previous output,
   without its `##autohelix[...]` lines, as `.autohelix-iteration/previous.md`.
-- In a run with an [experiment folder](config.md#experiment-folder), the
-  command's `$AUTOHELIX_EXPERIMENT` is copied in as
+- When the command has an `$AUTOHELIX_EXPERIMENT`
+  ([Experiment folder](config.md#experiment-folder)), it is copied in as
   `.autohelix-iteration/experiment/` (regular files and folders only), named in
   the prompt.
 - Read-only: the backend's read-only mode, one write guard around each call

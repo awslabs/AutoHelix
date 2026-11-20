@@ -14,7 +14,7 @@ from autohelix.config import ConfigNotFound, config_name, find_config, project_c
 from autohelix.judge import CONFIG_ENV, load_base_config
 from autohelix.harness import Harness
 from autohelix.history import History
-from autohelix.runs import NoRunToResume, RunPaths, git, new_run_name, short_id
+from autohelix.runs import NoRunToResume, RunPaths, git, load_run_config, new_run_name, select_run, short_id
 from autohelix.viewer import RunData
 from tests.helpers import CONFIG, cli, latest_run
 
@@ -309,6 +309,32 @@ def test_a_run_needs_an_experiment_config(folder_project):
                                            r"autohelix/NAME/config\.yaml\.$"):
         Harness(folder_project, config_file=other)  # the API only: the CLI takes a name
     assert_untouched(folder_project)
+
+
+def test_select_run_refuses_a_config_that_isnt_an_experiments(folder_project):
+    """The run state's own check, for library callers that skip the Harness."""
+    other = write(folder_project / "other.yaml", (folder_project / "autohelix" / "perf" / "config.yaml").read_text())
+    commit(folder_project)
+    with pytest.raises(RuntimeError, match=r"^other\.yaml isn't an experiment's config"):
+        select_run(folder_project, other, new=True)
+    assert not RunPaths(folder_project).runs.exists() or not any(RunPaths(folder_project).runs.iterdir())
+
+
+def test_a_run_whose_config_isnt_an_experiments_is_not_read(folder_project):
+    """A run's config is always an experiment's: one that names another file (an older
+    version's autohelix.yaml) is refused by every reader of its stored config."""
+    assert cli(folder_project, "run", "--no-report").exit_code == 0
+    paths = latest_run(folder_project)
+    data = paths.read_identity()
+    data["config_path"] = "autohelix.yaml"
+    paths.identity.write_text(json.dumps(data))
+    with pytest.raises(RuntimeError, match=rf"^Run {short_id(paths.run_id)}: autohelix\.yaml isn't an "
+                                           r"experiment's config: a run's config is autohelix/NAME/config\.yaml\.$"):
+        load_run_config(paths)
+    result = cli(folder_project, "resume", short_id(paths.run_id), "-n", "1", "--no-report")
+    assert result.exit_code == 1 and "isn't an experiment's config" in flat(result.output)
+    result = cli(folder_project, "run", "perf", "--import", short_id(paths.run_id), "--no-report")
+    assert result.exit_code == 0, result.output  # continued from in a new run (the CHANGELOG's advice)
 
 
 def test_run_outside_git_refuses_and_leaves_nothing(tmp_path, monkeypatch):

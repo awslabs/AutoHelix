@@ -541,8 +541,9 @@ def test_the_template_is_a_valid_config_once_it_has_a_goal(project):
     path.parent.mkdir(parents=True)
     text = Path(str(cli.TEMPLATE)).read_text()
     assert not re.search(r"autohelix (setup|init)\b", text)  # removed commands
-    for old in ("prompt.md", "-c "):
+    for old in ("prompt.md", "-c ", "autohelix.yaml"):
         assert old not in text
+    assert "autohelix/NAME/config.yaml" in text and "`autohelix run NAME`" in text
     path.write_text(text)
     config = load_config(project, config_file=path)
     errors = [i.message for i in config.validate() if i.level == "error"]

@@ -46,8 +46,7 @@ def _configure(project, repo, settings=None, **sections):
         "change_file": "hello.py", "change_content": "# iteration {iteration}", **(settings or {})}}, **sections}
     write_config(project, yaml.safe_dump(config, sort_keys=False))  # private (`/autohelix/` at the top only)
     git(repo, "add", "-A")
-    if git(repo, "status", "--porcelain"):  # the project's files, and a subfolder project's config
-        git(repo, "commit", "-qm", "config")
+    git(repo, "commit", "-qm", "config", "--allow-empty")  # the project's files, and a subfolder project's config
 
 
 def _prompt(project, text):

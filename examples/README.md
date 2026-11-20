@@ -26,8 +26,9 @@ guidance.
 | [**workflow-optimization**](workflow-optimization/) | AI workflow | Workflow code, prompt, and skill |
 
 The checks and evaluators remain outside the agent's editable surface. See each
-example's configuration or README for its exact gates, observe entries, and
-setup.
+example's configuration (`autohelix/<name>/config.yaml`; AlgoTune's and
+KernelBench's is `templates/config.yaml.tmpl`, which their setup writes there) or
+README for its exact gates, observe entries, and setup.
 
 ## Set Up an Example
 
@@ -44,7 +45,8 @@ python -m pip install -e ".[dev,examples]"
 ```
 
 `setup_example.py` lists the available examples and copies a bundled example
-into a clean standalone git repository:
+into a clean standalone git repository, config included (each example has one
+experiment, so a bare `autohelix run` runs it):
 
 ```bash
 python examples/setup_example.py --list
