@@ -13,7 +13,7 @@ from autohelix.config import load_config
 from autohelix.history import History, IterationResult
 from autohelix.report import WRITE_TO, build_report_prompt, read_report_info
 from autohelix.runs import RunPaths, git, write_json
-from tests.helpers import config_file, latest_run, write_config
+from tests.helpers import CONFIG, config_file, latest_run, write_config
 
 
 @pytest.fixture
@@ -101,13 +101,18 @@ class TestReportCommand:
         assert not (latest_run(project).report_draft).exists()
 
     def test_errors_when_agent_changes_files(self, runner, project):
+        # A committed experiment (shared), so the report's copy has its config.
+        git(project, "add", "-f", "autohelix")
+        git(project, "commit", "-qm", "commit the experiment")
+        tip = git(project, "rev-parse", "HEAD").stdout.strip()
+        git(project, "update-ref", latest_run(project).ref, tip)
+
         def change(**kwargs):
-            (kwargs["copy_path"] / ".gitignore").write_text("changed\n")
-        touch = change
-        with patch("autohelix.agents.create_agent", return_value=self._agent("ok", also=touch)):
+            (kwargs["copy_path"] / CONFIG).write_text("goal: changed\n")
+        with patch("autohelix.agents.create_agent", return_value=self._agent("ok", also=change)):
             result = runner.invoke(main, ["report", "-p", str(project)])
         assert "changed accepted code files" in result.output
-        assert ".gitignore" in result.output
+        assert CONFIG in result.output
 
     def test_timeout_is_capped(self, runner, project):
         config = latest_run(project).config

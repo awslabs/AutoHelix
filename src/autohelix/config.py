@@ -781,6 +781,19 @@ def _project_relative(project: Path, paths) -> list[str]:
     return found
 
 
+def config_relative(project: Path, config: Path) -> str:
+    """`config` relative to the project, as named (a linked autohelix/ keeps its names:
+    autohelix/NAME/config.yaml), else as resolved, else its resolved absolute path."""
+    named = Path(os.path.normpath(Path(config).absolute()))
+    for root in (Path(os.path.normpath(Path(project).absolute())), Path(project).resolve()):
+        if named.is_relative_to(root):
+            return named.relative_to(root).as_posix()
+    try:
+        return str(Path(config).resolve().relative_to(Path(project).resolve()))
+    except ValueError:
+        return str(Path(config).resolve())
+
+
 def load_config(project_path: Path, config_file: Path | None = None, *,
                 source: Path | None = None, template_text: str | None = None) -> Config:
     """Load configuration from `config_file`, else the project's config (`find_config`).
@@ -807,10 +820,10 @@ def load_config(project_path: Path, config_file: Path | None = None, *,
     elif template is not None:
         config._parse_errors.append("prompt_template must be a path to a template file")
     config.protected = _project_relative(Path(project_path), named)
-    named_at = Path(os.path.normpath(origin.absolute()))
+    relative = config_relative(Path(project_path), origin)  # as run.json names it (`select_run`)
     root = Path(os.path.normpath(Path(project_path).absolute()))
-    if named_at.is_relative_to(root) and config_name(named_at.relative_to(root)):
-        config.experiment = named_at.parent
+    if config_name(relative):
+        config.experiment = root / PurePosixPath(relative).parent
     config.protected += [f"{name}/" for name in _project_relative(Path(project_path), [root / CONFIG_DIR])
                          if f"{name}/" not in config.protected]
     return config

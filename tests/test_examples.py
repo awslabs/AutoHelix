@@ -48,3 +48,27 @@ def test_setup_example_lists_and_sets_up_the_bundled_examples(tmp_path):
     committed = subprocess.run(["git", "ls-files"], cwd=project, capture_output=True, text=True,
                                check=True).stdout.split()
     assert "autohelix/sorting/config.yaml" in committed
+
+
+def test_algotune_setup_writes_its_config_as_the_only_experiment(tmp_path, monkeypatch):
+    """examples/algotune/setup.py renders templates/config.yaml.tmpl as
+    autohelix/algotune/config.yaml (no download: the task file is written here; the
+    scaffold's own check/benchmark runs and git init are skipped)."""
+    spec = importlib.util.spec_from_file_location("algotune_setup", EXAMPLES / "algotune" / "setup.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def download(task_name, output_dir, root):
+        (output_dir / f"{task_name}.py").write_text(
+            "class Toy:\n    def generate_problem(self, n):\n        pass\n\n    def solve(self, p):\n        pass\n")
+        return True
+
+    monkeypatch.setattr(module, "find_algotune_root", lambda: None)
+    monkeypatch.setattr(module, "download_task", download)
+    monkeypatch.setattr(module, "git_init", lambda directory: None)
+    monkeypatch.setattr(module.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout="", stderr=""))
+    project = tmp_path / "toy"
+    assert module.setup("toy", project, problem_size=10)
+    assert project_configs(project) == [experiment_config("algotune")]
+    assert load_config(project).validate() == []

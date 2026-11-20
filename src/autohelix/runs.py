@@ -21,8 +21,8 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 from pathlib import Path
 
-from autohelix.config import (ENTRY_NAME, config_name, load_config, not_an_experiment, project_configs, run_command,
-                              template_text)
+from autohelix.config import (ENTRY_NAME, config_name, config_relative, load_config, not_an_experiment, project_configs,
+                              run_command, template_text)
 from autohelix.experiment import build_snapshot, snapshot_files, sweep_staging
 
 SCHEMA = 2
@@ -631,19 +631,6 @@ def critical_section():
                 raise KeyboardInterrupt
             else:
                 signal.raise_signal(signum)  # the default action, now that it is restored
-
-
-def config_relative(project: Path, config: Path) -> str:
-    """`config` relative to the project, as named (a linked autohelix/ keeps its names:
-    autohelix/NAME/config.yaml), else as resolved, else its resolved absolute path."""
-    named = Path(os.path.normpath(Path(config).absolute()))
-    for root in (Path(os.path.normpath(Path(project).absolute())), Path(project).resolve()):
-        if named.is_relative_to(root):
-            return named.relative_to(root).as_posix()
-    try:
-        return str(Path(config).resolve().relative_to(Path(project).resolve()))
-    except ValueError:
-        return str(Path(config).resolve())
 
 
 class NoRunToResume(RuntimeError):

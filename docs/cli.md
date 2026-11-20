@@ -516,7 +516,8 @@ from.
 ### Run ids
 
 A run's id is the local date and time it started, its experiment folder's
-name, and four random characters: `20261111-1432-perf-k3f9`. So
+name (lowercase, other characters as hyphens; left out when no letter or
+digit is left), and four random characters: `20261111-1432-perf-k3f9`. So
 `.autohelix/runs/` lists runs in the order they started. Every command that
 takes a run id also takes just the last part (`k3f9`), which is unique in the
 repository; git commands need the full id (`git merge autohelix/20261111-1432-perf-k3f9`).

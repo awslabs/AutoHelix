@@ -40,8 +40,8 @@ has the checklist.
   name; those now report nothing.
 - **Every experiment is a folder in `autohelix/`, and its config is the
   folder's `config.yaml`: `autohelix/<name>/config.yaml`** (`autohelix run
-  <name>`; a bare `autohelix run` runs the only one, and with several names
-  them). The top-level `autohelix.yaml` is no longer a config, nor is
+  <name>`; a bare `autohelix run` runs the only experiment, or lists them
+  when there are several). The top-level `autohelix.yaml` is no longer a config, nor is
   `autohelix/<name>.yaml`; development builds' `autohelix/<name>/autohelix.yaml`
   is now `autohelix/<name>/config.yaml`, the name the run's stored copy
   (`runs/<id>/config.yaml`) and `$AUTOHELIX_CONFIG` have. A run whose config

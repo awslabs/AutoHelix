@@ -360,9 +360,12 @@ def test_a_folder_with_only_its_config_stores_an_empty_folder_and_shows_none(pro
     assert resumed(project, paths).exit_code == 0
 
 
-def test_a_folder_with_only_its_config_stores_an_empty_one(project):
+def test_a_bare_run_of_the_only_experiment_stores_its_folder(project):
+    """A bare `run` takes the fixture's only experiment, autohelix/demo/, and stores its
+    folder (empty: it holds only its config)."""
     assert cli(project, "run", "-n", "1", "--no-report").exit_code == 0
     [(paths, _)] = project_runs(project)
+    assert "-demo-" in paths.run_id and paths.read_identity()["config_path"] == "autohelix/demo/config.yaml"
     assert paths.experiment.is_dir() and not experiment.has_files(paths.experiment)
 
 
@@ -855,3 +858,16 @@ def test_a_file_named_autohelix_is_frozen_as_the_folder_would_be(project):
     shutil.rmtree(project / "autohelix")
     (project / "autohelix").write_text("not a folder\n")
     assert load_config(project, project / "other.yaml").frozen_names() == ["other.yaml", "autohelix/"]
+
+
+def test_a_config_not_from_an_experiment_is_refused_by_the_path_check(project):
+    """`uncommitted_command_paths` advises in terms of the experiment folder, so a Config
+    without one (`from_dict`) whose command names an autohelix/ path is refused, not
+    an AttributeError."""
+    from autohelix.checks import uncommitted_command_paths
+    from autohelix.config import Config
+
+    assert uncommitted_command_paths(Config.from_dict({"goal": "g", "gates": ["sh run.sh"]}), project) == []
+    config = Config.from_dict({"goal": "g", "gates": ["sh autohelix/run.sh"]})
+    with pytest.raises(ValueError, match="isn't an experiment's"):
+        uncommitted_command_paths(config, project)

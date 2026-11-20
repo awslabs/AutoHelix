@@ -125,6 +125,9 @@ def uncommitted_command_paths(config: Config, project_path: Path) -> list[str]:
     named = [path for path in named if path.rstrip("/") != "autohelix" and not any(c in path for c in "*?[{$")]
     if not named:
         return []
+    if config.experiment is None:  # a Config not loaded from autohelix/NAME/config.yaml (`from_dict`)
+        raise ValueError("A command names a path under autohelix/, but the config isn't an experiment's: "
+                         "load it from autohelix/NAME/config.yaml.")
     listed = run_git(["git", "ls-tree", "-r", "-z", "--name-only", "HEAD"], cwd=project_path,
                      capture_output=True, env=git_env())
     if listed.returncode != 0:
