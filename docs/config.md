@@ -23,7 +23,8 @@ see [Phases → Candidate copies](phases.md#candidate-copies).
 ## Where configs live
 
 A run stores its config when it starts, so git is only for sharing configs.
-Setup keeps `autohelix/` private (`/autohelix/` in `.git/info/exclude`) unless
+Setup keeps `autohelix/` private (`/autohelix/` in the local exclude file,
+`git rev-parse --git-path info/exclude`) unless
 you share an experiment by committing it. The setups, and how to share one experiment
 out of a private folder: [Concepts → Where configs live](concepts.md#where-configs-live).
 
@@ -397,10 +398,12 @@ observe:
     command: python "$AUTOHELIX_EXPERIMENT/render.py"
 ```
 
-The copy's files are read-only and keep their exec bit; a command that changes
-its copy changes nothing stored. `$AUTOHELIX_EXPERIMENT` is unset for a config
-without a folder (the project's `autohelix.yaml`), so a command using it fails
-visibly. The agent gets the same files in `.autohelix-iteration/experiment/`
+The copy's files are read-only and keep their read and exec bits; a command
+that changes its copy changes nothing stored. `$AUTOHELIX_EXPERIMENT` is unset
+for a config without a folder (the project's `autohelix.yaml`), and for a
+folder holding only its config, so a command using it fails visibly. Links are
+followed only inside `autohelix/` (`metrics.py -> ../lib/metrics.py`); a
+committed project file is named by its path (`python scripts/bench.py`). The agent gets the same files in `.autohelix-iteration/experiment/`
 (in its prompt's reading list), and `ask`/`review` in a run in
 `.autohelix-iteration/experiment/` of their own copy.
 
@@ -497,7 +500,7 @@ changes to tests/x.py were discarded: outside the editable scope", or "...:
 frozen" for frozen paths). A rejected attempt whose changes were all discarded
 keeps no tree and gives the next agent no `rejected.patch`.
 
-The config file, its `prompt_template:` file and its experiment folder are
+The config file, its `prompt_template:` file and `autohelix/` are
 always frozen (the run keeps the config it started with:
 [CLI → Config files](cli.md#config-files)). Scripts
 the config calls are code: list them under `frozen:` if they must not change.

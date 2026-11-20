@@ -256,7 +256,7 @@ The variables a template gets are a stable, documented contract:
 | `gates` | Every gate in list order: `{text, kind}`, `kind` being `command` or `metric`; a metric gate's text says what it compares ("speed: at most 5% worse than the last accepted iteration"). Elsewhere (console header, `view ID --json`, the `gates` of history records) a metric gate goes by its short text, `speed regress 5%` or `speed improve 0%` |
 | `observe` | Every observe entry: `{name, kind, metric_labels}`, `kind` being `command` (with `command`) or `review` (with `prompt`, on one line); `metric_labels` like `speed (↑)` |
 | `stop` | The stop commands |
-| `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files and the experiment folder (`autohelix/NAME/`; always frozen) |
+| `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files and `autohelix/` (always frozen, for every config) |
 | `notes_path` | Where this iteration's notes go (in the copy) |
 | `hints` | `.autohelix-iteration/hints.md` if there are hints, else empty |
 | `hints_text` | The hints' text (the lines `autohelix hint` added, oldest first), else empty |
@@ -270,7 +270,7 @@ The variables a template gets are a stable, documented contract:
 | `time_limit` | `agent.timeout` as a compact duration (`15m`), or empty |
 | `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group. Members whose state failed to copy are left out |
 | `imported` | The run this one continues from (`run --import`), or none (also when its state isn't in the copy, e.g. that run was deleted): `{id, short, path, description, same_code}`, `path` being its state in the copy (`.autohelix-iteration/runs/<id>/`, read-only), `description` its line as in `group_runs`, `same_code` whether its tip holds the same tree as the copy's code (false when unknown); its code is at `autohelix/<id>`. Not listed in `group_runs`, even when it is in the group |
-| `experiment` | `.autohelix-iteration/experiment/`, the copy of the run's stored experiment folder (`runs/<id>/experiment/`), or empty for a config without one (the project's `autohelix.yaml`) |
+| `experiment` | `.autohelix-iteration/experiment/`, the copy of the run's stored experiment folder (`runs/<id>/experiment/`), or empty for a config without one (the project's `autohelix.yaml`) or a folder holding only its config |
 
 A custom template is a copy: it won't pick up future changes to the built-in
 one. Remove `prompt_template:` to return to it. A run warns when a custom
@@ -320,9 +320,13 @@ autohelix/
 `autohelix run console` runs `autohelix/console/autohelix.yaml`. The run stores
 the config, its template and the rest of the folder
 ([Configuration → Experiment folder](config.md#experiment-folder)); a link is
-followed when it points inside the checkout, so `metrics.py` is stored as the
-file it points to. A link outside the checkout, or into a dot-name inside it
-(`.git/`, `.autohelix/`, `.env`), is refused. Use relative links: they still work in a clone of
+followed when it points inside `autohelix/`, so `metrics.py` is stored as the
+file it points to. A link out of `autohelix/` (even to a committed file), or
+into a dot-name inside it (`autohelix/.git/`, `.env`), is refused: a committed
+project file is in every copy, so a command names it by its path
+(`python scripts/bench.py`); an ignored document (under `notes/`, say) is
+copied into the folder (stored and frozen with the run) or named by its path
+in the goal (read live). Use relative links: they still work in a clone of
 `autohelix/`'s own repository.
 
 `autohelix/README.md` is the coordinator's notes: the current state, decisions
@@ -343,20 +347,24 @@ committed one. Git is only for sharing them.
 
 | Setup | How | When |
 |---|---|---|
-| **Private** (setup's default) | `/autohelix/` in `.git/info/exclude` | your own experiments; their scripts live in their folders |
+| **Private** (setup's default) | `/autohelix/` in the local exclude file | your own experiments; their scripts live in their folders |
 | **Private, tracked** | private, plus `git init` in `autohelix/` | as private, with history, backup and a remote to clone onto other machines |
 | **Committed** | commit `autohelix/`, or one experiment of it, with the project | shared experiments (a team's benchmark) |
 | Team-wide ignore | `/autohelix/` in `.gitignore` | everyone on the team keeps their configs private |
 
-- Use `.git/info/exclude` over `.gitignore` for a private folder: it is local
-  to your clone, needs no commit, and collaborators don't see it. A private
-  top-level config is `/autohelix.yaml` in the same file.
+- Use the local exclude file over `.gitignore` for a private folder: it is
+  local to your clone, needs no commit, and collaborators don't see it. It is
+  `git rev-parse --git-path info/exclude` (`.git/info/exclude`, except in a
+  linked worktree, where `.git` is a file). A private top-level config is
+  `/autohelix.yaml` in the same file.
+- Its patterns start at the repository's top: for a project in a subfolder,
+  `/<subfolder>/autohelix/` (`/services/api/autohelix/`).
 - An already committed config must be untracked first (`git rm -r --cached
   autohelix`, then commit), or the exclude has no effect.
 - Private, tracked:
 
   ```bash
-  echo /autohelix/ >> .git/info/exclude
+  echo /autohelix/ >> "$(git rev-parse --git-path info/exclude)"
   cd autohelix && git init && git add perf/autohelix.yaml && git commit -m "perf config"
   ```
 
@@ -374,8 +382,8 @@ committed one. Git is only for sharing them.
   commit on the branch after the run lands puts the branch past the run's tip,
   and `resume` refuses. `run` warns when the config, its template or a file of
   its folder isn't committed; ignored files never move the branch.
-- A committed experiment folder is in every copy, and frozen: the agent's edits
-  to it are discarded.
+- A committed `autohelix/` (or an experiment of it) is in every copy, and
+  frozen: the agent's edits to it, `autohelix/lib/` included, are discarded.
 
 ## Runs and run state
 

@@ -16,6 +16,7 @@ from rich.text import Text
 
 from autohelix import terminal
 from autohelix.config import Config
+from autohelix.experiment import has_files
 from autohelix.history import History
 from autohelix.runs import RunPaths, RunLock, claim_copies, ensure_copies, remove_copies, run_tip, git
 
@@ -60,7 +61,7 @@ def build_report_prompt(config: Config, project: Path, draft: Path, run_id: str)
     reason = (read_run_status(project, paths.run_id) or {}).get("stop_reason")
     experiment = ("\n- experiment/: the experiment's folder (its scripts and material, without the config), as stored "
                   "when the run started; commands got a copy of it as $AUTOHELIX_EXPERIMENT."
-                  if paths.experiment.is_dir() else "")
+                  if has_files(paths.experiment) else "")
     ended = f"\nThe run ended because: {reason['detail']}.\n" if isinstance(reason, dict) and reason.get("detail") else ""
     return f"""\
 Write a summary of this AutoHelix run.

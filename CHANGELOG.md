@@ -66,22 +66,30 @@ has the checklist.
 
 - **A run keeps its experiment folder's files** (`runs/<id>/experiment/`):
   the scripts and material beside `autohelix/<name>/autohelix.yaml`, links
-  inside the checkout followed. `run` refuses a folder with a link outside the
-  checkout or into a dot-name inside it (`.git/`, `.env`), a non-regular file, or over 200 files or 10 MB. `resume` refuses
+  inside `autohelix/` followed (`metrics.py -> ../lib/metrics.py`; a
+  committed project file is named by its path instead). `run` refuses a folder
+  with a link out of `autohelix/` or into a dot-name inside it
+  (`autohelix/.git/`, `.env`), a folder reached twice through links, a
+  non-regular or unreadable file, or over 200 files, 200 folders or 10 MB.
+  The stored files keep their read and exec bits, without write bits. A folder
+  holding only its config gives commands, the agent and judges no copy.
+  `resume` refuses
   when the folder's files changed since, naming them. Gate, observe and stop
   commands get a copy of it as `$AUTOHELIX_EXPERIMENT`
   (`python "$AUTOHELIX_EXPERIMENT/render.py"`); the agent gets one in
-  `.autohelix-iteration/experiment/`, `ask`/`review` in their own copy. The
-  folder is always frozen: an agent's edit to a committed one is discarded.
-  `run --check` warns about a command that names an `autohelix/` path the
-  commit lacks.
+  `.autohelix-iteration/experiment/`, `ask`/`review` in their own copy
+  (read-only files). All of `autohelix/` is always frozen, for every config:
+  an agent's edit to a committed experiment or `autohelix/lib/` is discarded.
+  `run --check` warns about a command that names an `autohelix/` path that
+  exists but the commit lacks.
 - **The end block's `next` line and the web run page name the run's folder**
   (`.autohelix/runs/<id>/`: `report.md`, `history.jsonl`, `iterations/`).
   Each segment's start record in `segments.jsonl` has `autohelix_version`.
 - **Bare `autohelix`** in a terminal: the project's runs, then a Claude Code,
   Codex or OpenCode session with the bundled skill, which asks what next: a
   question about the runs, or a new experiment. The skill keeps a new
-  experiment folder private (`/autohelix/` in `.git/info/exclude`) unless you
+  experiment folder private (`/autohelix/` in the local exclude file,
+  `git rev-parse --git-path info/exclude`) unless you
   want it shared, and keeps the coordinator's notes in `autohelix/README.md`
   (the session reads it first).
 - **`autohelix view`**: the runs on a live web page (`127.0.0.1:8765`; a page

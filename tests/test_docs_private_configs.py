@@ -86,7 +86,8 @@ def test_the_page_shows_the_tested_exclude_entries():
 
     page = (Path(__file__).resolve().parents[1] / "docs" / "concepts.md").read_text()
     section = " ".join(page[page.index("### Where configs live"):page.index("## Runs and run state")].split())
-    for line in ("echo /autohelix/ >> .git/info/exclude",
+    for line in ('echo /autohelix/ >> "$(git rev-parse --git-path info/exclude)"',
+                 "`/<subfolder>/autohelix/`",
                  "`/autohelix.yaml`",
                  "git rm -r --cached autohelix",
                  "git add -f autohelix/bench/",

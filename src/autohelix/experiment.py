@@ -8,17 +8,18 @@ stores of it at creation, as `runs/<id>/experiment/` (`RunPaths.experiment`).
 `build_snapshot` copies it into a folder beside its destination, which the caller
 renames into place; `snapshot_changes` is what `resume` compares."""
 
+import errno
 import os
 import secrets
 import shutil
 import stat
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from autohelix.config import CONFIG_FILE, Config, ConfigError
+from autohelix.config import CONFIG_DIR, CONFIG_FILE, Config, ConfigError
 
 MAX_FILES = 200
+MAX_FOLDERS = 200
 MAX_BYTES = 10 * 1024 * 1024
 SKIPPED_FOLDERS = ("__pycache__",)
 
@@ -26,18 +27,16 @@ SKIPPED_FOLDERS = ("__pycache__",)
 @dataclass(frozen=True)
 class SnapshotFile:
     """One file of the snapshot: its name in the folder (`/`-separated), the file read
-    (a link's target), its size and whether it is executable."""
+    (a link's target), its size and its permission bits."""
 
     name: str
     source: Path
     size: int
-    executable: bool
+    mode: int
 
-
-def _checkout(project: Path) -> Path:
-    """The git checkout links may point into (the project's top level)."""
-    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=project, capture_output=True, text=True)
-    return Path(os.path.realpath(top.stdout.strip() if top.returncode == 0 and top.stdout.strip() else project))
+    @property
+    def executable(self) -> bool:
+        return bool(self.mode & stat.S_IXUSR)
 
 
 def _size(count: int) -> str:
@@ -52,77 +51,116 @@ def shown(project: Path, folder: Path) -> str:
         return str(folder) + "/"
 
 
+def has_files(stored: Path) -> bool:
+    """Whether a run's snapshot (`RunPaths.experiment`) holds a file: an empty one (a
+    folder with only its config) is kept for `resume` to compare, and otherwise treated
+    as no folder (no copy, no `$AUTOHELIX_EXPERIMENT`, no prompt line)."""
+    return os.path.isdir(stored) and not os.path.islink(stored) and any(
+        files for _, _, files in os.walk(stored))
+
+
 def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
     """What the run stores of the config's experiment folder, by name; None without one
     (the project's autohelix.yaml).
 
     Left out: the config file and the prompt template (stored already), dotfiles and
-    dot-folders, `__pycache__/`. A link is followed when its target is inside the git
-    checkout and not under a dot-name there (`.git/`, `.autohelix/`, `.env`). Raises
-    ConfigError, naming the files, for other links (or links to nothing),
-    files that aren't regular (a FIFO, a socket) and a folder over the cap
-    (`MAX_FILES`, `MAX_BYTES`)."""
+    dot-folders, `__pycache__/`. A link is followed when its target is inside the
+    project's autohelix/ (`lib -> ../lib`) and not under a dot-name there
+    (`autohelix/.git/`); a committed project file is named by its path instead. Raises
+    ConfigError, naming the files, for other links (or links to nothing), a folder
+    reached twice (a link to one that holds it, or a second way to one stored already),
+    files that aren't regular (a FIFO, a socket) or can't be read, and, as soon as the
+    walk passes it, the cap (`MAX_FILES`, `MAX_FOLDERS`, `MAX_BYTES`)."""
     folder = config.experiment
     if folder is None:
         return None
     project = Path(project)
-    checkout = _checkout(project)
+    root, allowed = os.path.realpath(folder), Path(os.path.realpath(project / CONFIG_DIR))
     left_out = {os.path.realpath(folder / CONFIG_FILE)}
     if config.prompt_template is not None:
         left_out.add(os.path.realpath(config.prompt_template))
+    where = shown(project, folder)
     found: list[SnapshotFile] = []
     refused: list[str] = []
+    visited = {root: ""}  # each folder walked, by real path: its name in the snapshot
+    total = 0
 
-    def visit(directory: Path, prefix: str, seen: frozenset[str]) -> None:
-        with os.scandir(directory) as scan:
-            entries = sorted(scan, key=lambda e: e.name)
+    def too_large(what: str) -> ConfigError:
+        largest = sorted(found, key=lambda file: (-file.size, file.name))[:5]
+        return ConfigError(
+            f"{where} is too large to store with the run: {what} (at most {MAX_FILES} files, "
+            f"{MAX_FOLDERS} folders and {MAX_BYTES // (1024 * 1024)} MB)."
+            + (" Largest: " + ", ".join(f"{file.name} ({_size(file.size)})" for file in largest) + "."
+               if largest else "")
+            + " Keep datasets out of it: name them by path (in the goal or a command) instead.")
+
+    def visit(directory: Path, prefix: str) -> None:
+        nonlocal total
+        try:
+            with os.scandir(directory) as scan:
+                entries = sorted(scan, key=lambda e: e.name)
+        except OSError as e:
+            refused.append(f"{prefix or 'the folder itself'} (can't be read: {e.strerror or e})")
+            return
         for entry in entries:
             if entry.name.startswith("."):
                 continue
             name = prefix + entry.name
             path = Path(entry.path)
-            target = os.path.realpath(path)
-            if target in left_out:
-                continue
-            if entry.is_symlink():
-                link = os.readlink(path)
-                if not Path(target).is_relative_to(checkout):
-                    refused.append(f"{name} (a link to {link}, outside the checkout)")
+            try:
+                target = os.path.realpath(path)
+                if target in left_out:
                     continue
-                hidden = next((part for part in Path(target).relative_to(checkout).parts if part.startswith(".")),
-                              None)
-                if hidden is not None:  # .git/ (its config may hold credentials), .autohelix/, .env, ...
-                    refused.append(f"{name} (a link to {link}, into {hidden})")
+                link = entry.is_symlink()
+                if link:
+                    pointed = os.readlink(path)
+                    if not Path(target).is_relative_to(allowed):
+                        refused.append(f"{name} (a link to {pointed}, outside {CONFIG_DIR}/)")
+                        continue
+                    hidden = next((part for part in Path(target).relative_to(allowed).parts
+                                   if part.startswith(".")), None)
+                    if hidden is not None:  # autohelix/.git/ (its config may hold credentials), .env, ...
+                        refused.append(f"{name} (a link to {pointed}, into {hidden})")
+                        continue
+                    if not os.path.exists(target):
+                        refused.append(f"{name} (a link to {pointed}, which doesn't exist)")
+                        continue
+                info = os.stat(target)
+                directory_entry = stat.S_ISDIR(info.st_mode)
+                if directory_entry and entry.name in SKIPPED_FOLDERS:
                     continue
-                if not os.path.exists(target):
-                    refused.append(f"{name} (a link to {link}, which doesn't exist)")
-                    continue
-            info = os.stat(target)
-            if stat.S_ISDIR(info.st_mode):
-                if entry.name in SKIPPED_FOLDERS:
-                    continue
-                if target in seen:
-                    refused.append(f"{name} (a link to a folder that contains it)")
-                    continue
-                visit(path, name + "/", seen | {target})
-            elif stat.S_ISREG(info.st_mode):
-                found.append(SnapshotFile(name, Path(target), info.st_size, bool(info.st_mode & stat.S_IXUSR)))
-            else:
-                refused.append(f"{name} (not a regular file)")
+                if directory_entry:
+                    if target in visited:
+                        first = visited[target]
+                        if first == "" or name.startswith(first + "/"):
+                            refused.append(f"{name} ({'a link to ' if link else ''}a folder that contains it)")
+                        else:
+                            refused.append(f"{name} (the same folder as {first}/, stored already)")
+                        continue
+                    visited[target] = name
+                    if len(visited) - 1 > MAX_FOLDERS:
+                        raise too_large(f"over {MAX_FOLDERS} folders")
+                    visit(path, name + "/")
+                elif stat.S_ISREG(info.st_mode):
+                    if not os.access(target, os.R_OK):
+                        refused.append(f"{name} (can't be read: {os.strerror(errno.EACCES)})")
+                        continue
+                    found.append(SnapshotFile(name, Path(target), info.st_size, stat.S_IMODE(info.st_mode)))
+                    total += info.st_size
+                    if len(found) > MAX_FILES:
+                        raise too_large(f"over {MAX_FILES} files")
+                    if total > MAX_BYTES:
+                        raise too_large(f"over {MAX_BYTES // (1024 * 1024)} MB")
+                else:
+                    refused.append(f"{name} (not a regular file)")
+            except OSError as e:  # vanished meanwhile, a name too long, ...
+                refused.append(f"{name} (can't be read: {e.strerror or e})")
 
-    visit(folder, "", frozenset({os.path.realpath(folder)}))
-    where = shown(project, folder)
+    visit(folder, "")
     if refused:
         raise ConfigError(f"{where} can't be stored with the run: " + "; ".join(refused) + ". "
-                          "Move these out of it, or link only to files inside the checkout.")
-    total = sum(file.size for file in found)
-    if len(found) > MAX_FILES or total > MAX_BYTES:
-        largest = sorted(found, key=lambda file: (-file.size, file.name))[:5]
-        raise ConfigError(
-            f"{where} is too large to store with the run: {len(found)} files, {_size(total)} "
-            f"(at most {MAX_FILES} files and {MAX_BYTES // (1024 * 1024)} MB). Largest: "
-            + ", ".join(f"{file.name} ({_size(file.size)})" for file in largest) + ". "
-            "Keep datasets out of it: name them by path (in the goal or a command) instead.")
+                          f"Move these out of it, or link only to files inside {CONFIG_DIR}/ (name a project "
+                          "file by its path in a command instead).")
     return found
 
 
@@ -132,8 +170,9 @@ STAGING_PREFIX = ".experiment-"
 def build_snapshot(files: list[SnapshotFile], beside: Path) -> Path:
     """Copy `files` into a new folder in `beside`, named with a leading dot (no run
     listing reads it), and return it for the caller to rename into place. Files lose
-    their write bits and keep their exec bit; folders stay writable by their owner, so
-    the snapshot can be deleted. On failure, nothing is left."""
+    their write bits and keep the others (a private file stays private); folders stay
+    writable by their owner, so the snapshot can be deleted. On failure, nothing is
+    left."""
     beside.mkdir(parents=True, exist_ok=True)
     staging = beside / f"{STAGING_PREFIX}{secrets.token_hex(4)}"
     staging.mkdir(mode=0o755)
@@ -142,7 +181,7 @@ def build_snapshot(files: list[SnapshotFile], beside: Path) -> Path:
             destination = staging / file.name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(file.source, destination)
-            os.chmod(destination, 0o555 if file.executable else 0o444)
+            os.chmod(destination, file.mode & 0o555)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -160,8 +199,8 @@ def sweep_staging(beside: Path) -> None:
 def snapshot_changes(config: Config, project: Path, stored: Path) -> str | None:
     """How the live experiment folder differs from a run's snapshot (`stored`), as
     words: the files changed (bytes or exec bit), added and removed, or why the folder
-    can no longer be stored; None when they match. Compared file by file: the snapshot
-    is the manifest."""
+    can no longer be stored (a file that can't be read too); None when they match.
+    Compared file by file: the snapshot is the manifest."""
     try:
         live = {file.name: file for file in snapshot_files(config, project) or []}
     except ConfigError as e:
@@ -171,9 +210,12 @@ def snapshot_changes(config: Config, project: Path, stored: Path) -> str | None:
     changed = []
     for name in sorted(live.keys() & kept.keys()):
         file, copy = live[name], kept[name]
-        if (file.executable != bool(copy.stat().st_mode & stat.S_IXUSR)
-                or file.size != copy.stat().st_size or file.source.read_bytes() != copy.read_bytes()):
-            changed.append(name)
+        try:
+            if (file.executable != bool(copy.stat().st_mode & stat.S_IXUSR)
+                    or file.size != copy.stat().st_size or file.source.read_bytes() != copy.read_bytes()):
+                changed.append(name)
+        except OSError as e:  # gone or unreadable since the walk
+            return f"it can no longer be stored: {e.filename or name} can't be read ({e.strerror or e})"
     parts = [f"{label}: {', '.join(names)}" for label, names in (
         ("changed", changed), ("added", sorted(live.keys() - kept.keys())),
         ("removed", sorted(kept.keys() - live.keys()))) if names]

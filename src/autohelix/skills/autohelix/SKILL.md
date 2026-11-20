@@ -163,13 +163,16 @@ autohelix/
 Helpers several experiments share go in `autohelix/lib/`, and each experiment
 links what it uses with a relative link (`ln -s ../lib/metrics.py
 autohelix/console/`), so it survives cloning `autohelix/` elsewhere. Links are
-followed only inside the checkout, and not into dot-names there (`.git/`,
-`.env`); other links are refused. A helper the
-project commits can stay in the project instead (`scripts/`).
+followed only inside `autohelix/`, and not into dot-names there
+(`autohelix/.git/`, `.env`); other links are refused. A helper the project
+commits stays in the project (`scripts/`) and commands name it by its path
+(`python scripts/bench.py`): committed files are in every copy. All of
+`autohelix/` is frozen: agents never edit experiment configs or material.
 
-A document the goal relies on (a design, a spec): link it into the folder to
-freeze it with the run (editing it then makes `resume` refuse), or name it by
-its path in the goal to keep it live.
+A document the goal relies on (a design, a spec): to freeze it with the run
+(editing it then makes `resume` refuse), keep it in the experiment folder or
+`autohelix/` and link it; an ignored one elsewhere (under `notes/`) is copied
+into the folder. To keep it live, name it by its path in the goal.
 
 Preserve other configs and the run state in `.autohelix/`. A config in the
 first format (`constraints:`, `metrics:`, `reviewer:`, ...) no longer loads:
@@ -247,7 +250,10 @@ needed to finish setup; report what ran and its result, and what didn't run and
 so is unverified.
 
 An experiment folder is private by default. When `autohelix/` has no tracked
-files and isn't ignored yet, add `/autohelix/` to `.git/info/exclude` and say
+files and isn't ignored yet, add `/autohelix/` to the local exclude file
+(`git rev-parse --git-path info/exclude`: `.git` is a file in a linked
+worktree; for a project in a subfolder the pattern is `/<subfolder>/autohelix/`,
+as patterns start at the repository's top) and say
 so in one line: "kept private: commit it to share it, or `git init` in
 autohelix/ for history". Commit only when the user wants the experiment shared
 (`git add -f autohelix/<name>/` plus the `lib/` files it links: an excluded

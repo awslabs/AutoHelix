@@ -67,7 +67,7 @@ def test_a_config_with_a_template_is_stored_verbatim_and_its_template_beside_it(
     config = load_run_config(paths)
     assert load_template(config) == (project / "prompts" / "p.md").read_text()
     assert config.prompt_template == (project / "prompts" / "p.md").resolve()
-    assert config.protected == ["autohelix.yaml", "prompts/p.md"]
+    assert config.protected == ["autohelix.yaml", "prompts/p.md", "autohelix/"]
 
 
 def test_a_config_without_template_stores_no_template(started):
@@ -85,7 +85,7 @@ def test_the_stored_template_text_is_the_template(tmp_path):
     assert load_template(config) == "Hi {{ goal }}"
     assert config.prompt_template == (tmp_path / "prompts" / "p.md").resolve()  # next to the source
     assert not [i for i in config.validate() if i.level == "error"]  # the file needn't exist
-    assert config.protected == ["autohelix.yaml", "prompts/p.md"]
+    assert config.protected == ["autohelix.yaml", "prompts/p.md", "autohelix/"]
 
 
 def test_a_mapping_as_prompt_template_is_a_config_error(tmp_path):
@@ -117,13 +117,13 @@ def test_protected_names_are_shown_plain_and_matched_escaped(tmp_path):
     (project / "a.yaml").write_text("goal: g\nprompt_template: p[1].md\n")
     (project / "b.yaml").write_text("goal: g\nprompt_template: ../outside.md\n")
     config = load_config(project, project / "a.yaml")
-    assert config.protected == config.frozen_names() == ["a.yaml", "p[1].md"]
-    assert config.frozen_patterns() == ["a.yaml", "p[[]1].md"]
+    assert config.protected == config.frozen_names() == ["a.yaml", "p[1].md", "autohelix/"]
+    assert config.frozen_patterns() == ["a.yaml", "p[[]1].md", "autohelix/"]
     assert not Scope(frozen=tuple(config.frozen_patterns())).allows("p[1].md")
     assert Scope(frozen=tuple(config.frozen_patterns())).allows("p1.md")
     config = load_config(project, project / "b.yaml")
-    assert config.protected == ["b.yaml"]
-    assert config.frozen_patterns() == ["b.yaml"] and config.frozen == []
+    assert config.protected == ["b.yaml", "autohelix/"]
+    assert config.frozen_patterns() == ["b.yaml", "autohelix/"] and config.frozen == []
 
 
 def test_a_symlinked_config_and_template_are_frozen_as_named_and_as_resolved(tmp_path):
@@ -134,7 +134,7 @@ def test_a_symlinked_config_and_template_are_frozen_as_named_and_as_resolved(tmp
     (tmp_path / "p.md").symlink_to("real/t.md")
     config = load_config(tmp_path, tmp_path / "autohelix.yaml")
     # The template's path resolves next to the config's target (real/../p.md), itself a link.
-    assert config.protected == ["autohelix.yaml", "real/c.yaml", "p.md", "real/t.md"]
+    assert config.protected == ["autohelix.yaml", "real/c.yaml", "p.md", "real/t.md", "autohelix/"]
     scope = Scope(frozen=tuple(config.frozen_patterns()))
     assert not any(scope.allows(name) for name in config.protected)
 

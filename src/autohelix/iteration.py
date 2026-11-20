@@ -15,6 +15,7 @@ import stat
 from contextlib import contextmanager
 from pathlib import Path
 
+from autohelix.experiment import has_files
 from autohelix.formatting import SUMMARY_LIMIT, clean
 from autohelix.history import History
 from autohelix.launcher import write_launcher
@@ -96,8 +97,9 @@ def prepare_state(paths: RunPaths, copy, *, members=(), prompt: str | None = Non
     `prompt.md` (this iteration's prompt), `history.jsonl`, `hints.md`,
     `iterations/NNN/` for the iterations `seeded_iterations` picks (below `before`; as
     `_seed_iteration` copies them), `experiment/` (a copy of the run's stored
-    experiment folder, when it has one), and for each other run shown (`members`: the
-    imported run and the group's, as `IterationWorkspace.others` lists them) its
+    experiment folder, files read-only, when it holds any: `has_files`), and for each
+    other run shown (`members`: the imported run and the group's, as
+    `IterationWorkspace.others` lists them) its
     `run.json`, `history.jsonl` and `notes/` under `runs/<id>/`. Copies are anything
     with a `working_dir`. Project state remains reachable by absolute path; this is
     not access isolation."""
@@ -112,7 +114,9 @@ def prepare_state(paths: RunPaths, copy, *, members=(), prompt: str | None = Non
             shutil.copy2(source, state / source.name)
     _copy_notes(paths.notes, state / "notes")
     (state / "notes").mkdir(exist_ok=True)
-    copy_dir(paths.project, paths.experiment.relative_to(paths.project).parts, state / "experiment")
+    if has_files(paths.experiment):
+        copy_dir(paths.project, paths.experiment.relative_to(paths.project).parts, state / "experiment",
+                 read_only=True)
     if paths.run_id:
         records = [r for r in History(paths.project, paths.run_id).load() if before is None or r.iteration < before]
         for n, record in seeded_iterations(records):
@@ -360,7 +364,7 @@ class IterationWorkspace:
         for each named source a copy of that folder under the same name (an empty folder
         if the source doesn't exist or is reached through a symlink; no entry for None),
         and `experiment/`, a copy of the run's stored experiment folder
-        (`$AUTOHELIX_EXPERIMENT`), when the run has one.
+        (`$AUTOHELIX_EXPERIMENT`), when the run has one with files (`has_files`).
         Yields {"call": call, "scratch": path, "logs": path, "bin": path, <name>: path, ...}.
         A copy keeps what the command reads from run state fixed, whatever the command or
         the agent writes meanwhile."""
@@ -374,7 +378,7 @@ class IterationWorkspace:
             paths["scratch"].mkdir()
             paths["logs"].mkdir()
             paths["bin"] = write_launcher(folder / "bin")  # `autohelix`, immune to the command's env
-            if os.path.isdir(self._run.paths.experiment):
+            if has_files(self._run.paths.experiment):
                 sources = {**sources, "experiment": self._run.paths.experiment}
             for name, source in sources.items():
                 if source is None:

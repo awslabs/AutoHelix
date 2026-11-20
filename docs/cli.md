@@ -153,13 +153,15 @@ Which config a command uses:
 - A run of an experiment folder also stores the folder's other files, read-only,
   as `.autohelix/runs/<id>/experiment/`: its scripts and material, without the
   config, the template, dotfiles, dot-folders and `__pycache__/`. A link is
-  followed when it points inside the git checkout (`metrics.py ->
-  ../lib/metrics.py`); `run` refuses a link outside it, a file that isn't a
-  regular file, and a folder over 200 files or 10 MB, before it writes anything
-  (`run --check` too). Keep datasets out of the folder: name them by path.
+  followed when it points inside `autohelix/` (`metrics.py ->
+  ../lib/metrics.py`); `run` refuses a link out of it (a committed project
+  file is named by its path instead), a folder reached twice through links, a
+  file that isn't a regular file or can't be read, and a folder over 200
+  files, 200 folders or 10 MB, before it writes anything (`run --check` too).
+  Keep datasets out of the folder: name them by path.
 - `resume` refuses when the file's config has changed since: see
   [`autohelix resume`](#autohelix-resume) (Its config).
-- The config file, its `prompt_template:` file and its experiment folder are
+- The config file, its `prompt_template:` file and all of `autohelix/` are
   always frozen, whatever `scope:` says (a committed folder is in the agent's
   copy, but edits to it are discarded). Other scripts the config calls
   (`bench.py`, gate scripts) are code: they move with the run's commits; list

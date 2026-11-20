@@ -554,7 +554,8 @@ def candidate_target(previous: bool) -> Iterator[Target]:
                 shown.write_bytes(b"".join(line for line in stdout.read_bytes().splitlines(keepends=True)
                                            if not line.lstrip().startswith(b"##autohelix[")))
         experiment = None  # the command may have changed its copy: only regular files and folders
-        if (source := os.environ.get(EXPERIMENT_ENV)) and copy_dir(Path(source), [], state / "experiment"):
+        if (source := os.environ.get(EXPERIMENT_ENV)) and copy_dir(Path(source), [], state / "experiment",
+                                                                       read_only=True):
             experiment = state / "experiment"
         # If the judge's copy loses its .git, discovery must not climb out of it.
         os.environ["GIT_CEILING_DIRECTORIES"] = str(folder)
