@@ -139,6 +139,12 @@ has the checklist.
   `opencode`).
 - The user docs ship in the package (`autohelix/docs`); **`autohelix docs`**
   prints their folder.
+- **`docs/patterns.md`**: a starting config for each kind of goal (a checked
+  task, optimization with a metric adapter, training a model, working through
+  a spec, writing and research, comparing approaches); the skill starts from
+  it. The training pattern's artifacts recipe (one model folder per run and
+  iteration) is now a `paths.sh` in the experiment folder, sourced by the
+  agent and the commands alike (`docs/ml-experiments.md`).
 
 ### Changed
 
