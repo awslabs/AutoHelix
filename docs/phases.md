@@ -77,23 +77,25 @@ when the copy is made; no stash, no remote). This means:
 ## Where things live
 
 In the project, `.autohelix/` (gitignored locally; AutoHelix leaves
-`.gitignore` unchanged) holds each run's state in `.autohelix/runs/<id>/`; what the harness keeps
-for itself is in `.internal/` folders:
+`.gitignore` unchanged) holds each run's state in `.autohelix/runs/<id>/`
+(the end of `run`, `resume` and `view` names it). Read `report.md`,
+`history.jsonl` and `iterations/NNN/` first; what the harness keeps for itself
+is in `.internal/` folders:
 
 ```
 .autohelix/
 ├── runs/<id>/
+│   ├── report.md  report.html  # the run summary; the one-file run page
+│   ├── history.jsonl           # one record per iteration: the index and the source of truth
+│   ├── iterations/
+│   │   ├── 000/                # the baseline
+│   │   └── 001/ ...            # one folder per iteration (below)
 │   ├── run.json                # identity (base commit, target branch, config file), archived flag
 │   ├── config.yaml             # the run's config, stored verbatim when it started
 │   ├── prompt_template.md      # its prompt_template's text, stored with it (only with one)
 │   ├── experiment/             # its experiment folder's files, stored with it (autohelix/NAME/ only)
-│   ├── history.jsonl           # one record per iteration: the index and the source of truth
 │   ├── hints.md
-│   ├── report.md  report.html  # the run summary; the one-file run page
 │   ├── notes -> .internal/notes/<n>   # agent memory; round-trips (link to the latest version)
-│   ├── iterations/
-│   │   ├── 000/                # the baseline
-│   │   └── 001/ ...            # one folder per iteration (below)
 │   ├── logs/                   # run logs per segment, report.log
 │   └── .internal/              # status.json, segments.jsonl, stop.json (autohelix stop), usage/,
 │                               # notes versions notes/<n>/, superseded attempts attempts/,

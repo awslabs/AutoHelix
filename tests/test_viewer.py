@@ -603,6 +603,7 @@ def test_view_json_and_once(measured_project, monkeypatch):
     assert f"Run {short_id(second)} (the most recently active run" in chosen.stderr
     assert f"run {short_id(second)} · " in chosen.stdout
 
+    monkeypatch.chdir(project)  # the run's folder is shown relative to here
     text = _cli("view", first, "-p", project, "--once").output
     lines = [line.rstrip() for line in text.splitlines()]
     assert lines[0].startswith("  AutoHelix  v") and lines[0].endswith(f" · run {short_id(first)} · test_project · finished")

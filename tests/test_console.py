@@ -277,7 +277,8 @@ def _ending(output: str) -> list[str]:
     return lines[next(i for i, line in enumerate(lines) if line.startswith(("  Done", "  Stopped", "  Error"))):]
 
 
-def test_ending_after_landing(project):
+def test_ending_after_landing(project, monkeypatch):
+    monkeypatch.chdir(project)  # the run's folder is shown relative to here, as the page is
     _configure(project, observe=[{"name": "bench", "command": "echo '##autohelix[speed=3]'",
                                   "metrics": {"speed": "higher"}}], scope={"editable": ["hello.py"]})
     result, short, run_id = _run(project)
@@ -342,8 +343,9 @@ def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):
     assert ending[0].startswith("  Error      Stop command exited 3 on the baseline: echo broken;")
     totals = next(i for i, line in enumerate(ending) if line.startswith("  run "))
     assert " ".join(" ".join(ending[:totals]).split()) == f"Error {message}"  # wrapped, not cut
-    assert [line.split()[0] for line in ending[totals:]] == ["run", "landed", "next", f".autohelix/runs/{run_id}/",
-                                                                   "page"]
+    # Run from outside the project: the run's folder is absolute, as the page is.
+    assert [line.split()[0] for line in ending[totals:]] == ["run", "landed", "next",
+                                                             f"{project / '.autohelix' / 'runs' / run_id}/", "page"]
     assert result.output.count("Error") == 1  # not repeated by the CLI
 
 

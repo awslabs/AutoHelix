@@ -429,3 +429,19 @@ def test_the_project_config_is_told_to_commit_the_path(project):
     git(project, "add", "autohelix")
     git(project, "commit", "-qm", "commit it")
     assert uncommitted_command_paths(config, project) == []
+
+
+def test_dot_slash_paths_warn_and_judge_entries_stay_quiet(project):
+    """`./autohelix/...` is the same path; an `ask:` question or a `review:` prompt naming
+    autohelix/ is read by a judge (which has `experiment/`), not run, so it isn't checked."""
+    from autohelix.checks import uncommitted_command_paths
+    from autohelix.config import CommandSpec, ObserveEntry
+
+    config = load_config(project)
+    config.gates = [CommandSpec(command="sh ./autohelix/run.sh"),
+                    CommandSpec(command="autohelix ask -- 'Does it follow autohelix/spec.md'",
+                                label="ask: Does it follow autohelix/spec.md")]
+    config.observe = [ObserveEntry(name="r", command="autohelix review -- 'Compare with autohelix/spec.md'",
+                                   review="Compare with autohelix/spec.md")]
+    assert uncommitted_command_paths(config, project) == [
+        "autohelix/run.sh (named by a command) isn't in the commit, so not in the copy: commit it."]

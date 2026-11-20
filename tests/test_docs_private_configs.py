@@ -1,12 +1,13 @@
-"""docs/config.md's "Where configs live": both recipes for a private config history
-work. `autohelix/` as its own git repository (ignored by the project) and
-`autohelix` as a symlink into a personal repository of configs: a run starts (clean
-checkout, no nested-repository rejection), lands automatically, and `resume`
-continues it. The folder recipe has no uncommitted-config warning; the symlink
-recipe does (its file is outside the project, which `git check-ignore` refuses), and
-the docs say it doesn't apply."""
+"""docs/concepts.md's "Where configs live": `autohelix/` as its own git repository
+(excluded by the project) runs (clean checkout, no nested-repository rejection),
+lands automatically, and `resume` continues it, without the uncommitted-config
+warning. Also `autohelix` as a symlink into a personal repository of configs, which
+the docs don't describe (run.json names its config by the resolved path): it runs,
+with the warning (its file is outside the project, which `git check-ignore`
+refuses)."""
 
 import json
+import shutil
 from pathlib import Path
 
 import yaml
@@ -83,11 +84,34 @@ def test_untracked_root_config(project):
 def test_the_page_shows_the_tested_exclude_entries():
     """The page's recipes use the entries these tests use."""
 
-    page = (Path(__file__).resolve().parents[1] / "docs" / "config.md").read_text()
-    section = page[page.index("## Where configs live"):page.index("## Full Reference")]
+    page = (Path(__file__).resolve().parents[1] / "docs" / "concepts.md").read_text()
+    section = " ".join(page[page.index("### Where configs live"):page.index("## Runs and run state")].split())
     for line in ("echo /autohelix/ >> .git/info/exclude",
-                 "echo /autohelix >> .git/info/exclude",
-                 "ln -s ~/configs/myproject autohelix",
                  "`/autohelix.yaml`",
-                 "git rm -r --cached autohelix"):
+                 "git rm -r --cached autohelix",
+                 "git add -f autohelix/bench/",
+                 "`/autohelix/*` and `!/autohelix/bench/`"):
         assert line in section, line
+
+
+def test_sharing_one_experiment_out_of_a_private_folder(project):
+    """The page's sharing rules: an excluded folder's experiment is staged with `git add -f`,
+    except when `autohelix/` has its own repository (exit 0, nothing staged); with
+    `.gitignore`, `/autohelix/*` + `!/autohelix/bench/` leaves just that experiment visible."""
+    bench = project / "autohelix" / "bench"
+    bench.mkdir(parents=True)
+    (bench / "autohelix.yaml").write_text(yaml.safe_dump(CONFIG))
+    (project / "autohelix" / "other.txt").write_text("private\n")
+    with open(project / ".git" / "info" / "exclude", "a") as f:
+        f.write("/autohelix/\n")
+    git(project / "autohelix", "init", "-q")
+    git(project, "add", "-f", "autohelix/bench/")
+    assert git(project, "diff", "--cached", "--name-only") == ""  # the inner repository wins
+    shutil.rmtree(project / "autohelix" / ".git")
+    git(project, "add", "-f", "autohelix/bench/")
+    assert git(project, "diff", "--cached", "--name-only") == "autohelix/bench/autohelix.yaml"
+    git(project, "reset", "-q")
+    (project / ".git" / "info" / "exclude").write_text("")
+    (project / ".gitignore").write_text("/autohelix/*\n!/autohelix/bench/\n")
+    untracked = git(project, "ls-files", "--others", "--exclude-standard", "autohelix")
+    assert untracked == "autohelix/bench/autohelix.yaml"

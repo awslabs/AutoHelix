@@ -222,7 +222,7 @@ See the [configuration reference](config.md).
 
 AutoHelix needs a git repository with a commit, and the first baseline needs no
 uncommitted changes to tracked files. Commit the config before the first
-`run` (or keep it private: [Where configs live](config.md#where-configs-live)),
+`run` (or keep it private: [Where configs live](concepts.md#where-configs-live)),
 and commit any scripts its commands use
 ([Phases → Candidate copies](phases.md#candidate-copies)).
 Preserve unrelated work:
@@ -296,7 +296,10 @@ changes and any commits you made on that branch since the run started.
 
 A project can have several loops: one experiment folder each, in an
 `autohelix/` folder at the project root. Commit the configs, or keep the folder private
-([Where configs live](config.md#where-configs-live)), and commit any scripts
+([Where configs live](concepts.md#where-configs-live)). An experiment's own
+scripts can live in its folder: the run stores them, and commands run them as
+`$AUTOHELIX_EXPERIMENT/<file>`
+([Experiment folder](config.md#experiment-folder)); commit any other scripts
 their commands use.
 
 ```
@@ -304,6 +307,7 @@ autohelix/
   perf/
     autohelix.yaml       # autohelix run perf
     prompt.md            # prompt_template: prompt.md, in perf/autohelix.yaml
+    bench.py             # python "$AUTOHELIX_EXPERIMENT/bench.py"
   docs/
     autohelix.yaml       # autohelix run docs
   lib/                   # no autohelix.yaml: not an experiment

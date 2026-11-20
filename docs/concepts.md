@@ -291,11 +291,98 @@ Editing the template is also how you can keep an evaluation *out of the agent's 
 
 This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence: in testing, Claude declined to read an out-of-copy eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: copies live outside the project, but the agent runs as you, so one that is determined (or explicitly told to cheat) can still reach the project and anything else on disk by absolute path. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
 
+## The project's folders
+
+Two folders, split by who writes them:
+
+- `autohelix/` is what you write: experiment folders, helpers they share, the
+  coordinator's notes.
+- `.autohelix/` is what the harness writes: runs and locks. `run` creates it and
+  keeps it out of git; `archive` and `delete` manage what's in it.
+
+```
+autohelix.yaml                 # the project's single experiment (optional)
+autohelix/
+  perf/                        # an experiment: just a config
+    autohelix.yaml
+  console/                     # an experiment with material
+    autohelix.yaml             # its config
+    prompt.md                  # its prompt template (optional)
+    render.py                  # evaluator / metric adapter
+    metrics.py -> ../lib/metrics.py
+  lib/                         # shared helpers: not an experiment (no autohelix.yaml)
+    metrics.py
+  README.md                    # the coordinator's notes
+.autohelix/
+  runs/<id>/                   # one run: what it stored and what it did
+```
+
+`autohelix run console` runs `autohelix/console/autohelix.yaml`. The run stores
+the config, its template and the rest of the folder
+([Configuration → Experiment folder](config.md#experiment-folder)); a link is
+followed when it points inside the checkout, so `metrics.py` is stored as the
+file it points to. Use relative links: they still work in a clone of
+`autohelix/`'s own repository.
+
+`autohelix/README.md` is the coordinator's notes: the current state, decisions
+and why, work done outside the loop, what's next. The agent session bare
+`autohelix` starts reads it first, and updates it at the end only while
+`autohelix/` isn't tracked by the project (a tracked file edited during a run
+dirties the checkout).
+
+Runs stay in `.autohelix/`, not `autohelix/`: a run belongs to its checkout
+(its commits are refs in the project's repository), and its folder is large and
+rewritten every iteration, so it belongs in no git repository.
+
+### Where configs live
+
+A run stores its config, template and experiment folder when it starts, and
+uses that copy from then on: a private experiment is as reproducible as a
+committed one. Git is only for sharing them.
+
+| Setup | How | When |
+|---|---|---|
+| **Private** (setup's default) | `/autohelix/` in `.git/info/exclude` | your own experiments; their scripts live in their folders |
+| **Private, tracked** | private, plus `git init` in `autohelix/` | as private, with history, backup and a remote to clone onto other machines |
+| **Committed** | commit `autohelix/`, or one experiment of it, with the project | shared experiments (a team's benchmark) |
+| Team-wide ignore | `/autohelix/` in `.gitignore` | everyone on the team keeps their configs private |
+
+- Use `.git/info/exclude` over `.gitignore` for a private folder: it is local
+  to your clone, needs no commit, and collaborators don't see it. A private
+  top-level config is `/autohelix.yaml` in the same file.
+- An already committed config must be untracked first (`git rm -r --cached
+  autohelix`, then commit), or the exclude has no effect.
+- Private, tracked:
+
+  ```bash
+  echo /autohelix/ >> .git/info/exclude
+  cd autohelix && git init && git add perf/autohelix.yaml && git commit -m "perf config"
+  ```
+
+  The project's `git status` stays clean, and copies, built from the project's
+  commits, never see the inner repository.
+- To share one experiment out of a private `autohelix/`: `git add -f
+  autohelix/bench/` (an excluded file needs `-f`; once tracked, its edits show
+  in `git status` as usual). With `.gitignore`, use the two patterns
+  `/autohelix/*` and `!/autohelix/bench/`: a negation can't re-include a file
+  under an ignored folder, so `/autohelix/` won't do.
+- **An inner repository and sharing in place don't mix:** with
+  `autohelix/.git` present, `git add -f autohelix/bench/` in the project exits 0
+  and stages nothing. Pick one per project.
+- Commit a shared experiment before its first `run`: with auto landing, a
+  commit on the branch after the run lands puts the branch past the run's tip,
+  and `resume` refuses. `run` warns when the config, its template or a file of
+  its folder isn't committed; ignored files never move the branch.
+- A committed experiment folder is in every copy, and frozen: the agent's edits
+  to it are discarded.
+
 ## Runs and run state
 
-A run's files are in `.autohelix/runs/<id>/` and its copies outside the
-project; [Phases → Where things live](phases.md#where-things-live) has the
-layout.
+A run's folder is `.autohelix/runs/<id>/` (the end of `run`, `resume` and
+`view` names it): read `report.md` (the summary), `history.jsonl` (one record
+per iteration) and `iterations/NNN/` (each iteration's prompt, agent log, and
+gate and observe output). Its copies are outside the project;
+[Phases → Where things live](phases.md#where-things-live) has the layout.
 
 A run is a line of work: `autohelix run` starts one, `autohelix resume` continues
 one (by default the config's most recently active), `autohelix stop` ends a

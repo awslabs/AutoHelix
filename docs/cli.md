@@ -126,11 +126,12 @@ or an experiment folder's `autohelix/<name>/autohelix.yaml` for several loops.
 
 - An experiment folder can also hold its prompt template and helper scripts
   (`autohelix/perf/prompt.md`; `prompt_template:` is relative to the config's
-  folder). Commit the scripts (outside `autohelix/` if you keep it private:
-  [Configuration → Where configs live](config.md#where-configs-live))
+  folder). Commands run the folder's scripts from `$AUTOHELIX_EXPERIMENT`
+  ([Configuration → Experiment folder](config.md#experiment-folder)); other
+  scripts they run must be committed
   ([Phases → Candidate copies](phases.md#candidate-copies)).
 - Whether to commit the configs:
-  [Configuration → Where configs live](config.md#where-configs-live).
+  [Concepts → Where configs live](concepts.md#where-configs-live).
 - Keep `autohelix/` out of `scope.editable` (or list it under `frozen:`), so
   the agent can't edit its own gates.
 - `.autohelix/` is the runs' state, kept out of git.
@@ -187,10 +188,10 @@ else the only experiment in `autohelix/` (see [Config files](#config-files)). Th
 checkout with a commit, and the first baseline needs no uncommitted changes to
 tracked files.
 
-Commit the scripts its commands use
+Commit the scripts its commands use, or keep them in its experiment folder
 ([Phases → Candidate copies](phases.md#candidate-copies)), and commit the config
 before the first `run` or keep it private
-([Where configs live](config.md#where-configs-live)).
+([Where configs live](concepts.md#where-configs-live)).
 
 While the segment runs, `run` (and `resume`) keeps the machine from sleeping:
 `caffeinate -i -w <pid>` on macOS, `systemd-inhibit` (idle and sleep) on Linux.

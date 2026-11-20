@@ -99,17 +99,20 @@ def preflight_check(config: Config, project_path: Path) -> list[PreflightIssue]:
     return issues
 
 
-# A path under autohelix/ in a command's text: not part of a longer path (`src/autohelix/`,
-# `$AUTOHELIX_PROJECT/autohelix/`, `.autohelix/`), up to a space, quote or shell operator.
-_AUTOHELIX_PATH = re.compile(r"(?<![\w./$~-])autohelix/[^\s'\"`;|&<>()]*")
+# A path under autohelix/ in a command's text, `./` allowed in front: not part of a longer
+# path (`src/autohelix/`, `$AUTOHELIX_PROJECT/autohelix/`, `.autohelix/`), up to a space,
+# quote or shell operator. The group is the path without the `./`.
+_AUTOHELIX_PATH = re.compile(r"(?<![\w./$~-])(?:\./)?(autohelix/[^\s'\"`;|&<>()]*)")
 
 
 def uncommitted_command_paths(config: Config, project_path: Path) -> list[str]:
     """`run --check`'s and preflight's warnings for gate, observe and stop commands that
     name a path under autohelix/ that isn't in the commit (`python autohelix/perf/render.py`):
-    the copy they run in lacks it. A textual check; one warning per path."""
-    commands = [spec.command for spec in config.gate_commands()] + [entry.command for entry in config.observe] + [
-        spec.command for spec in config.stop]
+    the copy they run in lacks it. A textual check; one warning per path. `ask:` and
+    `review:` entries are left out: their text is a question for a judge, which reads the
+    folder as `experiment/` in its own copy."""
+    commands = [spec.command for spec in config.gate_commands() if spec.label is None] + [
+        entry.command for entry in config.observe if entry.review is None] + [spec.command for spec in config.stop]
     named = dict.fromkeys(match.rstrip(".,:") for command in commands for match in _AUTOHELIX_PATH.findall(command))
     named = [path for path in named if path.rstrip("/") != "autohelix" and not any(c in path for c in "*?[{$")]
     if not named:

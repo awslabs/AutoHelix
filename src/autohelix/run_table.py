@@ -177,7 +177,7 @@ class Saved:
             rows = None
         files = [(label, terminal.shown_path(path))
                  for label, path in (("page", paths.report_html), ("summary", paths.report)) if path.is_file()]
-        return cls(config, rows, files, f".autohelix/runs/{paths.run_id}/")
+        return cls(config, rows, files, terminal.shown_path(paths.run_dir) + "/")
 
 
 def _outcome(run: dict) -> tuple[str, str, str | None]:

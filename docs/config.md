@@ -22,43 +22,10 @@ see [Phases → Candidate copies](phases.md#candidate-copies).
 
 ## Where configs live
 
-A run stores its config when it starts
-([CLI → Config files](cli.md#config-files)), so git is only for sharing
-configs. Either choice is fine, per experiment:
-
-- **Shared** (a team's benchmark): commit `autohelix.yaml` or `autohelix/` with
-  the project. Commit it before the first `run`: with auto landing, a commit on
-  the branch after the run lands puts the branch past the run's tip, and
-  `resume` refuses (`run` warns when the config, or a file of its experiment
-  folder, isn't committed).
-- **Private**: put `/autohelix/` (or `/autohelix.yaml`) in `.git/info/exclude`
-  (your clone only) or `.gitignore`. An ignored config is never committed, so it
-  can't move the branch. A config that is already committed must be untracked
-  first (`git rm -r --cached autohelix`, then commit), or the exclude has no
-  effect. An ignored `autohelix/` isn't in the copies
-  ([Phases → Candidate copies](phases.md#candidate-copies)): commands run the
-  experiment folder's scripts from `$AUTOHELIX_EXPERIMENT`
-  ([Experiment folder](#experiment-folder)), and every other script they run
-  is committed in the project.
-
-For a private history of your configs, either make `autohelix/` its own git
-repository:
-
-```bash
-echo /autohelix/ >> .git/info/exclude
-cd autohelix && git init && git add perf/autohelix.yaml && git commit -m "perf config"
-```
-
-or make it a symlink into a personal repository of configs:
-
-```bash
-ln -s ~/configs/myproject autohelix
-echo /autohelix >> .git/info/exclude    # no trailing slash: git sees a symlink as a file
-```
-
-AutoHelix follows the link. Two differences: `run.json` names the config by
-its resolved, absolute path, and with auto landing `run` warns "commit
-… first"; the warning doesn't apply to a file outside the project.
+A run stores its config when it starts, so git is only for sharing configs.
+Setup keeps `autohelix/` private (`/autohelix/` in `.git/info/exclude`) unless
+you share an experiment by committing it. The setups, and how to share one experiment
+out of a private folder: [Concepts → Where configs live](concepts.md#where-configs-live).
 
 ## Full Reference
 

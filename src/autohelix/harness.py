@@ -343,10 +343,11 @@ class Harness:
         consequence = f"a commit on {branch} after this run lands makes `resume` refuse."
         warnings = []
         if (folder := self.config.experiment) is not None and folder.is_dir():
-            # What the snapshot stores (a link, as git lists it, by the files under it) that
-            # is untracked and not ignored (tracked files are clean: `require_clean`).
+            # What the run stored (a link, as git lists it, by the files under it) that is
+            # untracked and not ignored (tracked files are clean: `require_clean`).
             where = config_relative(self.project_path, folder)
-            stored = [file.name for file in snapshot_files(self.config, self.project_path) or ()]
+            snapshot = self.paths.experiment
+            stored = [path.relative_to(snapshot).as_posix() for path in snapshot.rglob("*") if path.is_file()]
             listed = git(self.project_path, "--no-optional-locks", "ls-files", "-z", "--others", "--exclude-standard",
                          "--", where, check=False).stdout.split("\0")
             changed = {name[len(where) + 1:] for name in listed if name.startswith(f"{where}/")}
@@ -1867,7 +1868,7 @@ class Harness:
             commands = terminal.next_commands(short, also=self._relation()[1].commands)
             lines = table.ending(outcome, spent=format_total_cost(self.history.cost_usages), landing=self._landing,
                                  commands=commands, files=self._files,
-                                 folder=f".autohelix/runs/{self.paths.run_id}/")
+                                 folder=terminal.shown_path(self.paths.run_dir) + "/")
         except Exception as e:  # noqa: BLE001 - the outcome line still shows
             self.log.warn(f"Could not render the ending: {e}")
             lines = [Text(f"  {outcome[0]}  {outcome[1]}")]

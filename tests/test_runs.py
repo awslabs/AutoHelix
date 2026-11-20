@@ -817,6 +817,7 @@ def test_refused_first_start_creates_no_identity(project, problem, capsys, monke
 def test_manual_mode_says_diverged_when_target_moves_during_segment(project, monkeypatch, capsys):
     """A commit on the target during the segment: the ending says the run diverged and
     offers `git merge`, not `autohelix land` (which only fast-forwards)."""
+    monkeypatch.chdir(project)  # the run's folder is shown relative to here
     harness = Harness(project, land_mode="manual")
     target = harness.run_info["target_branch"]
     real = harness.run_agent
