@@ -10,15 +10,13 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from autohelix.cli import main
-from autohelix.config import Config
+from autohelix.cli import docs_dir, main
 
 
 SKILL_NAME = "autohelix"
 RESOURCE_PATHS = [
     "SKILL.md",
     "references/loop-design.md",
-    "references/examples.md",
     "references/managed-runs.md",
     "references/reading-runs.md",
 ]
@@ -309,21 +307,6 @@ def test_portable_skill_frontmatter_and_reference_links(resources):
             assert relative in resources, f"Missing portable reference: {relative}"
 
 
-@pytest.mark.parametrize("name", ["references/examples.md"])
-def test_documented_yaml_validates(resources, name):
-    snippets = re.findall(r"```yaml\n(.*?)```", resources[name].decode(), re.DOTALL)
-    assert snippets
-    for snippet in snippets:
-        raw = yaml.safe_load(snippet)
-        # The agent/reviewer excerpt is a config fragment, not a whole run.
-        data = {
-            "goal": "Improve the document while preserving factual accuracy.",
-            "gates": ["python validate_guide.py"],
-            **raw,
-        }
-        assert Config.from_dict(data).validate() == []
-
-
 def test_setup_keeps_an_experiment_private_and_the_coordinator_reads_its_notes(bundled):
     """The setup's private default, the `lib/` convention, linked documents, and
     `autohelix/README.md` as the coordinator's notes (read first, updated at the end)."""
@@ -339,3 +322,15 @@ def test_setup_keeps_an_experiment_private_and_the_coordinator_reads_its_notes(b
     assert "`autohelix/README.md` first when it exists" in text and "## Coordinator notes" in bundled[
         "SKILL.md"].decode()
     assert "Only while `autohelix/` isn't tracked by the project" in text
+    assert "Create it when it doesn't exist yet." in text
+
+
+def test_the_skill_points_to_the_docs_patterns_and_proposes_metric_adapters(bundled):
+    """The patterns' one home is the docs (`patterns.md`): the skill names it, and
+    carries the two rules from it a setup applies: an adapter for a measured goal,
+    an `ask:` gate for a one-iteration run."""
+    text = " ".join(bundled["SKILL.md"].decode().split())
+    assert "read `patterns.md` in the docs" in text
+    assert '`python "$AUTOHELIX_EXPERIMENT/metrics.py"`' in text
+    assert "with an `ask:` gate for what the tests can't judge" in text
+    assert (docs_dir() / "patterns.md").is_file()

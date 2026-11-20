@@ -4,7 +4,7 @@ Use this when the user asks about existing runs: what happened, why an
 iteration was rejected, whether a run is making progress, what it cost.
 Answer from the records; everything below only reads `.autohelix/`, so it is
 safe beside a running run. The user docs have the full field lists
-(`concepts.md`, "Runs and run state"; `cli.md`, "JSON output").
+(`phases.md`, "Where things live"; `cli.md`, "JSON output" and "The event log").
 
 ## Find the run and its records
 
@@ -19,21 +19,14 @@ safe beside a running run. The user docs have the full field lists
   `iterations`: `iteration`, `accepted`, `metrics`, `summary`, `reason`,
   `cost`, `cost_incomplete`, `seconds`, `gates`, `observe`, `stops`,
   `discarded`. Pass the id (or its last part) to every command.
-- `.autohelix/runs/<id>/` holds the run: `run.json` (name, `config_path`,
-  `base_commit`, `target_branch`, `land`, `group`, `import`, `why`,
-  `archived`), `config.yaml` (the config it runs with, stored at its start;
-  the file in the checkout may have changed since), `history.jsonl` (one
-  record per iteration, `0` the baseline; the source of truth), `hints.md`,
-  `notes/` (the agent's own notes, `iter-N.md` by convention),
-  `report.md` (the summary written when a segment ends, unless
-  `--no-report`; not after an interrupt) and `report.html` (the run page).
-- `iterations/NNN/` (three digits) per iteration: `record.json` (its history
-  record, pretty-printed), `prompt.md` and `agent.log` (what the agent was
-  given and did; written live while it runs), `gates/<k>/` for each gate
-  that ran (k: its 1-based position in `gates:`; `command.txt`,
-  `stdout.txt`, `stderr.txt`, `ask.log` for an `ask:` gate), `observe/<name>/`
-  (`stdout.txt`, `stderr.txt`, captures, `review.log`; a review's feedback is
-  its `stdout.txt`), `stop/<k>/`, and `rejected.patch` for a rejection.
+- `.autohelix/runs/<id>/` holds the run: `report.md`, `history.jsonl` (one
+  record per iteration, `0` the baseline; the source of truth), `iterations/NNN/`
+  (three digits: `record.json`, `prompt.md` and `agent.log`, `gates/<k>/`,
+  `observe/<name>/`, `stop/<k>/`, `rejected.patch`), `config.yaml` (the config
+  it runs with, stored at its start; the file in the checkout may have changed
+  since), `experiment/`, `notes/`, `hints.md`. The docs' `phases.md` ("Where
+  things live") has the full layout; a review's feedback is its
+  `observe/<name>/stdout.txt`.
 
 A record's fields: `accepted`, `reason` (why it was rejected), `summary` (the
 agent's one-line summary), `metrics`, `commit` (accepted), `gates` (each

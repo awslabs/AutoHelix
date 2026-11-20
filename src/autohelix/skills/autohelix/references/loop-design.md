@@ -116,7 +116,10 @@ limit counts.
 Rejecting an iteration discards repository code, not shared output directories,
 databases, model checkpoints, or remote state. For external artifacts, use
 deliberate locations and an explicit promotion/recovery procedure. Capturing a
-checkpoint reference does not implement that procedure.
+checkpoint reference does not implement that procedure. For a model, one folder
+per run and iteration outside the project gives rollback: the docs'
+`patterns.md` ("Training a model") and `ml-experiments.md` ("One folder per
+iteration") have the recipe.
 
 Estimate command runtime and cost from scripts, dataset sizes, prior logs, and
 known resource/model use; mark uncertainty rather than treating a timeout as an

@@ -46,28 +46,43 @@ model an accepted iteration produced:
 /data/x/$AUTOHELIX_RUN_ID/$AUTOHELIX_ITERATION/model
 ```
 
-- **The agent** trains into its own iteration's folder, starting from the last
-  accepted iteration's. It finds that iteration in
-  `.autohelix-iteration/history.jsonl` (a number can appear on more than one
-  line; the last line for it counts). A killed iteration or a retried baseline
-  reuses its number, so clear `$out` first:
+Both the agent and the commands need these paths, so keep them in one script
+in the [experiment folder](config.md#experiment-folder), `autohelix/train/paths.sh`
+(see the [Training a model](patterns.md#training-a-model) pattern):
 
-  <!-- recipe: agent -->
-  ```bash
-  last=$(jq -s 'group_by(.iteration) | map(last | select(.accepted)) | last | .iteration' \
-    .autohelix-iteration/history.jsonl)
+<!-- recipe: paths -->
+```bash
+# autohelix/train/paths.sh: sourced by the agent and by gate and observe commands
+out=/data/x/$AUTOHELIX_RUN_ID/$AUTOHELIX_ITERATION/model
+history=.autohelix-iteration/history.jsonl
+if [ -f "$history" ]; then  # only the agent's copy has the run's history
+  last=$(jq -s 'group_by(.iteration) | map(last | select(.accepted)) | last | .iteration' "$history")
   start=/data/x/$AUTOHELIX_RUN_ID/$last/model
-  out=/data/x/$AUTOHELIX_RUN_ID/$AUTOHELIX_ITERATION/model
-  rm -rf "$out"
+fi
+```
+
+- **The agent** runs `source .autohelix-iteration/experiment/paths.sh`, then
+  `rm -rf "$out"` (a killed iteration or a retried baseline reuses its number),
+  and trains from `$start` into `$out`. `$start` is the last accepted
+  iteration's folder (in the history a number can appear on more than one line;
+  the last line for it counts); when that is the baseline, it doesn't exist:
+  start from the base model. Put these steps in the goal, so the agent knows
+  them.
+- **Gate and observe commands** run `source "$AUTOHELIX_EXPERIMENT/paths.sh"`
+  and evaluate `$out`: `AUTOHELIX_RUN_ID` and `AUTOHELIX_ITERATION` are in
+  their [environment](phases.md#command-environment), with the values the
+  agent had. At the baseline (`AUTOHELIX_ITERATION` is `0`) no agent has
+  trained, so evaluate the base model there:
+
+  ```bash
+  # autohelix/train/eval.sh
+  source "$AUTOHELIX_EXPERIMENT/paths.sh"
+  if [ "$AUTOHELIX_ITERATION" = 0 ]; then out=/data/base-model; fi
+  python evaluate.py --model "$out"   # prints ##autohelix[accuracy=...]
   ```
 
-  When `$last` is `0` (the baseline), `$start` doesn't exist: start from the
-  base model. Put the path and these lines in the goal, so the agent knows them.
-- **Gate and observe commands** evaluate
-  `/data/x/$AUTOHELIX_RUN_ID/$AUTOHELIX_ITERATION/model`: both variables are in
-  their [environment](phases.md#command-environment), with the values the agent
-  had. At the baseline (`AUTOHELIX_ITERATION` is `0`) no agent has trained, so
-  evaluate the base model there.
+With a top-level `autohelix.yaml` (no experiment folder), put the same lines in
+the goal and in the commands.
 
 What it gives you: rollback. A rejected iteration's model stays in its own
 folder, the next agent starts again from the last accepted one, and every

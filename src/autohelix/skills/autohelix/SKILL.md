@@ -80,8 +80,9 @@ Recommend, don't interview. From the user's goal and the project, choose the
 scope, gates, observe entries and launch command; ask before proposing only
 when the project can't tell you something that changes the loop materially,
 such as there being no way yet to check or measure the goal. For help, read
-[loop design](references/loop-design.md); for patterns by kind of goal, read
-[examples](references/examples.md).
+[loop design](references/loop-design.md); for a starting config by kind of
+goal (a checked task, optimization, training a model, working through a spec,
+writing and research), read `patterns.md` in the docs.
 
 - **Scope**: the files the goal needs. Keep tests, benchmarks, evaluation
   criteria and `autohelix/` outside `scope.editable` unless changing them is
@@ -91,6 +92,12 @@ such as there being no way yet to check or measure the goal. For help, read
   entry never rejects: its feedback goes to the next iteration. A qualitative
   goal can use captured evidence and review feedback without inventing a
   numeric score.
+- **A metric adapter** is the normal case for a measured goal: few tools
+  print `##autohelix[name=value]` lines, so propose a small script in the
+  experiment folder (`autohelix/<name>/metrics.py`, run as
+  `python "$AUTOHELIX_EXPERIMENT/metrics.py"`) that runs the tool and prints
+  the line, with its code in the proposal. Running it once is the cheap check
+  that the metric prints.
 - **A new evaluator** (check, benchmark, validator) is part of the proposal:
   what it checks or measures, representative cases and limits, likely
   runtime and model cost, and whether it gates or informs. Label it as not yet
@@ -98,7 +105,9 @@ such as there being no way yet to check or measure the goal. For help, read
 
 Pick these yourself and say what you picked; don't ask about them:
 
-- **Iterations**: `-n 1` for a single task the gates fully check; `-n 3` for an
+- **Iterations**: `-n 1` for a single task the gates check, with an `ask:`
+  gate for what the tests can't judge (a one-iteration run has no later
+  review and lands by itself); `-n 3` for an
   open-ended goal ("make X faster", "improve Y"), a first look that `resume`
   can extend; with a `stop:` condition, enough for the whole job (`-n 10`). A
   goal checked only by a review needs more than one iteration.
@@ -296,10 +305,11 @@ why, work done outside the loop, what's next. Keep it short; longer material
 goes in its own file in `autohelix/` (or an experiment folder), linked from it.
 
 - Read it first in every session.
-- At the end of a session, update it: what changed, what was decided, what's
-  next. Commit `autohelix/` only when it has its own repository and the user
-  agreed to the session's changes; never commit into the project from here
-  unless asked.
+- At the end of a session that changed something (a config, a run started
+  or landed, a decision), update it: what changed, what was decided, what's
+  next. Create it when it doesn't exist yet. Commit `autohelix/` only when it
+  has its own repository and the user agreed to the session's changes; never
+  commit into the project from here unless asked.
 - Only while `autohelix/` isn't tracked by the project: editing a tracked one
   during a run dirties the checkout, and committing it puts the branch past an
   auto-landing run's tip. With a committed `autohelix/`, don't write it (or
@@ -307,9 +317,18 @@ goes in its own file in `autohelix/` (or an experiment folder), linked from it.
 
 ## Launch and supervise a run
 
-Only when the user asks. A run needs a git checkout with a commit, and its
-first baseline needs no uncommitted changes to tracked files: name any that
-block it without committing or discarding them. Use the bounds given; resolve
+Only when the user asks. The request says how far to go, and the config is
+the agreement on what the loop does, not permission for unlimited work:
+
+- "Use AutoHelix to make the solver faster": prepare a config and hand off the
+  launch command.
+- "... and start a pilot": also launch it, within the bounds given.
+- "... run three iterations and explain the results": launch, supervise to the
+  end, and report.
+
+A run needs a git checkout with a commit, and its first baseline needs no
+uncommitted changes to tracked files: name any that block it without
+committing or discarding them. Use the bounds given; resolve
 material budget ambiguity as [loop design](references/loop-design.md) says. For
 supervision, read [managed runs](references/managed-runs.md): monitor the
 actual process and saved outcomes, send evidence-based hints, continue through

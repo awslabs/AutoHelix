@@ -180,7 +180,8 @@ The following steps prepare the same kind of experiment without the skill.
 ### 1. Write the config
 
 Write `autohelix.yaml` at the project root (or `autohelix/perf/autohelix.yaml`,
-one of [several configs](#5-several-configs)). Start from the config below, an
+one of [several configs](#5-several-configs)). Start from the config below, a
+[pattern](patterns.md) for your kind of goal, an
 [example](https://github.com/awslabs/AutoHelix/tree/main/examples), or the commented template shipped in the package:
 
 ```bash

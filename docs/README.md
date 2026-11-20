@@ -9,6 +9,7 @@ See the [main README](https://github.com/awslabs/AutoHelix/blob/main/README.md) 
 ## Guides
 
 - **[Getting Started](getting-started.md)** — install, write a config (with your agent or by hand), run your first loop
+- **[Patterns](patterns.md)** — a starting config for each kind of goal: a checked task, optimization, training a model, working through a spec, writing and research
 - **[Configuration](config.md)** — the full config surface (`autohelix.yaml`, `autohelix/<name>/autohelix.yaml`): gates, observe, stop, scope, agent (budgets are `run`/`resume` flags)
 - **[CLI Reference](cli.md)** — skill installation/export, bare `autohelix` (the entry screen), `run` (and groups of runs), `resume`, `stop`, `land`, `archive`, `delete`, `view`, `wait`, `hint`, `ask`, `review`, `report`, `docs`
 - **[Docker Sandbox](docker.md)** — run the agent with filesystem isolation
