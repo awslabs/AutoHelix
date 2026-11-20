@@ -101,7 +101,8 @@ class TestReportCommand:
         assert not (latest_run(project).report_draft).exists()
 
     def test_errors_when_agent_changes_files(self, runner, project):
-        # A committed experiment (shared), so the report's copy has its config.
+        # A committed experiment (shared), so the report's copy has its config. Only the
+        # run's ref moves to that commit (run.json's base_commit stays): the report copies the tip.
         git(project, "add", "-f", "autohelix")
         git(project, "commit", "-qm", "commit the experiment")
         tip = git(project, "rev-parse", "HEAD").stdout.strip()
