@@ -36,7 +36,7 @@ uv pip install -e ".[dev]"
 - `src/autohelix/runs.py` - run identity/paths and selection, ownership locks, ref recovery, landing, archive/delete, copies sweep
 - `src/autohelix/workspace.py` - candidate copies (`Repo`, `Copy`, `Fingerprint`), tree snapshots, write scope and judge guard
 - `src/autohelix/display.py` - live Rich display
-- `src/autohelix/terminal.py` - what `run`/`resume`/bare `autohelix` print (header, rows, end block: its `next` line ends with the run folder, `.autohelix/runs/<id>/` from the project root (`shown_path`, like the page and summary lines: else absolute), as the web run page's `#run-folder` names it, common.js `runFolder`), and every screen's one warning form (`warning`/`warn`: `  ! message`) and one wrap helper (`wrap`/`hanging`/`show`: breaks at spaces only, never inside a word such as a path or branch name)
+- `src/autohelix/terminal.py` - what `run`/`resume`/bare `autohelix` print (header, rows, end block: its `next` line ends with the run folder, `.autohelix/runs/<id>/` (`shown_path`, like the page and summary lines: relative to the current folder when inside it, else absolute), as the web run page's `#run-folder` names it, common.js `runFolder`), and every screen's one warning form (`warning`/`warn`: `  ! message`) and one wrap helper (`wrap`/`hanging`/`show`: breaks at spaces only, never inside a word such as a path or branch name)
 - `src/autohelix/run_status.py` - live run status (`.autohelix/runs/<id>/.internal/status.json`)
 - `src/autohelix/live.py` - `view --terminal` (run table + the log the run status points at, or the running iteration's latest ask/review transcript)
 - `src/autohelix/viewer.py` + `viewer_resources/` - `autohelix view`'s web app (`/` run list, `/run/<id>/` one run)

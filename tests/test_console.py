@@ -294,6 +294,21 @@ def test_ending_after_landing(project, monkeypatch):
     assert len(ending) == 7
 
 
+def test_ending_from_a_subfolder_names_the_run_folder_absolutely(project, monkeypatch):
+    # Paths are relative to the current folder, not to the project: from a subfolder the
+    # run's folder is absolute, as the page is.
+    (project / "sub").mkdir()
+    monkeypatch.chdir(project / "sub")
+    _configure(project, scope={"editable": ["hello.py"]})
+    result, short, run_id = _run(project)
+    assert result.exit_code == 0, result.output
+    ending = _ending(result.output)
+    folder = project / ".autohelix" / "runs" / run_id
+    assert f"{folder}/" in [part for line in ending for part in line.split()]
+    assert f" .autohelix/runs/{run_id}/" not in "\n".join(ending)
+    assert ending[-1].startswith("  page       ") and ending[-1].endswith(f"{folder}/report.html")
+
+
 def test_ending_when_nothing_landed(project):
     _configure(project, settings={"change_file": "elsewhere.txt"}, scope={"editable": ["hello.py"]})
     result, _, _ = _run(project)

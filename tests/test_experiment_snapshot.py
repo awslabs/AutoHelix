@@ -307,6 +307,39 @@ def test_the_agent_copy_has_the_snapshot_and_the_prompt_names_it(project, folder
     assert (copy / ".autohelix-iteration" / "experiment" / "data.txt").read_text() == "stored\n"
 
 
+def with_ask_gate(config_file):
+    """An `ask:` gate whose mock judge answers no unless its own copy has experiment/data.txt."""
+    import yaml
+
+    data = yaml.safe_load(config_file.read_text())
+    data["agent"]["mock"]["judge_requires"] = ".autohelix-iteration/experiment/data.txt"
+    data["gates"] = [{"ask": "Does it use the stored data?"}]
+    config_file.write_text(yaml.safe_dump(data))
+
+
+def test_an_ask_gate_in_a_run_reads_the_experiment_folder(project, folder):
+    (folder / "data.txt").write_text("stored\n")
+    with_ask_gate(folder / "autohelix.yaml")
+    result = cli(project, "run", "exp", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    [(paths, _)] = project_runs(project)
+    [baseline, first] = History(project, paths.run_id).load()
+    assert first.accepted and first.gates[0]["passed"] is True
+    log = (paths.iteration_dir(1) / "gates" / "1" / "ask.log").read_text()
+    assert "The experiment's folder, as the run stored it" in log
+
+
+def test_an_ask_gate_in_a_run_without_a_folder_has_no_experiment(project):
+    with_ask_gate(project / "autohelix.yaml")
+    git(project, "commit", "-qam", "ask gate")
+    result = cli(project, "run", "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output
+    [(paths, _)] = project_runs(project)
+    first = History(project, paths.run_id).load()[-1]
+    assert not first.accepted and first.gates[0]["passed"] is False
+    assert "experiment's folder" not in (paths.iteration_dir(1) / "gates" / "1" / "ask.log").read_text()
+
+
 def test_a_run_without_a_folder_has_none_in_the_agent_copy_or_prompt(project, tmp_path):
     from types import SimpleNamespace
 
