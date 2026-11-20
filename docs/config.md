@@ -602,68 +602,9 @@ read; a run warns while it exists.
 
 ## Example Configs
 
-### Performance Optimization
-
-The most common use case: make code faster while keeping tests passing.
-
-```yaml
-goal: |
-  Make sort_list faster. The current implementation is a slow bubble sort.
-
-gates:
-  - pytest test_sort.py
-
-observe:
-  - name: bench
-    command: python benchmark.py
-    metrics: {speed: higher}
-
-scope:
-  editable: [sort.py]
-```
-
-### ML Training Recipe
-
-Capture full eval output (loss curves, per-task breakdowns) for the agent to analyze:
-
-```yaml
-goal: |
-  Improve the training recipe to maximize average accuracy.
-
-gates:
-  - python test_recipe.py
-
-observe:
-  - name: eval
-    command: python evaluate.py
-    metrics: {avg_accuracy: higher}
-    capture: [results/eval_log.json, results/per_task.jsonl]
-
-scope:
-  editable: [recipe.py]
-```
-
-### Code Quality Refactor
-
-Improve readability without breaking anything, with an editor's review:
-
-```yaml
-goal: |
-  Refactor utils.py for clarity: better naming, Pythonic idioms, less duplication.
-  Don't change external behavior.
-
-gates:
-  - pytest tests/
-
-observe:
-  - name: review
-    review: |
-      Review src/utils.py for clarity and duplication. Name the single change
-      that would most improve it next.
-
-scope:
-  editable: [src/utils.py]
-```
+Starting configs for each kind of goal (a checked task, optimization, training
+a model, working through a spec, writing and research) are in
+[Patterns](patterns.md). Two more, for the keys they show:
 
 ### Metric Gates and Reviews
 
@@ -700,39 +641,6 @@ observe:
 scope:
   editable: [kernel.py]
 ```
-
-### Working Through a List
-
-Progress tracking with a review that keeps its own status, and a stop on the
-number it reports (see [Concepts → Progress tracking](concepts.md#progress-tracking)):
-
-```yaml
-goal: |
-  Implement every item in PRD.md
-  Each iteration, take the highest-priority unfinished item, implement only
-  that one, and add tests for it.
-
-scope:
-  editable: [src/, tests/]
-  frozen: [PRD.md]
-
-gates:
-  - pytest -q
-
-observe:
-  - name: progress
-    review: |
-      For each PRD.md item, give done / partial / missing with file:line evidence.
-      Report `missing`: the number of items that are not fully done.
-    previous: true
-    metrics: {missing: lower}
-
-stop:
-  - jq -e '.missing == 0' "$AUTOHELIX_METRICS"
-```
-
-Run it with a cap: `autohelix run -n 30 --cost 20` (30 iterations or $20,
-whichever comes first; the stop condition can end it sooner).
 
 ### Minimal Config
 

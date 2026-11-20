@@ -94,8 +94,8 @@ writing and research), read `patterns.md` in the docs.
   numeric score.
 - **A metric adapter** is the normal case for a measured goal: few tools
   print `##autohelix[name=value]` lines, so propose a small script in the
-  experiment folder (`autohelix/<name>/metrics.py`, run as
-  `python "$AUTOHELIX_EXPERIMENT/metrics.py"`) that runs the tool and prints
+  experiment folder (`autohelix/perf/bench.py`, run as
+  `python "$AUTOHELIX_EXPERIMENT/bench.py"`) that runs the tool and prints
   the line, with its code in the proposal. Running it once is the cheap check
   that the metric prints.
 - **A new evaluator** (check, benchmark, validator) is part of the proposal:
@@ -107,8 +107,7 @@ Pick these yourself and say what you picked; don't ask about them:
 
 - **Iterations**: `-n 1` for a single task the gates check, with an `ask:`
   gate for what the tests can't judge (a one-iteration run has no later
-  review and lands by itself); `-n 3` for an
-  open-ended goal ("make X faster", "improve Y"), a first look that `resume`
+  review and lands by itself); `-n 3` for an open-ended goal ("make X faster", "improve Y"), a first look that `resume`
   can extend; with a `stop:` condition, enough for the whole job (`-n 10`). A
   goal checked only by a review needs more than one iteration.
 - **Landing**: automatic (the run fast-forwards the branch it started on when
@@ -123,7 +122,8 @@ Pick these yourself and say what you picked; don't ask about them:
   expensive, say so in the handoff and offer the flag ("add `--cost 20` to cap
   it").
 - **Timeouts**: none (no `timeout:` on entries, no `agent.timeout`): the
-  built-in defaults apply.
+  built-in defaults apply. When each iteration trains a model for a long time,
+  offer `agent.timeout` and `--time` (`patterns.md`, Training a model).
 - **Metric gates**: none: the agent sees the numbers and decides. Suggest one
   in the walkthrough when a measurement is stable enough to protect.
 - **Agent**: `agent: {cli: X}`, where X is the CLI this session runs in (the
@@ -307,7 +307,8 @@ goes in its own file in `autohelix/` (or an experiment folder), linked from it.
 - Read it first in every session.
 - At the end of a session that changed something (a config, a run started
   or landed, a decision), update it: what changed, what was decided, what's
-  next. Create it when it doesn't exist yet. Commit `autohelix/` only when it
+  next. Create it when it doesn't exist yet (a new `autohelix/` is excluded first,
+  as under Save and check). Commit `autohelix/` only when it
   has its own repository and the user agreed to the session's changes; never
   commit into the project from here unless asked.
 - Only while `autohelix/` isn't tracked by the project: editing a tracked one

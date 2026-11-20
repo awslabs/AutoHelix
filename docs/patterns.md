@@ -13,7 +13,8 @@ Each pattern has a config to adapt, the command that launches it and why, and
 variants. The commands and files in the configs are placeholders for your
 project's own: a gate that doesn't exist yet has to be written first. Every key
 is in the [configuration reference](config.md); budgets and landing are
-[`autohelix run` flags](cli.md#budgets), not config. Each config is an
+`autohelix run` flags ([budgets](cli.md#budgets), [`--land`](cli.md#options)),
+not config. Each config is an
 [experiment folder](config.md#experiment-folder), `autohelix/NAME/autohelix.yaml`,
 which can also hold the experiment's own scripts. The bundled agent skill
 (bare [`autohelix`](cli.md#autohelix)) starts from these patterns too.
@@ -47,7 +48,8 @@ and the failing gate's output.
 - **Gate on the whole suite**, not only the target test, so the change can't
   break something else.
 - **An `ask:` gate for what the tests can't judge**: a read-only agent's yes or
-  no, one model call per iteration. A one-iteration run has no later review,
+  no, one model call per iteration (the baseline's included, so a `-n 1` run
+  makes two). A one-iteration run has no later review,
   and it lands by itself, so this gate is the only agent check before it does.
   Drop it when the tests decide everything (a proof the checker accepts).
 - **No observe entry and no review**: a review's feedback only reaches a next
@@ -95,7 +97,7 @@ observe:
   - name: bench
     command: python "$AUTOHELIX_EXPERIMENT/bench.py"
     metrics: {runtime_ms: lower}
-    capture: [results/benchmark.json]
+    capture: [benchmark.json]
 agent:
   cli: claude-code
 ```
@@ -111,8 +113,8 @@ measurement check a speedup well enough to land it automatically.
   ```python
   # autohelix/perf/bench.py
   import json, subprocess
-  subprocess.run(["python", "benchmark.py", "--out", "results/benchmark.json"], check=True)
-  median = json.load(open("results/benchmark.json"))["median_ms"]
+  subprocess.run(["python", "benchmark.py", "--out", "benchmark.json"], check=True)
+  median = json.load(open("benchmark.json"))["median_ms"]
   print(f"##autohelix[runtime_ms={median}]")
   ```
 
@@ -154,7 +156,7 @@ doesn't roll it back when an iteration is rejected.
 When training is cheap enough to repeat in every evaluation, keep the model
 out of it: the agent changes the recipe, and an observe entry trains from the
 committed recipe and evaluates. The commit is the model. (The
-[ml-recipe example](../examples/ml-recipe) works this way.)
+[ml-recipe example](https://github.com/awslabs/AutoHelix/tree/main/examples/ml-recipe) works this way.)
 
 `autohelix/train/autohelix.yaml`:
 
@@ -191,14 +193,18 @@ autohelix/train/
 
 `paths.sh` is the recipe in
 [ML experiments: One folder per iteration](ml-experiments.md#one-folder-per-iteration);
-the agent sources it from its copy of the folder, commands from theirs:
+the agent sources it from its copy of the folder, commands from theirs. An
+agent's shell commands don't share variables, so every command that uses
+`$out` or `$start` sources it first:
 
 ```yaml
 goal: |
   Improve validation accuracy by changing the training code in train.py.
-  Before training, run `source .autohelix-iteration/experiment/paths.sh` and
-  `rm -rf "$out"`. Train from "$start" into "$out" (from the base model when
-  "$start" doesn't exist), in the foreground.
+  Train in the foreground, in one command:
+  source .autohelix-iteration/experiment/paths.sh && rm -rf "$out" &&
+  python train.py --start "$start" --out "$out"
+  (train.py starts from the base model when "$start" doesn't exist). Start
+  any other command that uses $out or $start with the same `source`.
 scope:
   editable: [train.py]
 gates:
@@ -211,13 +217,16 @@ agent:
   cli: claude-code
 ```
 
+Launch: `autohelix run train -n 3 --time 8h`. `--time` bounds the segment
+when each iteration trains for a long time.
+
 - **What it gives**: rollback. The next agent starts from the last accepted
   model, and every accepted model stays on disk.
 - **What it doesn't**: cleanup (nothing removes the folders; delete them
   yourself), and accepting a retrain that changes no code as an improvement
   (see [ML experiments](ml-experiments.md#one-folder-per-iteration)).
-- **Long training** wants `agent.timeout` (a hard limit that also tells the
-  agent how much time is left) and `--time` on the launch;
+- **Long training**: offer `agent.timeout` (a hard limit that also tells the
+  agent how much time is left) besides `--time`;
   [ML experiments](ml-experiments.md) has the environment and run discipline
   (pre-installed dependencies, cached data, training in the foreground).
 
@@ -251,12 +260,12 @@ agent:
   cli: claude-code
 ```
 
-Launch: `autohelix run tasks -n 10 --cost 20 --land manual`.
+Launch: `autohelix run tasks -n 10 --land manual`.
 
 - **`-n 10`**: room for the whole list; the stop condition ends the run sooner
   once the review counts nothing missing.
-- **`--cost 20`**: every iteration includes a review, a second model call, so
-  a cost cap is worth having.
+- **No `--cost` unless you want one**: every iteration includes a review, a
+  second model call, so `--cost 20` is worth offering.
 - **`--land manual`**: changes across many files are worth reading before they
   reach your branch (`autohelix land <id>` when you're satisfied).
 
@@ -352,8 +361,8 @@ apart.
 
 ## Examples
 
-The repository's [examples](../examples) are complete, runnable projects for
-these patterns: [sorting](../examples/sorting) (optimization),
-[task-queue](../examples/task-queue) (working through a spec),
-[writing](../examples/writing) and [research](../examples/research) (writing
-and research), [ml-recipe](../examples/ml-recipe) (training a model).
+The repository's [examples](https://github.com/awslabs/AutoHelix/tree/main/examples) are complete, runnable projects for
+these patterns: [sorting](https://github.com/awslabs/AutoHelix/tree/main/examples/sorting) (optimization),
+[task-queue](https://github.com/awslabs/AutoHelix/tree/main/examples/task-queue) (working through a spec),
+[writing](https://github.com/awslabs/AutoHelix/tree/main/examples/writing) and [research](https://github.com/awslabs/AutoHelix/tree/main/examples/research) (writing
+and research), [ml-recipe](https://github.com/awslabs/AutoHelix/tree/main/examples/ml-recipe) (training a model).

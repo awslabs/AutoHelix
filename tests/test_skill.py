@@ -322,7 +322,7 @@ def test_setup_keeps_an_experiment_private_and_the_coordinator_reads_its_notes(b
     assert "`autohelix/README.md` first when it exists" in text and "## Coordinator notes" in bundled[
         "SKILL.md"].decode()
     assert "Only while `autohelix/` isn't tracked by the project" in text
-    assert "Create it when it doesn't exist yet." in text
+    assert "Create it when it doesn't exist yet (a new `autohelix/` is excluded first" in text
 
 
 def test_the_skill_points_to_the_docs_patterns_and_proposes_metric_adapters(bundled):
@@ -331,6 +331,6 @@ def test_the_skill_points_to_the_docs_patterns_and_proposes_metric_adapters(bund
     an `ask:` gate for a one-iteration run."""
     text = " ".join(bundled["SKILL.md"].decode().split())
     assert "read `patterns.md` in the docs" in text
-    assert '`python "$AUTOHELIX_EXPERIMENT/metrics.py"`' in text
+    assert '`python "$AUTOHELIX_EXPERIMENT/bench.py"`' in text
     assert "with an `ask:` gate for what the tests can't judge" in text
     assert (docs_dir() / "patterns.md").is_file()

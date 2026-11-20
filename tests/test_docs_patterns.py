@@ -53,7 +53,7 @@ def test_every_pattern_has_a_config_and_a_launch():
     names = [heading for heading, _ in configs() if "variant" not in heading]
     assert {"A checked task", "Optimization", "Training a model", "Working through a spec",
             "Writing and research"} <= set(names)
-    assert len(launches()) == 5
+    assert len(launches()) == 6
 
 
 def test_each_config_file_is_an_experiment_folder_its_launch_names():

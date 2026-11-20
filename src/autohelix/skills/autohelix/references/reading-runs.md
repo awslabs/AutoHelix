@@ -24,7 +24,9 @@ safe beside a running run. The user docs have the full field lists
   (three digits: `record.json`, `prompt.md` and `agent.log`, `gates/<k>/`,
   `observe/<name>/`, `stop/<k>/`, `rejected.patch`), `config.yaml` (the config
   it runs with, stored at its start; the file in the checkout may have changed
-  since), `experiment/`, `notes/`, `hints.md`. The docs' `phases.md` ("Where
+  since), `run.json` (name, `config_path`, `base_commit`, `target_branch`,
+  `land`, `landed`, `group`, `import`, `why`, `archived`, `archive_why`),
+  `experiment/`, `notes/`, `hints.md`, `report.html` (the run page), `logs/`. The docs' `phases.md` ("Where
   things live") has the full layout; a review's feedback is its
   `observe/<name>/stdout.txt`.
 

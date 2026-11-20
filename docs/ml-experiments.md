@@ -63,7 +63,9 @@ fi
 
 - **The agent** runs `source .autohelix-iteration/experiment/paths.sh`, then
   `rm -rf "$out"` (a killed iteration or a retried baseline reuses its number),
-  and trains from `$start` into `$out`. `$start` is the last accepted
+  and trains from `$start` into `$out`. Its shell commands don't share
+  variables, so each command that uses `$out` or `$start` sources the script
+  first (`source … && rm -rf "$out" && python train.py …`, one command). `$start` is the last accepted
   iteration's folder (in the history a number can appear on more than one line;
   the last line for it counts); when that is the baseline, it doesn't exist:
   start from the base model. Put these steps in the goal, so the agent knows

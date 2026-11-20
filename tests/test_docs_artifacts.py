@@ -1,7 +1,9 @@
 """docs/ml-experiments.md's "One folder per iteration" recipe works as written: its
-`paths.sh` (as the page has it), sourced by the agent, finds the last accepted
-iteration in the copy's history and trains from its folder; sourced by a gate
-command (whose copy has no history), it gives the same `$out` through
+`paths.sh` (as the page has it), kept in an experiment folder and sourced by the
+agent from `.autohelix-iteration/experiment/` in each of its shell commands, finds
+the last accepted iteration in the copy's history and trains from its folder;
+sourced by a gate command from `$AUTOHELIX_EXPERIMENT` (whose copy has no
+history), it gives the same `$out` through
 `AUTOHELIX_RUN_ID` / `AUTOHELIX_ITERATION`; a rejected iteration's model never
 becomes the next start."""
 
@@ -12,10 +14,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from autohelix.agents.mock import MockAgent
 from autohelix.harness import Budget, Harness
-from tests.helpers import configure
+from autohelix.runs import git
 
 PAGE = Path(__file__).resolve().parent.parent / "docs" / "ml-experiments.md"
 
@@ -30,24 +33,33 @@ def paths_script() -> str:
 @pytest.mark.skipif(shutil.which("jq") is None, reason="the recipe uses jq")
 def test_each_iteration_trains_from_the_last_accepted_iterations_folder(project, tmp_path, monkeypatch):
     artifacts = tmp_path / "data"
-    paths = tmp_path / "paths.sh"
-    paths.write_text(paths_script().replace("/data/x", str(artifacts)))
-    # The agent's steps as the page gives them; "training": the start's weights plus
-    # this iteration's number.
-    train = (f'source {paths}\nrm -rf "$out"\nmkdir -p "$out"; '
-             '{ cat "$start/weights" 2>/dev/null || echo base; } '
-             '| sed "s/$/+$AUTOHELIX_ITERATION/" > "$out/weights"')
+    folder = project / "autohelix" / "train"  # untracked, as a private experiment is
+    folder.mkdir(parents=True)
+    (folder / "paths.sh").write_text(paths_script().replace("/data/x", str(artifacts)))
+    config = yaml.safe_load((project / "autohelix.yaml").read_text())
+    config["gates"] = [  # as eval.sh does: the command's own copy of the folder
+        'source "$AUTOHELIX_EXPERIMENT/paths.sh"; [ -z "${start+set}" ] && '
+        '{ [ "$AUTOHELIX_ITERATION" = 0 ] || [ -f "$out/weights" ]; }',
+        '[ "$AUTOHELIX_ITERATION" != 2 ]']  # iteration 2 is rejected
+    (folder / "autohelix.yaml").write_text(yaml.safe_dump(config))
+    git(project, "rm", "-q", "autohelix.yaml")
+    git(project, "commit", "-qm", "config moves into autohelix/train/")
+    # The agent's steps as the page gives them, each its own shell (an agent's
+    # commands share no variables): clear $out, then "train": the start's weights
+    # plus this iteration's number.
+    source = "source .autohelix-iteration/experiment/paths.sh && "
+    steps = [source + 'rm -rf "$out"',
+             source + 'mkdir -p "$out" && { cat "$start/weights" 2>/dev/null || echo base; } '
+             '| sed "s/$/+$AUTOHELIX_ITERATION/" > "$out/weights"']
     real = MockAgent.run
 
     def run(self, copy_path, prompt, iteration, *args, **kwargs):
-        subprocess.run(["bash", "-euc", train], cwd=copy_path, env=dict(os.environ), check=True)
+        for step in steps:
+            subprocess.run(["bash", "-euc", step], cwd=copy_path, env=dict(os.environ), check=True)
         return real(self, copy_path, prompt, iteration, *args, **kwargs)
 
     monkeypatch.setattr(MockAgent, "run", run)
-    configure(project, gates=[f'. {paths}; [ -z "${{start+set}}" ] && '
-                              '{ [ "$AUTOHELIX_ITERATION" = 0 ] || [ -f "$out/weights" ]; }',
-                              '[ "$AUTOHELIX_ITERATION" != 2 ]'])  # iteration 2 is rejected
-    harness = Harness(project, land_mode="manual")
+    harness = Harness(project, config_file=folder / "autohelix.yaml", land_mode="manual")
     harness.run(Budget(until=3), report=False)
     harness.close()
     assert [r.accepted for r in harness.history.load()] == [True, True, False, True]
