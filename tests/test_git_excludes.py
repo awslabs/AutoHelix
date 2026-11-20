@@ -9,7 +9,7 @@ from autohelix.cli import main
 from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.workspace import GitExcludeError, ensure_git_exclude_entry, ensure_runtime_ignored
-from tests.helpers import git, latest_run
+from tests.helpers import config_file, git, latest_run
 
 
 @pytest.fixture(params=["fresh-clone", "existing-ignore", "subdirectory", "worker"])
@@ -27,7 +27,8 @@ def project_layout(tmp_path, request):
         (source / ".gitignore").write_text(".autohelix/\n")
 
     (project / "main.py").write_text('print("hello")\n')
-    (project / "autohelix.yaml").write_text(
+    config_file(project).parent.mkdir(parents=True)
+    config_file(project).write_text(
         "goal: Test local exclusions\n"
         "agent:\n"
         "  cli: mock\n"
@@ -36,7 +37,7 @@ def project_layout(tmp_path, request):
         "    change_content: '# Modified in iteration {iteration}'\n"
         "gates: ['true']\n"
     )
-    git(source, "add", "-A")
+    git(source, "add", "-A")  # the experiment committed too: clones and workers need it
     git(source, "commit", "-m", "Initial commit")
 
     if request.param == "fresh-clone":
@@ -134,7 +135,7 @@ def test_conflicting_ignore_refuses_and_preserves_user_work(
     staged_before = git(project, "diff", "--cached", "--binary")
     unstaged_before = git(project, "diff", "--binary")
     worktrees_before = git(project, "worktree", "list", "--porcelain")
-    config_before = (project / "autohelix.yaml").read_bytes()
+    config_before = config_file(project).read_bytes()
     exclude = common_repo / ".git" / "info" / "exclude"
     exclude_before = exclude.read_bytes() if exclude.exists() else None
     runtime = project / ".autohelix"
@@ -169,7 +170,7 @@ def test_conflicting_ignore_refuses_and_preserves_user_work(
     assert git(project, "diff", "--binary") == unstaged_before
     assert ignore.read_bytes() == ignore_before
     assert (project / "scratch.py").read_text() == 'print("untracked user work")\n'
-    assert (project / "autohelix.yaml").read_bytes() == config_before
+    assert config_file(project).read_bytes() == config_before
     # The refusal takes back the exclude line it added.
     assert (exclude.read_bytes() if exclude.exists() else None) == exclude_before
 

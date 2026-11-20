@@ -1,6 +1,7 @@
-"""Helpers shared by test files: `git`, `cli`, `configure`, `latest_run` and `with_words`. The
-committed mock-agent `project` and the file-only `run_paths` fixtures are in
-`tests/conftest.py`."""
+"""Helpers shared by test files: `git`, `cli`, `CONFIG`, `config_file`, `private`, `write_config`,
+`configure`,
+`latest_run` and `with_words`. The committed mock-agent `project` and the file-only `run_paths`
+fixtures are in `tests/conftest.py`."""
 
 import os
 import subprocess
@@ -26,14 +27,41 @@ def cli(project, *args):
     return CliRunner().invoke(main, [*args, "-p", str(project)])
 
 
+# The `project` fixture's experiment: its config, project-relative, and its name.
+NAME = "demo"
+CONFIG = f"autohelix/{NAME}/config.yaml"
+
+
+def config_file(project) -> Path:
+    """The `project` fixture's config file: `project/autohelix/demo/config.yaml`."""
+    return Path(project) / CONFIG
+
+
+def private(project):
+    """Make the project's autohelix/ private, as setup does: `/autohelix/` in the
+    repository's exclude file (`git rev-parse --git-path info/exclude`)."""
+    exclude = Path(project) / git(project, "rev-parse", "--git-path", "info/exclude")
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    text = exclude.read_text() if exclude.exists() else ""
+    if "/autohelix/" not in text.splitlines():
+        exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + "/autohelix/\n")
+
+
+def write_config(project, text: str) -> Path:
+    """Write the project's config (`CONFIG`), private (`private`); its path."""
+    private(project)
+    path = config_file(project)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
 def configure(project, **values):
-    """Set top-level keys of the project's `autohelix.yaml` and commit it."""
-    path = project / "autohelix.yaml"
+    """Set top-level keys of the project's config (`CONFIG`, private: not committed)."""
+    path = config_file(project)
     data = yaml.safe_load(path.read_text())
     data.update(values)
     path.write_text(yaml.safe_dump(data))
-    git(project, "add", "autohelix.yaml")
-    git(project, "commit", "-qm", "config")
 
 
 def latest_run(project: Path) -> RunPaths:

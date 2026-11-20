@@ -414,7 +414,8 @@ class TestRequireClean:
 
     def test_untracked_files_are_ignored(self, git_project):
         # Also inside what would be editable: the config itself needn't be committed.
-        (git_project / "autohelix.yaml").write_text("goal: g\n")
+        (git_project / "autohelix" / "perf").mkdir(parents=True)
+        (git_project / "autohelix" / "perf" / "config.yaml").write_text("goal: g\n")
         (git_project / "new_module.py").write_text("x = 1\n")
         require_clean(git_project)
 

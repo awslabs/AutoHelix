@@ -15,7 +15,7 @@ from autohelix.cli import main
 from autohelix.config import Config, ConfigError
 from autohelix.history import History
 from autohelix.runs import project_runs
-from tests.helpers import configure, latest_run
+from tests.helpers import config_file, configure, latest_run
 
 
 def _errors(agent) -> list[str]:
@@ -139,7 +139,7 @@ def test_resume_with_the_old_variable_is_refused_like_a_config_error(project, mo
     codex = "goal: Make a checked change\nagent:\n  cli: codex\n  timeout: 10m\n"
     stored = latest_run(project).config  # and the stored copy: no config change
     stored.chmod(0o644)
-    for config in (project / "autohelix.yaml", stored):
+    for config in (config_file(project), stored):
         config.write_text(codex)
     monkeypatch.setenv("AUTOHELIX_CLAUDE_CMD", "/opt/claude")
     monkeypatch.setenv("AUTOHELIX_CODEX_CMD", str(project / "no-codex"))  # never started

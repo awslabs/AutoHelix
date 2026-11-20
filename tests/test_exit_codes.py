@@ -74,7 +74,7 @@ def test_an_interrupt_in_the_baseline_exits_130(project, monkeypatch):
 
 def test_no_run_to_resume_exits_1(project):
     result = cli(project, "resume")
-    assert result.exit_code == 1 and "No run to resume for autohelix.yaml" in result.output
+    assert result.exit_code == 1 and "No run to resume for autohelix/demo/config.yaml" in result.output
 
 
 def test_a_segment_starts_when_the_lock_is_held_and_stop_reaches_it(project, monkeypatch):

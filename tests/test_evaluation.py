@@ -16,7 +16,7 @@ from autohelix.harness import Budget, Harness
 from autohelix.history import History
 from autohelix.iteration import IterationWorkspace
 from autohelix.runs import RunPaths
-from tests.helpers import git, latest_run
+from tests.helpers import config_file, git, latest_run, write_config
 
 
 @pytest.fixture
@@ -44,9 +44,7 @@ def _configure(project, **sections) -> None:
               "agent": {"cli": "mock", "mock": {"change_file": "hello.py",
                                                         "change_content": "# iteration {iteration}"}},
               **sections}
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    git(project, "add", "-A")
-    git(project, "commit", "-m", "config")
+    write_config(project, yaml.safe_dump(config, sort_keys=False))
 
 
 def _run(project, n: int) -> list:
@@ -467,10 +465,9 @@ def test_previous_skips_iterations_where_the_entry_failed(project):
 def test_an_accepted_no_op_counts_as_previous(project):
     # The agent's change is out of scope, discarded: every iteration is an accepted no-op.
     _configure(project, scope={"editable": ["hello.py"]}, observe=[{"name": "tracker", "command": TRACKER}])
-    config = yaml.safe_load((project / "autohelix.yaml").read_text())
+    config = yaml.safe_load(config_file(project).read_text())
     config["agent"]["mock"]["change_file"] = "elsewhere.txt"
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    git(project, "commit", "-qam", "out-of-scope change")
+    config_file(project).write_text(yaml.safe_dump(config, sort_keys=False))
     records = _run(project, 3)
     assert [(r.accepted, r.commit) for r in records[1:]] == [(True, None)] * 3
     assert _first_lines(project, 3) == ["iter=3", "prev=iter=2"]
@@ -542,10 +539,9 @@ def test_a_judge_writes_in_its_own_copy_not_the_checks_copy(project, log):
     _configure(project, gates=[f'[ "$AUTOHELIX_ITERATION" = 0 ] || autohelix ask "Done?" || true',
                                f'test ! -e planted.md && echo "$AUTOHELIX_ITERATION later" >> {log}'],
                observe=[{"name": "bench", "command": f'echo "$AUTOHELIX_ITERATION bench" >> {log}'}])
-    config = yaml.safe_load((project / "autohelix.yaml").read_text())
+    config = yaml.safe_load(config_file(project).read_text())
     config["agent"]["mock"]["judge_change_file"] = "planted.md"
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    git(project, "commit", "-qam", "judge edits")
+    config_file(project).write_text(yaml.safe_dump(config, sort_keys=False))
     _, record = _run(project, 1)
     assert record.accepted
     assert _lines(log) == ["0 later", "0 bench", "1 later", "1 bench"]

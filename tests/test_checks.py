@@ -227,7 +227,7 @@ def _example_metrics():
     import yaml
 
     root = Path(__file__).resolve().parent.parent / "examples"
-    for path in sorted([*root.glob("*/autohelix.yaml"), *root.glob("*/templates/autohelix.yaml.tmpl")]):
+    for path in sorted([*root.glob("*/autohelix/*/config.yaml"), *root.glob("*/templates/config.yaml.tmpl")]):
         text = _re.sub(r"\{(\w+)\}", "x", path.read_text())
         example = path.relative_to(root).parts[0]
         for entry in (yaml.safe_load(text) or {}).get("observe") or []:

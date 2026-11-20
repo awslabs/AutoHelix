@@ -8,8 +8,9 @@ import os
 from autohelix.agents.mock import MockAgent
 from autohelix.harness import Budget, Harness
 from autohelix.iteration import _remove_file
-from tests.helpers import configure, git, latest_run
+from tests.helpers import CONFIG, config_file, configure, git, latest_run
 
+TEMPLATE = CONFIG.replace("config.yaml", "prompt.md")
 VARIABLES = ("AUTOHELIX_PROJECT", "AUTOHELIX_RUN_DIR", "AUTOHELIX_RUN_ID", "AUTOHELIX_ITERATION")
 
 
@@ -19,8 +20,10 @@ def _watch_agent(monkeypatch, also=None):
     real = MockAgent.run
 
     def run(self, copy_path, prompt, iteration, *args, **kwargs):
+        experiment = copy_path / CONFIG.rsplit("/", 1)[0]
         seen.append({"env": {name: os.environ.get(name) for name in VARIABLES},
-                     "files": sorted(p.name for p in copy_path.iterdir())})
+                     "files": sorted(p.name for p in copy_path.iterdir()),
+                     "experiment": sorted(p.name for p in experiment.iterdir()) if experiment.is_dir() else None})
         if also:
             also(copy_path)
         return real(self, copy_path, prompt, iteration, *args, **kwargs)
@@ -59,47 +62,54 @@ def test_gate_commands_keep_the_project_and_run_folder(project):
 
 
 def test_the_agent_copy_has_no_config_or_template_and_the_removal_is_never_committed(project, monkeypatch):
-    (project / "prompt.md").write_text("Goal: {{ goal }}\n")
-    git(project, "add", "prompt.md")
     configure(project, prompt_template="prompt.md")
-    config = (project / "autohelix.yaml").read_text()
+    (config_file(project).parent / "prompt.md").write_text("Goal: {{ goal }}\n")
+    config = config_file(project).read_text()
+    git(project, "add", "-f", config_file(project).parent)  # an experiment committed with the project
+    git(project, "commit", "-qm", "experiment")
     seen = _watch_agent(monkeypatch)
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
     harness.close()
     [call] = seen
-    assert "autohelix.yaml" not in call["files"] and "prompt.md" not in call["files"]
+    assert not call["experiment"]  # its config and template removed
     assert "code.py" in call["files"]
     record = harness.history.load()[-1]
     assert record.accepted and record.commit
-    assert git(project, "show", f"{record.commit}:autohelix.yaml") + "\n" == config
-    assert git(project, "show", f"{record.commit}:prompt.md") == "Goal: {{ goal }}"
+    assert git(project, "show", f"{record.commit}:{CONFIG}") + "\n" == config
+    assert git(project, "show", f"{record.commit}:{TEMPLATE}") == "Goal: {{ goal }}"
     assert record.discarded == [] and record.discarded_frozen == []  # the harness's removal, not the agent's
-    assert (project / "autohelix.yaml").read_text() == config  # the checkout is untouched
+    assert config_file(project).read_text() == config  # the checkout is untouched
 
 
 def test_a_config_the_agent_writes_back_is_discarded_as_frozen(project, monkeypatch):
-    _watch_agent(monkeypatch, also=lambda copy: (copy / "autohelix.yaml").write_text("goal: mine\n"))
+    def write_back(copy):
+        (copy / CONFIG).parent.mkdir(parents=True, exist_ok=True)
+        (copy / CONFIG).write_text("goal: mine\n")
+
+    git(project, "add", "-f", CONFIG)  # committed: a private one is ignored in the copy too
+    git(project, "commit", "-qm", "experiment")
+    _watch_agent(monkeypatch, also=write_back)
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
     harness.close()
     record = harness.history.load()[-1]
-    assert record.discarded_frozen == ["autohelix.yaml"]
-    assert "goal: mine" not in git(project, "show", f"{record.commit}:autohelix.yaml")
+    assert record.discarded_frozen == [CONFIG]
+    assert "goal: mine" not in git(project, "show", f"{record.commit}:{CONFIG}")
 
 
 def test_removal_never_follows_a_symlink(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
-    (outside / "autohelix.yaml").write_text("keep")
+    (outside / "config.yaml").write_text("keep")
     copy = tmp_path / "copy"
     copy.mkdir()
     (copy / "conf").symlink_to(outside)
-    assert not _remove_file(copy, "conf/autohelix.yaml")
-    assert (outside / "autohelix.yaml").read_text() == "keep"
+    assert not _remove_file(copy, "conf/config.yaml")
+    assert (outside / "config.yaml").read_text() == "keep"
     assert not _remove_file(copy, "missing.yaml")
     (copy / "dir.yaml").mkdir()
     assert not _remove_file(copy, "dir.yaml") and (copy / "dir.yaml").is_dir()
-    (copy / "link.yaml").symlink_to(outside / "autohelix.yaml")
+    (copy / "link.yaml").symlink_to(outside / "config.yaml")
     assert _remove_file(copy, "link.yaml")  # the link itself, never its target
-    assert not os.path.lexists(copy / "link.yaml") and (outside / "autohelix.yaml").read_text() == "keep"
+    assert not os.path.lexists(copy / "link.yaml") and (outside / "config.yaml").read_text() == "keep"

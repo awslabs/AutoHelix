@@ -2,7 +2,7 @@
 (excluded by the project) runs (clean checkout, no nested-repository rejection),
 lands automatically, and `resume` continues it, without the uncommitted-config
 warning. Also `autohelix` as a symlink into a personal repository of configs, which
-the docs don't describe (run.json names its config by the resolved path): it runs,
+the docs don't describe (run.json names its config as named, through the link): it runs,
 with the warning (its file is outside the project, which `git check-ignore`
 refuses)."""
 
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from tests.helpers import cli, git, latest_run
+from tests.helpers import config_file, cli, git, latest_run
 
 CONFIG = {
     "goal": "Make a checked change",
@@ -22,15 +22,14 @@ CONFIG = {
 
 
 def private_configs(project, folder, exclude):
-    """Move the project's config to `folder`/perf/autohelix.yaml as its own repository's commit,
-    take autohelix.yaml out of the project's history and ignore `exclude` there."""
+    """Replace the project's experiments with `folder`/perf/config.yaml as its own repository's
+    commit, and ignore `exclude` in the project."""
+    shutil.rmtree(project / "autohelix")
     (folder / "perf").mkdir(parents=True)
-    (folder / "perf" / "autohelix.yaml").write_text(yaml.safe_dump(CONFIG))
+    (folder / "perf" / "config.yaml").write_text(yaml.safe_dump(CONFIG))
     git(folder, "init", "-q")
-    git(folder, "add", "perf/autohelix.yaml")
+    git(folder, "add", "perf/config.yaml")
     git(folder, "commit", "-qm", "perf config")
-    git(project, "rm", "-q", "autohelix.yaml")
-    git(project, "commit", "-qm", "configs are private")
     with open(project / ".git" / "info" / "exclude", "a") as f:
         f.write(f"{exclude}\n")
 
@@ -53,27 +52,27 @@ def run_and_resume(project, config_path, warned=False):
 
 def test_autohelix_folder_as_its_own_repository(project):
     private_configs(project, project / "autohelix", "/autohelix/")
-    run_and_resume(project, "autohelix/perf/autohelix.yaml")
+    run_and_resume(project, "autohelix/perf/config.yaml")
 
 
 def test_autohelix_symlink_into_a_personal_repository(project, tmp_path):
     personal = tmp_path / "configs" / "project"
     private_configs(project, personal, "/autohelix")  # a symlink is a file to git: no trailing slash
     (project / "autohelix").symlink_to(personal)
-    # run.json names the config by its resolved path, outside the project.
-    run_and_resume(project, str((personal / "perf" / "autohelix.yaml").resolve()), warned=True)
+    # run.json names the config as named, through the link, and the run is named after its folder.
+    run_and_resume(project, "autohelix/perf/config.yaml", warned=True)
+    assert latest_run(project).read_identity()["name"] == "perf"
 
 
-def test_untracked_root_config(project):
-    """The **Private** bullet's other form: a committed `autohelix.yaml` untracked
-    (`git rm --cached`) and excluded as `/autohelix.yaml` runs without the warning."""
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(CONFIG))
-    git(project, "add", "autohelix.yaml")
+def test_a_committed_experiment_made_private(project):
+    """The **Private** bullet's other form: a committed `autohelix/` untracked
+    (`git rm -r --cached autohelix`) and excluded as `/autohelix/` runs without the warning."""
+    config_file(project).write_text(yaml.safe_dump(CONFIG))
+    git(project, "add", "-f", "autohelix")
     git(project, "commit", "-qm", "config")
-    git(project, "rm", "-q", "--cached", "autohelix.yaml")
+    git(project, "rm", "-r", "-q", "--cached", "autohelix")
     git(project, "commit", "-qm", "config is private")
-    with open(project / ".git" / "info" / "exclude", "a") as f:
-        f.write("/autohelix.yaml\n")
+    assert "/autohelix/" in (project / ".git" / "info" / "exclude").read_text().splitlines()  # as setup makes it
     result = cli(project, "run", "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     assert "first: a commit on" not in result.output
@@ -88,7 +87,6 @@ def test_the_page_shows_the_tested_exclude_entries():
     section = " ".join(page[page.index("### Where configs live"):page.index("## Runs and run state")].split())
     for line in ('echo /autohelix/ >> "$(git rev-parse --git-path info/exclude)"',
                  "`/<subfolder>/autohelix/`",
-                 "`/autohelix.yaml`",
                  "git rm -r --cached autohelix",
                  "git add -f autohelix/bench/",
                  "`/autohelix/*` and `!/autohelix/bench/`"):
@@ -101,7 +99,7 @@ def test_sharing_one_experiment_out_of_a_private_folder(project):
     `.gitignore`, `/autohelix/*` + `!/autohelix/bench/` leaves just that experiment visible."""
     bench = project / "autohelix" / "bench"
     bench.mkdir(parents=True)
-    (bench / "autohelix.yaml").write_text(yaml.safe_dump(CONFIG))
+    (bench / "config.yaml").write_text(yaml.safe_dump(CONFIG))
     (project / "autohelix" / "other.txt").write_text("private\n")
     with open(project / ".git" / "info" / "exclude", "a") as f:
         f.write("/autohelix/\n")
@@ -110,9 +108,9 @@ def test_sharing_one_experiment_out_of_a_private_folder(project):
     assert git(project, "diff", "--cached", "--name-only") == ""  # the inner repository wins
     shutil.rmtree(project / "autohelix" / ".git")
     git(project, "add", "-f", "autohelix/bench/")
-    assert git(project, "diff", "--cached", "--name-only") == "autohelix/bench/autohelix.yaml"
+    assert git(project, "diff", "--cached", "--name-only") == "autohelix/bench/config.yaml"
     git(project, "reset", "-q")
     (project / ".git" / "info" / "exclude").write_text("")
     (project / ".gitignore").write_text("/autohelix/*\n!/autohelix/bench/\n")
     untracked = git(project, "ls-files", "--others", "--exclude-standard", "autohelix")
-    assert untracked == "autohelix/bench/autohelix.yaml"
+    assert untracked == "autohelix/bench/config.yaml"

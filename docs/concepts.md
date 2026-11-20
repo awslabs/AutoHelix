@@ -256,7 +256,7 @@ The variables a template gets are a stable, documented contract:
 | `gates` | Every gate in list order: `{text, kind}`, `kind` being `command` or `metric`; a metric gate's text says what it compares ("speed: at most 5% worse than the last accepted iteration"). Elsewhere (console header, `view ID --json`, the `gates` of history records) a metric gate goes by its short text, `speed regress 5%` or `speed improve 0%` |
 | `observe` | Every observe entry: `{name, kind, metric_labels}`, `kind` being `command` (with `command`) or `review` (with `prompt`, on one line); `metric_labels` like `speed (↑)` |
 | `stop` | The stop commands |
-| `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files and `autohelix/` (always frozen, for every config; listed when the project has one, and then instead of the files in it) |
+| `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files and `autohelix/` (always frozen, and listed instead of the files in it) |
 | `notes_path` | Where this iteration's notes go (in the copy) |
 | `hints` | `.autohelix-iteration/hints.md` if there are hints, else empty |
 | `hints_text` | The hints' text (the lines `autohelix hint` added, oldest first), else empty |
@@ -270,7 +270,7 @@ The variables a template gets are a stable, documented contract:
 | `time_limit` | `agent.timeout` as a compact duration (`15m`), or empty |
 | `group`, `group_runs` | The run's group, and one line per other run of it (where its state is in the copy, iterations, latest accepted metrics, running or finished, its ref); empty outside a group. Members whose state failed to copy are left out |
 | `imported` | The run this one continues from (`run --import`), or none (also when its state isn't in the copy, e.g. that run was deleted): `{id, short, path, description, same_code}`, `path` being its state in the copy (`.autohelix-iteration/runs/<id>/`, read-only), `description` its line as in `group_runs`, `same_code` whether its tip holds the same tree as the copy's code (false when unknown); its code is at `autohelix/<id>`. Not listed in `group_runs`, even when it is in the group |
-| `experiment` | `.autohelix-iteration/experiment/`, the copy of the run's stored experiment folder (`runs/<id>/experiment/`), or empty for a config without one (the project's `autohelix.yaml`) or a folder holding only its config |
+| `experiment` | `.autohelix-iteration/experiment/`, the copy of the run's stored experiment folder (`runs/<id>/experiment/`), or empty for a folder holding only its config |
 
 A custom template is a copy: it won't pick up future changes to the built-in
 one. Remove `prompt_template:` to return to it. A run warns when a custom
@@ -301,23 +301,22 @@ Two folders, split by who writes them:
   keeps it out of git; `archive` and `delete` manage what's in it.
 
 ```
-autohelix.yaml                 # the project's single experiment (optional)
 autohelix/
   perf/                        # an experiment: just a config
-    autohelix.yaml
+    config.yaml
   console/                     # an experiment with material
-    autohelix.yaml             # its config
+    config.yaml                # its config
     prompt.md                  # its prompt template (optional)
     render.py                  # evaluator / metric adapter
     metrics.py -> ../lib/metrics.py
-  lib/                         # shared helpers: not an experiment (no autohelix.yaml)
+  lib/                         # shared helpers: not an experiment (no config.yaml)
     metrics.py
   README.md                    # the coordinator's notes
 .autohelix/
   runs/<id>/                   # one run: what it stored and what it did
 ```
 
-`autohelix run console` runs `autohelix/console/autohelix.yaml`. The run stores
+`autohelix run console` runs `autohelix/console/config.yaml`. The run stores
 the config, its template and the rest of the folder
 ([Configuration → Experiment folder](config.md#experiment-folder)); a link is
 followed when it points inside `autohelix/`, so `metrics.py` is stored as the
@@ -355,8 +354,7 @@ committed one. Git is only for sharing them.
 - Use the local exclude file over `.gitignore` for a private folder: it is
   local to your clone, needs no commit, and collaborators don't see it. It is
   `git rev-parse --git-path info/exclude` (`.git/info/exclude`, except in a
-  linked worktree, where `.git` is a file). A private top-level config is
-  `/autohelix.yaml` in the same file.
+  linked worktree, where `.git` is a file).
 - Its patterns start at the repository's top: for a project in a subfolder,
   `/<subfolder>/autohelix/` (`/services/api/autohelix/`).
 - An already committed config must be untracked first (`git rm -r --cached
@@ -365,7 +363,7 @@ committed one. Git is only for sharing them.
 
   ```bash
   echo /autohelix/ >> "$(git rev-parse --git-path info/exclude)"
-  cd autohelix && git init && git add perf/autohelix.yaml && git commit -m "perf config"
+  cd autohelix && git init && git add perf/config.yaml && git commit -m "perf config"
   ```
 
   The project's `git status` stays clean, and copies, built from the project's

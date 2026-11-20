@@ -43,7 +43,7 @@ autohelix
 ```
 
 An agent session opens and helps you turn your goal into a protocol: it looks at your
-project, proposes the checks and what to measure, and commits the file once you agree.
+project, proposes the checks and what to measure, and saves the file once you agree.
 
 **2. Run.** The setup agent ends by suggesting a command and budget, for example:
 
@@ -91,7 +91,7 @@ the work is done.
 <summary>What a config looks like</summary>
 
 ```yaml
-# autohelix/perf/autohelix.yaml
+# autohelix/perf/config.yaml
 goal: Make the data pipeline faster without changing its output.
 
 scope:

@@ -3,7 +3,7 @@ nothing (the skill's validation step)."""
 
 import pytest
 
-from tests.helpers import cli, configure
+from tests.helpers import config_file, cli, configure
 
 
 def _snapshot(project):
@@ -16,19 +16,13 @@ def test_a_ready_config_passes_and_nothing_is_written(project):
     before = _snapshot(project)
     result = cli(project, "run", "--check")
     assert result.exit_code == 0, result.output
-    assert "OK: autohelix.yaml is ready; `autohelix run` would start a new run." in result.output
+    assert "OK: autohelix/demo/config.yaml is ready; `autohelix run demo` would start a new run." in result.output
     assert _snapshot(project) == before
     assert not list((project / ".autohelix").iterdir())
 
 
 def test_a_named_config_is_checked(project):
-    (project / "autohelix" / "perf").mkdir(parents=True)
-    (project / "autohelix" / "perf" / "autohelix.yaml").write_text((project / "autohelix.yaml").read_text())
-    (project / "autohelix.yaml").unlink()
-    from autohelix.runs import git
-
-    git(project, "add", "-A")
-    git(project, "commit", "-qm", "named")
+    config_file(project).parent.rename(project / "autohelix" / "perf")
     result = cli(project, "run", "perf", "--check")
     assert result.exit_code == 0, result.output
     assert "`autohelix run perf` would start a new run." in result.output
@@ -45,7 +39,7 @@ def test_a_named_config_is_checked(project):
 def test_what_run_would_refuse_fails_the_check(project, values, message, monkeypatch):
     """These passed the skill's old Python check (a warning or nothing) and then
     failed `run` (or, for the template, reached the agent)."""
-    (project / "p.md").write_text("{% if hints %}\n")
+    (config_file(project).parent / "p.md").write_text("{% if hints %}\n")  # beside the config
     values = dict(values)
     if "env" in values:
         monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", values.pop("env"))

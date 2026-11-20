@@ -16,7 +16,7 @@ from autohelix.cli import main
 from autohelix.judge import CONFIG_ENV
 from autohelix.runs import (SCHEMA, NoRun, RunLock, RunPaths, default_run, find_project, git, project_runs,
                             short_id, write_json)
-from tests.helpers import cli, latest_run
+from tests.helpers import CONFIG, cli, latest_run
 
 
 def add_run(project, run_id, *, created_at, archived=False):
@@ -68,13 +68,10 @@ def test_the_project_is_found_from_a_subfolder_within_the_checkout(tmp_path):
 
 @pytest.fixture
 def folder_project(project):
-    """The shared project with its config at autohelix/perf/autohelix.yaml, plus autohelix/docs/autohelix.yaml."""
-    (project / "autohelix" / "perf").mkdir(parents=True)
+    """The shared project with its config at autohelix/perf/config.yaml, plus autohelix/docs/config.yaml."""
+    (project / CONFIG).parent.rename(project / "autohelix" / "perf")
     (project / "autohelix" / "docs").mkdir()
-    git(project, "mv", "autohelix.yaml", "autohelix/perf/autohelix.yaml")
-    shutil.copy(project / "autohelix" / "perf" / "autohelix.yaml", project / "autohelix" / "docs" / "autohelix.yaml")
-    git(project, "add", "-A")
-    git(project, "commit", "-qm", "two configs")
+    shutil.copy(project / "autohelix" / "perf" / "config.yaml", project / "autohelix" / "docs" / "config.yaml")
     shutil.rmtree(project / ".autohelix")
     return project
 
@@ -97,16 +94,14 @@ def test_resume_takes_a_config_name_like_run(folder_project):
     assert result.exit_code == 1 and "Name a run or a config: `autohelix resume <id|name>`." in result.output
     result = cli(folder_project, "resume", "nope")
     assert result.exit_code == 1 and "No run or config 'nope'" in result.output
-    assert "(`perf` for autohelix/perf/autohelix.yaml)" in " ".join(result.output.split())
+    assert "(`perf` for autohelix/perf/config.yaml)" in " ".join(result.output.split())
 
 
 def test_a_run_id_takes_precedence_over_a_config_of_that_name(folder_project):
     perf = started(folder_project, "perf")
     short = short_id(perf.run_id)
     (folder_project / "autohelix" / short).mkdir()
-    (folder_project / "autohelix" / short / "autohelix.yaml").write_text((folder_project / "autohelix" / "docs" / "autohelix.yaml").read_text())
-    git(folder_project, "add", "-A")
-    git(folder_project, "commit", "-qm", "a config named like the id")
+    (folder_project / "autohelix" / short / "config.yaml").write_text((folder_project / "autohelix" / "docs" / "config.yaml").read_text())
     result = cli(folder_project, "resume", short, "-n", "1", "--no-report")
     assert result.exit_code == 0, result.output
     assert f"Resuming {short}" in result.output
@@ -224,12 +219,12 @@ def test_by_hand_ask_names_its_agent_and_where_the_settings_came_from(tmp_path, 
     config = {"goal": "g", "agent": {"cli": "mock", "model": "m1",
                                      "mock": {"judge_answer": "yes", "judge_reason": "fine"}}}
     (tmp_path / "autohelix" / "a").mkdir(parents=True)
-    (tmp_path / "autohelix" / "a" / "autohelix.yaml").write_text(yaml.safe_dump(config))
+    (tmp_path / "autohelix" / "a" / "config.yaml").write_text(yaml.safe_dump(config))
     result = CliRunner().invoke(main, ["ask", "Done?"])
     assert result.exit_code == 0, result.output
-    assert "autohelix ask: yes · mock m1 (autohelix/a/autohelix.yaml) · " in result.output
+    assert "autohelix ask: yes · mock m1 (autohelix/a/config.yaml) · " in result.output
     (tmp_path / "autohelix" / "b").mkdir()
-    (tmp_path / "autohelix" / "b" / "autohelix.yaml").write_text(yaml.safe_dump(config))
+    (tmp_path / "autohelix" / "b" / "config.yaml").write_text(yaml.safe_dump(config))
     result = CliRunner().invoke(main, ["ask", "--cli", "mock", "Done?"])
     assert " · mock (--cli) · " in result.output
     from autohelix.judge import base_config

@@ -26,7 +26,7 @@ notes/
 env.sh
 TODO.md
 
-# AutoHelix experiments for working on this repo (autohelix/NAME/autohelix.yaml),
+# AutoHelix experiments for working on this repo (autohelix/NAME/config.yaml),
 # kept private. A run stores the folder it uses (.autohelix/runs/<id>/experiment/),
 # so its config and helpers need no commit.
 /autohelix/

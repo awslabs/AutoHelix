@@ -16,7 +16,7 @@ from autohelix import run_table
 from autohelix.live import fit, status_line
 from autohelix.runs import RunPaths, write_json
 from autohelix.viewer import MAX_TEXT, ProjectRuns, RunData, make_server, review_markdown, write_static
-from tests.helpers import git, latest_run
+from tests.helpers import NAME, config_file, git, latest_run, write_config
 
 
 CONFIG = """\
@@ -45,7 +45,7 @@ def project(tmp_path, run_paths):
     git(tmp_path, "config", "user.email", "t@t")
     git(tmp_path, "config", "user.name", "T")
     (tmp_path / ".gitignore").write_text(".autohelix/\n")
-    (tmp_path / "autohelix.yaml").write_text(CONFIG)
+    write_config(tmp_path, CONFIG)
     run_paths.config.write_text(CONFIG)  # the run's stored copy, which the viewer reads
     (tmp_path / "sort.py").write_text("def sort(xs):\n    return sorted(xs)\n")
     git(tmp_path, "add", "-A")
@@ -462,10 +462,10 @@ def test_the_stored_template_is_shown_with_the_config(project):
     assert "template" not in RunData(project, run_id="test").state()["config"]
     paths.config.write_text(CONFIG + "prompt_template: prompt.md\n")
     paths.template.write_text("Stored: {{ goal }}\n")
-    (project / "prompt.md").write_text("Edited since\n")
+    (config_file(project).parent / "prompt.md").write_text("Edited since\n")  # resolved beside the config
     config = RunData(project, run_id="test").state()["config"]
     assert config["text"].endswith("prompt_template: prompt.md\n")
-    assert config["template"] == {"file": "prompt.md", "text": "Stored: {{ goal }}\n"}
+    assert config["template"] == {"file": f"autohelix/{NAME}/prompt.md", "text": "Stored: {{ goal }}\n"}
 
 
 def test_config_is_parsed_again_only_when_its_file_changes(project, monkeypatch):

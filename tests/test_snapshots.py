@@ -51,7 +51,7 @@ ROWS = [
     Row(5, False, {"speed": 33002.0, "mem_mb": 140}, 108, 0.29,
         reason="metric gate: speed 33002 is 6.5% worse than 35310.7 (regress: 5% allowed)",
         gates=_gates(True, False, value=33002.0, reference=35310.7),
-        discarded=["autohelix.yaml", "notes.txt"], discarded_frozen=["autohelix.yaml"]),
+        discarded=["autohelix/bench.py", "notes.txt"], discarded_frozen=["autohelix/bench.py"]),
     Row(6, True, {"speed": 57520.8, "mem_mb": 95}, 111, 0.31, commit="a6",
         summary="Avoid the defensive list copy; sort in place", gates=_gates(True, True)),
     Row(7, False, {}, 4, None, reason="Iteration 7 agent failed: claude exited 1: rate limited",
@@ -132,7 +132,7 @@ def _run_payload(running: bool) -> dict:
               {"state": "finished", "phase": None, "iteration": 7, "stopped_at": T,
                "stop_reason": {"kind": "budget", "detail": "iteration budget reached (7)"}})
     return {"id": "20261115-1402-sorting-krp3", "name": "sorting", "archived": False, "last_activity": T - 30,
-            "config_file": "autohelix/sorting/autohelix.yaml", "config_invalid": False,
+            "config_file": "autohelix/sorting/config.yaml", "config_invalid": False,
             "goal": CONFIG.goal, "title": CONFIG.title, "status": status, "stop_requested": None,
             "accepted": 3, "group": None, "why": None, "archive_why": None, "import": None,
             "metrics": {"iteration": 6 if not running else 3, "values": [
@@ -166,7 +166,7 @@ def dashboard_screen(width: int) -> list:
     perf = _run_payload(True)
     perf["status"].update(max_time_seconds=3600, segment_started_at=T - 372)  # `run --time 1h`
     perf = {**perf, "id": "20261115-1530-perf-m2xq", "name": "perf", "group": "speed",
-            "title": "Cut the memory use of sort_list.", "config_file": "autohelix/perf/autohelix.yaml",
+            "title": "Cut the memory use of sort_list.", "config_file": "autohelix/perf/config.yaml",
             "why": "try a lower memory bound", "landing": {"relation": "ahead", "commits": 2, "behind": 0, "fast_forward": True}}
     old = {**_run_payload(False), "id": "20261110-0900-old-a1b2", "archived": True}
     return dashboard_lines({**PROJECT, "runs": [with_words(r) for r in [_run_payload(False), perf, old]]}, width, now=T)
@@ -210,7 +210,7 @@ def entry_screen(width: int) -> list:
     one waiting to land, one interrupted, one whose process is gone with commits to land,
     the finished one; one archived), the command for each, and the one question."""
     finished = _run_payload(False)
-    perf = {**_run_payload(True), "id": "20261115-1530-perf-m2xq", "name": "perf", "config_file": "autohelix/perf/autohelix.yaml",
+    perf = {**_run_payload(True), "id": "20261115-1530-perf-m2xq", "name": "perf", "config_file": "autohelix/perf/config.yaml",
             "title": "Cut the memory use of sort_list."}
     manual = {**finished, "id": "20261114-1000-sorting-xax8", "last_activity": T - 7200, "land": "manual",
               "landing": {"relation": "ahead", "commits": 1, "behind": 0, "fast_forward": True}}
@@ -220,21 +220,21 @@ def entry_screen(width: int) -> list:
             "status": {"state": "crashed", "iteration": 7}, "landing": {"relation": "ahead", "commits": 2, "behind": 0, "fast_forward": True}}
     old = {**_run_payload(False), "id": "20261110-0900-old-a1b2", "archived": True}
     data = {**PROJECT, "runs": [with_words(r) for r in [finished, perf, manual, stopped, gone, old]]}
-    return _entry(data, width, ["claude-code"], ["autohelix/sorting/autohelix.yaml", "autohelix/perf/autohelix.yaml"])
+    return _entry(data, width, ["claude-code"], ["autohelix/sorting/config.yaml", "autohelix/perf/config.yaml"])
 
 
 def entry_archived_screen(width: int) -> list:
     """Bare `autohelix` where every run is archived, two agents: counted, not "no runs",
     and the question is which agent."""
     data = {**PROJECT, "runs": [with_words({**_run_payload(False), "archived": True})]}
-    return _entry(data, width, ["claude-code", "codex"], ["autohelix/sorting/autohelix.yaml"])
+    return _entry(data, width, ["claude-code", "codex"], ["autohelix/sorting/config.yaml"])
 
 
 def entry_config_screen(width: int) -> list:
     """Bare `autohelix` with a config and no runs, no commit yet: the Git field, then the
     one question."""
     git = ("No commits yet; a run starts from a commit.", "yellow")
-    return _entry({**PROJECT, "runs": []}, width, ["claude-code"], ["autohelix.yaml"], git)
+    return _entry({**PROJECT, "runs": []}, width, ["claude-code"], ["autohelix/sorting/config.yaml"], git)
 
 
 def entry_new_screen(width: int) -> list:

@@ -15,7 +15,7 @@ project's own: a gate that doesn't exist yet has to be written first. Every key
 is in the [configuration reference](config.md); budgets and landing are
 `autohelix run` flags ([budgets](cli.md#budgets), [`--land`](cli.md#options)),
 not config. Each config is an
-[experiment folder](config.md#experiment-folder), `autohelix/NAME/autohelix.yaml`,
+[experiment folder](config.md#experiment-folder), `autohelix/NAME/config.yaml`,
 which can also hold the experiment's own scripts. The bundled agent skill
 (bare [`autohelix`](cli.md#autohelix)) starts from these patterns too.
 
@@ -24,7 +24,7 @@ which can also hold the experiment's own scripts. The bundled agent skill
 One concrete task the tests can decide, or nearly: fix a bug that has a
 reproducer, make a failing test pass, add a small feature with its tests.
 
-`autohelix/fix/autohelix.yaml`:
+`autohelix/fix/config.yaml`:
 
 ```yaml
 goal: |
@@ -79,11 +79,11 @@ workflow's cost.
 
 ```
 autohelix/perf/
-  autohelix.yaml
+  config.yaml
   bench.py        # runs the benchmark, prints the metric
 ```
 
-`autohelix/perf/autohelix.yaml`:
+`autohelix/perf/config.yaml`:
 
 ```yaml
 goal: |
@@ -158,7 +158,7 @@ out of it: the agent changes the recipe, and an observe entry trains from the
 committed recipe and evaluates. The commit is the model. (The
 [ml-recipe example](https://github.com/awslabs/AutoHelix/tree/main/examples/ml-recipe) works this way.)
 
-`autohelix/train/autohelix.yaml`:
+`autohelix/train/config.yaml`:
 
 ```yaml
 goal: |
@@ -186,7 +186,7 @@ rejected iteration's model never replaces the last accepted one:
 
 ```
 autohelix/train/
-  autohelix.yaml
+  config.yaml
   paths.sh        # $out: this iteration's model folder; $start: the last accepted one's
   eval.sh         # evaluates $out (the base model at the baseline)
 ```
@@ -235,7 +235,7 @@ when each iteration trains for a long time.
 A list of things to implement, one per iteration, with an independent agent
 tracking what is left: a PRD, a task list, a set of review findings.
 
-`autohelix/tasks/autohelix.yaml`:
+`autohelix/tasks/config.yaml`:
 
 ```yaml
 goal: |
@@ -285,7 +285,7 @@ unchecked boxes), the observe entry is a command that prints
 Make a text or an investigation better where judgment decides what better is:
 a guide, a report, an experiment and its write-up.
 
-`autohelix/guide/autohelix.yaml`:
+`autohelix/guide/config.yaml`:
 
 ```yaml
 goal: |

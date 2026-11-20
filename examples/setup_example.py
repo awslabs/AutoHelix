@@ -2,8 +2,9 @@
 """Set up a bundled example as a standalone AutoHelix project.
 
 Bundled examples are copy-and-run: this copies the example directory, git-inits
-it, and prints run instructions. A bundled example is any directory here that
-contains an `autohelix.yaml`.
+it, and prints run instructions. A bundled example is any directory here with
+an experiment config, `autohelix/<name>/config.yaml` (a bare `autohelix run` runs
+the only one).
 
 AlgoTune and KernelBench tasks have their own `setup.py` under `examples/` —
 they fetch tasks from upstream suites rather than ship ready-to-run projects.
@@ -42,12 +43,12 @@ def git_commit_all(directory: Path) -> None:
 
 
 def list_bundled() -> list[str]:
-    """A bundled example is any dir here with an autohelix.yaml."""
+    """A bundled example is any dir here with an autohelix/<name>/config.yaml."""
     return sorted(
         d.name for d in SCRIPT_DIR.iterdir()
         if d.is_dir()
         and d.name not in REFERENCE_EXAMPLES
-        and (d / "autohelix.yaml").exists()
+        and any((d / "autohelix").glob("*/config.yaml"))
     )
 
 

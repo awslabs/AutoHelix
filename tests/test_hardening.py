@@ -18,7 +18,7 @@ from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History, IterationResult
 from autohelix.prompt_template import build_prompt_variables, load_template, render_template, unknown_variables
 from autohelix.workspace import ITERATION_DIR
-from tests.helpers import git, latest_run
+from tests.helpers import CONFIG, config_file, git, latest_run, write_config
 
 
 @pytest.fixture
@@ -44,9 +44,15 @@ def _project(repo, sub=None, files=None):
 def _configure(project, repo, settings=None, **sections):
     config = {"goal": "Harden", "agent": {"cli": "mock", "mock": {
         "change_file": "hello.py", "change_content": "# iteration {iteration}", **(settings or {})}}, **sections}
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+    write_config(project, yaml.safe_dump(config, sort_keys=False))  # private (`/autohelix/` at the top only)
     git(repo, "add", "-A")
-    git(repo, "commit", "-qm", "config")
+    git(repo, "commit", "-qm", "config", "--allow-empty")  # the project's files, and a subfolder project's config
+
+
+def _prompt(project, text):
+    """A `prompt_template: prompt.md` beside the config, in the experiment folder."""
+    config_file(project).parent.mkdir(parents=True, exist_ok=True)
+    (config_file(project).parent / "prompt.md").write_text(text)
 
 
 def _refs(repo, owner):
@@ -92,8 +98,9 @@ def _apply_in_probe(copy_dir, patch):
         state = (copy_dir.relative_to(copy_root) / ITERATION_DIR).as_posix()
         git(probe, "add", "-A", "--", ".", env=index)
         git(probe, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", state, env=index)
-        # The agent copy has no config file (`agent_copy(hidden=...)`); T has it, as the snapshot resets it.
-        config = (copy_dir.relative_to(copy_root) / "autohelix.yaml").as_posix()
+        # The agent copy has no config file (`agent_copy(hidden=...)`); T has it when it is committed
+        # (a subfolder project's), as the snapshot resets it.
+        config = (copy_dir.relative_to(copy_root) / CONFIG).as_posix()
         git(probe, "reset", "-q", "HEAD", "--", config, env=index)
         return git(probe, "write-tree", env=index)
     finally:
@@ -349,7 +356,7 @@ def test_unknown_template_variables():
 
 def test_a_custom_template_with_old_variables_warns_at_run_start(repo, capsys):
     project = _project(repo)
-    (project / "prompt.md").write_text("Goal: {{ goal }}\n{{ history_summary }}\n")
+    _prompt(project, "Goal: {{ goal }}\n{{ history_summary }}\n")
     _configure(project, repo, prompt_template="prompt.md")
     Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
     out = capsys.readouterr().out
@@ -465,7 +472,7 @@ def test_run_start_warnings_wrap_under_their_label(repo, capsys):
     project = _project(repo)
     (project / ".autohelix").mkdir(exist_ok=True)
     (project / ".autohelix" / "prompt.md").write_text("old\n")
-    (project / "prompt.md").write_text("Goal: {{ goal }}; notes in .autohelix/notes/iter-1.md\n")
+    _prompt(project, "Goal: {{ goal }}; notes in .autohelix/notes/iter-1.md\n")
     _configure(project, repo, prompt_template="prompt.md")
     Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
     out = capsys.readouterr().out
@@ -510,9 +517,8 @@ def test_verbose_output_prints_gate_output_and_goal_as_text(repo, capsys):
     project = _project(repo)
     _configure(project, repo, gates=['[ "$AUTOHELIX_ITERATION" = 0 ] || { printf "[/red] \\033[2Jboom [bold]x"; exit 1; }'],
                observe=[{"name": "bench", "command": "echo '##autohelix[speed=3]'", "metrics": {"speed": "higher"}}])
-    config = project / "autohelix.yaml"
+    config = config_file(project)
     config.write_text(config.read_text().replace("goal: Harden", "goal: Harden [/bold] it"))
-    git(repo, "commit", "-qam", "goal")
     Harness(project, verbose=True, land_mode="manual").run(Budget(until=1), report=False)
     out = capsys.readouterr().out
     assert "[/red] boom [bold]x" in out and "\x1b[2J" not in out

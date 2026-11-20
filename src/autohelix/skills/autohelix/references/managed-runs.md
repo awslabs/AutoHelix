@@ -108,7 +108,7 @@ For requested resumption, use `autohelix resume <id>`, never `autohelix run`:
 same run (its stored config, its own tip): to apply an edited config, to keep
 going after the target branch moved past the run (it landed and the user
 committed more), or to fork from an old run (`git switch -c <branch>
-autohelix/<id>` first), start a new run that continues from it, `autohelix run <config> --import
+autohelix/<id>` first), start a new run that continues from it, `autohelix run <name> --import
 <id>`: it sees that run's notes and history read-only and continues its
 observations at the baseline. When the branch lacks that run's accepted
 commits, `run --import` says "land it first" with the commands; do that
@@ -139,7 +139,7 @@ interrupted run, `autohelix report` writes one when requested.
 **Compare** approaches (models, prompts, or the same setup several times) with
 separate runs that land manually: they must not share notes or code, or the
 comparison measures their mix. Write one config per approach
-(`autohelix/a/autohelix.yaml`, `autohelix/b/autohelix.yaml`; runs are named after the folder; repeats
+(`autohelix/a/config.yaml`, `autohelix/b/config.yaml`; runs are named after the folder; repeats
 of one setup share a config), commit them, and start each run in its own
 background session with the same budget flags:
 
@@ -172,4 +172,4 @@ NAME` to add an existing run (`--group ''` removes it).
 
 To **continue or fork** from a run (the winner, after more commits on the
 branch, or with an edited config), start a new run with `autohelix run
-<config> --import <id>` (see above); it is not a group membership.
+<name> --import <id>` (see above); it is not a group membership.

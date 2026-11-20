@@ -80,7 +80,7 @@ function fmtClock(epochSeconds) {
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 // "20261114-2333-sorting-1q3w" -> name "sorting-1q3w", started "2026-11-14 23:33";
-// a run of autohelix.yaml has only the suffix: "Run 1q3w".
+// a run without a name (its folder's name has no letter or digit) has only the suffix: "Run 1q3w".
 function splitRunId(id) {
   const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})-(.+)$/.exec(id || '');
   if (!m) return { name: id || null, started: '' };

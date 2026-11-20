@@ -6,11 +6,12 @@ from click.testing import CliRunner
 
 from autohelix.cli import main
 from autohelix.harness import AutoHelixRunError
+from tests.helpers import write_config
 
 
 def test_run_returns_nonzero_for_infrastructure_failure(tmp_path, monkeypatch):
     subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
-    (tmp_path / "autohelix.yaml").write_text("goal: x\n")
+    write_config(tmp_path, "goal: x\n")
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "init", "--allow-empty"],
                    cwd=tmp_path, capture_output=True, check=True)
 
@@ -33,7 +34,7 @@ def test_run_refuses_a_project_that_does_not_ignore_autohelix(tmp_path):
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@e"]
     subprocess.run(git + ["init", "-q"], cwd=tmp_path, check=True)
     (tmp_path / ".gitignore").write_text("!.*\n")
-    (tmp_path / "autohelix.yaml").write_text("goal: x\nagent: {cli: mock}\n")
+    write_config(tmp_path, "goal: x\nagent: {cli: mock}\n")
     subprocess.run(git + ["add", "-A"], cwd=tmp_path, check=True)
     subprocess.run(git + ["commit", "-qm", "init"], cwd=tmp_path, check=True)
 

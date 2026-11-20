@@ -21,7 +21,8 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 from pathlib import Path
 
-from autohelix.config import ENTRY_NAME, config_name, load_config, project_configs, run_command, template_text
+from autohelix.config import (ENTRY_NAME, config_name, config_relative, load_config, not_an_experiment, project_configs,
+                              run_command, template_text)
 from autohelix.experiment import build_snapshot, snapshot_files, sweep_staging
 
 SCHEMA = 2
@@ -632,13 +633,6 @@ def critical_section():
                 signal.raise_signal(signum)  # the default action, now that it is restored
 
 
-def config_relative(project: Path, config: Path) -> str:
-    try:
-        return str(config.resolve().relative_to(project.resolve()))
-    except ValueError:
-        return str(config.resolve())
-
-
 class NoRunToResume(RuntimeError):
     """A bare `resume` found nothing to continue."""
 
@@ -1148,7 +1142,8 @@ def development_run(paths: RunPaths, missing: str) -> str:
 def load_run_config(paths: RunPaths, data: dict | None = None):
     """The run's own config (`load_config` of its stored copy, with its stored template
     text, `RunPaths.template`; the file it came from, as run.json names it, is the
-    `source`). RuntimeError (`development_run`) without one."""
+    `source`). RuntimeError (`development_run`) without one, and for a config that
+    isn't an experiment's (`not_an_experiment`)."""
     data = data if data is not None else paths.read_identity()
     if not paths.config.is_file():
         raise RuntimeError(development_run(paths, "stored config"))
@@ -1157,6 +1152,8 @@ def load_run_config(paths: RunPaths, data: dict | None = None):
     except FileNotFoundError:
         text = None
     config = load_config(paths.project, paths.config, source=paths.project / data["config_path"], template_text=text)
+    if config.experiment is None:
+        raise RuntimeError(f"Run {short_id(paths.run_id)}: {not_an_experiment(data['config_path'])}")
     if config.prompt_template is not None and text is None:
         raise RuntimeError(development_run(paths, "stored copy of its prompt_template"))
     return config
@@ -1164,9 +1161,10 @@ def load_run_config(paths: RunPaths, data: dict | None = None):
 
 def new_run_name(config_path: str, name: str | None) -> str | None:
     """A new run's readable name: `name`, else its experiment's (`config_name` of the
-    project-relative `config_path`; none for autohelix.yaml)."""
-    if name is None and (experiment := config_name(config_path)):
-        name = re.sub(r"[^a-z0-9-]", "-", experiment.lower()).strip("-")[:32] or None
+    project-relative `config_path`: autohelix/NAME/config.yaml; None only when no letter
+    or digit is left of it)."""
+    if name is None:
+        name = re.sub(r"[^a-z0-9-]", "-", config_name(config_path).lower()).strip("-")[:32] or None
     if name is not None and not _NAME.fullmatch(name):
         raise RuntimeError(f"Run name {name!r}: use lowercase letters, digits or hyphens, starting with a letter "
                            "or digit, at most 32 characters.")
@@ -1258,6 +1256,8 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
                 return (paths, *_owned(paths))
             if not create:
                 raise NoRunToResume(no_run_to_resume(config_path))
+        if config_name(config_path) is None:
+            raise RuntimeError(not_an_experiment(config_path))
         name = new_run_name(config_path, name)
         # Refused first starts must not leave an identity, owned ref or pointer.
         if ready is not None:
@@ -1275,7 +1275,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
         taken |= {short_id(p.name) for p in RunPaths(project).runs.glob("*")}
         # The experiment folder's copy, built beside the run folders (a dot-name no listing
         # reads) and renamed into the new run's folder.
-        staging = None if files is None else build_snapshot(files, RunPaths(project).runs)
+        staging = build_snapshot(files, RunPaths(project).runs)
         try:
             while True:
                 suffix = "".join(secrets.choice(_ALPHABET) for _ in range(4))
@@ -1306,8 +1306,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
                 try:
                     # First: a readable run (run.json) has its config and experiment folder.
                     # Never edited: a run keeps the config it started with.
-                    if staging is not None:
-                        os.rename(staging, paths.experiment)
+                    os.rename(staging, paths.experiment)
                     for path, text in ((paths.config, stored), (paths.template, template)):
                         if text is not None:
                             write_text(path, text)
@@ -1318,7 +1317,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
                     raise
                 return paths, data, lock, notices
         finally:
-            if staging is not None and staging.exists():
+            if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
 
 

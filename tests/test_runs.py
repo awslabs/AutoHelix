@@ -19,7 +19,7 @@ from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.runs import RunLock, RunPaths, archive, delete, git, land, repair_history, short_id
 from click.testing import CliRunner
-from tests.helpers import configure
+from tests.helpers import CONFIG, config_file, configure
 
 
 def test_identity_selection_new_and_explicit_config(project):
@@ -33,17 +33,15 @@ def test_identity_selection_new_and_explicit_config(project):
     assert re.fullmatch(r"\d{8}-\d{4}-second-[0-9a-z]{4}", named.paths.run_id)
     assert named.paths.run_id != run_id
     named.close()
-    other = project / "autohelix" / "other" / "autohelix.yaml"  # named after its experiment folder
+    other = project / "autohelix" / "other" / "config.yaml"  # named after its experiment folder
     other.parent.mkdir(parents=True)
-    other.write_text((project / "autohelix.yaml").read_text())
-    git(project, "add", ".")
-    git(project, "commit", "-qm", "other config")
+    other.write_text(config_file(project).read_text())
     third = Harness(project, config_file=other)
     assert re.fullmatch(r"\d{8}-\d{4}-other-[0-9a-z]{4}", third.paths.run_id)
     third.close()
     explicit = Harness(project, run_id=run_id)
     assert explicit.paths.run_id == run_id
-    assert explicit.config_file == project / "autohelix.yaml"
+    assert explicit.config_file == config_file(project)
     explicit.close()
 
 
@@ -267,6 +265,7 @@ def test_sigint_during_publication_defers_until_ref_and_history_agree(project, m
 @pytest.mark.parametrize("accepted", [True, False])
 def test_normalize_git_state_before_validation(project, monkeypatch, operation, accepted):
     configure(project, gates=["true" if accepted else "false"], scope={"editable": ["code.py"]})
+    git(project, "commit", "-q", "--allow-empty", "-m", "a parent to rewind to")
     harness = Harness(project, land_mode="manual")
     base = harness.run_state.expected_tip
     target = f"refs/heads/{harness.run_info['target_branch']}"
@@ -317,7 +316,7 @@ def test_normalize_git_state_before_validation(project, monkeypatch, operation, 
 def test_a_judge_writing_in_a_run_fails_its_call_in_its_own_copy(project, slot):
     """The judge's write lands in its own copy, never in what commands check or what is
     accepted; its call fails (exit 2), and the script owns that exit code."""
-    data = yaml.safe_load((project / "autohelix.yaml").read_text())
+    data = yaml.safe_load(config_file(project).read_text())
     data["agent"]["mock"]["judge_change_file"] = "code.py"
     ask = 'autohelix ask "Done?"; echo "ask=$?" >&2; grep -q "judge edit" code.py && exit 9; exit 1'
     if slot == "gates":
@@ -326,9 +325,7 @@ def test_a_judge_writing_in_a_run_fails_its_call_in_its_own_copy(project, slot):
         data["observe"] = [{"name": "judge", "command": '[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; ' + ask}]
     else:
         data["stop"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 1; ' + ask]
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
-    git(project, "add", ".")
-    git(project, "commit", "-qm", "judge config")
+    config_file(project).write_text(yaml.safe_dump(data))
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
     record = harness.history.load()[-1]
@@ -346,12 +343,10 @@ def test_a_judge_writing_in_a_run_fails_its_call_in_its_own_copy(project, slot):
 def test_baseline_judge_writing_fails_only_its_call_and_cost_counts(project):
     """At the baseline too, a judge writes only in its own copy: the checks copy and the
     project stay as they were, and its call's cost is counted."""
-    data = yaml.safe_load((project / "autohelix.yaml").read_text())
+    data = yaml.safe_load(config_file(project).read_text())
     data["agent"]["mock"]["judge_change_file"] = "code.py"
     data["observe"] = [{"name": "judge", "command": 'autohelix ask "Done?" || true'}]
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
-    git(project, "add", ".")
-    git(project, "commit", "-qm", "baseline judge")
+    config_file(project).write_text(yaml.safe_dump(data))
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
     baseline = harness.history.load()[0]
@@ -377,7 +372,7 @@ def test_guard_detects_candidate_content_and_modes(project, change):
         (project / "code.py").chmod(0o755)
     elif change == "symlink":
         (project / "link").unlink()
-        (project / "link").symlink_to("autohelix.yaml")
+        (project / "link").symlink_to(CONFIG)
     else:
         (project / "code.py").write_text("changed contents with same status")
     assert guard.violations()
@@ -421,12 +416,10 @@ def test_guard_detects_submodule_edit_and_commit(project, tmp_path):
 
 
 def test_an_ask_gate_whose_judge_writes_rejects(project):
-    data = yaml.safe_load((project / "autohelix.yaml").read_text())
+    data = yaml.safe_load(config_file(project).read_text())
     data["agent"]["mock"]["judge_change_file"] = "code.py"
     data["gates"] = ['[ "$AUTOHELIX_ITERATION" = 0 ] && exit 0; autohelix ask "Done?"']
-    (project / "autohelix.yaml").write_text(yaml.safe_dump(data))
-    git(project, "add", ".")
-    git(project, "commit", "-qm", "judge gate")
+    config_file(project).write_text(yaml.safe_dump(data))
     harness = Harness(project, land_mode="manual")
     harness.run(Budget(until=1), report=False)
     record = harness.history.load()[-1]
@@ -695,9 +688,10 @@ def test_failing_baseline_constraint_does_not_block_the_run(project):
 def test_project_subdirectory_never_accepts_staged_sibling(project, monkeypatch, scope):
     sub = project / "sub"
     sub.mkdir()
-    config = yaml.safe_load((project / "autohelix.yaml").read_text())
+    config = yaml.safe_load(config_file(project).read_text())
     config["scope"] = scope
-    (sub / "autohelix.yaml").write_text(yaml.safe_dump(config))
+    (sub / CONFIG).parent.mkdir(parents=True)
+    (sub / CONFIG).write_text(yaml.safe_dump(config))  # committed: only the top-level autohelix/ is private
     (sub / "code.py").write_text("baseline sub")
     (project / "sibling.py").write_text("baseline sibling")
     git(project, "add", ".")

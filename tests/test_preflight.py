@@ -10,6 +10,14 @@ from autohelix.checks import preflight_check, PreflightIssue, CommandResult, Obs
 from autohelix.config import load_config
 
 
+def _write(folder: Path, text: str) -> Path:
+    """The folder's only experiment config, autohelix/p/config.yaml."""
+    path = folder / "autohelix" / "p" / "config.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
 @pytest.fixture
 def project(tmp_path):
     """Create a minimal project with a valid config."""
@@ -23,7 +31,7 @@ def project(tmp_path):
             metrics:
               speed: higher
     """)
-    (tmp_path / "autohelix.yaml").write_text(config)
+    _write(tmp_path, config)
     return tmp_path
 
 
@@ -43,7 +51,7 @@ class TestPreflightCheck:
         assert issues == []
 
     def test_empty_goal_is_error(self, tmp_path):
-        (tmp_path / "autohelix.yaml").write_text("goal: ''\n")
+        _write(tmp_path, "goal: ''\n")
         config = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, tmp_path)
@@ -51,9 +59,7 @@ class TestPreflightCheck:
         assert any("goal" in i.message.lower() for i in errors)
 
     def test_placeholder_goal_is_error(self, tmp_path):
-        (tmp_path / "autohelix.yaml").write_text(
-            "goal: Describe what you want the agent to achieve.\n"
-        )
+        _write(tmp_path, "goal: Describe what you want the agent to achieve.\n")
         config = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, tmp_path)
@@ -61,7 +67,7 @@ class TestPreflightCheck:
         assert any("placeholder" in i.message for i in errors)
 
     def test_no_constraints_or_metrics_is_warning(self, tmp_path):
-        (tmp_path / "autohelix.yaml").write_text("goal: Make it faster\n")
+        _write(tmp_path, "goal: Make it faster\n")
         config = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, tmp_path)
@@ -89,7 +95,7 @@ class TestPreflightCheck:
             scope:
               editable: [nonexistent/]
         """)
-        (tmp_path / "autohelix.yaml").write_text(config_text)
+        _write(tmp_path, config_text)
         config = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, tmp_path)
@@ -117,7 +123,7 @@ class TestPreflightCheck:
 
     def test_preflight_no_longer_guesses_gate_targets(self, tmp_path):
         (tmp_path / "tests").mkdir()
-        (tmp_path / "autohelix.yaml").write_text("goal: Make it faster\ngates:\n  - pytest tests/\n")
+        _write(tmp_path, "goal: Make it faster\ngates:\n  - pytest tests/\n")
         config = load_config(tmp_path)
         with patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
             issues = preflight_check(config, tmp_path)
@@ -133,7 +139,7 @@ class TestPreflightCheck:
                   throughput: higher
                   latency: lower
         """)
-        (tmp_path / "autohelix.yaml").write_text(config_text)
+        _write(tmp_path, config_text)
         config = load_config(tmp_path)
         with patch("autohelix.checks.run_observe_entry") as mock_m, \
              patch("autohelix.checks.shutil.which", return_value="/usr/bin/claude"):
@@ -165,7 +171,7 @@ def _committed(folder: Path, files: dict[str, str], untracked: dict[str, str] | 
 
 
 def _scope_warnings(folder: Path, scope: str) -> list[str]:
-    (folder / "autohelix.yaml").write_text(f"goal: g\nagent: {{cli: mock}}\nscope:\n{scope}")
+    _write(folder, f"goal: g\nagent: {{cli: mock}}\nscope:\n{scope}")
     config = load_config(folder)
     return [i.message for i in preflight_check(config, folder) if "scope." in i.message]
 
@@ -205,7 +211,7 @@ def _agent_errors(folder: Path, monkeypatch, config: str, **env: str) -> list[st
         monkeypatch.delenv(f"AUTOHELIX_{cli}_CMD", raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    (folder / "autohelix.yaml").write_text(config)
+    _write(folder, config)
     return [i.message for i in preflight_check(load_config(folder), folder)
             if i.level == "error" and "Agent command" in i.message]
 

@@ -60,9 +60,8 @@ def has_files(stored: Path) -> bool:
         files for _, _, files in os.walk(stored))
 
 
-def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
-    """What the run stores of the config's experiment folder, by name; None without one
-    (the project's autohelix.yaml).
+def snapshot_files(config: Config, project: Path) -> list[SnapshotFile]:
+    """What the run stores of the config's experiment folder (`Config.experiment`), by name.
 
     Left out: the config file and the prompt template (stored already), dotfiles and
     dot-folders, `__pycache__/`. A link is followed when its target is inside the
@@ -74,8 +73,6 @@ def snapshot_files(config: Config, project: Path) -> list[SnapshotFile] | None:
     walk passes it, the cap (`MAX_FILES`, `MAX_FOLDERS`, `MAX_BYTES`; `MAX_FILES`
     refusals stop it too). The folder itself must be inside autohelix/, not a link out."""
     folder = config.experiment
-    if folder is None:
-        return None
     project = Path(project)
     root, allowed = os.path.realpath(folder), Path(os.path.realpath(project / CONFIG_DIR))
     left_out = {os.path.realpath(folder / CONFIG_FILE)}
@@ -244,7 +241,7 @@ def snapshot_changes(config: Config, project: Path, stored: Path) -> str | None:
     can no longer be stored (a file that can't be read too); None when they match.
     Compared file by file: the snapshot is the manifest."""
     try:
-        live = {file.name: file for file in snapshot_files(config, project) or []}
+        live = {file.name: file for file in snapshot_files(config, project)}
     except ConfigError as e:
         return f"it can no longer be stored: {e}"
     kept = {path.relative_to(stored).as_posix(): path for path in stored.rglob("*")

@@ -3,7 +3,8 @@
 
 Fetches an AlgoTune task (from a local clone if present, else GitHub), strips
 the AlgoTune framework so it stands alone, scaffolds a solver + benchmark +
-correctness check from templates, and git-inits the project.
+correctness check and the AutoHelix config (autohelix/algotune/config.yaml) from
+templates, and git-inits the project.
 
 Run this from wherever you want the project to live (NOT inside the AutoHelix
 repo — the scaffolded project is its own git repo):
@@ -24,8 +25,13 @@ from pathlib import Path
 import yaml
 
 SETUP_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = SETUP_DIR / "config.yaml"
+# This script's own settings (upstream source, scaffold defaults): not an AutoHelix config.
+SETTINGS_PATH = SETUP_DIR / "setup.yaml"
 TEMPLATES_DIR = SETUP_DIR / "templates"
+# The scaffolded project's AutoHelix config: templates/config.yaml.tmpl, written as
+# the experiment autohelix/algotune/config.yaml (`autohelix run` finds the only one).
+CONFIG_TEMPLATE = "config.yaml.tmpl"
+EXPERIMENT_CONFIG = Path("autohelix") / "algotune" / "config.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -47,8 +53,8 @@ def render_template(template_path: Path, variables: dict) -> str:
     return template_path.read_text().format(**variables)
 
 
-def load_config() -> dict:
-    return yaml.safe_load(CONFIG_PATH.read_text())
+def load_settings() -> dict:
+    return yaml.safe_load(SETTINGS_PATH.read_text())
 
 
 # ---------------------------------------------------------------------------
@@ -157,8 +163,8 @@ def download_task(task_name: str, output_dir: Path, algotune_root: Path | None) 
             return True
 
     # Fall back to GitHub
-    config = load_config()
-    base_url = config["source"]["raw_url"]
+    settings = load_settings()
+    base_url = settings["source"]["raw_url"]
     url = f"{base_url}/{task_name}/{task_name}.py"
     print(f"Downloading {task_name}.py from AlgoTune GitHub...")
     result = subprocess.run(["curl", "-fsSL", url], capture_output=True, text=True)
@@ -209,8 +215,8 @@ def setup(task_name: str, output_dir: Path, problem_size: int | None = None) -> 
     task_file = output_dir / f"{task_name}.py"
     class_name = find_class_name(task_file)
 
-    config = load_config()
-    defaults = config["defaults"]
+    settings = load_settings()
+    defaults = settings["defaults"]
 
     if problem_size is None:
         problem_size = get_problem_size(task_name, algotune_root)
@@ -231,8 +237,12 @@ def setup(task_name: str, output_dir: Path, problem_size: int | None = None) -> 
     for tmpl_file in TEMPLATES_DIR.iterdir():
         if not tmpl_file.name.endswith(".tmpl"):
             continue
-        output_name = tmpl_file.name[:-5]  # strip .tmpl
-        (output_dir / output_name).write_text(render_template(tmpl_file, variables))
+        if tmpl_file.name == CONFIG_TEMPLATE:
+            output_path = output_dir / EXPERIMENT_CONFIG
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            output_path = output_dir / tmpl_file.name[:-5]  # strip .tmpl
+        output_path.write_text(render_template(tmpl_file, variables))
 
     (output_dir / ".gitignore").write_text("__pycache__/\n*.pyc\n.autohelix/\n")
 

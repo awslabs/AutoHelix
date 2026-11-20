@@ -1,10 +1,8 @@
 """What `run` and `resume` say at their start about other runs, the run imported, a
 failed first attempt, an uncommitted config and a group without manual landing."""
 
-import yaml
-
 from autohelix.runs import git, short_id
-from tests.helpers import cli, configure, latest_run
+from tests.helpers import CONFIG, config_file, cli, configure, latest_run
 from tests.test_groups import identity, started
 
 
@@ -48,7 +46,7 @@ def test_the_config_change_refusal_says_land_it_first(project):
     result = cli(project, "resume", short, "-n", "1", "--no-report")
     assert result.exit_code == 1
     said = " ".join(result.output.split())
-    assert f"`autohelix run --import {short}`. {short}'s 1 accepted commit isn't in main: land it first" in said
+    assert f"`autohelix run demo --import {short}`. {short}'s 1 accepted commit isn't in main: land it first" in said
 
 
 def failing_baseline(project):
@@ -62,7 +60,7 @@ def test_a_failed_baseline_is_a_disposable_attempt(project):
     paths = latest_run(project)
     short = short_id(paths.run_id)
     said = " ".join(result.output.split())
-    assert (f"every declared metric needs a value at the baseline. Fix it and run `autohelix run` again "
+    assert (f"every declared metric needs a value at the baseline. Fix it and run `autohelix run demo` again "
             f"(`autohelix delete {short}` removes this attempt).") in said
     # The history keeps the error itself, without the advice.
     assert "Fix it" not in (paths.iteration_dir(0) / "record.json").read_text()
@@ -75,34 +73,37 @@ def test_a_failed_baseline_is_a_disposable_attempt(project):
     configure(project, goal="Fixed")
     refused = cli(project, "resume", short, "-n", "1", "--no-report")
     said = " ".join(refused.output.split())
-    assert refused.exit_code == 1 and f"run {short} has no accepted baseline: start a new run, `autohelix run`" in said
+    assert refused.exit_code == 1 and f"run {short} has no accepted baseline: start a new run, `autohelix run demo`" in said
     assert "--import" not in said and "restore the file" not in said
 
 
 def test_an_untracked_prompt_template_warns_under_auto_landing(project):
-    configure(project, prompt_template="prompt.md")  # committed config, untracked template
+    configure(project, prompt_template="../../prompt.md")  # private config, untracked template outside autohelix/
     (project / "prompt.md").write_text("Goal: {{ goal }}\n")
     _, result = started(project)
     warning = "commit prompt.md first: a commit on main after this run lands makes `resume` refuse."
-    assert warning in before_header(result) and "commit autohelix.yaml" not in result.output
+    assert warning in before_header(result) and "commit autohelix/demo/config.yaml" not in result.output
     _, result = started(project, "--land", "manual")
     assert "commit prompt.md first" not in result.output
 
 
 def test_an_untracked_config_warns_and_an_ignored_one_doesnt(project):
-    (project / "autohelix" / "perf").mkdir(parents=True)
-    config = yaml.safe_load((project / "autohelix.yaml").read_text())
-    (project / "autohelix" / "perf" / "autohelix.yaml").write_text(yaml.safe_dump(config))
+    exclude = project / ".git" / "info" / "exclude"  # autohelix/ shared: not private as setup makes it
+    exclude.write_text("".join(line for line in exclude.read_text().splitlines(keepends=True)
+                               if line.strip() != "/autohelix/"))
+    config_file(project).parent.rename(project / "autohelix" / "perf")  # untracked, not ignored
     _, result = started(project, "perf")
-    assert "commit autohelix/perf/autohelix.yaml first" in before_header(result)
+    assert "commit autohelix/perf/config.yaml first" in before_header(result)
     (project / ".gitignore").write_text("autohelix/\n")
     git(project, "add", ".gitignore")
     git(project, "commit", "-qm", "ignore")
     _, result = started(project, "perf")
-    assert "commit autohelix/perf/autohelix.yaml first" not in result.output
+    assert "commit autohelix/perf/config.yaml first" not in result.output
 
 
 def test_a_committed_config_doesnt_warn(project):
+    git(project, "add", "-f", CONFIG)  # an experiment shared with the project
+    git(project, "commit", "-qm", "config")
     _, result = started(project)
     assert "first: a commit on" not in result.output
 

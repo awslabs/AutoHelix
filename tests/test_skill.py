@@ -5,6 +5,7 @@ import re
 import zipfile
 from importlib.resources import files
 from pathlib import Path
+from tests.helpers import config_file
 
 import pytest
 import yaml
@@ -90,7 +91,7 @@ def test_project_install(runner, resources, tmp_path, agent):
     assert result.exit_code == 0, result.output
     assert snapshot(project / PROJECT_DIRS[agent] / SKILL_NAME) == resources
     assert not (project / ".autohelix").exists()
-    assert not (project / "autohelix.yaml").exists()
+    assert not config_file(project).exists()
 
 
 @pytest.mark.parametrize("agent", USER_DIRS)
@@ -323,6 +324,17 @@ def test_setup_keeps_an_experiment_private_and_the_coordinator_reads_its_notes(b
         "SKILL.md"].decode()
     assert "Only while `autohelix/` isn't tracked by the project" in text
     assert "Create it when it doesn't exist yet (a new `autohelix/` is excluded first" in text
+
+
+def test_setup_writes_an_experiment_folder_config(bundled):
+    """The one config form: setup writes autohelix/NAME/config.yaml, and the launch and
+    check commands name the experiment; no resource names another config file."""
+    text = " ".join(bundled["SKILL.md"].decode().split())
+    assert "else `autohelix/<name>/config.yaml`, a new experiment folder" in text
+    assert "Only `autohelix/<name>/config.yaml` is a config" in text
+    assert "`autohelix run <name> --check`" in text
+    for name, content in bundled.items():
+        assert "autohelix.yaml" not in content.decode(), name
 
 
 def test_the_skill_points_to_the_docs_patterns_and_proposes_metric_adapters(bundled):

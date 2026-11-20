@@ -1,8 +1,7 @@
 # Configuration
 
-A loop's configuration lives in `autohelix.yaml` at the project root, or in
-an experiment folder's `autohelix/<name>/autohelix.yaml` when a project has
-several (`autohelix run <name>`; see
+A loop's configuration is the `config.yaml` of an experiment folder,
+`autohelix/<name>/config.yaml` (`autohelix run <name>`; see
 [CLI → Config files](cli.md#config-files)). Bare `autohelix` in a terminal
 starts a coding agent that drafts one with you; to write one by hand, start from
 the examples below or the commented template shipped in the package
@@ -380,7 +379,7 @@ Where gate, observe and stop commands run and the variables they get:
 
 ### Experiment folder
 
-A config in an experiment folder (`autohelix/NAME/autohelix.yaml`) can keep its
+An experiment folder (`autohelix/NAME/`, holding `config.yaml`) can keep its
 evaluator scripts and material beside it. The run stores the folder when it
 starts, as `.autohelix/runs/<id>/experiment/` (without the config and its
 template), and each gate, observe and stop command gets its own copy of that
@@ -388,7 +387,7 @@ as `$AUTOHELIX_EXPERIMENT`:
 
 ```
 autohelix/console/
-  autohelix.yaml
+  config.yaml
   render.py
 ```
 
@@ -400,8 +399,7 @@ observe:
 
 The copy's files are read-only and keep their read and exec bits; a command
 that changes its copy changes nothing stored. `$AUTOHELIX_EXPERIMENT` is unset
-for a config without a folder (the project's `autohelix.yaml`), and for a
-folder holding only its config, so a command using it fails visibly. Links are
+for a folder holding only its config, so a command using it fails visibly. Links are
 followed only inside `autohelix/` (`metrics.py -> ../lib/metrics.py`); a
 committed project file is named by its path (`python scripts/bench.py`). The agent gets the same files in `.autohelix-iteration/experiment/`
 (in its prompt's reading list), and `ask`/`review` in a run in

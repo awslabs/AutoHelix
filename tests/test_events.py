@@ -27,7 +27,7 @@ EMPTY = encode_cursor({})  # before anything: every event is pending
 
 def make_run(project: Path, run_id: str, created_at: float = T0) -> RunPaths:
     paths = RunPaths(project, run_id)
-    write_json(paths.identity, {"schema": SCHEMA, "id": run_id, "config_path": "autohelix.yaml",
+    write_json(paths.identity, {"schema": SCHEMA, "id": run_id, "config_path": "autohelix/demo/config.yaml",
                                 "created_at": created_at, "base_commit": "0" * 40})
     return paths
 

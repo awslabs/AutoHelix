@@ -18,7 +18,7 @@ from autohelix.config import Config, load_config
 from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History
 from autohelix.runs import RunPaths
-from tests.helpers import latest_run
+from tests.helpers import config_file, latest_run, write_config
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ def integration_project(tmp_path):
     (project / ".gitignore").write_text(".autohelix/\n")
 
     # Create autohelix config with mock agent
-    (project / "autohelix.yaml").write_text("""
+    write_config(project, """
 goal: Test the integration
 
 agent:
@@ -130,7 +130,7 @@ class TestMockAgentIntegration:
         ).stdout.strip() == head_before
 
     def test_missing_baseline_metric_aborts_before_agent(self, integration_project):
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test baseline failure
 
 agent:
@@ -142,16 +142,6 @@ observe:
     metrics:
       score: higher
 """)
-        subprocess.run(
-            ["git", "add", "autohelix.yaml"],
-            cwd=integration_project,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", "Configure missing baseline metric"],
-            cwd=integration_project,
-            capture_output=True,
-        )
 
         harness = Harness(integration_project, verbose=False)
         with pytest.raises(
@@ -166,7 +156,7 @@ observe:
     def _commit_config(self, project, text, files=()):
         for name, content in files:
             (project / name).write_text(content)
-        (project / "autohelix.yaml").write_text(text)
+        config_file(project).write_text(text)
         subprocess.run(["git", "add", "-A"], cwd=project, capture_output=True)
         subprocess.run(["git", "commit", "-m", "config"], cwd=project, capture_output=True)
 
@@ -250,7 +240,7 @@ agent:
         subprocess.run(["git", "commit", "-m", "Add check script"], cwd=integration_project, capture_output=True)
 
         # Update config to use mock agent that creates the file the constraint checks
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test constraint failure
 
 agent:
@@ -262,8 +252,6 @@ agent:
 gates:
   - ./check.sh
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
@@ -285,7 +273,7 @@ gates:
         subprocess.run(["git", "add", "check.sh"], cwd=integration_project, capture_output=True)
         subprocess.run(["git", "commit", "-m", "Add check script"], cwd=integration_project, capture_output=True)
 
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test failure output capture
 
 agent:
@@ -297,8 +285,6 @@ agent:
 gates:
   - ./check.sh
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
@@ -313,7 +299,7 @@ gates:
     def test_out_of_scope_changes_reverted(self, integration_project):
         """Changes outside editable scope should be reverted before constraints run."""
         # Configure mock agent to modify both hello.py (editable) and a new file (not editable)
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test scope enforcement
 
 agent:
@@ -329,8 +315,6 @@ scope:
   editable:
     - hello.py
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
@@ -352,7 +336,7 @@ scope:
         subprocess.run(["git", "add", "frozen_file.py"], cwd=integration_project, capture_output=True)
         subprocess.run(["git", "commit", "-m", "Add frozen file"], cwd=integration_project, capture_output=True)
 
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test frozen scope enforcement
 
 agent:
@@ -368,8 +352,6 @@ scope:
   frozen:
     - frozen_file.py
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
@@ -387,7 +369,7 @@ scope:
         self, integration_project
     ):
         """Failed calls remain attributable and consume their attempted iteration."""
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test agent failure
 
 agent:
@@ -398,8 +380,6 @@ agent:
 gates:
   - "true"
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=1))
@@ -446,7 +426,7 @@ class TestRealAgentIntegration:
 
         # Create config with real claude agent and short timeout
         # Use simple constraint that just checks syntax
-        (project / "autohelix.yaml").write_text("""
+        write_config(project, """
 goal: |
   Add a comment to example.py. Just add a single line comment.
   This is a minimal test - make only this small change.
@@ -499,7 +479,7 @@ class TestBudgetEnforcement:
         import json
         from autohelix.agents.runner import ProcessRunResult
 
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test calculated Codex cost
 agent:
   cli: codex
@@ -507,8 +487,6 @@ agent:
 gates:
   - "true"
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, check=True, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Configure Codex"], cwd=integration_project, check=True, capture_output=True)
         calls = 0
 
         def fake_run_process(**kwargs):
@@ -546,7 +524,7 @@ gates:
     def test_cost_budget_stops_loop(self, integration_project):
         """Loop should stop when cumulative cost exceeds the budget."""
         # Configure mock agent with cost_usd in usage
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test cost budget
 
 agent:
@@ -558,8 +536,6 @@ agent:
 gates:
   - "true"
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
 
@@ -583,7 +559,7 @@ gates:
 
     def test_time_budget_stops_loop(self, integration_project, monkeypatch):
         """Loop should stop when elapsed wall-clock time exceeds the budget."""
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test time budget
 
 agent:
@@ -595,8 +571,6 @@ agent:
 gates:
   - "true"
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         import time as time_mod
         call_count = 0
@@ -632,7 +606,7 @@ gates:
 
     def test_multiple_budgets_first_wins(self, integration_project):
         """When multiple budgets are set, whichever hits first stops the loop."""
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test multiple budgets
 
 agent:
@@ -644,8 +618,6 @@ agent:
 gates:
   - "true"
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
 
@@ -668,7 +640,7 @@ gates:
 
     def test_cost_exact_boundary_stops(self, integration_project):
         """Cost exactly equal to budget should stop the loop."""
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test exact cost boundary
 
 agent:
@@ -680,8 +652,6 @@ agent:
 gates:
   - "true"
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
 
@@ -702,7 +672,7 @@ gates:
 
     def test_zero_cost_iterations_dont_trigger_budget(self, integration_project, capsys):
         """Unknown costs warn, but preserve existing iteration-limit behavior."""
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test zero cost iterations
 
 agent:
@@ -714,8 +684,6 @@ agent:
 gates:
   - "true"
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
 
@@ -744,7 +712,7 @@ gates:
         records the cap as a run total (spent before + --cost)."""
         import json
 
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test cost resume
 
 agent:
@@ -756,8 +724,6 @@ agent:
 gates:
   - "true"
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         # First run: 2 iterations
         harness1 = Harness(integration_project, verbose=False)
@@ -861,7 +827,7 @@ gates:
 
     def test_iteration_cap_alone(self, integration_project):
         """With no cost/time budget, the loop runs to the iteration cap."""
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test no budget
 agent:
   cli: mock
@@ -871,8 +837,6 @@ agent:
 gates:
   - "true"
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
         harness.run(Budget(until=3))
@@ -884,7 +848,7 @@ gates:
 
     def test_floating_point_cost_accumulation(self, integration_project):
         """Test that $0.10 x 3 exceeds $0.30 budget due to float precision."""
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test float accumulation
 
 agent:
@@ -896,8 +860,6 @@ agent:
 gates:
   - "true"
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
 
@@ -921,7 +883,7 @@ gates:
         """Resume with wall_clock_ms=0 entries should not inflate prior time."""
         import json
 
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test zero wall_clock resume
 
 agent:
@@ -933,8 +895,6 @@ agent:
 gates:
   - "true"
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         # First run
         harness1 = Harness(integration_project, verbose=False)
@@ -972,7 +932,7 @@ gates:
         subprocess.run(["git", "add", "check.sh"], cwd=integration_project, capture_output=True)
         subprocess.run(["git", "commit", "-m", "Add check"], cwd=integration_project, capture_output=True)
 
-        (integration_project / "autohelix.yaml").write_text("""
+        config_file(integration_project).write_text("""
 goal: Test cost with rejections
 
 agent:
@@ -984,8 +944,6 @@ agent:
 gates:
   - ./check.sh
 """)
-        subprocess.run(["git", "add", "autohelix.yaml"], cwd=integration_project, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update config"], cwd=integration_project, capture_output=True)
 
         harness = Harness(integration_project, verbose=False)
 
