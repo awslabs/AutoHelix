@@ -383,20 +383,22 @@ def suggestion(run: dict) -> tuple[str, str] | None:
     (resuming is the point, and an auto-landing resume lands them); else what lands
     waiting commits (`runs.LandingWords.commands`: `land` when the target can
     fast-forward, `git merge autohelix/<id>` when it diverged); else `resume` one that
-    failed or never started."""
+    failed or never started. A run whose stored config can't be read (`config_invalid`:
+    a run of an old layout, which `resume` refuses) is offered only what lands."""
     if run.get("error"):
         return None
     short = short_id(run["id"])
     state = (run.get("status") or {}).get("state")
     lands = _words(run).commands
     where = f"iteration {_under_way(run) or run['progress']['iterations']}"
+    resumable = not run.get("config_invalid")
     if _live(run):
         command = f"autohelix view {short}"
-    elif state in ("interrupted", "crashed"):
+    elif state in ("interrupted", "crashed") and resumable:
         command = f"autohelix resume {short}"
     elif lands:
         command, where = lands[0], _words(run).cell
-    elif state in ("failed", "idle", None):
+    elif state in ("failed", "idle", None) and resumable:
         command = f"autohelix resume {short}"
     else:
         return None

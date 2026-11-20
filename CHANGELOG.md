@@ -197,6 +197,8 @@ has the checklist.
      ([Where configs live](docs/concepts.md#where-configs-live)).
    - With a development build's experiment folders, rename each
      `autohelix/<name>/autohelix.yaml` to `config.yaml`.
+   - A `/autohelix.yaml` line in `.git/info/exclude` (a private top-level
+     config) can go: `/autohelix/` covers the folder.
 3. **Set `AUTOHELIX_CLAUDE_CODE_CMD`** instead of `AUTOHELIX_CLAUDE_CMD`
    (a set `AUTOHELIX_CLAUDE_CMD` is an error), and use the variables instead
    of `agent.command`.

@@ -140,9 +140,6 @@ def uncommitted_command_paths(config: Config, project_path: Path) -> list[str]:
     named = [path for path in named if uncommitted(path)]
     if not named:
         return []  # each is committed or not a file here (a ref, `autohelix/<run-id>`; a name the command makes)
-    if config.experiment is None:  # a Config not loaded from autohelix/NAME/config.yaml (`from_dict`)
-        raise ValueError("A command names an uncommitted file under autohelix/, but the config isn't an "
-                         "experiment's: load it from autohelix/NAME/config.yaml.")
     folder = f"{CONFIG_DIR}/{config.experiment.name}"  # as `load_config` names it
 
     @functools.cache

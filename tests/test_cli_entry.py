@@ -334,6 +334,22 @@ def test_one_suggested_command_per_run(state, commits, expected):
     assert found == (expected and (expected[0], f"autohelix {expected[1]} krp3"))
 
 
+@pytest.mark.parametrize("state, commits, expected", [
+    ("interrupted", 0, None), ("failed", 0, None), (None, 0, None),
+    ("interrupted", 2, ("interrupted · 2 to land", "land")),
+])
+def test_a_run_whose_config_cant_be_read_is_not_offered_resume(state, commits, expected):
+    """A run of an old layout (its stored config isn't an experiment's): `resume`
+    refuses it, so only what lands is offered."""
+    from autohelix import run_table
+
+    run = {"id": "20261115-1402-sorting-krp3", "progress": {"iterations": 3}, "config_invalid": True,
+           "status": {"state": state, "iteration": 4} if state else None,
+           "target_branch": "main", "landing": {"relation": "ahead", "commits": commits, "behind": 0, "fast_forward": True}}
+    found = run_table.suggestion(with_words(run))
+    assert found == (expected and (expected[0], f"autohelix {expected[1]} krp3"))
+
+
 @pytest.mark.parametrize("state", ["finished", "failed"])
 def test_a_diverged_run_suggests_git_merge(state):
     """`autohelix land` can't fast-forward a diverged target: the merge that works."""
