@@ -24,9 +24,9 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
-from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import (ConfigError, MetricGate, config_changes, config_relative, find_config, load_config,
-                              not_an_experiment, run_command)
+from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, create_agent
+from autohelix.config import (Config, ConfigError, MetricGate, config_changes, config_relative, find_config,
+                              load_config, not_an_experiment, run_command)
 from autohelix.costs import summarize_costs
 from autohelix import terminal
 from autohelix.display import LiveDisplay, clean
@@ -258,17 +258,7 @@ class Harness:
                 if is_live(planned):  # said first: the advice (`--land manual`) would lead straight to it
                     raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
                 raise RuntimeError(target_ahead_refusal(planned, data, found))
-        # Claude Code uses only the last --settings: a user's in extra_args is read now (a
-        # config error when it can't be) and merged with AutoHelix's hooks into one file.
-        self._agent_config = self.config.agent
-        self._user_settings: str | None = None
-        if self.config.agent.cli.lower() == "claude-code":
-            from autohelix.agents.claudecode import merged_settings, split_settings
-
-            self._user_settings, rest = split_settings(self.config.agent.extra_args)
-            if self._user_settings is not None:
-                merged_settings(self._user_settings, {}, self.project_path)
-                self._agent_config = dataclasses.replace(self.config.agent, extra_args=rest)
+        self._agent_settings(self.config)  # an unreadable user --settings: refused before any write
         if check_only:  # nothing written; the scope advice a run prints at its start too
             if warning := scope_warning(self.config):
                 self._warn(warning)
@@ -296,6 +286,12 @@ class Harness:
             except BaseException:
                 self._ownership.close()
                 raise
+        # The agent comes from the run's stored copy, like everything else in the run.
+        try:
+            self._user_settings, self._agent_config = self._agent_settings(self.config)
+        except BaseException:
+            self._ownership.close()
+            raise
         # Stored on resume when the segment starts (`_run`): the mode and group asked for.
         self._identity_changes: dict = {}
         if land_mode and self.run_info.get("land") != land_mode:
@@ -650,6 +646,20 @@ class Harness:
             shutil.copy2(src, plugin)
         except OSError:
             pass
+
+    def _agent_settings(self, config: Config) -> tuple[str | None, AgentConfig]:
+        """The user's own `--settings` taken out of a Claude Code agent's extra_args (read
+        now: a config error when it can't be), and the agent config without it. Claude Code
+        uses only the last `--settings`, so `_write_claude_settings` merges the two."""
+        if config.agent.cli.lower() != "claude-code":
+            return None, config.agent
+        from autohelix.agents.claudecode import merged_settings, split_settings
+
+        user_settings, rest = split_settings(config.agent.extra_args)
+        if user_settings is None:
+            return None, config.agent
+        merged_settings(user_settings, {}, self.project_path)
+        return user_settings, dataclasses.replace(config.agent, extra_args=rest)
 
     def _write_claude_settings(self, hooks: dict[str, list]) -> None:
         """Write the accumulated Claude Code hooks, added to the user's own `--settings`

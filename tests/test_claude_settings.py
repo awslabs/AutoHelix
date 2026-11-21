@@ -117,3 +117,27 @@ def test_an_unreadable_user_settings_file_refuses_the_run(tmp_path, claude):
     with pytest.raises(ConfigError, match="--settings nowhere.json can't be read"):
         Harness(project, check_only=True)
     assert not (project / ".autohelix").exists()
+
+
+def test_the_agent_comes_from_the_runs_stored_config(tmp_path, monkeypatch, claude):
+    """The settings are read early only to refuse an unreadable value before any write;
+    the agent is built from the run's stored copy, like the rest of the run."""
+    import dataclasses
+
+    from autohelix.harness import Harness
+
+    original = Harness._run_config
+
+    def stored_differs(self, *args, **kwargs):  # as when a raced selection picks another run
+        config = original(self, *args, **kwargs)
+        return dataclasses.replace(config, agent=dataclasses.replace(
+            config.agent, extra_args=['--settings={"model": "stored"}', "--stored-flag"]))
+
+    monkeypatch.setattr(Harness, "_run_config", stored_differs)
+    project = _project(tmp_path, ['--settings={"model": "file"}', "--file-flag"])
+    harness = Harness(project)
+    try:
+        assert json.loads(harness._claude_settings_path.read_text())["model"] == "stored"
+        assert harness.agent.config.extra_args == ["--stored-flag"]
+    finally:
+        harness.close()

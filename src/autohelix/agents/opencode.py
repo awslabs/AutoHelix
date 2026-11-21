@@ -95,6 +95,8 @@ class OpenCodeAgent:
             data = error.get("data") if isinstance(error.get("data"), dict) else {}
             message = data.get("message") or error.get("message") or error.get("name") or "OpenCode reported an error"
             self._error = str(message)
+            # 401/403 seen for real (an invalid key); 429/5xx not yet: an error event is
+            # assumed to come after OpenCode's own retries (`isRetryable` aside).
             self._infrastructure = infrastructure_reason(data.get("statusCode"))
             self._emit(event_callback, AgentEventKind.ERROR, self._error)
             return

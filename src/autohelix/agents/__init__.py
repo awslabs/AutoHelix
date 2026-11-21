@@ -148,15 +148,15 @@ class AgentRunResult:
 EventCallback = Callable[[AgentEvent], None]
 
 
-def infrastructure_reason(status: Any, *, service: bool = True) -> str | None:
+def infrastructure_reason(status: Any) -> str | None:
     """An HTTP status a CLI reported for a failed model call, as an infrastructure
-    failure: 401/403 `authentication failed (HTTP 403)`; with `service`, 429 and 5xx
-    `model service error (HTTP 503)`. None for anything else (an ordinary failure)."""
+    failure: 401/403 `authentication failed (HTTP 403)`, 429 and 5xx `model service
+    error (HTTP 503)`. None for anything else (an ordinary failure)."""
     if not isinstance(status, int) or isinstance(status, bool):
         return None
     if status in (401, 403):
         return f"authentication failed (HTTP {status})"
-    if service and (status == 429 or 500 <= status <= 599):
+    if status == 429 or 500 <= status <= 599:
         return f"model service error (HTTP {status})"
     return None
 

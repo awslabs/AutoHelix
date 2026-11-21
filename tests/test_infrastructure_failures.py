@@ -37,11 +37,6 @@ def test_infrastructure_reason(status, reason):
     assert infrastructure_reason(status) == reason
 
 
-def test_without_service_only_authentication_counts():
-    assert infrastructure_reason(503, service=False) is None
-    assert infrastructure_reason(401, service=False) == "authentication failed (HTTP 401)"
-
-
 def _claude_result(**fields):
     return {"type": "result", "subtype": "success", "duration_ms": 10, "total_cost_usd": 0, "usage": {}, **fields}
 
