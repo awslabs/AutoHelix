@@ -182,6 +182,18 @@ class TestBuildPromptVariables:
         assert variables["hints"] == ".autohelix-iteration/hints.md"
         assert variables["hints_text"] == "- [2026-07-07 10:00] try numpy\n- [2026-07-07 11:00] then a heap"
 
+    def test_long_hints_show_their_last_8000_characters(self, tmp_path):
+        ah = tmp_path / ".autohelix"
+        ah.mkdir(parents=True)
+        lines = [f"- [2026-07-07 10:00] hint {n:04d} " + "x" * 70 for n in range(200)]
+        (ah / "hints.md").write_text("\n".join(lines) + "\n")
+        text = build_prompt_variables(self._make_config(), History(tmp_path), iteration=1,
+                                      copy_dir=tmp_path)["hints_text"]
+        first, *shown = text.split("\n")
+        assert first == "(Earlier hints are in .autohelix-iteration/hints.md.)"
+        assert len("\n".join(shown)) <= 8000 and shown == lines[-len(shown):]  # whole lines, the newest
+        assert shown[-1] == lines[-1] and len(shown) == 8000 // (len(lines[0]) + 1)
+
     def test_time_limit_is_compact_duration(self, tmp_path):
         # Must be a forward-looking duration ("15m"), NOT the timeout *message*
         # ("timed out after 15 minutes"), which would read as if the run already died.

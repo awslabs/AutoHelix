@@ -201,6 +201,22 @@ class TestClaudeCodeHandleLine:
         assert agent._usage["cost_source"] == "backend"
         assert agent._usage["duration_ms"] == 5000
 
+    def test_usage_over_several_result_events(self):
+        """A session that went on after its answer (a background task ended) ends with
+        several results: tokens and duration are each turn's own, the cost the session's."""
+        agent = self._agent()
+        turns = [
+            {"duration_ms": 112000, "total_cost_usd": 0.29, "usage": {"input_tokens": 900, "output_tokens": 300}},
+            {"duration_ms": 250000, "total_cost_usd": 0.29, "usage": {"input_tokens": 0, "output_tokens": 0}},
+            {"duration_ms": 2000, "total_cost_usd": 0.31, "usage": {"input_tokens": 100, "output_tokens": 20}},
+        ]
+        for turn in turns:
+            _collect_events(agent, json.dumps({"type": "result", "subtype": "success", **turn}))
+        assert agent._usage["input_tokens"] == 1000
+        assert agent._usage["output_tokens"] == 320
+        assert agent._usage["duration_ms"] == 364000
+        assert agent._usage["cost_usd"] == 0.31
+
     def test_result_event_no_usage(self):
         agent = self._agent()
         line = json.dumps({"type": "result", "subtype": "success"})
@@ -252,6 +268,29 @@ class TestClaudeCodeBuildCommand:
         agent = ClaudeCodeAgent(config=AgentConfig())
         cmd = agent._build_command("do the thing")
         assert cmd[-1] == "do the thing"
+
+
+@pytest.mark.parametrize(("agent_class", "cli", "flag"), [
+    (ClaudeCodeAgent, "claude-code", "--disallowedTools"),
+    (CodexAgent, "codex", "--image"),
+    (OpenCodeAgent, "opencode", "--file"),
+])
+def test_a_variadic_flag_in_extra_args_leaves_the_prompt_alone(agent_class, cli, flag):
+    """Each CLI's parser ends options at `--`: a flag taking several values stops there."""
+    cmd = agent_class(AgentConfig(cli=cli, extra_args=[flag, "X"]))._build_command("do the thing")
+    assert cmd[-4:] == [flag, "X", "--", "do the thing"]
+
+
+def test_the_main_claude_agent_cannot_schedule_wakeups():
+    cmd = ClaudeCodeAgent(AgentConfig(extra_args=["--disallowedTools", "WebFetch"]))._build_command("p")
+    at = cmd.index("--disallowedTools")
+    assert cmd[at:at + 2] == ["--disallowedTools", "ScheduleWakeup"]
+    assert cmd[-4:] == ["--disallowedTools", "WebFetch", "--", "p"]
+
+
+def test_a_claude_judge_has_no_wakeup_flag():
+    cmd = ClaudeCodeAgent(AgentConfig(read_only=True))._build_command("p")
+    assert "ScheduleWakeup" not in cmd
 
 
 class TestClaudeCodeRunResult:

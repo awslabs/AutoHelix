@@ -27,6 +27,13 @@ class TestBuildCommitMessage:
         msg = harness._build_commit_message(1, {})
         assert msg == "AutoHelix iteration 1"
 
+    def test_a_cut_summary_has_the_whole_line_in_the_body(self, tmp_path):
+        harness = _make_harness(tmp_path)
+        msg = harness._build_commit_message(1, {}, summary="short…", full_summary="short and long")
+        assert msg == "short…\n\nshort and long\n\nAutoHelix iteration 1"
+        msg = harness._build_commit_message(1, {}, summary="whole", full_summary="whole")
+        assert msg == "whole\n\nAutoHelix iteration 1"
+
     def test_single_metric_no_history(self, tmp_path):
         harness = _make_harness(tmp_path, observe=[
             ObserveEntry(name="bench", command="bench.sh", metrics={"speed": "higher"}),

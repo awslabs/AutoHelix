@@ -140,8 +140,22 @@ def build_prompt_variables(
     hints = history.paths.hints
     if hints.exists() and hints.stat().st_size > 0:
         variables["hints"] = f"{ITERATION_DIR}/hints.md"
-        variables["hints_text"] = clean_block(hints.read_text(errors="replace")).strip()
+        variables["hints_text"] = hints_text(clean_block(hints.read_text(errors="replace")).strip(), variables["hints"])
     return variables
+
+
+HINTS_LIMIT = 8000  # characters of hints.md the prompt shows: the last ones
+
+
+def hints_text(text: str, path: str) -> str:
+    """The hints for the prompt: all of them, or, over HINTS_LIMIT, the last whole
+    lines that fit, after a line naming the full file, `path` (it stays in the copy)."""
+    if len(text) <= HINTS_LIMIT:
+        return text
+    tail = text[-HINTS_LIMIT:]
+    if "\n" in tail and text[-HINTS_LIMIT - 1] != "\n":  # starts mid-line: from the next one
+        tail = tail.split("\n", 1)[1]
+    return f"(Earlier hints are in {path}.)\n{tail.lstrip()}"
 
 
 def _own_tip(history) -> str | None:

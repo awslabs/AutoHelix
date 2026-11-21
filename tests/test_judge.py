@@ -121,7 +121,7 @@ def test_claude_read_only_command():
 
 def test_regular_claude_command_is_unchanged():
     cmd = ClaudeCodeAgent(AgentConfig(cli="claude-code", extra_args=["--x"]))._build_command("P")
-    assert "--dangerously-skip-permissions" in cmd and "--tools" not in cmd and cmd[-2:] == ["--x", "P"]
+    assert "--dangerously-skip-permissions" in cmd and "--tools" not in cmd and cmd[-3:] == ["--x", "--", "P"]
 
 
 def test_codex_read_only_command(tmp_path):

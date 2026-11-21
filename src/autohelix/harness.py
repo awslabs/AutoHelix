@@ -3,6 +3,7 @@
 
 """Main iteration loop."""
 
+import dataclasses
 import json
 import hashlib
 import itertools
@@ -257,6 +258,17 @@ class Harness:
                 if is_live(planned):  # said first: the advice (`--land manual`) would lead straight to it
                     raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
                 raise RuntimeError(target_ahead_refusal(planned, data, found))
+        # Claude Code uses only the last --settings: a user's in extra_args is read now (a
+        # config error when it can't be) and merged with AutoHelix's hooks into one file.
+        self._agent_config = self.config.agent
+        self._user_settings: str | None = None
+        if self.config.agent.cli.lower() == "claude-code":
+            from autohelix.agents.claudecode import merged_settings, split_settings
+
+            self._user_settings, rest = split_settings(self.config.agent.extra_args)
+            if self._user_settings is not None:
+                merged_settings(self._user_settings, {}, self.project_path)
+                self._agent_config = dataclasses.replace(self.config.agent, extra_args=rest)
         if check_only:  # nothing written; the scope advice a run prints at its start too
             if warning := scope_warning(self.config):
                 self._warn(warning)
@@ -330,7 +342,7 @@ class Harness:
                 self._time_left_script = self._install_time_left(claude_hooks)
             self._write_claude_settings(claude_hooks)
 
-            self.agent = create_agent(self.config.agent, heartbeat_seconds=heartbeat_seconds)
+            self.agent = create_agent(self._agent_config, heartbeat_seconds=heartbeat_seconds)
             self._check_codex_time_left()
 
         except BaseException:
@@ -445,11 +457,14 @@ class Harness:
         arrow = "↓" if directions.get(name) == "lower" else "↑"
         return f"{name} {arrow}"
 
-    def _build_commit_message(self, iteration: int, metrics: dict[str, float], summary: str | None = None) -> str:
+    def _build_commit_message(self, iteration: int, metrics: dict[str, float], summary: str | None = None,
+                              full_summary: str | None = None) -> str:
         """Build a commit message with metric deltas and the agent's summary (first line
-        of its `.autohelix-iteration/commit_summary.txt`, read when the copy was frozen)."""
+        of its `.autohelix-iteration/commit_summary.txt`, read when the copy was frozen,
+        cut at SUMMARY_LIMIT; when cut, `full_summary`, the whole line, leads the body)."""
         if summary:
-            lines = [summary, "", f"AutoHelix iteration {iteration}"]
+            lines = [summary, "", *([full_summary, ""] if full_summary and full_summary != summary else []),
+                     f"AutoHelix iteration {iteration}"]
         else:
             lines = [f"AutoHelix iteration {iteration}"]
         if not metrics:
@@ -637,12 +652,18 @@ class Harness:
             pass
 
     def _write_claude_settings(self, hooks: dict[str, list]) -> None:
-        """Write the accumulated Claude Code hooks to claude_settings.json (if any)."""
-        if not hooks:
+        """Write the accumulated Claude Code hooks, added to the user's own `--settings`
+        (taken out of extra_args), to claude_settings.json (if any): one `--settings`."""
+        if not hooks and self._user_settings is None:
             return
+        from autohelix.agents.claudecode import merged_settings
+
+        settings = merged_settings(self._user_settings, hooks, self.project_path)
         settings_path = self.paths.claude_settings
         settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps({"hooks": hooks}, indent=2))
+        settings_path.unlink(missing_ok=True)  # the user's settings: private (0600)
+        with os.fdopen(os.open(settings_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as file:
+            file.write(json.dumps(settings, indent=2))
         self._claude_settings_path = settings_path
 
     def _check_codex_time_left(self) -> None:
@@ -935,7 +956,8 @@ class Harness:
                                  calls=[{"role": "agent", "usage": attempt.agent_usage}])
         self._describe_attempt(result, workspace)
         self._complete_record(result, attempt.started_at, attempt.monotonic, evaluation)
-        workspace.accept(self._build_commit_message(iteration, metrics, summary=workspace.summary), result)
+        workspace.accept(self._build_commit_message(iteration, metrics, summary=workspace.summary,
+                                                    full_summary=workspace.summary_line), result)
 
         # Stop commands see accepted content in a fresh copy. Errors (and interrupts,
         # handled by the caller) keep the recorded acceptance.
@@ -1165,6 +1187,9 @@ class Harness:
                 if gate.metric not in entry.metrics:
                     continue
                 if failure := self._check_metric_gate(gate, evaluation.gates[index], evaluation.metrics, records):
+                    if not result.ok:  # not measured because its entry failed: say which, and how
+                        failure = evaluation.gates[index]["reason"] = f"{failure} (observe {entry.name} {result.error})"
+                        evaluation.failure_output = _tail(result.output)
                     notes += terminal.hanging(Text("  ").append("✗ ", style="red"), failure, self.console.width)
                     self.log.info(f"iter {iteration} {failure}")
                     evaluation.rejection = failure

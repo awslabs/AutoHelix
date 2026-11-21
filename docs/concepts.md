@@ -259,7 +259,7 @@ The variables a template gets are a stable, documented contract:
 | `editable`, `frozen` | The scope patterns; `frozen` is `scope.frozen` plus the config and template files and `autohelix/` (always frozen, and listed instead of the files in it) |
 | `notes_path` | Where this iteration's notes go (in the copy) |
 | `hints` | `.autohelix-iteration/hints.md` if there are hints, else empty |
-| `hints_text` | The hints' text (the lines `autohelix hint` added, oldest first), else empty |
+| `hints_text` | The hints' text (the lines `autohelix hint` added, oldest first), else empty; over 8,000 characters, the last whole lines that fit, after a line saying earlier hints are in `.autohelix-iteration/hints.md` |
 | `rejected_patch` | `.autohelix-iteration/rejected.patch` if the copy has one, else empty |
 | `rejected_diff` | When the latest rejected change is over 2 MiB (no patch file), the `git diff <tip> <tree>` command that shows it, else empty |
 | `discarded` | The paths whose changes the latest iteration lost to the scope |

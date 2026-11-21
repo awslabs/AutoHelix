@@ -46,7 +46,9 @@ class OpenCodeAgent:
         if self.config.effort:
             cmd.extend(["--variant", self.config.effort])
         cmd.extend(self.config.extra_args)
-        cmd.append(prompt)
+        # `--` (yargs: what follows is the `message` positional): a flag in extra_args
+        # that takes several values (`--file`) doesn't take the prompt.
+        cmd.extend(["--", prompt])
         return cmd
 
     def _emit(self, event_callback: EventCallback, kind: AgentEventKind, text: str, **metadata: object) -> None:

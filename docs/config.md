@@ -316,7 +316,9 @@ An observe entry that exits non-zero, times out, can't start, or (a review)
 produces no valid answer doesn't reject the iteration. Its output and the
 failure are recorded and shown to the next agent, and the remaining entries
 run. **A failed entry contributes no metrics**, so a metric gate on one of its
-numbers fails. Only gates reject. One exception: a command or review that
+numbers fails; its rejection names the entry and how it failed (`metric gate:
+score was not measured (observe bench exited 2)`), and the next agent gets the
+tail of the entry's output, as for a failed gate command. Only gates reject. One exception: a command or review that
 changes the candidate's files rejects the iteration (see
 [Read-only evaluation](phases.md#candidate-copies)).
 
@@ -524,7 +526,7 @@ another repository clones it outside its copy (under `/tmp`, say).
 | `model` | The model, passed to the CLI unchanged; unset: the CLI's own default (see below) |
 | `effort` | The reasoning effort, passed through unchanged (e.g. `low`, `medium`, `high`) |
 | `timeout` | A duration per iteration; unset means no limit (see below) |
-| `extra_args` | Extra CLI arguments for the main agent (also the place for a CLI's own settings, e.g. Codex `["-c", "key=value"]`) |
+| `extra_args` | Extra CLI arguments for the main agent (also the place for a CLI's own settings, e.g. Codex `["-c", "key=value"]`); they go before `--` and the prompt, so a flag that takes several values (`--disallowedTools X`) doesn't take the prompt. Claude Code: a `--settings X` (a file, relative to the project folder, or a JSON string) is read at the start of each `run`/`resume` and merged with AutoHelix's time-left hooks into one settings file (Claude Code reads only the last `--settings`); one that can't be read is a config error |
 | `auto_memory` | Claude Code's built-in memory; off by default for self-contained iterations |
 
 AutoHelix keeps no list of model names: `model:` goes to the CLI as written, and

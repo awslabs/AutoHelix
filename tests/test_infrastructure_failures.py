@@ -84,6 +84,12 @@ class TestClaudeCode:
         result = self._run(monkeypatch, tmp_path, lines)
         assert not result.success and result.infrastructure == "authentication failed (HTTP 403)"
 
+    def test_the_last_failed_result_decides(self, monkeypatch, tmp_path):
+        lines = [_api_error(403), _claude_result(is_error=True, result="something else")]
+        result = self._run(monkeypatch, tmp_path, lines)
+        assert not result.success and result.error == "something else"
+        assert result.infrastructure is None
+
     def test_a_timeout_is_not_one(self, monkeypatch, tmp_path):
         result = self._run(monkeypatch, tmp_path, [_api_error(403)], exit_code=124, timed_out=True)
         assert not result.success and result.infrastructure is None

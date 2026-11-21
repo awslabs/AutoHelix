@@ -152,8 +152,11 @@ def test_gate_on_a_failed_entrys_metric_fails(project, log):
     ])
     _, record = _run(project, 1)
     assert not record.accepted
-    assert record.reason == "metric gate: score was not measured"
+    # The rejection names the entry, its exit status and the tail of its output.
+    assert record.reason == "metric gate: score was not measured (observe flaky exited 2)"
+    assert record.failure_output == "##autohelix[score=7]\noops"
     assert record.gates[0]["passed"] is False and record.gates[0]["value"] is None
+    assert record.gates[0]["reason"] == record.reason
     assert _lines(log) == ["0 other"]  # rejected right after the entry: nothing was verified
 
 

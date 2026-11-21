@@ -2,10 +2,10 @@
 
 ## Installation
 
-Install the CLI and its agent skill from PyPI:
+Install the CLI and its agent skill from git (until the PyPI release):
 
 ```bash
-pip install autohelix
+pip install git+https://github.com/awslabs/AutoHelix.git
 ```
 
 Or install from source for the repository's example projects:

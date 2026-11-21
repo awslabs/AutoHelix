@@ -346,6 +346,10 @@ def test_summary_is_cleaned_and_capped_for_record_and_commit(repo):
     record = History(project, latest_run(project).run_id).load()[-1]
     assert record.summary.startswith("red ww") and len(record.summary) == 200 and record.summary.endswith("…")
     assert git(repo, "show", "-s", "--format=%s", record.commit) == record.summary
+    # The commit body has the whole first line, before the AutoHelix trailers.
+    body = git(repo, "show", "-s", "--format=%b", record.commit)
+    assert body.startswith("red " + "w" * 500 + "\n") and "more" not in body
+    assert body.index("w" * 500) < body.index("AutoHelix-Run:")
 
 
 def test_unknown_template_variables():

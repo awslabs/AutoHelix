@@ -124,13 +124,15 @@ class CodexAgent:
             # Codex has no flag to append to its system prompt, so the judge's
             # instructions lead the prompt.
             system = self.config.system_prompt
-            cmd.append(f"{system}\n\n{prompt}" if system else prompt)
+            cmd.extend(["--", f"{system}\n\n{prompt}" if system else prompt])
             return cmd
         time_left_hook = self._time_left_hook_path()
         if time_left_hook:
             cmd.extend(self._time_left_hook_args(time_left_hook))
         cmd.extend(self.config.extra_args)
-        cmd.append(prompt)
+        # `--` (clap): a flag in extra_args that takes several values (`--image`) doesn't
+        # take the prompt.
+        cmd.extend(["--", prompt])
         return cmd
 
     def _emit(self, event_callback: EventCallback, kind: AgentEventKind, text: str, **metadata: object) -> None:
