@@ -1,0 +1,162 @@
+#!/bin/bash
+# The GPUs' only entry point in an arm's container, for the agent's user through sudo
+# (/etc/sudoers.d/ar allows exactly these):
+#
+#   sudo -n ar-gpu smoke < train.py             # ar/smoke.sh calls it
+#   sudo -n ar-gpu train_and_score < train.py   # ar/train_and_score.sh: AutoHelix's observe command
+#   sudo -n ar-gpu run_experiment < train.py    # run_experiment: the Karpathy and /goal arms' tool
+#
+# Only train.py comes from the caller: on stdin, opened with the caller's permissions, at
+# most 1 MB. Everything else is the arms' base commit (/srv/ar/base.git at AR_BASE, as the
+# container started), in a fresh tree in /srv/ar-work, with ar/paths.sh pointing at the
+# data in /srv/ar-data, out of the agent's reach. The tree's ar/smoke.sh or
+# ar/train_and_score.sh then runs as user ar, the only user besides root that may open the
+# GPUs, on the container's GPUs: the budgets, limits and sandbox are the base commit's.
+#
+# - smoke: the container's first GPU; SMOKE_BUDGET and SMOKE_LIMIT of ar/smoke.sh.
+# - train_and_score: the AutoHelix arm only, and only for a process descended from the
+#   harness (the container's `autohelix run`), not from the agent's Claude Code session.
+# - run_experiment: the session arms only. At most AR_MAX_EXPERIMENTS calls; each one is kept
+#   in /srv/ar/state (arms/runs/NAME on the host, root-owned): count, experiments.jsonl, and
+#   train_py/NNN.py and NNN.log; the output ends with the metrics as `name: value` lines.
+#   A call is counted once its tree is built; sudo relays TERM, INT and HUP, so an
+#   interrupted call kills its training and is logged as killed (only a SIGKILL of sudo
+#   leaves it running to its end).
+# Every call appends a line to /srv/ar/state/calls.jsonl.
+set -uo pipefail
+export PATH=/usr/sbin:/usr/bin LANG=C.UTF-8
+umask 022
+. /srv/ar/run.env  # AR_KIND AR_BASE AR_GPUS AR_MAX_EXPERIMENTS AR_CLAUDE (entrypoint.sh)
+state=/srv/ar/state
+what=${1:-} start=$(date +%s.%N) sha= child= work=
+
+log_call() {  # log_call STATUS
+    printf '{"what": "%s", "start": %s, "end": %s, "status": "%s", "train_py_sha256": "%s", "gpus": "%s"}\n' \
+        "$what" "$start" "$(date +%s.%N)" "$1" "$sha" "$AR_GPUS" >> "$state/calls.jsonl"
+}
+
+refuse() {  # refuse WHY
+    echo "ar-gpu: $what refused: $1" >&2
+    log_call refused
+    exit 3
+}
+
+from_harness() {  # is the caller a descendant of the harness, and not of a claude process?
+    local pid=$PPID harness
+    harness=$(cat /srv/ar/harness.pid 2>/dev/null) || return 1
+    while [ "${pid:-0}" -gt 1 ]; do
+        [ "$pid" = "$harness" ] && return 0
+        # as the agent's user: root here lacks CAP_SYS_PTRACE, so its readlink comes back empty
+        [ "$(setpriv --reuid=agent --regid=agent --clear-groups readlink "/proc/$pid/exe")" = "$AR_CLAUDE" ] && return 1
+        pid=$(awk '$1 == "PPid:" { print $2 }' "/proc/$pid/status" 2>/dev/null)
+    done
+    return 1
+}
+
+stop_child() {  # kill the running script with every process it started
+    [ -n "$child" ] && kill -KILL -- "-$child" 2>/dev/null
+    child=
+}
+
+cleanup() {
+    stop_child
+    [ -n "$work" ] && rm -rf "$work"
+}
+trap cleanup EXIT
+
+case $AR_KIND:$what in
+    autohelix:smoke | session:smoke | session:run_experiment) ;;
+    autohelix:train_and_score)
+        from_harness || refuse "only AutoHelix's observe command runs it; check a change with bash ar/smoke.sh" ;;
+    session:train_and_score) refuse "use run_experiment" ;;
+    autohelix:run_experiment) refuse "the other arms' tool; check a change with bash ar/smoke.sh" ;;
+    *) refuse "unknown: smoke, train_and_score or run_experiment" ;;
+esac
+
+# The tree: the base commit with the caller's train.py
+work=$(mktemp -d /srv/ar-work/call.XXXXXX)
+tree=$work/tree
+mkdir -p "$tree" "$work/tmp"
+head -c 1048577 > "$work/train.py"
+[ "$(stat -c %s "$work/train.py")" -le 1048576 ] || refuse "train.py is over 1 MB"
+sha=$(sha256sum "$work/train.py" | cut -d' ' -f1)
+git --git-dir=/srv/ar/base.git archive "$AR_BASE" | tar -x -C "$tree" || refuse "can't read the base commit"
+
+if [ "$what" = run_experiment ]; then  # counted only now: a refused call runs nothing
+    mkdir -p "$state/train_py"
+    exec 9> "$state/count.lock"
+    flock 9
+    n=$(( $(cat "$state/count" 2>/dev/null || echo 0) + 1 ))
+    if [ "$n" -le "$AR_MAX_EXPERIMENTS" ]; then echo "$n" > "$state/count"; fi
+    exec 9>&-
+    if [ "$n" -gt "$AR_MAX_EXPERIMENTS" ]; then
+        printf '{"refused": true, "at": %s}\n' "$(date +%s.%N)" >> "$state/experiments.jsonl"
+        log_call refused
+        echo "run_experiment: REFUSED. The experiment budget is used up: all $AR_MAX_EXPERIMENTS experiments have run."
+        echo "No more experiments can be run. The experiment loop is over: end the session now."
+        exit 3
+    fi
+fi
+
+cp "$work/train.py" "$tree/train.py"
+sed -i -E -e 's|^AR_DATA=.*|AR_DATA=/srv/ar-data/data|' -e 's|^AR_TOKENIZER=.*|AR_TOKENIZER=/srv/ar-data/tokenizer|' \
+    "$tree/ar/paths.sh"
+chown -R ar:ar "$work"
+# This container's GPUs (0,1), asked as ar: as root, the driver's libraries would recreate
+# the device nodes with mode 0666 (nothing masks /proc/driver/nvidia/params here).
+as_ar=(setpriv --reuid=ar --regid=ar --init-groups --)
+gpus=$("${as_ar[@]}" nvidia-smi --query-gpu=index --format=csv,noheader | paste -sd,)
+
+run_as_ar() {  # run_as_ar SCRIPT: the tree's ar/SCRIPT as user ar, in a session of its own
+    setsid "${as_ar[@]}" env -i PATH=/usr/bin:/usr/sbin \
+        HOME="$work/tmp" TMPDIR="$work/tmp" LANG=C.UTF-8 AR_WRAPPED=1 AR_GPU="$gpus" \
+        bash "$tree/ar/$1" &
+    child=$!
+    wait "$child"
+    local code=$?
+    child=
+    return "$code"
+}
+
+if [ "$what" != run_experiment ]; then
+    trap 'stop_child; log_call killed; exit 130' TERM INT HUP
+    run_as_ar "$what.sh"
+    code=$?
+    log_call "exit $code"
+    exit "$code"
+fi
+
+num=$(printf '%03d' "$n")
+cp "$work/train.py" "$state/train_py/$num.py"
+log=$state/train_py/$num.log
+status=killed
+finish() {  # the log line, also when the call is killed
+    python3 -I - "$n" "$start" "$(date +%s.%N)" "$sha" "$status" "$log" "$AR_GPUS" >> "$state/experiments.jsonl" <<'EOF'
+import json, os, re, sys
+n, start, end, sha, status, log, gpus = sys.argv[1:]
+text = open(log, errors="replace").read() if os.path.exists(log) else ""
+metrics = {k: float(v) for k, v in re.findall(r"^##autohelix\[(\w+)=([-+0-9.eE]+)\]$", text, re.M)}
+problems = re.findall(r"^train_and_score: (.*)$", text, re.M)
+print(json.dumps({"call": int(n), "start": float(start), "end": float(end), "gpus": gpus, "train_py_sha256": sha,
+                  "status": status, "metrics": metrics if status == "ok" else {},
+                  "failure": None if status == "ok" else "; ".join(problems) or status}))
+EOF
+    log_call "$status"
+}
+trap 'stop_child; finish; exit 130' TERM INT HUP
+
+echo "run_experiment: experiment $n of $AR_MAX_EXPERIMENTS (about 7 minutes)"
+run_as_ar train_and_score.sh > "$log" 2>&1
+code=$?
+[ "$code" = 0 ] && status=ok || status=failed
+trap - TERM INT HUP
+finish
+cat "$log"
+echo "---"
+if [ "$status" = ok ]; then
+    sed -n -E 's/^##autohelix\[(\w+)=(.*)\]$/\1: \2/p' "$log"
+else
+    echo "val_bpb: none (the experiment failed; see above)"
+fi
+echo "experiments: $n of $AR_MAX_EXPERIMENTS used"
+exit "$code"

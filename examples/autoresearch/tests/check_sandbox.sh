@@ -4,8 +4,9 @@
 #   AR_GPU=K bash tests/check_sandbox.sh PROJECT [HIDDEN_PATH...]
 #
 # PROJECT is a project setup.py laid out. Runs tests/sandbox_check.py inside the sandbox
-# (network, GPU, data, writes, mounts, capabilities, what's visible; HIDDEN_PATHs must not
-# exist inside), then checks that killing the sandbox at a timeout kills every process in it.
+# (network, GPU, data, writes, mounts, capabilities, what's visible: the host's data
+# folder, ~/.ssh, ~/.aws and each HIDDEN_PATH, e.g. the test shard's folder, must not exist
+# inside), then checks that killing the sandbox at a timeout kills every process in it.
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 project=$(cd "$1" && pwd)
@@ -17,7 +18,7 @@ trap 'rm -rf "$scratch"' EXIT
 cp "$here/sandbox_check.py" "$project/prepare.py" "$scratch/"
 bus=$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader -i "$AR_GPU")
 bash "$project/ar/sandbox.sh" "$scratch" python sandbox_check.py "$bus" "$AR_DATA" \
-    "$AR_DATA" "$HOME/.ssh" "$HOME/.aws" /fsx "$@"
+    "$AR_DATA" "$HOME/.ssh" "$HOME/.aws" "$@"
 status=$?
 
 # The kill: two sleepers in the background, one in a new session; the sandbox is killed

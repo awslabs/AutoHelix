@@ -17,7 +17,7 @@ To set up a new experiment, work with the user to:
 
 ## Experimentation
 
-Each experiment trains train.py twice at once, on two GPUs with two seeds, each run in a sandbox, and scores both; val_bpb is their mean. The training script runs for a **fixed time budget of 5 minutes** (wall clock training time, excluding startup/compilation); each training is killed 380 s after launch, startup and compilation included. You launch an experiment simply as: `RUN_EXPERIMENT` (it runs the current train.py). It runs at most MAX_EXPERIMENTS experiments in total; after that it refuses.
+Each experiment trains train.py twice at once, on two GPUs with two seeds, each run in a sandbox, and scores both; val_bpb is their mean. The training script runs for a **fixed time budget of 5 minutes** (wall clock training time, excluding startup/compilation); each training is killed 380 s after launch, startup and compilation included. You launch an experiment simply as: `RUN_EXPERIMENT` (it runs the current train.py). It runs at most MAX_EXPERIMENTS experiments in total; after that it refuses. Run full trainings only through it; to check that train.py runs, use `bash ar/smoke.sh` (about 70 s: 30 s of steps in the same sandbox, then it checks the export; it says nothing about val_bpb). In the comparison's containers the GPUs are reachable only through these two.
 
 **What you CAN do:**
 - Modify `train.py` — this is the only file you edit. Everything is fair game: model architecture, optimizer, hyperparameters, training loop, batch size, model size, etc.

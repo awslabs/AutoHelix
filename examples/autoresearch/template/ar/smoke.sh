@@ -10,11 +10,18 @@
 # that train.py runs and exports, not how good the model is. About 70 s on an H200.
 #
 # A train.py that doesn't stop on prepare.TIME_BUDGET runs into SMOKE_LIMIT here.
+#
+# In an arm's container (arms/container/) the GPUs are reachable only through
+# `sudo ar-gpu smoke`, which runs this script from the arms' base commit with this train.py
+# on the container's first GPU: this script, its budget and the sandbox can't be changed.
 set -uo pipefail
 SMOKE_BUDGET=30
 SMOKE_LIMIT=180
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+if [ -z "${AR_WRAPPED:-}" ] && [ -x /usr/local/sbin/ar-gpu ]; then
+    exec sudo -n /usr/local/sbin/ar-gpu smoke < train.py
+fi
 . ar/paths.sh
 
 if [ -z "${AR_GPU:-}" ]; then
@@ -33,7 +40,7 @@ grep -q "^TIME_BUDGET = $SMOKE_BUDGET\b" "$work/prepare.py" || { echo "smoke: ca
 
 echo "smoke: training for ${SMOKE_BUDGET}s of steps on GPU $AR_GPU (killed at ${SMOKE_LIMIT}s)..."
 start=$(date +%s)
-AR_EXPORT=$work/model.pt2 timeout --foreground -s KILL "$SMOKE_LIMIT" \
+timeout --foreground -s KILL "$SMOKE_LIMIT" \
     bash ar/sandbox.sh "$work" python train.py > "$scratch/train.log" 2>&1
 status=$?
 seconds=$(( $(date +%s) - start ))

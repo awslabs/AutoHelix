@@ -22,13 +22,20 @@
 #
 # AR_SCORE_DATA (default: the validation shard) is the parquet shard to score on: the
 # operator's test shard, after a run.
+#
+# In an arm's container (arms/container/) it goes through `sudo ar-gpu train_and_score`,
+# which runs this script from the arms' base commit with this train.py on the container's
+# GPUs (AR_SEED and AR_SCORE_DATA unset), and only for AutoHelix's observe command.
 set -uo pipefail
 
-# Seconds from launch to exit: the patched baseline's wall clock (341-346 s on an H200, 8
-# at once or alone) plus about 10%. See README.md, "Time limit".
+# Seconds from launch to exit: the patched baseline's wall clock (338-346 s on an H200, 8
+# at once or alone) plus about 10%. See README.md, "Time limit and noise".
 TIME_LIMIT=380
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+if [ -z "${AR_WRAPPED:-}" ] && [ -x /usr/local/sbin/ar-gpu ]; then
+    exec sudo -n /usr/local/sbin/ar-gpu train_and_score < train.py
+fi
 . ar/paths.sh
 VAL_SHARD=shard_06542.parquet
 
@@ -55,7 +62,7 @@ train_and_score() {  # train_and_score FOLDER GPU SEED: writes its results in FO
         > "$out/vram.txt" 2>/dev/null &
     poller=$!
     start=$(date +%s%N)
-    AR_GPU=$gpu AR_SEED=$3 AR_EXPORT=$work/model.pt2 timeout --foreground -s KILL "$TIME_LIMIT" \
+    AR_GPU=$gpu AR_SEED=$3 timeout --foreground -s KILL "$TIME_LIMIT" \
         bash ar/sandbox.sh "$work" python train.py > "$out/train.log" 2>&1
     echo $? > "$out/status"
     ms_since "$start" > "$out/wall_ms"

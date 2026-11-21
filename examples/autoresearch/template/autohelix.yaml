@@ -32,8 +32,9 @@ goal: |
 
   Check a change with `bash ar/smoke.sh` (about 70 s, same sandbox and GPU, 30 s of
   steps): it says whether train.py runs and exports, nothing about val_bpb. Don't run
-  full trainings in your session. Past iterations' observe output has each attempt's
-  training log and score.
+  full trainings in your session (in the comparison's containers the GPUs are reachable
+  only through smoke.sh). Past iterations' observe output has each attempt's training log
+  and score.
   All else equal, prefer the simpler change.
 
 agent:
@@ -48,7 +49,7 @@ scope:
 gates:
   - . ar/paths.sh && "$AR_PYTHON" -I ar/static_check.py train.py
   - metric: val_bpb
-    improve: 0.2%           # from the noise calibration (README, "Noise"); 0.3% with one GPU
+    improve: 0.1%           # README, "Time limit and noise"; 0.15% with one GPU
 
 observe:
   - name: train

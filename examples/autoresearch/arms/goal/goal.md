@@ -27,5 +27,6 @@ first. It runs at most MAX_EXPERIMENTS experiments in total; after that it refus
 
 Check a change with `bash ar/smoke.sh` (about 70 s, same sandbox and GPU, 30 s of
 steps): it says whether train.py runs and exports, nothing about val_bpb. Run full
-trainings only through RUN_EXPERIMENT.
+trainings only through RUN_EXPERIMENT (in the comparison's containers the GPUs are
+reachable only through it and smoke.sh).
 All else equal, prefer the simpler change.

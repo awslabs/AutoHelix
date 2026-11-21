@@ -74,9 +74,10 @@ shards = sorted(os.listdir(data))
 check("data: the training shards only", shards == [f"shard_{i:05d}.parquet" for i in range(10)], shards)
 check("data: no validation shard", not os.path.exists(f"{data}/shard_06542.parquet")
       and not os.path.exists(f"{host_data}/shard_06542.parquet"))
-check("data: shards read-only", raises(lambda: write(f"{data}/{shards[0]}"), errno.EROFS))
+# EACCES before EROFS where the sandbox's user doesn't own the files (an arm's container)
+check("data: shards read-only", raises(lambda: write(f"{data}/{shards[0]}"), errno.EROFS, errno.EACCES))
 check("data: can't add files", raises(lambda: write(f"{data}/new.parquet"), errno.EROFS))
-check("data: tokenizer read-only", raises(lambda: write(f"{tokenizer}/tokenizer.pkl"), errno.EROFS))
+check("data: tokenizer read-only", raises(lambda: write(f"{tokenizer}/tokenizer.pkl"), errno.EROFS, errno.EACCES))
 sys.path.insert(0, scratch)
 import prepare  # noqa: E402
 
@@ -89,7 +90,8 @@ batch = next(prepare.make_dataloader(prepare.Tokenizer.from_directory(), 1, 64, 
 check("data: the train dataloader works", tuple(batch[0].shape) == (1, 64))
 
 # Writes: only scratch (and /tmp, which is in it)
-for path in [sys.executable, f"{os.environ['HF_HOME']}/x", "/etc/x", "/usr/x", "/x", "/sys/x", "/proc/x"]:
+for path in [sys.executable, f"{os.environ['HF_HOME']}/x", "/etc/x", "/etc/hosts", "/etc/resolv.conf", "/usr/x",
+             "/x", "/sys/x", "/sys/fs/cgroup/x", "/proc/x"]:
     check(f"writes: refused at {path}", raises(lambda: write(path)))
 write(f"{scratch}/ok")
 write("/tmp/ok")

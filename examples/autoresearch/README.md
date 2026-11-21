@@ -19,6 +19,9 @@ Upstream is fetched at a pinned commit (`228791f`, sha256-checked) and patched
 (`patches/train.patch`: the seed from `AR_SEED`, the export instead of upstream's
 evaluation); nothing of it is vendored here.
 
+There are two ways to use it: one AutoHelix run on your own GPU box (setup, run, score),
+and the comparison of three loops in `arms/` (see [Comparing loops](#comparing-loops)).
+
 ## What is enforced
 
 | Restriction | How | Not covered |
@@ -35,9 +38,10 @@ evaluation); nothing of it is vendored here.
 | `train.py` is a training script | `ar/static_check.py`: under 64 KB, allowed imports only, no large literals | |
 
 All of it is unprivileged (user namespaces; no root, no Docker). `tests/check_sandbox.sh`
-checks each row on your machine. What's left (the agent itself runs unsandboxed as you, so
-it could use other GPUs or run the scorer in its session) is for a post-hoc audit of the
-run's logs, and the test shard measures overfitting to validation.
+checks each row on your machine. The agent itself runs unsandboxed as you, so it could
+use other GPUs or run the scorer in its session; that is for a look at the run's logs,
+and the test shard measures overfitting to validation. The comparison in `arms/` closes
+this gap with a container per run.
 
 ## Set up
 
@@ -52,13 +56,14 @@ This fetches upstream, builds its locked environment (`~/ar-local/venv`), caches
 downloads the data with upstream's `prepare.py` (10 training shards, the validation shard,
 the tokenizer), lays out `~/ar-project` as a git repository, and puts a test shard at a
 random index in `~/ar-heldout` (private). Keep `--local` on local disk: on a network file
-system, data reads and Python's imports stall training.
+system, data reads and Python's imports stall training. The project's `ar/paths.sh` names
+these folders; nothing else holds a path of the box.
 
 Check it, on two free GPUs J and K (indices as `nvidia-smi` numbers them):
 
 ```bash
 cd ~/ar-project
-AR_GPU=J bash /path/to/examples/autoresearch/tests/check_sandbox.sh .   # each restriction
+AR_GPU=J bash /path/to/examples/autoresearch/tests/check_sandbox.sh . ~/ar-heldout  # each restriction
 AR_GPU=J,K bash ar/smoke.sh              # train.py runs and exports (about 70 s, on J)
 AR_GPU=J,K bash ar/train_and_score.sh    # two trainings at once and their score (about 7 min)
 ```
@@ -66,25 +71,25 @@ AR_GPU=J,K bash ar/train_and_score.sh    # two trainings at once and their score
 ## Run
 
 With AutoHelix and Claude Code (`claude`, or `AUTOHELIX_CLAUDE_CODE_CMD`) installed on the
-box:
+box, in `tmux`:
 
 ```bash
 AR_GPU=J,K autohelix run -n 60 --time 24h
 ```
 
 `AR_GPU` goes to every command and to the agent's session (`ar/smoke.sh` uses its first
-GPU), so four runs can share an 8-GPU box. Start `autohelix` in `tmux` on the box. Each
-iteration is the agent's session (`agent.timeout: 30m`), the static check,
-then the two trainings and their scores (about 7 minutes). With one GPU (`AR_GPU=K`) it
-trains once; raise `improve:` to about 0.3% (see [Noise](#noise)).
+GPU), so four runs can share an 8-GPU box. Each iteration is the agent's session
+(`agent.timeout: 30m`), the static check, then the two trainings and their scores (about
+7 minutes). With one GPU (`AR_GPU=K`) it trains once; raise `improve:` to 0.15%.
 
 ## Scoring the test shard
 
-After the run, score the run's final `train.py` on the test shard. Exports aren't kept, so
-this trains it again; use a few seeds for an error bar, and do the same for the baseline:
+After the run, score its final `train.py` on the test shard. Exports aren't kept, so this
+trains it again; use a few seeds for an error bar, and do the same for the baseline (the
+run's first commit):
 
 ```bash
-git worktree add /tmp/ar-tip autohelix/<run-id>      # the run's tip (the first commit: the baseline)
+git worktree add /tmp/ar-tip autohelix/<run-id>      # the run's tip
 cd /tmp/ar-tip
 for seed in 1 2 3; do
   AR_GPU=K AR_SEED=$seed AR_SCORE_DATA=~/ar-heldout/test.parquet bash ar/train_and_score.sh | grep val_bpb=
@@ -93,48 +98,136 @@ done
 
 The metric is still printed as `val_bpb`; with `AR_SCORE_DATA` it is the test shard's.
 
-## Time limit
+## Time limit and noise
 
-`TIME_LIMIT` in `ar/train_and_score.sh` is the only clock that counts: from launch to
-exit, imports, `torch.compile`, training and the export included. `prepare.TIME_BUDGET`
-(300 s of steps, the first 10 not counted) is upstream's timer inside editable code.
+`TIME_LIMIT` in `ar/train_and_score.sh` (380 s) is the only clock that counts: from launch
+to exit, imports, `torch.compile`, training and the export included. `prepare.TIME_BUDGET`
+(300 s of steps) is upstream's timer inside editable code. 380 s is the patched baseline's
+wall clock on an H200 (338–346 s, alone or 8 at once) plus about 10%: an agent may move its
+own timer, so the margin is training time it can claim.
 
-It is 380 s: the patched baseline's wall clock through `ar/train_and_score.sh` on an H200
-was 338–341 s alone or two at once and 343–346 s with all 8 GPUs training (about 40 s of imports,
-setup, compile and the first 10 steps, 300 s of counted steps, 2 s of export), plus about
-10%. An agent
-may move its own timer, so the margin is training time it can claim; a tighter limit
-leaves less of it but risks killing a run slowed by its neighbours.
+The baseline's val_bpb varies by about 0.16% (σ) across seeds, while the same seed repeats
+within about 0.03%. Seeds are fixed (42 and 43 unless `AR_SEED` is set), so a change that
+leaves the random stream alone (learning rates, schedules) is judged sharply, and one that
+redraws it (shapes, initialization) gets the full seed noise. Two trainings per attempt
+halve that variance; `improve: 0.1%` then passes a no-effect, stream-redrawing change about
+27% of the time and a real 0.3% gain about 89% of the time. Rescoring with fresh seeds and
+the test shard measures what is real. Seeds 42 and 43 happen to be about 0.2% lucky for the
+baseline, so a stream-changing change has to beat that too.
 
-## Noise
+## Comparing loops
 
-The patched baseline through `ar/train_and_score.sh`, scored on the validation shard (H200,
-`hotel-3`, November 18, 2026):
+`arms/` runs the same task under three loops on one 8-GPU box: AutoHelix (this
+`autohelix.yaml`), Karpathy's `program.md` loop (`arms/karpathy/`, upstream's text adapted
+to the experiment tool) and Claude Code's `/goal` (`arms/goal/`, this goal text). Each gets
+the same model (Claude Opus 5.5 on Bedrock), scorer and budget of 60 experiments of two
+trainings in 24 h, two runs each. The session loops also stop at $150 of API cost
+(`--max-budget-usd`); AutoHelix gets no `--cost`.
 
-| Runs | Seeds (`AR_SEED`) | val_bpb | Wall clock (s) |
-|---|---|---|---|
-| 8 at once, GPUs 0–7 | 1–8 | 0.992598, 0.993331, 0.994890, 0.993906, 0.993873, 0.995953, 0.993854, 0.992745 | 342.9–345.7 |
-| alone, GPU 0 | 1, 2 | 0.992566, 0.993904 | 338.2, 338.6 |
-| alone, GPU 5 | 42 | 0.993247 | 341.0 |
-| 2 at once (`AR_GPU=0,1`) | 42, 43 | 0.993258, 0.989724 (mean 0.991491) | 339.2, 339.7 |
+A pilot without isolation was audited first: agents there used GPUs outside their pair
+and one run read another's live state through `ps`. So now each run has a Docker container
+of its own (`arms/container.sh`, image `arms/container/`), and the GPUs are reached only
+through fixed entry points:
 
-- **Across seeds:** 8 at once, mean 0.993894 and σ 0.0011 (0.11%); over the 10 seeds,
-  mean 0.993413 and σ 0.0016 (0.16%), seed 43 being the low outlier.
-- **The same seed repeats closely:** 0.00003, 0.00057 and 0.00001 apart (seeds 1, 2, 42)
-  in different runs, step counts and neighbours. Training 8 at once adds about 5 s of
-  startup and no visible noise.
-- **So it depends on the change.** Seeds are fixed (42 and 43 unless `AR_SEED` is set),
-  so a change that leaves the random stream alone (learning rates, schedules) is compared
-  almost like with like: noise around 0.03% per training. A change that redraws it
-  (model shapes, initialization) gets the full seed noise: the difference of two
-  attempts has σ 0.23% with one training each and 0.16% with the mean of two.
-- **Two trainings per attempt** (`AR_GPU=J,K`), all at once, so the wall clock stays the
-  same. `improve: 0.2%` passes a no-effect change that redraws the stream about 11% of
-  the time and a real 0.3% gain about 73% of the time; same-stream changes are judged
-  far more sharply. With one training, use `improve: 0.3%`. Revisit after a pilot run.
-- The baseline's reference with seeds 42 and 43 (0.991491) is lucky by about 0.2%, seed 43
-  being a good draw. Until an accepted change redraws the stream, a stream-changing change
-  has to beat that too.
+- **The container** sees only its project, the environment (read-only), data the agent's
+  user can't open, its own processes, `HOME` and `/tmp`, and only its two GPUs.
+- **The wrappers:** the GPU device nodes are open only to root and a training user. The
+  agent's user reaches them through `sudo ar-gpu smoke | train_and_score |
+  run_experiment` (`arms/container/ar-gpu`), which take nothing from the agent but
+  `train.py` and run the base commit's scripts. `ar/smoke.sh` and `ar/train_and_score.sh`
+  call them in a container. `train_and_score` runs only for AutoHelix's harness, and
+  `run_experiment` (the other loops' tool) counts and logs every call where the agent
+  can't write, refusing past 60.
+- **The audit:** `arms/check_container.sh` checks a running container; `arms/gpu_poll.py`
+  records every GPU process and the entry point it came from; `arms/collect.py` tabulates
+  the runs (cost, val_bpb, GPU time, entry-point calls) and flags what looks wrong.
+
+### Reproducing it
+
+The host needs Docker, the NVIDIA container toolkit (`nvidia-container-cli`), Amazon Linux
+2023 (the image's base, so the host-built venvs run in it) and an instance role with
+Bedrock access (`AWS_REGION`, default `us-west-2`). The arms' scripts find everything
+relative to the folder `arms/` is in, setup's `--local` folder:
+
+```
+~/ar-local/
+├── projects/autoresearch/   # setup.py's project: every run starts from its first commit
+├── arms/                    # a copy of examples/autoresearch/arms; the runs' state goes here
+├── claude-home/.local/bin/claude   # Claude Code's native build
+├── autohelix-venv/          # a venv with AutoHelix, on a uv Python in python/ (setup's)
+└── logs/
+```
+
+```bash
+python examples/autoresearch/setup.py ~/ar-local/projects/autoresearch --local ~/ar-local --heldout ~/ar-heldout
+cp -r examples/autoresearch/arms ~/ar-local/arms
+UV_PYTHON_INSTALL_DIR=~/ar-local/python uv venv --managed-python --python 3.12 ~/ar-local/autohelix-venv
+uv pip install --python ~/ar-local/autohelix-venv/bin/python .   # AutoHelix, from the checkout
+HOME=~/ar-local/claude-home bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
+cd ~/ar-local && mkdir -p logs
+docker build --build-arg AGENT_UID=$(id -u) -t ar-arm arms/container
+bash arms/reset_projects.sh                     # six fresh projects at one base commit
+nohup python3 arms/gpu_poll.py > logs/gpu_poll.log 2>&1 &
+bash arms/autohelix/launch.sh autohelix 0,1     # autohelix run -n 60 --time 24h
+bash arms/autohelix/launch.sh autohelix-2 6,7
+nohup bash arms/queue.sh karpathy 2,3 karpathy karpathy-2 > logs/queue-karpathy.log 2>&1 &
+nohup bash arms/queue.sh goal 4,5 goal goal-2 > logs/queue-goal.log 2>&1 &
+python3 arms/collect.py                         # any time
+```
+
+`arms/check_container.sh NAME OTHER...` checks a running container from the host (what its
+agent's user can't do). The run's log keeps its refused `train_and_score` call, which
+`collect.py` flags, so check a test run's container before the real runs, for example `bash arms/reset_projects.sh ar-test`, `bash
+arms/karpathy/launch.sh test 0,1`, `bash arms/check_container.sh test autohelix karpathy
+goal`, then `docker rm -f ar-test`, `rm -rf projects/ar-test` and `docker run --rm
+--entrypoint rm -v "$PWD/arms/runs:/runs" ar-arm -rf /runs/test` (its logs are root's).
+
+Each run's logs are in `arms/runs/NAME/`; an AutoHelix run's state is in its project's
+`.autohelix/`. To score the runs once they end (`arms/rescore.py`: the best `train.py`
+in a fresh copy of the base commit, 6 seed pairs on validation, then 3 on the test shard),
+with the baseline as an AutoHelix run's iteration 0:
+
+```bash
+nohup bash arms/score_chain.sh 0,1 ~/ar-heldout/test.parquet autohelix:0 autohelix autohelix-2 \
+    karpathy karpathy-2 goal goal-2 > logs/score_chain.log 2>&1 &
+```
+
+### Results
+
+Both AutoHelix runs ended 4.83% and 4.81% below the baseline on the test shard (3 seed
+pairs; the baseline is 0.99358), `/goal` 4.28% and 4.25%, and `program.md` 2.30% and
+2.26%. The API cost (without AutoHelix's end-of-run report) was $27–36 per AutoHelix run,
+$36–37 per `/goal` run and $20–45 per `program.md` run. Test and validation scores agree
+within 0.0006 for every run, and the audit found no breaches. The [repository
+README](../../README.md#results) plots the improvement against cost
+(`assets/autoresearch_cost-light.png`). These runs' prompts said "In your session the GPUs
+are reachable only through" smoke (and the experiment tool), without "Don't run full
+trainings in your session".
+
+### Known limitations
+
+- **Time wording differs between loops.** `program.md` says "fixed time budget of 5
+  minutes", so the Karpathy runs train to 338–348 s; `/goal` and AutoHelix read the 380 s
+  limit and train to 365–378 s.
+- **Smoke frequency is uncapped.** Each `ar-gpu smoke` call is capped (killed at 180 s),
+  but not how many there are, and `train.py` may ignore smoke's 30 s `TIME_BUDGET`. One
+  AutoHelix run used 780 GPU-minutes of smoke. `collect.py` reports each run's smoke
+  GPU-minutes.
+- **Re-rolls.** AutoHelix accepts an attempt whose two trainings pass the gate; the same
+  tree submitted again gets another draw of the run-to-run noise. Two of one run's
+  acceptances came that way. Rescoring with fresh seeds measures it.
+- **IMDS is reachable from the containers.** Claude Code gets Bedrock credentials from
+  the instance role through the instance metadata service, so the agent's user, which has
+  network access, could fetch the same credentials and use whatever the role allows. No
+  agent tried. To close it, give each container a Bedrock-only credential (environment
+  variables or a mounted credentials file) and block 169.254.169.254 from containers,
+  for example with a host rule for every container (needs root on the host):
+
+  ```bash
+  sudo iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+  ```
+
+  `check_container.sh`'s `imds` check then fails, as it should.
 
 ## Files
 
@@ -151,11 +244,18 @@ autoresearch/
 │       ├── train_and_score.sh  # the observe command: sandboxed training, then the scorer
 │       ├── smoke.sh         # the agent's quick check
 │       └── static_check.py  # the gate on train.py's source
-└── tests/
-    ├── test_ar_score.py     # the scorer's tests (GPU, AR_UPSTREAM)
-    └── check_sandbox.sh     # runs sandbox_check.py in the sandbox: each restriction
+├── tests/
+│   ├── test_ar_score.py     # the scorer's tests (GPU, AR_UPSTREAM)
+│   └── check_sandbox.sh     # runs sandbox_check.py in the sandbox: each restriction
+└── arms/                    # the comparison of loops
+    ├── container.sh, container/   # a run's container: image, entrypoint, ar-gpu wrapper
+    ├── autohelix/, karpathy/, goal/   # each loop's launcher (and prompt)
+    ├── reset_projects.sh, queue.sh    # fresh projects; runs one after another
+    ├── check_container.sh, gpu_poll.py, collect.py   # the audit
+    └── rescore.py, score_chain.sh     # scoring again, on fresh seeds and the test shard
 ```
 
-`setup.py` also writes `ar/paths.sh`, the absolute paths of the environment and data.
-The ClimbMix data's license has not been checked for redistribution; setup downloads it
-from Hugging Face as upstream does.
+`tests/test_ar_score.py` needs a CUDA GPU, upstream's environment and `AR_UPSTREAM` (the
+folder with upstream's `train.py` and `prepare.py`, e.g. `~/ar-local/upstream`); elsewhere
+it isn't collected. The ClimbMix data's license has not been checked for redistribution;
+setup downloads it from Hugging Face as upstream does.

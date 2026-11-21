@@ -1,18 +1,15 @@
 #!/bin/bash
-# The AutoHelix arm: `autohelix run` in PROJECT with its autohelix.yaml.
+# The AutoHelix arm: `autohelix run` in projects/ar-NAME with its autohelix.yaml, in the
+# run's container (../container.sh).
 #
-#   bash arms/autohelix/launch.sh projects/ar-autohelix 0,1 [RUN ARGS]
+#   bash arms/autohelix/launch.sh NAME GPUS [RUN ARGS]   # e.g. autohelix 0,1; autohelix-2 6,7
 #
-# RUN ARGS default to `-n 60 --time 24h`. Start it in tmux; the run's state is in
-# PROJECT/.autohelix/ (collect.py and rescore.sh read it there).
+# RUN ARGS default to `-n 60 --time 24h`. The run's state is in projects/ar-NAME/.autohelix/
+# (collect.py and rescore.py read it there), its console output in arms/runs/NAME/console.log.
+# Stop it politely with `docker exec -u agent -w PROJECT ar-NAME autohelix stop`.
 set -euo pipefail
 ARMS=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-LOCAL=$(dirname "$ARMS")
-project=$(cd "$1" && pwd) gpus=$2
+name=$1 gpus=$2
 shift 2
 [ $# -gt 0 ] || set -- -n 60 --time 24h
-. "$LOCAL/agent-env.sh"
-export AR_GPU=$gpus ANTHROPIC_MODEL=us.anthropic.claude-opus-5-5
-export TMPDIR=$LOCAL/tmp  # for ar/smoke.sh: its sandbox fails with a scratch under /tmp
-cd "$project"
-exec "$LOCAL/autohelix-venv/bin/autohelix" run "$@"
+exec bash "$ARMS/container.sh" "$name" "$gpus" autohelix "$@"

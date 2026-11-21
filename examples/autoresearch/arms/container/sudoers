@@ -1,0 +1,3 @@
+# The agent's user may run the GPU entry point, with exactly these arguments, and nothing else.
+Defaults:agent !use_pty, !lecture
+agent ALL=(root) NOPASSWD: /usr/local/sbin/ar-gpu smoke, /usr/local/sbin/ar-gpu run_experiment, /usr/local/sbin/ar-gpu train_and_score

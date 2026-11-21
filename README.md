@@ -235,6 +235,20 @@ to GRPO, reaching **93%** in 8 iterations ([posttrain](examples/posttrain)).
   <img alt="GSM8K accuracy over 8 iterations of post-training Qwen3-4B-Base, from 41% to 93%" src="assets/progression_posttrain_gsm8k.png" width="820">
 </p>
 
+**Three loops, same budget.** On Karpathy's [autoresearch](https://github.com/karpathy/autoresearch)
+(lower val_bpb of a small GPT trained for five minutes), AutoHelix, Claude Code `/goal` and
+autoresearch's own `program.md` loop got the same model (Claude Opus 5.5), up to 60
+experiments and the same trusted scorer, two runs each, each run isolated in its own
+container. Both AutoHelix runs ended 4.8% below the baseline on a held-out shard, for
+$27–36; `/goal` 4.3% for $36–37; `program.md` 2.3% for $20–45 ([autoresearch](examples/autoresearch)).
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/autoresearch_cost-dark.png">
+    <img alt="val_bpb improvement against cumulative API cost: AutoHelix reaches 4.8%, /goal 4.3%, program.md 2.3%, two runs each" src="assets/autoresearch_cost-light.png" width="820">
+  </picture>
+</p>
+
 **In the wild.** In [Hybrid Model Factory](https://github.com/awslabs/hybrid-model-factory),
 the agent developed a state-passing sequence-parallelism implementation: ~5× faster per
 layer and 1.6× faster end-to-end training at 128K sequence length on a 27B model.
