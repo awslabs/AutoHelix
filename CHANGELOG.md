@@ -157,7 +157,10 @@ has the checklist.
 ### Changed
 
 - **A failed or timed-out agent call is a rejected iteration**, and the loop
-  goes on; three in a row stop the run.
+  goes on; three in a row stop the run. An infrastructure failure (a rejected
+  key or credentials, HTTP 401/403; for Claude Code and OpenCode also HTTP 429
+  or 5xx) stops it after the one call, with an error (exit 1) that says to fix
+  it and `autohelix resume`.
 - **Notes are saved as a version per iteration**: a note the agent deletes
   stays deleted.
 - Gate, observe and stop commands run in their own process group, killed
@@ -169,6 +172,30 @@ has the checklist.
 
 ### Fixed
 
+- An OpenCode `error` event (an invalid key) fails the call, the main agent's
+  or a judge's: OpenCode exits 0 after one, which read as a successful call
+  that changed nothing.
+- A Claude Code call whose session ended several turns (it went on after its
+  answer, when a background task ended) counts every turn's tokens and time;
+  only the last turn's were recorded.
+- A flag in `agent.extra_args` that takes several values (Claude Code's
+  `--disallowedTools X`) no longer takes the prompt: every agent command ends
+  with `--` and the prompt.
+- The main Claude Code agent gets `--disallowedTools ScheduleWakeup`: a
+  pending wakeup kept `claude -p` running for up to 15 minutes after its
+  answer. A `--disallowedTools` of your own in `extra_args` still applies.
+- A Claude Code `--settings` in `agent.extra_args` no longer drops AutoHelix's
+  time-left hooks (Claude Code reads only the last `--settings`): AutoHelix
+  merges your settings and its hooks into one file. A value that can't be read
+  is a config error.
+- A rejection because a gated metric's observe entry failed names the entry
+  and how it failed (`metric gate: score was not measured (observe bench
+  exited 2)`), and the next agent gets the tail of its output, as for a failed
+  gate command.
+- A commit subject cut at 200 characters has the agent's whole first line in
+  the commit body.
+- The prompt shows at most the last 8,000 characters of the hints, with a line
+  saying earlier ones are in `.autohelix-iteration/hints.md`.
 - Commands and agents get Ctrl-C (SIGINT) and SIGQUIT at their defaults in a
   run a script started in the background (`nohup autohelix run ... &`).
 - `agent.timeout` kills an agent whose child closed its output but kept

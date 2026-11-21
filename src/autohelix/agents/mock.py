@@ -30,6 +30,8 @@ class MockAgent:
         change_file: File to modify (default: "mock_change.txt")
         change_content: Content to write (default: "Mock iteration {iteration}")
         should_fail: If True, returns failure (default: False)
+        infrastructure: With should_fail, the failure's infrastructure reason (as a real
+            backend reports a rejected key: "authentication failed (HTTP 403)").
         notes_content: Optional notes to write
         cost_usd: Synthetic cost reported per iteration (default: none). Lets the
             mock exercise `--cost` without a real LLM.
@@ -84,7 +86,8 @@ class MockAgent:
         # Check if we should fail
         if settings.get("should_fail", False):
             event_callback(AgentEvent(kind=AgentEventKind.ERROR, text="Mock failure triggered"))
-            return AgentRunResult(success=False, exit_code=1, error="Mock failure")
+            return AgentRunResult(success=False, exit_code=1, error="Mock failure",
+                                  infrastructure=settings.get("infrastructure"))
 
         # Make a change
         change_file = settings.get("change_file", "mock_change.txt")

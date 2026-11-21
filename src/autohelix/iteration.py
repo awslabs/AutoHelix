@@ -209,6 +209,7 @@ class IterationWorkspace:
         self.base = run.expected_tip  # A
         self.tree: str | None = None  # T
         self.summary: str | None = None
+        self.summary_line: str | None = None
         self.discarded: list[str] = []  # out-of-scope names dropped at freeze (repository-relative)
         self.rejected_diff = ""  # the command showing a rejected change too large for rejected.patch
         self.copies: list[Copy] = []
@@ -336,6 +337,7 @@ class IterationWorkspace:
                 with summary.open("rb") as stream:  # the agent's file: only its first line, cleaned
                     first = stream.read(4096).decode(errors="replace").strip().split("\n")[0]
                 self.summary = clean(first, SUMMARY_LIMIT) or None
+                self.summary_line = clean(first) or None  # uncut: a cut subject's commit body
         finally:
             self._release_agent()
         self.tree, self.discarded = tree, discarded

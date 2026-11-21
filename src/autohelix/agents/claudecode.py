@@ -7,9 +7,60 @@ import json
 import os
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path
+from autohelix.agents import (
+    AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path,
+    infrastructure_reason,
+)
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_copy_env
+
+
+def split_settings(args: list[str]) -> tuple[str | None, list[str]]:
+    """`extra_args`' `--settings X` / `--settings=X` (the last one: Claude Code uses only
+    the last, as a whole) and the other arguments."""
+    value, rest, args = None, [], list(args)
+    while args:
+        arg = args.pop(0)
+        if arg == "--settings":
+            if not args:
+                from autohelix.config import ConfigError  # config imports the agents package
+
+                raise ConfigError("agent.extra_args: --settings has no value.")
+            value = args.pop(0)
+        elif arg.startswith("--settings="):
+            value = arg.removeprefix("--settings=")
+        else:
+            rest.append(arg)
+    return value, rest
+
+
+def merged_settings(value: str | None, hooks: dict[str, list], base: Path) -> dict:
+    """Claude Code settings: the user's `--settings` value (a JSON string, or a file,
+    relative to `base`), with AutoHelix's `hooks` added to the user's hook lists."""
+    from autohelix.config import ConfigError  # config imports the agents package
+
+    settings: object = {}
+    if value is not None:
+        problem = f"agent.extra_args: --settings {value} can't be read"
+        try:
+            text = value if value.lstrip().startswith("{") else (base / Path(value).expanduser()).read_text()
+            settings = json.loads(text)
+        except (OSError, UnicodeDecodeError, ValueError) as e:
+            raise ConfigError(f"{problem}: {e}.") from None
+        if not isinstance(settings, dict):
+            raise ConfigError(f"{problem}: it isn't a JSON object.")
+    merged = dict(settings)
+    own = merged.get("hooks", {})
+    if not isinstance(own, dict) or not all(isinstance(entries, list) for entries in own.values()):
+        raise ConfigError(f"agent.extra_args: --settings {value}: its hooks aren't an object of lists.")
+    if hooks:
+        merged["hooks"] = {**own, **{event: [*own.get(event, []), *entries] for event, entries in hooks.items()}}
+    return merged
+
+
+def _count(value: object) -> bool:
+    """Whether a result field is a number of tokens or milliseconds."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
 
 
 class ClaudeCodeAgent:
@@ -32,6 +83,7 @@ class ClaudeCodeAgent:
         self._incremental_input: int = 0
         self._incremental_output: int = 0
         self._result_error: str | None = None
+        self._infrastructure: str | None = None  # the last `api_error` result's (`infrastructure_reason`)
         self._final_text: str | None = None
         self._structured_output = None
         self._model: str | None = None  # the model the `init` event names
@@ -62,7 +114,7 @@ class ClaudeCodeAgent:
         if self.config.output_schema:
             cmd.extend(["--json-schema", json.dumps(self.config.output_schema)])
         if self.config.read_only:
-            cmd.append(prompt)
+            cmd.extend(["--", prompt])
             return cmd
         # If autohelix has prepared a settings file with our hooks (e.g. the
         # time_left injector), load it via --settings without touching the user
@@ -70,8 +122,12 @@ class ClaudeCodeAgent:
         autohelix_settings = os.environ.get("AUTOHELIX_CLAUDE_SETTINGS")
         if autohelix_settings and os.path.exists(autohelix_settings):
             cmd.extend(["--settings", autohelix_settings])
+        # A pending wakeup keeps `claude -p` alive after its answer (up to 15 minutes).
+        # Separate --disallowedTools flags combine: a user's own in extra_args still applies.
+        cmd.extend(["--disallowedTools", "ScheduleWakeup"])
         cmd.extend(self.config.extra_args)
-        cmd.append(prompt)
+        # `--`: a flag in extra_args that takes several values doesn't take the prompt.
+        cmd.extend(["--", prompt])
         return cmd
 
     def _emit_stream(
@@ -232,24 +288,31 @@ class ClaudeCodeAgent:
                 self._result_error = str(
                     payload.get("result") or f"Claude Code returned {subtype}"
                 )
+                # Credentials or the model service (401/403, 429/5xx), as the CLI reports
+                # them; an earlier `completed` result doesn't change it: the call failed.
+                # The last failed result decides.
+                self._infrastructure = None
+                if payload.get("terminal_reason") == "api_error":
+                    self._infrastructure = infrastructure_reason(payload.get("api_error_status"))
                 self._emit(
                     event_callback,
                     AgentEventKind.ERROR,
                     self._result_error,
                 )
-            # Extract usage/cost data
+            # A session can end several turns (a background task's continuation): each
+            # result's tokens and duration are its turn's own, summed; its total_cost_usd
+            # is the session's, so the last one counts.
             cost_usd = payload.get("total_cost_usd")
             usage = payload.get("usage", {})
             if isinstance(usage, dict):
-                if usage.get("input_tokens"):
-                    self._usage["input_tokens"] = usage["input_tokens"]
-                if usage.get("output_tokens"):
-                    self._usage["output_tokens"] = usage["output_tokens"]
+                for key in ("input_tokens", "output_tokens"):
+                    if _count(usage.get(key)) and usage[key] > 0:
+                        self._usage[key] = self._usage.get(key, 0) + usage[key]
             if cost_usd is not None:
                 self._usage["cost_usd"] = cost_usd
                 self._usage["cost_source"] = "backend"
-            if duration_ms is not None:
-                self._usage["duration_ms"] = duration_ms
+            if _count(duration_ms):
+                self._usage["duration_ms"] = self._usage.get("duration_ms", 0) + duration_ms
             cost_text = f" ${cost_usd:.4f}" if cost_usd is not None else ""
             self._emit(event_callback, AgentEventKind.RESULT, f"{subtype}{duration_text}{cost_text}")
 
@@ -289,6 +352,7 @@ class ClaudeCodeAgent:
         self._incremental_input = 0
         self._incremental_output = 0
         self._result_error = None
+        self._infrastructure = None
         self._final_text = None
         self._structured_output = None
         self._model = None
@@ -340,11 +404,13 @@ class ClaudeCodeAgent:
         elif result.exit_code != 0 and error is None:
             error = f"Claude Code exited with status {result.exit_code}"
 
+        success = result.exit_code == 0 and error is None
         return AgentRunResult(
-            success=result.exit_code == 0 and error is None,
+            success=success,
             exit_code=result.exit_code,
             error=error,
             usage={**self._usage, **call_fields("claude-code", self.executable, self._model)},
             final_text=self._final_text,
             structured_output=self._structured_output,
+            infrastructure=None if success or result.timed_out else self._infrastructure,
         )

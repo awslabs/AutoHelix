@@ -10,10 +10,17 @@ import subprocess
 import time
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path
+from autohelix.agents import (
+    AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path,
+    infrastructure_reason,
+)
 from autohelix.agents.codex_cost import TOKEN_FIELDS, estimate_cost
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_copy_env
+
+
+# Codex's only signal for a rejected key: `turn.failed`'s message text.
+_AUTH_STATUS = re.compile(r"\bunexpected status (401|403)\b")
 
 
 class CodexAgent:
@@ -30,6 +37,7 @@ class CodexAgent:
         self.executable = command_path("codex")
         self._usage: dict[str, object] = {}
         self._turn_error: str | None = None
+        self._infrastructure: str | None = None  # from `turn.failed` (`_AUTH_STATUS`)
         self._model: str | None = None  # the model Codex's output names, if it does
         self._completed = False
         self._final_text: str | None = None
@@ -116,13 +124,15 @@ class CodexAgent:
             # Codex has no flag to append to its system prompt, so the judge's
             # instructions lead the prompt.
             system = self.config.system_prompt
-            cmd.append(f"{system}\n\n{prompt}" if system else prompt)
+            cmd.extend(["--", f"{system}\n\n{prompt}" if system else prompt])
             return cmd
         time_left_hook = self._time_left_hook_path()
         if time_left_hook:
             cmd.extend(self._time_left_hook_args(time_left_hook))
         cmd.extend(self.config.extra_args)
-        cmd.append(prompt)
+        # `--` (clap): a flag in extra_args that takes several values (`--image`) doesn't
+        # take the prompt.
+        cmd.extend(["--", prompt])
         return cmd
 
     def _emit(self, event_callback: EventCallback, kind: AgentEventKind, text: str, **metadata: object) -> None:
@@ -159,6 +169,8 @@ class CodexAgent:
             else:
                 detail = "Codex turn failed"
             self._turn_error = detail
+            if match := _AUTH_STATUS.search(detail):
+                self._infrastructure = infrastructure_reason(int(match.group(1)))
             self._emit(event_callback, AgentEventKind.ERROR, detail)
             return
         if event_type == "turn.completed":
@@ -222,6 +234,7 @@ class CodexAgent:
     ) -> AgentRunResult:
         self._usage = {}
         self._turn_error = None
+        self._infrastructure = None
         self._model = None
         self._completed = False
         self._final_text = None
@@ -285,10 +298,12 @@ class CodexAgent:
                 f"Cost unavailable: {self._usage['cost_unavailable_reason']}",
             )
 
+        success = result.exit_code == 0 and error is None
         return AgentRunResult(
-            success=result.exit_code == 0 and error is None,
+            success=success,
             exit_code=result.exit_code,
             error=error,
             usage={**self._usage, **call_fields("codex", self.executable, self._model)},
             final_text=self._final_text,
+            infrastructure=None if success or result.timed_out else self._infrastructure,
         )

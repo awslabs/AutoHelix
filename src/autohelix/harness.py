@@ -3,6 +3,7 @@
 
 """Main iteration loop."""
 
+import dataclasses
 import json
 import hashlib
 import itertools
@@ -23,9 +24,9 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
-from autohelix.agents import AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import (ConfigError, MetricGate, config_changes, config_relative, find_config, load_config,
-                              not_an_experiment, run_command)
+from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, create_agent
+from autohelix.config import (Config, ConfigError, MetricGate, config_changes, config_relative, find_config,
+                              load_config, not_an_experiment, run_command)
 from autohelix.costs import summarize_costs
 from autohelix import terminal
 from autohelix.display import LiveDisplay, clean
@@ -62,6 +63,8 @@ class AutoHelixRunError(RuntimeError):
 # A failed or timed-out agent call is a rejected iteration and the loop goes on; this
 # many in a row (within a segment) stop the run: the agent is unlikely to recover.
 MAX_CONSECUTIVE_AGENT_FAILURES = 3
+# Stop reason kinds of a failing agent: the segment ends with an error (exit 1), no summary.
+AGENT_STOPS = ("agent", "infrastructure")
 
 # Iterations a segment runs when no budget flag is given (`run`/`resume` without
 # -n, --until, --cost or --time).
@@ -255,6 +258,7 @@ class Harness:
                 if is_live(planned):  # said first: the advice (`--land manual`) would lead straight to it
                     raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
                 raise RuntimeError(target_ahead_refusal(planned, data, found))
+        self._agent_settings(self.config)  # an unreadable user --settings: refused before any write
         if check_only:  # nothing written; the scope advice a run prints at its start too
             if warning := scope_warning(self.config):
                 self._warn(warning)
@@ -282,6 +286,12 @@ class Harness:
             except BaseException:
                 self._ownership.close()
                 raise
+        # The agent comes from the run's stored copy, like everything else in the run.
+        try:
+            self._user_settings, self._agent_config = self._agent_settings(self.config)
+        except BaseException:
+            self._ownership.close()
+            raise
         # Stored on resume when the segment starts (`_run`): the mode and group asked for.
         self._identity_changes: dict = {}
         if land_mode and self.run_info.get("land") != land_mode:
@@ -328,7 +338,7 @@ class Harness:
                 self._time_left_script = self._install_time_left(claude_hooks)
             self._write_claude_settings(claude_hooks)
 
-            self.agent = create_agent(self.config.agent, heartbeat_seconds=heartbeat_seconds)
+            self.agent = create_agent(self._agent_config, heartbeat_seconds=heartbeat_seconds)
             self._check_codex_time_left()
 
         except BaseException:
@@ -443,11 +453,14 @@ class Harness:
         arrow = "↓" if directions.get(name) == "lower" else "↑"
         return f"{name} {arrow}"
 
-    def _build_commit_message(self, iteration: int, metrics: dict[str, float], summary: str | None = None) -> str:
+    def _build_commit_message(self, iteration: int, metrics: dict[str, float], summary: str | None = None,
+                              full_summary: str | None = None) -> str:
         """Build a commit message with metric deltas and the agent's summary (first line
-        of its `.autohelix-iteration/commit_summary.txt`, read when the copy was frozen)."""
+        of its `.autohelix-iteration/commit_summary.txt`, read when the copy was frozen,
+        cut at SUMMARY_LIMIT; when cut, `full_summary`, the whole line, leads the body)."""
         if summary:
-            lines = [summary, "", f"AutoHelix iteration {iteration}"]
+            lines = [summary, "", *([full_summary, ""] if full_summary and full_summary != summary else []),
+                     f"AutoHelix iteration {iteration}"]
         else:
             lines = [f"AutoHelix iteration {iteration}"]
         if not metrics:
@@ -634,13 +647,33 @@ class Harness:
         except OSError:
             pass
 
+    def _agent_settings(self, config: Config) -> tuple[str | None, AgentConfig]:
+        """The user's own `--settings` taken out of a Claude Code agent's extra_args (read
+        now: a config error when it can't be), and the agent config without it. Claude Code
+        uses only the last `--settings`, so `_write_claude_settings` merges the two."""
+        if config.agent.cli.lower() != "claude-code":
+            return None, config.agent
+        from autohelix.agents.claudecode import merged_settings, split_settings
+
+        user_settings, rest = split_settings(config.agent.extra_args)
+        if user_settings is None:
+            return None, config.agent
+        merged_settings(user_settings, {}, self.project_path)
+        return user_settings, dataclasses.replace(config.agent, extra_args=rest)
+
     def _write_claude_settings(self, hooks: dict[str, list]) -> None:
-        """Write the accumulated Claude Code hooks to claude_settings.json (if any)."""
-        if not hooks:
+        """Write the accumulated Claude Code hooks, added to the user's own `--settings`
+        (taken out of extra_args), to claude_settings.json (if any): one `--settings`."""
+        if not hooks and self._user_settings is None:
             return
+        from autohelix.agents.claudecode import merged_settings
+
+        settings = merged_settings(self._user_settings, hooks, self.project_path)
         settings_path = self.paths.claude_settings
         settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps({"hooks": hooks}, indent=2))
+        settings_path.unlink(missing_ok=True)  # the user's settings: private (0600)
+        with os.fdopen(os.open(settings_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as file:
+            file.write(json.dumps(settings, indent=2))
         self._claude_settings_path = settings_path
 
     def _check_codex_time_left(self) -> None:
@@ -903,14 +936,15 @@ class Harness:
                 self._status("Agent did not complete successfully")
             detail = agent_result.error or f"agent exited with status {agent_result.exit_code}"
             # Kept for the record and the next agent (rejected.patch), never checked or
-            # accepted; the loop goes on (`_run` stops after consecutive failures).
+            # accepted; the loop goes on (`_run` stops after consecutive failures, or at
+            # once after an infrastructure failure).
             try:
                 self._freeze(workspace, checking=False)
             except Exception as e:  # noqa: BLE001 - the agent's failure is the outcome
                 self.log.warn(f"Could not keep iteration {iteration}'s tree: {e}")
             self.log.info(f"iter {iteration} agent failed — {detail}")
             return self._rejected(iteration, attempt, f"Iteration {iteration} agent failed: {detail}",
-                                  agent_error=detail)
+                                  agent_error=detail, infrastructure=agent_result.infrastructure)
 
         self._freeze(workspace)
 
@@ -932,7 +966,8 @@ class Harness:
                                  calls=[{"role": "agent", "usage": attempt.agent_usage}])
         self._describe_attempt(result, workspace)
         self._complete_record(result, attempt.started_at, attempt.monotonic, evaluation)
-        workspace.accept(self._build_commit_message(iteration, metrics, summary=workspace.summary), result)
+        workspace.accept(self._build_commit_message(iteration, metrics, summary=workspace.summary,
+                                                    full_summary=workspace.summary_line), result)
 
         # Stop commands see accepted content in a fresh copy. Errors (and interrupts,
         # handled by the caller) keep the recorded acceptance.
@@ -1162,6 +1197,9 @@ class Harness:
                 if gate.metric not in entry.metrics:
                     continue
                 if failure := self._check_metric_gate(gate, evaluation.gates[index], evaluation.metrics, records):
+                    if not result.ok:  # not measured because its entry failed: say which, and how
+                        failure = evaluation.gates[index]["reason"] = f"{failure} (observe {entry.name} {result.error})"
+                        evaluation.failure_output = _tail(result.output)
                     notes += terminal.hanging(Text("  ").append("✗ ", style="red"), failure, self.console.width)
                     self.log.info(f"iter {iteration} {failure}")
                     evaluation.rejection = failure
@@ -1449,7 +1487,8 @@ class Harness:
         condition, `autohelix stop`), "interrupted" when an interrupt in the loop
         ended it (recorded and landed; one in the baseline or the summary
         propagates). Raises `AutoHelixRunError`, already shown in the ending
-        (`autohelix_reported`), when the agent kept failing or auto landing failed.
+        (`autohelix_reported`), when the agent kept failing, failed for its infrastructure
+        (`AGENT_STOPS`) or auto landing failed.
         """
         if self._ran:
             raise RuntimeError("A Harness runs one segment; make a new one for the next (as `resume` does).")
@@ -1459,7 +1498,7 @@ class Harness:
         if self._interrupted_at is not None:
             return "interrupted"
         stop = self.run_status.data.get("stop_reason") or {}
-        failure = self._land_error or (stop.get("kind") == "agent" and stop.get("detail"))
+        failure = self._land_error or (stop.get("kind") in AGENT_STOPS and stop.get("detail"))
         if failure:
             error = AutoHelixRunError(f"auto landing failed: {failure}" if failure is self._land_error else failure)
             error.autohelix_reported = True
@@ -1516,9 +1555,9 @@ class Harness:
     def _summary(self) -> None:
         """The run summary, after the loop and its landing: how the segment ended stands
         whatever happens here (a failure or Ctrl-C ends only the summary, said in a line).
-        None after the agent failed 3 times in a row: a fourth call would most likely fail
-        too, and there is nothing new to summarise."""
-        if (self.run_status.data.get("stop_reason") or {}).get("kind") == "agent":
+        None after the agent failed 3 times in a row or an infrastructure failure: the
+        next call would most likely fail too, and there is nothing new to summarise."""
+        if (self.run_status.data.get("stop_reason") or {}).get("kind") in AGENT_STOPS:
             return
         from autohelix.report import write_report
 
@@ -1787,6 +1826,13 @@ class Harness:
 
                 if result.stop:
                     stop_reason = self._condition_stop(result.stop, iteration)
+                    break
+                if result.infrastructure:  # credentials or the model service: the next call fails too
+                    stop_reason = {"kind": "infrastructure", "iteration": iteration,
+                                   "infrastructure": result.infrastructure, "error": result.agent_error,
+                                   "detail": f"the agent call failed: {result.infrastructure}: "
+                                             f"{clean(result.agent_error, 200)}; fix it, then "
+                                             f"autohelix resume {short_id(self.paths.run_id)}"}
                     break
                 agent_failures = agent_failures + 1 if result.agent_error is not None else 0
                 if agent_failures >= MAX_CONSECUTIVE_AGENT_FAILURES:
