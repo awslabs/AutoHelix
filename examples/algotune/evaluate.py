@@ -141,11 +141,18 @@ def evaluate(task: str, solver: Path, data: Path, split: str, runs: int,
             return {"task": task, "split": split, "valid": False, "error": "no solver.py"}
         _read_only(build)
         runner = Runner(task, str(build), work, run_as)
-        problems = [pickle.dumps(_plain(r["problem"]), protocol=5) for r in records]
+        # Each instance warms up on the previous one (the first on the last). Only those two
+        # problems are pickled at a time: all at once would hold every problem in memory
+        # (aes_gcm_encryption's 100 come to ~29 GB).
+        def problem(i: int) -> bytes:
+            return pickle.dumps(_plain(records[i]["problem"]), protocol=5)
+
         results = []
+        warm = problem(len(records) - 1)
         for i, record in enumerate(records):
-            entry = _score(runner, reference_task, record["seed"], problems[i - 1], problems[i],
-                           runs, cache)
+            timed = problem(i)
+            entry = _score(runner, reference_task, record["seed"], warm, timed, runs, cache)
+            warm = timed
             results.append(entry)
             progress(i + 1, len(records), entry)
             if not entry["valid"] and split == "dev":
