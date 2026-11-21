@@ -1,0 +1,32 @@
+# 30 of AlgoTune's 154 tasks (reports/generation.json at dff9914):
+# sorted(random.Random(20261119).sample(sorted(tasks), 30))
+aes_gcm_encryption
+affine_transform_2d
+battery_scheduling
+capacitated_facility_location
+clustering_outliers
+convex_hull
+convolve2d_full_fill
+firls
+generalized_eigenvectors_real
+graph_isomorphism
+kalman_filter
+kd_tree
+kmeans
+linear_system_solver
+lti_simulation
+lyapunov_stability
+matrix_exponential_sparse
+max_common_subgraph
+min_dominating_set
+multi_dim_knapsack
+ode_hires
+qr_factorization
+robust_linear_program
+rocket_landing_optimization
+rotate_2d
+shortest_path_dijkstra
+sparse_lowest_eigenvalues_posdef
+unit_simplex_projection
+upfirdn1d
+wasserstein_dist

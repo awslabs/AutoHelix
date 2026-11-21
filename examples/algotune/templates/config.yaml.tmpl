@@ -1,30 +1,44 @@
 goal: |
-  Optimize the solve() method in solver.py for the {task_name} task.
-  The Solver class wraps {class_name} from {task_name}.py.
-  Only edit solver.py — you may import any standard library or numpy/scipy.
+  Speed up solve() in solver.py for the AlgoTune task {task_name}
 
-  Workspace tools:
-    python eval_input.py [seed]  — quick single-problem test (correctness + timing)
-    python reference.py [seed]   — show reference output for a problem
-    python profile.py [seed]     — cProfile bottleneck analysis
-    python check.py              — full correctness check (50 seeds)
-    python benchmark.py          — final speedup measurement
+  description.txt describes the task. {task_name}.py is AlgoTune's code for it: the reference
+  solve() and is_solution(), the check every output must pass. solver.py starts as the
+  reference.
 
-  Rules:
-    - Do not add memoization, persistent caches, or cross-call precomputation.
-    - Do not specialize for repeated benchmark inputs.
-    - Single-threaded CPU only: the benchmark pins the process to one core and hides the
-      GPU (matching AlgoTune's convention), so parallelism or GPU offload won't help — the
-      speedup must come from a better algorithm.
+  How it is scored (AlgoTune's rules; the evaluator's code isn't readable):
+  - Per instance, speedup = reference time / your time. The score is the mean over the
+    instances, and only if every output passes is_solution: one invalid output, no score.
+  - Each run is a fresh process. It imports solver.py (not timed; 2 minutes at most), makes
+    a Solver() and calls solve() on another instance (the warm-up), then makes a new
+    Solver() and calls solve() on this instance. Timed: that Solver(), solve() and
+    AlgoTune's materialization of the output (array-likes become numpy arrays). A call may
+    take at most 10x the reference.
+  - 2 runs per development instance, 10 per final one; the fastest counts, and every timed
+    run's output is validated.
+  - 8 CPU cores (os.cpu_count() reports the host's), no GPU, 14 GB of memory per process.
+    Thread variables (OMP_NUM_THREADS and so on) start at 1; you may raise them at run time.
+  - You see development instances. The final score uses held-out instances of the same
+    size and distribution, generated after the run, so don't special-case the ones you see.
+  - You may add Python modules, Cython or C/C++ sources with a setup.py that builds them in
+    place (`python setup.py build_ext --inplace`), or Pythran modules (`# pythran export`);
+    they are built before each evaluation.
 
-gates:
-  - python check.py
+  Check your work with `sudo -n algotune-gate --limit N` (the first N development
+  instances). After you finish, AutoHelix runs the full evaluation (`sudo -n algotune-gate`),
+  which takes about as long as the baseline's did: each gate's output ends with the time it
+  took, earlier iterations' are in .autohelix-iteration/iterations/. Run one gate at a time
+  (another waits for it); `sudo -n algotune-gate --stop` ends one you started.
 
 observe:
-  - name: bench
-    command: python benchmark.py
-    metrics:
-      speedup: higher
+  - name: dev
+    command: sudo -n algotune-gate
+    timeout: 3h
+    metrics: {{speedup: higher}}
+
+gates:
+  - metric: speedup
+    regress: 100%   # any speedup passes; no speedup (an invalid output) rejects
 
 scope:
-  editable: [solver.py]
+  editable: ["*.py", "*.pyx", "*.pxd", "*.c", "*.cpp", "*.h"]
+  frozen: [{task_name}.py]

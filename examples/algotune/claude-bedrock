@@ -1,0 +1,8 @@
+#!/bin/sh
+# Claude Code with the current Bedrock key: run.py rewrites /run/bedrock/token (mounted
+# read-only) every 30 minutes, so each start gets a fresh key ($AUTOHELIX_CLAUDE_CODE_CMD).
+token=$(cat /run/bedrock/token) || exit 1
+[ -n "$token" ] || { echo "claude-bedrock: /run/bedrock/token is empty" >&2; exit 1; }
+AWS_BEARER_TOKEN_BEDROCK=$token
+export AWS_BEARER_TOKEN_BEDROCK
+exec claude "$@"
