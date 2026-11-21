@@ -139,9 +139,26 @@ class AgentRunResult:
     usage: dict[str, Any] = field(default_factory=dict)
     final_text: str | None = None  # the agent's last message
     structured_output: Any = None  # schema-constrained answer, where the backend supports it
+    # A failed call's infrastructure failure (credentials, the model service), as a short
+    # reason (`infrastructure_reason`), from the CLI's specific signals only; None for
+    # anything else. The harness ends the segment on one.
+    infrastructure: str | None = None
 
 
 EventCallback = Callable[[AgentEvent], None]
+
+
+def infrastructure_reason(status: Any, *, service: bool = True) -> str | None:
+    """An HTTP status a CLI reported for a failed model call, as an infrastructure
+    failure: 401/403 `authentication failed (HTTP 403)`; with `service`, 429 and 5xx
+    `model service error (HTTP 503)`. None for anything else (an ordinary failure)."""
+    if not isinstance(status, int) or isinstance(status, bool):
+        return None
+    if status in (401, 403):
+        return f"authentication failed (HTTP {status})"
+    if service and (status == 429 or 500 <= status <= 599):
+        return f"model service error (HTTP {status})"
+    return None
 
 
 class AgentBackend(Protocol):

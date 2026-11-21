@@ -528,12 +528,12 @@ def test_verbose_output_prints_gate_output_and_goal_as_text(repo, capsys):
 # --- agent failures continue the loop ---------------------------------------------------
 
 
-def _failing(iterations, error="crashed"):
+def _failing(iterations, error="crashed", infrastructure=None):
     """An `act` that fails the agent call on the given iterations (after editing hello.py)."""
     def act(copy_dir, iteration):
         if iteration in iterations:
             (copy_dir / "hello.py").write_text(f"attempt {iteration}\n")
-            return AgentRunResult(success=False, exit_code=1, error=error)
+            return AgentRunResult(success=False, exit_code=1, error=error, infrastructure=infrastructure)
     return act
 
 
@@ -569,6 +569,39 @@ def test_three_agent_failures_in_a_row_stop_the_run_and_land_accepted_work(repo)
     reason = read_run_status(project, latest_run(project).run_id)["stop_reason"]
     assert reason["kind"] == "agent" and reason["detail"] == "the agent failed 3 times in a row: crashed"
     assert git(repo, "show", "main:hello.py").endswith("# iteration 1")  # iteration 1 landed
+
+
+def test_an_infrastructure_failure_ends_the_segment_at_once_and_resume_goes_on(repo):
+    """A rejected key fails every call: the first one is recorded as any failed call
+    (rejected, unchecked, its tree kept), then the segment ends with an error and lands
+    what was accepted; `resume` goes on with the next iteration number."""
+    from autohelix.run_status import read_run_status
+
+    project = _project(repo)
+    _configure(project, repo, scope={"editable": ["hello.py"]})
+    harness = Harness(project, verbose=False)  # auto landing
+    Agent(harness, _failing({2}, error="Invalid API key", infrastructure="authentication failed (HTTP 401)"))
+    with pytest.raises(AutoHelixRunError, match="authentication failed") as raised:
+        harness.run(Budget(until=10), report=False)
+    assert raised.value.autohelix_reported
+    run_id = latest_run(project).run_id
+    records = History(project, run_id).load()
+    assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, True), (2, False)]
+    failed = records[2]
+    assert failed.agent_error == "Invalid API key" and failed.infrastructure == "authentication failed (HTTP 401)"
+    assert failed.gates == [] and failed.rejected_ref
+    reason = read_run_status(project, run_id)["stop_reason"]
+    assert reason["kind"] == "infrastructure" and reason["iteration"] == 2
+    assert reason["infrastructure"] == "authentication failed (HTTP 401)" and reason["error"] == "Invalid API key"
+    assert reason["detail"] == ("the agent call failed: authentication failed (HTTP 401): Invalid API key; "
+                                f"fix it, then autohelix resume {runs.short_id(run_id)}")
+    assert git(repo, "show", "main:hello.py").endswith("# iteration 1")  # iteration 1 landed
+
+    harness = Harness(project, verbose=False, run_id=run_id)
+    agent = Agent(harness)
+    harness.run(Budget(iterations=1), report=False)
+    assert [r.iteration for r in History(project, run_id).load()] == [0, 1, 2, 3]
+    assert b"+attempt 2" in agent.seen[3]["patch"]  # the failed call's tree, for the next agent
 
 
 def test_failures_that_are_not_consecutive_dont_stop_the_run(repo):

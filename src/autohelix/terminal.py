@@ -631,7 +631,7 @@ def outcome(stop: dict | None, error: BaseException | None, interrupted_at: int 
     """The end block's first line: (word, detail, style). `Error` (red) for an
     exception, `Interrupted` (yellow) for Ctrl-C or `autohelix stop --now`, `Done` for
     a budget or a stop condition, `Stopped` for `autohelix stop` (red when the agent
-    kept failing). `stop`: the status's stop reason."""
+    kept failing or failed for its infrastructure). `stop`: the status's stop reason."""
     stop = stop or {}
     if isinstance(error, Exception):
         return "Error", clean(error) or type(error).__name__, RED
@@ -640,7 +640,7 @@ def outcome(stop: dict | None, error: BaseException | None, interrupted_at: int 
         where = f"at iteration {interrupted_at}" if interrupted_at else "at the baseline"
         return "Interrupted", f"{by}{where} · progress saved", "yellow"
     word = "Done" if stop.get("kind") in ("budget", "condition") else "Stopped"
-    return word, stop.get("detail") or "", RED if stop.get("kind") == "agent" else None
+    return word, stop.get("detail") or "", RED if stop.get("kind") in ("agent", "infrastructure") else None
 
 
 def rejection(row: Row, gates: list, directions: dict, tip: dict[str, tuple[float, int]]) -> str:

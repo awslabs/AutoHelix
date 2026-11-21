@@ -335,8 +335,20 @@ When a call fails:
   timeout), consumes its number, and the loop goes on to the next iteration;
   budgets apply as for any rejection.
 - Three failed calls in a row stop the run ("the agent failed 3 times in a
-  row: …"), with landing and the report as at any segment end, and the command
-  exits 1.
+  row: …"), with landing as at any segment end but no run summary, and the
+  command exits 1.
+- An infrastructure failure stops the run after that one call: the agent CLI
+  reported a rejected key or credentials (HTTP 401/403), or, for Claude Code
+  and OpenCode, an unavailable model service (HTTP 429 or 5xx). The call is
+  recorded as any failed call (its record's `infrastructure` says which), then
+  the run stops ("the agent call failed: authentication failed (HTTP 403): …;
+  fix it, then autohelix resume <id>"), lands as after three failures, writes
+  no run summary, and the command exits 1. `autohelix resume` goes on with the
+  next iteration. Only these signals count: Claude Code's `result` with
+  `terminal_reason: "api_error"` and its `api_error_status`, Codex's
+  `turn.failed` message "unexpected status 401" or "403", OpenCode's `error`
+  event's `statusCode`. Any other failure is an ordinary one. An OpenCode
+  `error` event fails the call even when OpenCode exits 0.
 - Setup failures before a call (copy creation, the prompt) do not consume an
   iteration and stop the run with an error.
 - Failed baseline attempts remain iteration 0 and retain their costs. A run
@@ -356,7 +368,7 @@ When a call fails:
 - **1** on an error: the config or a check refused the start (no run to
   resume, a dirty checkout, failed preflight checks, also on `resume`), the
   baseline or an iteration failed with an error, the agent failed three times in
-  a row, or auto landing failed (the iterations stay accepted on the run's ref;
+  a row or once for its infrastructure (credentials, the model service), or auto landing failed (the iterations stay accepted on the run's ref;
   `autohelix land` once the cause is fixed);
 - **130** when interrupted: Ctrl-C, SIGTERM, or `autohelix stop --now`
   (the iteration is recorded and the run lands as usual).
@@ -533,7 +545,7 @@ autohelix resume [RUN_ID | CONFIG] [-n MORE | --until N] [--cost USD] [--time DU
 
 `resume` only continues the same run: its stored config, its own tip, more
 budget. Use it after a budget ran out, an interruption (Ctrl-C, a killed
-process, a reboot, three agent failures), a stop condition or `autohelix stop`, or to change
+process, a reboot, three agent failures, a fixed infrastructure failure), a stop condition or `autohelix stop`, or to change
 `--land` or `--group`. Anything else is a new run: [`run --import
 <id>`](#continuing-from-another-run).
 
@@ -1042,6 +1054,10 @@ fields of its kind:
 - `condition`: a [stop command](config.md#stop) succeeded; `iteration`,
   `command` and `reason`;
 - `agent`: the agent failed three times in a row; `iteration` and `error`;
+- `infrastructure`: an agent call failed for its credentials or the model
+  service (see [`autohelix run`](#autohelix-run), "When a call fails");
+  `iteration`, `error` and
+  `infrastructure` (the short reason, "authentication failed (HTTP 403)");
 - `request`: [`autohelix stop`](#autohelix-stop) asked; `why` (or
   `null`), `requested_at`, and `now: true` when `--now` interrupted the
   segment (its state is then `interrupted`).

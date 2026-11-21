@@ -466,8 +466,8 @@ the new condition, start `autohelix run <config> --import <id>`.
 
 Why a run ended is shown at the end of the run, in `autohelix view` (the web page
 and `--terminal`), the run summary, and `.autohelix/runs/<id>/.internal/status.json`
-(`stop_reason`, `kind: condition`; the other kinds are `budget`, `agent` and
-`request`, from [`autohelix stop`](cli.md#autohelix-stop); see
+(`stop_reason`, `kind: condition`; the other kinds are `budget`, `agent`,
+`infrastructure` and `request`, from [`autohelix stop`](cli.md#autohelix-stop); see
 [CLI → Stop reasons](cli.md#stop-reasons)).
 
 ## Scope

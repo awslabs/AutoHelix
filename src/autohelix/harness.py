@@ -62,6 +62,8 @@ class AutoHelixRunError(RuntimeError):
 # A failed or timed-out agent call is a rejected iteration and the loop goes on; this
 # many in a row (within a segment) stop the run: the agent is unlikely to recover.
 MAX_CONSECUTIVE_AGENT_FAILURES = 3
+# Stop reason kinds of a failing agent: the segment ends with an error (exit 1), no summary.
+AGENT_STOPS = ("agent", "infrastructure")
 
 # Iterations a segment runs when no budget flag is given (`run`/`resume` without
 # -n, --until, --cost or --time).
@@ -903,14 +905,15 @@ class Harness:
                 self._status("Agent did not complete successfully")
             detail = agent_result.error or f"agent exited with status {agent_result.exit_code}"
             # Kept for the record and the next agent (rejected.patch), never checked or
-            # accepted; the loop goes on (`_run` stops after consecutive failures).
+            # accepted; the loop goes on (`_run` stops after consecutive failures, or at
+            # once after an infrastructure failure).
             try:
                 self._freeze(workspace, checking=False)
             except Exception as e:  # noqa: BLE001 - the agent's failure is the outcome
                 self.log.warn(f"Could not keep iteration {iteration}'s tree: {e}")
             self.log.info(f"iter {iteration} agent failed — {detail}")
             return self._rejected(iteration, attempt, f"Iteration {iteration} agent failed: {detail}",
-                                  agent_error=detail)
+                                  agent_error=detail, infrastructure=agent_result.infrastructure)
 
         self._freeze(workspace)
 
@@ -1449,7 +1452,8 @@ class Harness:
         condition, `autohelix stop`), "interrupted" when an interrupt in the loop
         ended it (recorded and landed; one in the baseline or the summary
         propagates). Raises `AutoHelixRunError`, already shown in the ending
-        (`autohelix_reported`), when the agent kept failing or auto landing failed.
+        (`autohelix_reported`), when the agent kept failing, failed for its infrastructure
+        (`AGENT_STOPS`) or auto landing failed.
         """
         if self._ran:
             raise RuntimeError("A Harness runs one segment; make a new one for the next (as `resume` does).")
@@ -1459,7 +1463,7 @@ class Harness:
         if self._interrupted_at is not None:
             return "interrupted"
         stop = self.run_status.data.get("stop_reason") or {}
-        failure = self._land_error or (stop.get("kind") == "agent" and stop.get("detail"))
+        failure = self._land_error or (stop.get("kind") in AGENT_STOPS and stop.get("detail"))
         if failure:
             error = AutoHelixRunError(f"auto landing failed: {failure}" if failure is self._land_error else failure)
             error.autohelix_reported = True
@@ -1516,9 +1520,9 @@ class Harness:
     def _summary(self) -> None:
         """The run summary, after the loop and its landing: how the segment ended stands
         whatever happens here (a failure or Ctrl-C ends only the summary, said in a line).
-        None after the agent failed 3 times in a row: a fourth call would most likely fail
-        too, and there is nothing new to summarise."""
-        if (self.run_status.data.get("stop_reason") or {}).get("kind") == "agent":
+        None after the agent failed 3 times in a row or an infrastructure failure: the
+        next call would most likely fail too, and there is nothing new to summarise."""
+        if (self.run_status.data.get("stop_reason") or {}).get("kind") in AGENT_STOPS:
             return
         from autohelix.report import write_report
 
@@ -1787,6 +1791,13 @@ class Harness:
 
                 if result.stop:
                     stop_reason = self._condition_stop(result.stop, iteration)
+                    break
+                if result.infrastructure:  # credentials or the model service: the next call fails too
+                    stop_reason = {"kind": "infrastructure", "iteration": iteration,
+                                   "infrastructure": result.infrastructure, "error": result.agent_error,
+                                   "detail": f"the agent call failed: {result.infrastructure}: "
+                                             f"{clean(result.agent_error, 200)}; fix it, then "
+                                             f"autohelix resume {short_id(self.paths.run_id)}"}
                     break
                 agent_failures = agent_failures + 1 if result.agent_error is not None else 0
                 if agent_failures >= MAX_CONSECUTIVE_AGENT_FAILURES:

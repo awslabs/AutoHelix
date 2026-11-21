@@ -157,7 +157,10 @@ has the checklist.
 ### Changed
 
 - **A failed or timed-out agent call is a rejected iteration**, and the loop
-  goes on; three in a row stop the run.
+  goes on; three in a row stop the run. An infrastructure failure (a rejected
+  key or credentials, HTTP 401/403; for Claude Code and OpenCode also HTTP 429
+  or 5xx) stops it after the one call, with an error (exit 1) that says to fix
+  it and `autohelix resume`.
 - **Notes are saved as a version per iteration**: a note the agent deletes
   stays deleted.
 - Gate, observe and stop commands run in their own process group, killed
@@ -169,6 +172,8 @@ has the checklist.
 
 ### Fixed
 
+- An OpenCode `error` event (an invalid key) fails the call: OpenCode exits 0
+  after one, which read as a successful call that changed nothing.
 - Commands and agents get Ctrl-C (SIGINT) and SIGQUIT at their defaults in a
   run a script started in the background (`nohup autohelix run ... &`).
 - `agent.timeout` kills an agent whose child closed its output but kept

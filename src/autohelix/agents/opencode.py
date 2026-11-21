@@ -6,7 +6,10 @@
 import json
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path
+from autohelix.agents import (
+    AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path,
+    infrastructure_reason,
+)
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_copy_env
 
@@ -24,6 +27,10 @@ class OpenCodeAgent:
         self.executable = command_path("opencode")
         self._usage: dict[str, object] = {}
         self._final_text: str | None = None
+        # The last `error` event's message and `infrastructure_reason`: OpenCode can exit 0
+        # after one (an invalid key), so an error event fails the call whatever the exit code.
+        self._error: str | None = None
+        self._infrastructure: str | None = None
 
     def _command_path(self) -> str:
         return self.executable
@@ -80,6 +87,16 @@ class OpenCodeAgent:
                 self._emit(event_callback, AgentEventKind.TOOL_RESULT, output)
             return
 
+        if event_type == "error":
+            error = payload.get("error")
+            error = error if isinstance(error, dict) else {}
+            data = error.get("data") if isinstance(error.get("data"), dict) else {}
+            message = data.get("message") or error.get("message") or error.get("name") or "OpenCode reported an error"
+            self._error = str(message)
+            self._infrastructure = infrastructure_reason(data.get("statusCode"))
+            self._emit(event_callback, AgentEventKind.ERROR, self._error)
+            return
+
         if event_type == "step_finish":
             reason = part.get("reason", "unknown")
             tokens = part.get("tokens", {})
@@ -112,6 +129,8 @@ class OpenCodeAgent:
     ) -> AgentRunResult:
         self._usage = {}
         self._final_text = None
+        self._error = None
+        self._infrastructure = None
         # Build env with remapped PYTHONPATH for the copy
         env = build_copy_env(project_path, copy_path) if project_path else None
 
@@ -143,9 +162,12 @@ class OpenCodeAgent:
                 self._usage["partial_cost_usd"] = self._usage.pop("cost_usd")
                 self._usage.pop("cost_source", None)
             self._usage["cost_unavailable_reason"] = "OpenCode timed out before reporting its whole cost."
+        elif self._error is not None:
+            error = self._error
         elif result.exit_code != 0:
             error = f"OpenCode exited with status {result.exit_code}"
+        infrastructure = self._infrastructure if self._error is not None and not result.timed_out else None
         # OpenCode's JSON events, as parsed here, name no model (unconfirmed): None.
         return AgentRunResult(success=error is None, exit_code=result.exit_code, error=error,
                               usage={**self._usage, **call_fields("opencode", self.executable, None)},
-                              final_text=self._final_text)
+                              final_text=self._final_text, infrastructure=infrastructure)

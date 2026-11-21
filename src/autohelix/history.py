@@ -59,6 +59,9 @@ class IterationResult:
     discarded_frozen: list[str] = field(default_factory=list)  # those of `discarded` that are frozen
     # Why the main agent's call failed or timed out (the attempt was rejected unchecked).
     agent_error: str | None = None
+    # The failure was the infrastructure's (`AgentRunResult.infrastructure`: credentials,
+    # the model service), which ended the segment.
+    infrastructure: str | None = None
     rejected_ref: str | None = None
 
     @property

@@ -7,7 +7,10 @@ import json
 import os
 from pathlib import Path
 
-from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path
+from autohelix.agents import (
+    AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path,
+    infrastructure_reason,
+)
 from autohelix.agents.runner import format_timeout_seconds, run_process
 from autohelix.sandbox import build_copy_env
 
@@ -32,6 +35,7 @@ class ClaudeCodeAgent:
         self._incremental_input: int = 0
         self._incremental_output: int = 0
         self._result_error: str | None = None
+        self._infrastructure: str | None = None  # the last `api_error` result's (`infrastructure_reason`)
         self._final_text: str | None = None
         self._structured_output = None
         self._model: str | None = None  # the model the `init` event names
@@ -232,6 +236,10 @@ class ClaudeCodeAgent:
                 self._result_error = str(
                     payload.get("result") or f"Claude Code returned {subtype}"
                 )
+                # Credentials or the model service (401/403, 429/5xx), as the CLI reports
+                # them; an earlier `completed` result doesn't change it: the call failed.
+                if payload.get("terminal_reason") == "api_error":
+                    self._infrastructure = infrastructure_reason(payload.get("api_error_status"))
                 self._emit(
                     event_callback,
                     AgentEventKind.ERROR,
@@ -289,6 +297,7 @@ class ClaudeCodeAgent:
         self._incremental_input = 0
         self._incremental_output = 0
         self._result_error = None
+        self._infrastructure = None
         self._final_text = None
         self._structured_output = None
         self._model = None
@@ -340,11 +349,13 @@ class ClaudeCodeAgent:
         elif result.exit_code != 0 and error is None:
             error = f"Claude Code exited with status {result.exit_code}"
 
+        success = result.exit_code == 0 and error is None
         return AgentRunResult(
-            success=result.exit_code == 0 and error is None,
+            success=success,
             exit_code=result.exit_code,
             error=error,
             usage={**self._usage, **call_fields("claude-code", self.executable, self._model)},
             final_text=self._final_text,
             structured_output=self._structured_output,
+            infrastructure=None if success or result.timed_out else self._infrastructure,
         )

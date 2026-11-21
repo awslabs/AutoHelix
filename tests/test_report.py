@@ -153,3 +153,19 @@ def test_a_failed_or_interrupted_summary_leaves_the_segment_finished(project, mo
     assert status["state"] == "finished" and status["stop_reason"]["kind"] == "budget"
     [segment] = read_segments(paths.segments)
     assert (segment["state"], segment["error"]) == ("finished", None)
+
+
+def test_no_summary_after_an_infrastructure_failure(project, monkeypatch):
+    from autohelix.history import History
+    from tests.helpers import configure
+
+    configure(project, agent={"cli": "mock", "mock": {
+        "should_fail": True, "infrastructure": "authentication failed (HTTP 403)"}})
+    calls = []
+    monkeypatch.setattr("autohelix.report.write_report", lambda *a, **k: calls.append(a) or True)
+    result = CliRunner().invoke(main, ["run", "-n", "5", "-p", str(project)])
+    assert result.exit_code == 1, result.output
+    assert "the agent call failed: authentication failed (HTTP 403): Mock failure" in " ".join(result.output.split())
+    assert calls == [] and not latest_run(project).report.exists()
+    run_id = latest_run(project).run_id
+    assert [r.iteration for r in History(project, run_id).load()] == [0, 1]  # one call, not three
