@@ -1,7 +1,7 @@
-"""Figures for the AlgoTune comparison (30 tasks): median speedup by iteration, held-out
+"""Figures for the AlgoTune comparison (30 tasks): speedup against cost through the iterations, held-out
 speedup per task, and speedup against cost.
 
-    python results/algotune/make_plot.py    # writes assets/algotune_{steps,tasks,cost}-{light,dark}.png
+    python results/algotune/make_plot.py    # writes assets/algotune_{progress,tasks,cost}-{light,dark}.png
 
 results.json holds every arm's best dev candidate per task, rescored on held-out instances,
 and every iteration's and attempt's dev speedup (see examples/algotune/README.md). Speedups are
@@ -65,71 +65,6 @@ def dev_steps(task):
     return ah, best
 
 
-def quartiles(values):
-    q = statistics.quantiles(values, n=4)
-    return q[0], statistics.median(values), q[2]
-
-
-def draw_steps(theme):
-    t = THEMES[theme]
-    blue, orange, aqua = t["series"]
-    steps = [dev_steps(task) for task in TASKS]
-    ks = list(range(6))
-    ah = [quartiles([s[0][k] for s in steps]) for k in ks]
-    best = [quartiles([s[1][k] for s in steps]) for k in ks]
-    goal_dev = statistics.median(max(subset[task]["goal"].get("dev_rescored") or 1.0, 1.0) for task in TASKS)
-    fig, ax = plt.subplots(figsize=(9, 5.4), dpi=160)
-    fig.patch.set_facecolor(t["surface"])
-    style(ax, t)
-    edges = ks + [5.5]
-    ax.fill_between(edges, [a[0] for a in ah] + [ah[-1][0]], [a[2] for a in ah] + [ah[-1][2]],
-                    step="post", color=blue, alpha=0.13, linewidth=0, zorder=1,
-                    label="AutoHelix: middle half of tasks")
-    for series, color, name, marker, z in ((best, aqua, "Best of N independent attempts", "s", 3),
-                                           (ah, blue, "AutoHelix, after N iterations", "o", 4)):
-        ys = [m[1] for m in series]
-        ax.step(edges, ys + [ys[-1]], where="post", color=color, linewidth=2.2, zorder=z, label=name)
-        ax.scatter(ks, ys, s=46, marker=marker, color=color, edgecolors=t["surface"], linewidths=1.5,
-                   zorder=z + 0.5)
-        ax.annotate(f"{ys[-1]:.0f}×", xy=(5.5, ys[-1]), xytext=(6, 0), textcoords="offset points",
-                    va="center", color=t["text"], fontsize=10.5, fontweight="bold")
-    ax.plot([0.6, 5.5], [goal_dev, goal_dev], color=orange, linewidth=2, linestyle=(0, (5, 3)), zorder=2,
-               label="Claude Code /goal, one session per task")
-    ax.annotate(f"{goal_dev:.0f}×", xy=(5.5, goal_dev), xytext=(6, 0), textcoords="offset points",
-                va="center", color=t["text"], fontsize=10.5, fontweight="bold")
-    held = [(k, statistics.median(speedup(task, f"{arm}@{k}") for task in TASKS), color, marker)
-            for arm, color, marker in (("autohelix", blue, "o"), ("best", aqua, "s")) for k in (3, 5)]
-    held.append((5.25, statistics.median(speedup(task, "goal") for task in TASKS), orange, "D"))
-    for k, y, color, marker in held:
-        ax.scatter([k + 0.18 if k in (3, 5) else k], [y], s=62, marker=marker, facecolors=t["surface"],
-                   edgecolors=color, linewidths=2, zorder=5)
-    ax.scatter([], [], s=50, marker="o", facecolors=t["surface"], edgecolors=t["muted"], linewidths=2,
-               label="held-out median (100 new instances)")
-    ax.set_yscale("log")
-    ax.set_ylim(0.8, 1500)
-    ax.yaxis.set_major_formatter(lambda v, _: f"{v:g}×")
-    ax.set_xlim(-0.3, 6.1)
-    ax.set_xticks(ks, ["baseline", "1", "2", "3", "4", "5"])
-    ax.set_xlabel("iterations (AutoHelix) or attempts (best of N)", color=t["muted"], fontsize=10)
-    ax.set_ylabel("median speedup over reference (dev)", color=t["muted"], fontsize=10)
-    handles, labels = ax.get_legend_handles_labels()
-    order = [labels.index(n) for n in ("AutoHelix, after N iterations", "AutoHelix: middle half of tasks",
-             "Best of N independent attempts", "Claude Code /goal, one session per task",
-             "held-out median (100 new instances)")]
-    ax.legend([handles[i] for i in order], [labels[i] for i in order], loc="upper left", frameon=False,
-              fontsize=9, labelcolor=t["text"])
-    fig.suptitle(f"AlgoTune, {len(TASKS)} random tasks: median speedup by iteration",
-                 x=0.07, ha="left", color=t["text"], fontsize=12.5, fontweight="bold")
-    ax.set_title("Lines: best accepted development score so far (100 dev instances). Open markers: the "
-                 "same candidates at 3 and 5,\nrescored on held-out instances generated after the runs. "
-                 "Claude Opus 5.5, 8 cores; audit adjustments applied.", loc="left", color=t["muted"],
-                 fontsize=8.8)
-    fig.tight_layout()
-    path = os.path.join(ASSETS, f"algotune_steps-{theme}.png")
-    fig.savefig(path, facecolor=t["surface"])
-    print("wrote", os.path.relpath(path))
-
-
 def cost(label):
     return sum(subset[t][label]["cost_usd"] for t in TASKS)
 
@@ -147,6 +82,77 @@ def style(ax, t):
     for side in ("left", "bottom"):
         ax.spines[side].set_color(t["grid"])
     ax.tick_params(colors=t["muted"], labelsize=9)
+
+
+def step_costs(task):
+    """Agent cost after 0..5 AutoHelix iterations and after 0..5 best-of attempts."""
+    ah = [0.0] + [sum(i["cost_usd"] for i in progress[task]["autohelix_dev"] if i["iteration"] <= k)
+                  for k in range(1, 6)]
+    best = [0.0] + [sum(a["cost_usd"] for a in progress[task]["best_dev"] if a["attempt"] <= k)
+                    for k in range(1, 6)]
+    return ah, best
+
+
+def draw_progress(theme):
+    t = THEMES[theme]
+    blue, orange, aqua = t["series"]
+    n = len(TASKS)
+    steps = [dev_steps(task) for task in TASKS]
+    costs = [step_costs(task) for task in TASKS]
+    curves = []
+    for arm, (name, color, marker, z) in enumerate((("AutoHelix: iterations 1-5", blue, "o", 4),
+                                                    ("Best of 1-5 independent attempts", aqua, "s", 3))):
+        xs = [sum(c[arm][k] for c in costs) / n for k in range(6)]
+        ys = [statistics.geometric_mean([s[arm][k] for s in steps]) for k in range(6)]
+        curves.append((name, color, marker, z, xs, ys))
+    goal_x = sum(subset[task]["goal"]["cost_usd"] for task in TASKS) / n
+    goal_dev = statistics.geometric_mean([max(subset[task]["goal"].get("dev_rescored") or 1.0, 1.0)
+                                          for task in TASKS])
+    fig, ax = plt.subplots(figsize=(9, 5.4), dpi=160)
+    fig.patch.set_facecolor(t["surface"])
+    style(ax, t)
+    for name, color, marker, z, xs, ys in curves:
+        ax.plot(xs, ys, color=color, linewidth=2.2, zorder=z, label=name, solid_capstyle="round")
+        ax.scatter(xs, ys, s=48, marker=marker, color=color, edgecolors=t["surface"], linewidths=1.5,
+                   zorder=z + 0.5)
+    ax.scatter([goal_x], [goal_dev], s=70, marker="D", color=orange, edgecolors=t["surface"],
+               linewidths=1.5, zorder=5, label="Claude Code /goal: one session per task")
+    for (name, color, marker, z, xs, ys), arm in zip(curves, ("autohelix", "best")):
+        for k in (3, 5):
+            ax.annotate(f"{'iteration' if arm == 'autohelix' else 'attempt'} {k}", xy=(xs[k], ys[k]),
+                        xytext=(7, -12 if arm == "best" else 6), textcoords="offset points",
+                        color=t["muted"], fontsize=8.5)
+    held = [(curves[0][4][k], statistics.geometric_mean([speedup(task, f"autohelix@{k}") for task in TASKS]),
+             blue, "o") for k in (3, 5)]
+    held += [(curves[1][4][k], statistics.geometric_mean([speedup(task, f"best@{k}") for task in TASKS]),
+              aqua, "s") for k in (3, 5)]
+    held.append((goal_x, statistics.geometric_mean([speedup(task, "goal") for task in TASKS]), orange, "D"))
+    for x, y, color, marker in held:
+        ax.scatter([x], [y], s=95, marker=marker, facecolors="none", edgecolors=color, linewidths=1.8,
+                   zorder=6)
+    ax.scatter([], [], s=70, marker="o", facecolors="none", edgecolors=t["muted"], linewidths=1.8,
+               label="same candidate, held-out instances")
+    for name, color, marker, z, xs, ys in curves:
+        ax.annotate(f"{ys[-1]:.0f}×", xy=(xs[-1], ys[-1]), xytext=(9, 0), textcoords="offset points",
+                    va="center", color=t["text"], fontsize=10.5, fontweight="bold")
+    ax.annotate(f"{goal_dev:.0f}×", xy=(goal_x, goal_dev), xytext=(9, 4), textcoords="offset points",
+                va="center", color=t["text"], fontsize=10.5, fontweight="bold")
+    ax.set_xlim(0, 13.5)
+    ax.set_ylim(0, 210)
+    ax.xaxis.set_major_formatter(lambda v, _: f"${v:.0f}")
+    ax.yaxis.set_major_formatter(lambda v, _: f"{v:.0f}×")
+    ax.set_xlabel("agent API cost per task (USD, mean over the 30 tasks)", color=t["muted"], fontsize=10)
+    ax.set_ylabel("speedup over reference (geometric mean)", color=t["muted"], fontsize=10)
+    ax.legend(loc="lower right", frameon=False, fontsize=9, labelcolor=t["text"])
+    fig.suptitle(f"AlgoTune, {n} random tasks: speedup against what the agent cost",
+                 x=0.07, ha="left", color=t["text"], fontsize=12.5, fontweight="bold")
+    ax.set_title("Filled: best development score so far (100 dev instances). Open: the same candidates "
+                 "rescored on 100\nheld-out instances generated after the runs. Claude Opus 5.5, 8 cores; "
+                 "audit adjustments applied; floored at 1×.", loc="left", color=t["muted"], fontsize=8.8)
+    fig.tight_layout()
+    path = os.path.join(ASSETS, f"algotune_progress-{theme}.png")
+    fig.savefig(path, facecolor=t["surface"])
+    print("wrote", os.path.relpath(path))
 
 
 def draw_tasks(theme):
@@ -239,6 +245,6 @@ for _, labels, _ in ARMS:
         print(f"{label:12s} ${cost(label):7.2f}  geomean {geomean(label):6.1f}x  "
               f"median {statistics.median(speedup(t, label) for t in TASKS):6.1f}x")
 for theme in THEMES:
-    draw_steps(theme)
+    draw_progress(theme)
     draw_tasks(theme)
     draw_cost(theme)
