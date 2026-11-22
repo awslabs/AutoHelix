@@ -207,6 +207,30 @@ README](../../README.md#results) plots the improvement against cost
 are reachable only through" smoke (and the experiment tool), without "Don't run full
 trainings in your session".
 
+### Cost and tokens
+
+The loops cost about the same, but spend it differently (API tokens per run, from the
+session logs; Opus 5.5 prices per million: cache read $0.20, cache write $5, output $20):
+
+| Run | Model calls | Context per call (median) | Input | of it cache reads | Cache writes | Output | Reads / writes / output |
+|---|---|---|---|---|---|---|---|
+| AutoHelix | 919 | 36k | 33.9M | 31.8M | 2.1M | 0.51M | $6 / $10 / $10 |
+| AutoHelix | 1,357 | 39k | 52.7M | 50.0M | 2.7M | 0.60M | $10 / $14 / $12 |
+| `/goal` | 102 | 111k | 11.8M | 5.1M | 6.7M | 0.12M | $1 / $34 / $2 |
+| `/goal` | 114 | 108k | 13.4M | 7.0M | 6.3M | 0.12M | $1 / $32 / $2 |
+| `program.md` | 203 | 126k | 27.4M | 19.8M | 7.7M | 0.14M | $4 / $38 / $3 |
+| `program.md` | 73 | 69k | 5.2M | 1.5M | 3.7M | 0.05M | $0.3 / $18 / $1 |
+
+- **AutoHelix:** each iteration is a fresh session, so contexts stay small (peaks of 43–49k
+  per session, 70k at most). Its calls come seconds apart, so most input is cache reads.
+  It reads 3–4× more input and writes 4–5× more output than `/goal`: it spends
+  its budget on reading the code, notes and history, and on planning.
+- **The session loops:** one conversation grows to 100–250k tokens. An experiment (6–7
+  minutes) outlasts the 5-minute prompt cache, so each wake-up rewrites the whole context
+  at cache-write price: 85–94% of their cost. The two `program.md` runs, with the same
+  setup, cost $20 and $45. The $45 one ran experiments in the background, woke about three
+  times per experiment and reprinted its results table each time.
+
 ### Known limitations
 
 - **Time wording differs between loops.** `program.md` says "fixed time budget of 5
