@@ -1,0 +1,63 @@
+# Karpathy's autoresearch: lower val_bpb of a small GPT trained from scratch on one GPU.
+# The agent edits train.py; training runs sandboxed under a hard wall-clock limit and a
+# trusted scorer computes val_bpb from the exported model. Set up with setup.py; start
+# with `AR_GPU=J,K autohelix run -n 60 --time 24h` (J, K: this run's two GPUs, one
+# training on each). See README.md.
+
+goal: |
+  Lower val_bpb of a small GPT trained from scratch on one GPU in a fixed time.
+
+  This is Karpathy's autoresearch (upstream 228791f): train.py trains a GPT on ClimbMix
+  text with the tokenizer prepare.py built. Edit only train.py: model, optimizer,
+  schedule, batch, size, anything in it. Changes to other files are discarded.
+
+  How an attempt is scored, after your session (ar/train_and_score.sh):
+  - train.py runs twice at once, with different seeds (AR_SEED), each in a sandbox
+    (ar/sandbox.sh): one H200, no network, the training shards and tokenizer read-only
+    where prepare.py looks for them (not the validation shard), writes only to its
+    working folder. Don't install packages.
+  - It is killed 380 s after launch (TIME_LIMIT in ar/train_and_score.sh), with imports,
+    torch.compile and the export included. prepare.TIME_BUDGET (300 s of steps) is a
+    timer in your own code: when to stop is yours, but a run still going at the limit
+    scores nothing.
+  - Before exiting, train.py calls ar.export.save(model): forward(idx) -> logits, int64
+    [16, 2048] -> float [16, 2048, 8192], under bf16 autocast, exported with
+    torch.export (fixed shapes; aten ops and FA3's forward only). See ar/export.py.
+  - ar/score.py, in a separate process, computes the cross-entropy from those logits on
+    the validation shard (shard_06542, about 21M tokens, as upstream's evaluate_bpb)
+    and rejects models that aren't causal or mix batch rows. val_bpb is the mean of the
+    two. The loss train.py computes is your own business.
+  - Gate: ar/static_check.py (under 64 KB, allowed imports, no large literals). The
+    final result is scored again on a held-out test shard after the run.
+
+  Check a change with `bash ar/smoke.sh` (about 70 s, same sandbox and GPU, 30 s of
+  steps): it says whether train.py runs and exports, nothing about val_bpb. Don't run
+  full trainings in your session (in the comparison's containers the GPUs are reachable
+  only through smoke.sh). Past iterations' observe output has each attempt's training log
+  and score.
+  All else equal, prefer the simpler change.
+
+agent:
+  cli: claude-code
+  model: us.anthropic.claude-opus-5-5   # Bedrock id; pin a model for a result
+  effort: high
+  timeout: 30m
+
+scope:
+  editable: [train.py]      # everything else, ar/ and prepare.py included, is frozen
+
+gates:
+  - . ar/paths.sh && "$AR_PYTHON" -I ar/static_check.py train.py
+  - metric: val_bpb
+    improve: 0.1%           # README, "Time limit and noise"; 0.15% with one GPU
+
+observe:
+  - name: train
+    command: bash ar/train_and_score.sh
+    timeout: 15m
+    metrics:
+      val_bpb: lower
+      wall_s: lower
+      peak_vram_gb: lower
+      train_steps: higher
+      scoring_s: lower

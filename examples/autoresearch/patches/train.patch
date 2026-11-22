@@ -1,0 +1,45 @@
+--- a/train.py
++++ b/train.py
+@@ -23,7 +23,8 @@
+ repo = "varunneal/flash-attention-3" if cap == (9, 0) else "kernels-community/flash-attn3"
+ fa3 = get_kernel(repo).flash_attn_interface
+ 
+-from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb
++from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader
++import ar.export
+ 
+ # ---------------------------------------------------------------------------
+ # GPT Model
+@@ -455,8 +456,9 @@
+ # ---------------------------------------------------------------------------
+ 
+ t_start = time.time()
+-torch.manual_seed(42)
+-torch.cuda.manual_seed(42)
++SEED = int(os.environ.get("AR_SEED", "42"))
++torch.manual_seed(SEED)
++torch.cuda.manual_seed(SEED)
+ torch.set_float32_matmul_precision("high")
+ device = torch.device("cuda")
+ autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
+@@ -607,10 +609,8 @@
+ 
+ total_tokens = step * TOTAL_BATCH_SIZE
+ 
+-# Final eval
+-model.eval()
+-with autocast_ctx:
+-    val_bpb = evaluate_bpb(model, tokenizer, DEVICE_BATCH_SIZE)
++# Export for the trusted scorer (ar/score.py computes val_bpb)
++ar.export.save(model)
+ 
+ # Final summary
+ t_end = time.time()
+@@ -619,7 +619,6 @@
+ peak_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+ 
+ print("---")
+-print(f"val_bpb:          {val_bpb:.6f}")
+ print(f"training_seconds: {total_training_time:.1f}")
+ print(f"total_seconds:    {t_end - t_start:.1f}")
+ print(f"peak_vram_mb:     {peak_vram_mb:.1f}")

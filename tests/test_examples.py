@@ -14,7 +14,9 @@ from autohelix.config import experiment_config, find_config, load_config, projec
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 # Scaffolded by their own setup.py from templates/config.yaml.tmpl, no config in the folder.
 SCAFFOLDED = {"algotune", "kernelbench"}
-BUNDLED = sorted(d.name for d in EXAMPLES.iterdir() if d.is_dir() and d.name not in SCAFFOLDED
+# Laid out by its own setup.py from template/, which holds the experiment.
+TEMPLATED = {"autoresearch"}
+BUNDLED = sorted(d.name for d in EXAMPLES.iterdir() if d.is_dir() and d.name not in SCAFFOLDED | TEMPLATED
                  and not d.name.startswith((".", "__")))
 
 
@@ -38,6 +40,14 @@ def test_scaffolded_examples_ship_a_config_template_not_a_config(example):
     folder = EXAMPLES / example
     assert project_configs(folder) == []
     assert (folder / "templates" / "config.yaml.tmpl").is_file()
+
+
+@pytest.mark.parametrize("example", sorted(TEMPLATED))
+def test_templated_examples_hold_one_experiment_in_their_template(example):
+    folder = EXAMPLES / example
+    assert project_configs(folder) == []
+    assert project_configs(folder / "template") == [experiment_config(example)]
+    assert load_config(folder / "template").validate() == []
 
 
 def test_setup_example_lists_and_sets_up_the_bundled_examples(tmp_path):

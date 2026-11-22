@@ -8,6 +8,7 @@ the only one).
 
 AlgoTune and KernelBench tasks have their own `setup.py` under `examples/` —
 they fetch tasks from upstream suites rather than ship ready-to-run projects.
+So does autoresearch, which fetches upstream and its data onto a GPU box.
 
 Usage:
     python examples/setup_example.py sorting
@@ -100,6 +101,7 @@ def print_list() -> None:
     }
     entries["algotune"] = "fetch tasks with examples/algotune/setup.py"
     entries["kernelbench"] = "download tasks with examples/kernelbench/setup.py"
+    entries["autoresearch"] = "set up on a GPU box with examples/autoresearch/setup.py"
 
     width = max(len(name) for name in entries)
     print("Examples:")
@@ -120,6 +122,7 @@ Examples:
 Fetched task suites have their own setup.py:
   python examples/algotune/setup.py eigenvalues_real
   python examples/kernelbench/setup.py L1_1_Square_matrix_multiplication
+  python examples/autoresearch/setup.py ~/ar-project --local ~/ar-local
 """,
     )
     parser.add_argument("name", nargs="?", help="Example name (e.g. sorting)")
