@@ -1,0 +1,20 @@
+# AlgoTune evaluator image: AlgoTune at a pinned commit, its locked environment (read-only
+# for everyone but root), an unprivileged `solver` user for solver code, and the scripts here.
+#   docker build -f Dockerfile.evaluator -t algotune-eval .
+#   docker run --rm --network none --cpuset-cpus 0-7 -v SOLVER:/solver:ro -v DATA:/data:ro \
+#     algotune-eval --task svm --solver /solver --data /data --split test --run-as solver
+FROM python:3.12-slim
+
+ARG ALGOTUNE_COMMIT=dff9914c10800c7a031c9e8c3d4d1c8cd1b38906
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential git \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/oripress/AlgoTune.git /opt/algotune \
+    && git -C /opt/algotune checkout --quiet "$ALGOTUNE_COMMIT"
+# Their lock pins pot==1.0.0, which isn't on PyPI.
+RUN sed 's/^pot==1.0.0$/pot==0.9.7.post1/' /opt/algotune/requirements.txt > /opt/requirements.lock \
+    && pip install --no-cache-dir -r /opt/requirements.lock \
+    && pip install --no-cache-dir --no-deps -e /opt/algotune
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin solver
+COPY evaluate.py make_data.py /opt/algotune-eval/
+ENV ALGOTUNE_ROOT=/opt/algotune ALGOTUNE_HF_DISABLE=1 PYTHONDONTWRITEBYTECODE=1
+ENTRYPOINT ["python", "-I", "/opt/algotune-eval/evaluate.py"]

@@ -1,0 +1,3426 @@
+{
+ "description": "AlgoTune, 30 tasks sampled with seed 20261119 (subset-30.txt), and pilot 2 (4 tasks). Held-out test: 100 instances generated after the runs, 10 runs each. Speedups below 1x or invalid count 1x.",
+ "model": "us.anthropic.claude-opus-5-5",
+ "sets": {
+  "subset": {
+   "labels": [
+    "autohelix@3",
+    "autohelix@5",
+    "best@3",
+    "best@5",
+    "goal"
+   ],
+   "tasks": {
+    "aes_gcm_encryption": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 4.845,
+      "dev_in_run": 2.76269,
+      "test": 2.723882806209447,
+      "test_median_instance": 2.7218921252659056,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 8.7324,
+      "dev_in_run": 5.76942,
+      "test": 5.61340944531314,
+      "test_median_instance": 5.609690001194142,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": null,
+      "cost_usd": 4.7942,
+      "dev_in_run": null,
+      "test": null
+     },
+     "best@5": {
+      "candidate": null,
+      "cost_usd": 5.8565,
+      "dev_in_run": null,
+      "test": null
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 2.443,
+      "dev_in_run": null,
+      "test": 36.911388817904054,
+      "test_median_instance": 36.73686298878686,
+      "capped_instances": 0,
+      "dev_rescored": 36.27693704697658
+     }
+    },
+    "affine_transform_2d": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 6.6303,
+      "dev_in_run": 57.6025,
+      "test": 60.13687395715125,
+      "test_median_instance": 58.44897238488457,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 15.7244,
+      "dev_in_run": 60.4324,
+      "test": 62.60377613623563,
+      "test_median_instance": 61.502365648502014,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 4.6597,
+      "dev_in_run": 59.0933,
+      "test": 62.58930757988124,
+      "test_median_instance": 61.3142980974288,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a1",
+      "cost_usd": 9.6425,
+      "dev_in_run": 59.0933,
+      "test": 62.58930757988124,
+      "test_median_instance": 61.3142980974288,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 2.7525,
+      "dev_in_run": null,
+      "test": 53.54667616758586,
+      "test_median_instance": 52.34546340696863,
+      "capped_instances": 0,
+      "dev_rescored": 51.9868950132434
+     }
+    },
+    "battery_scheduling": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 2.5997,
+      "dev_in_run": 1514.18,
+      "test": 1696.7598226930004,
+      "test_median_instance": 1710.2533809911743,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 5.9701,
+      "dev_in_run": 2399.16,
+      "test": 2770.3012825437877,
+      "test_median_instance": 2766.8525977466393,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 2.1448,
+      "dev_in_run": 365.639,
+      "test": 428.18163773089054,
+      "test_median_instance": 428.9561601152293,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a1",
+      "cost_usd": 3.9142,
+      "dev_in_run": 365.639,
+      "test": 428.18163773089054,
+      "test_median_instance": 428.9561601152293,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 1.5795,
+      "dev_in_run": null,
+      "test": 330.01900863898663,
+      "test_median_instance": 327.6507807040066,
+      "capped_instances": 0,
+      "dev_rescored": 322.54865487603627
+     }
+    },
+    "capacitated_facility_location": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 1.6303,
+      "dev_in_run": 2506.19,
+      "test": 2618.1273755806396,
+      "test_median_instance": 2109.398552921858,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 2.5307,
+      "dev_in_run": 3069.81,
+      "test": 2682.444157673581,
+      "test_median_instance": 2191.964678385387,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 1.6273,
+      "dev_in_run": 412.626,
+      "test": 421.27817507199734,
+      "test_median_instance": 339.6084664535176,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a1",
+      "cost_usd": 2.4021,
+      "dev_in_run": 412.626,
+      "test": 421.27817507199734,
+      "test_median_instance": 339.6084664535176,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 0.7846,
+      "dev_in_run": null,
+      "test": 638.7204043574036,
+      "test_median_instance": 517.8341235226646,
+      "capped_instances": 0,
+      "dev_rescored": 621.9336890173563
+     }
+    },
+    "clustering_outliers": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 16.0902,
+      "dev_in_run": 80.9377,
+      "test": 81.06494262981234,
+      "test_median_instance": 81.41012659805494,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 33.7447,
+      "dev_in_run": 159.798,
+      "test": 156.12564182265803,
+      "test_median_instance": 156.9396325533183,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a2",
+      "cost_usd": 9.3411,
+      "dev_in_run": 48.0436,
+      "test": 46.42320182621164,
+      "test_median_instance": 46.83606992025628,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a4",
+      "cost_usd": 18.8171,
+      "dev_in_run": 66.5326,
+      "test": 64.54755086579661,
+      "test_median_instance": 65.1883446537434,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 3.3315,
+      "dev_in_run": null,
+      "test": 38.45436671589445,
+      "test_median_instance": 38.399932083031274,
+      "capped_instances": 0,
+      "dev_rescored": 39.15014172983997
+     }
+    },
+    "convex_hull": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 2.1418,
+      "dev_in_run": 121.878,
+      "test": 138.35035579851757,
+      "test_median_instance": 139.30975293510815,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 5.4844,
+      "dev_in_run": 156.426,
+      "test": 167.6265561237746,
+      "test_median_instance": 169.03849112576398,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a3",
+      "cost_usd": 3.4326,
+      "dev_in_run": 116.844,
+      "test": 119.70898729927363,
+      "test_median_instance": 120.58424546138755,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a3",
+      "cost_usd": 4.8859,
+      "dev_in_run": 116.844,
+      "test": 119.70898729927363,
+      "test_median_instance": 120.58424546138755,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 2.3919,
+      "dev_in_run": null,
+      "test": 88.76263521664404,
+      "test_median_instance": 89.74604900426226,
+      "capped_instances": 0,
+      "dev_rescored": 87.23695516790565
+     }
+    },
+    "convolve2d_full_fill": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 4.9328,
+      "dev_in_run": 1225.65,
+      "test": 1341.2296218144,
+      "test_median_instance": 1338.5668797243366,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 9.749,
+      "dev_in_run": 1704.26,
+      "test": 2060.7049648373563,
+      "test_median_instance": 2053.445194051482,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 0.5523,
+      "dev_in_run": 161.552,
+      "test": 163.206350344219,
+      "test_median_instance": 163.17125784943426,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a5",
+      "cost_usd": 0.9822,
+      "dev_in_run": 167.724,
+      "test": 169.90732932561087,
+      "test_median_instance": 170.9223923390056,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 0.6794,
+      "dev_in_run": null,
+      "test": 214.9288757000082,
+      "test_median_instance": 213.289520855736,
+      "capped_instances": 0,
+      "dev_rescored": 207.24298028928183
+     }
+    },
+    "firls": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 31.2974,
+      "dev_in_run": 7.5649,
+      "test": 7.624697610130551,
+      "test_median_instance": 7.631910817202858,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 42.4752,
+      "dev_in_run": 8.75364,
+      "test": 8.835464227224772,
+      "test_median_instance": 8.839218188094826,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 42.3456,
+      "dev_in_run": 6.51651,
+      "test": 6.472891477380212,
+      "test_median_instance": 6.4760063871198685,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a1",
+      "cost_usd": 50.7337,
+      "dev_in_run": 6.51651,
+      "test": 6.472891477380212,
+      "test_median_instance": 6.4760063871198685,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 10.6669,
+      "dev_in_run": null,
+      "test": 4.965307533779606,
+      "test_median_instance": 4.954040787575401,
+      "capped_instances": 0,
+      "dev_rescored": 4.88703951179816
+     }
+    },
+    "generalized_eigenvectors_real": {
+     "autohelix@3": {
+      "candidate": "autohelix-it2",
+      "cost_usd": 2.471,
+      "dev_in_run": 1.97134,
+      "test": 1.9564303584479419,
+      "test_median_instance": 1.954760870825036,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it4",
+      "cost_usd": 4.0199,
+      "dev_in_run": 2.02621,
+      "test": 2.0548408414573114,
+      "test_median_instance": 2.052475402370633,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a3",
+      "cost_usd": 3.4403,
+      "dev_in_run": 2.01064,
+      "test": 2.0143927206064185,
+      "test_median_instance": 2.0112261759229826,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a3",
+      "cost_usd": 5.1022,
+      "dev_in_run": 2.01064,
+      "test": 2.0143927206064185,
+      "test_median_instance": 2.0112261759229826,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 4.7858,
+      "dev_in_run": null,
+      "test": 1.8942350274496182,
+      "test_median_instance": 1.8936269120745248,
+      "capped_instances": 0,
+      "dev_rescored": 1.8546522136641983
+     }
+    },
+    "graph_isomorphism": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 0.9435,
+      "dev_in_run": 615.63,
+      "test": 625.5288828100713,
+      "test_median_instance": 620.0581431621305,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 3.2237,
+      "dev_in_run": 1152.17,
+      "test": 1195.371097579906,
+      "test_median_instance": 1188.2554640405447,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a3",
+      "cost_usd": 1.0702,
+      "dev_in_run": 239.072,
+      "test": 270.55604537310074,
+      "test_median_instance": 268.1633397453329,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a3",
+      "cost_usd": 1.8574,
+      "dev_in_run": 239.072,
+      "test": 270.55604537310074,
+      "test_median_instance": 268.1633397453329,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 2.2946,
+      "dev_in_run": null,
+      "test": 843.3607533521306,
+      "test_median_instance": 834.0193332579518,
+      "capped_instances": 0,
+      "dev_rescored": 789.1514462031239
+     }
+    },
+    "kalman_filter": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 9.3348,
+      "dev_in_run": 739.914,
+      "test": 758.7024119707281,
+      "test_median_instance": 762.4062152652743,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 14.321,
+      "dev_in_run": 818.526,
+      "test": 877.8080221952393,
+      "test_median_instance": 891.545487648366,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a3",
+      "cost_usd": 6.7682,
+      "dev_in_run": 497.117,
+      "test": 505.2949465783652,
+      "test_median_instance": 511.3407573839962,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a3",
+      "cost_usd": 8.6616,
+      "dev_in_run": 497.117,
+      "test": 505.2949465783652,
+      "test_median_instance": 511.3407573839962,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 9.5488,
+      "dev_in_run": null,
+      "test": 839.9658913670319,
+      "test_median_instance": 847.0442543707501,
+      "capped_instances": 0,
+      "dev_rescored": 894.2486657141067
+     }
+    },
+    "kd_tree": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 12.4157,
+      "dev_in_run": 18.8752,
+      "test": 19.962228010629428,
+      "test_median_instance": 20.05388689167948,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 16.0369,
+      "dev_in_run": 20.607,
+      "test": 21.133565151869078,
+      "test_median_instance": 21.258900728664727,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 2.4142,
+      "dev_in_run": 10.708,
+      "test": 11.008463628907041,
+      "test_median_instance": 11.076748504534375,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a4",
+      "cost_usd": 5.4327,
+      "dev_in_run": 11.8169,
+      "test": 12.012264664285299,
+      "test_median_instance": 12.062922297911683,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 1.5114,
+      "dev_in_run": null,
+      "test": 12.692434904768676,
+      "test_median_instance": 12.765139466586572,
+      "capped_instances": 0,
+      "dev_rescored": 12.710367656148634
+     }
+    },
+    "kmeans": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 6.8519,
+      "dev_in_run": 257.589,
+      "test": 272.2192497863037,
+      "test_median_instance": 267.20333934683697,
+      "capped_instances": 0,
+      "audit": "task artifact: as autohelix@5"
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 14.0891,
+      "dev_in_run": 474.641,
+      "test": 491.8457497577997,
+      "test_median_instance": 485.799971292456,
+      "capped_instances": 0,
+      "audit": "task artifact: few over-relaxed passes relying on the single-blob generator and 5% loss slack"
+     },
+     "best@3": {
+      "candidate": "best-a3",
+      "cost_usd": 3.0951,
+      "dev_in_run": 59.3235,
+      "test": 65.60064106658646,
+      "test_median_instance": 65.03648209875759,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a4",
+      "cost_usd": 4.4977,
+      "dev_in_run": 85.6546,
+      "test": 88.94933768163426,
+      "test_median_instance": 87.86670696924503,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 7.4468,
+      "dev_in_run": null,
+      "test": 511.5071491651586,
+      "test_median_instance": 504.60691682496156,
+      "capped_instances": 0,
+      "dev_rescored": 493.34342973896605,
+      "audit": "task artifact: as autohelix@5"
+     }
+    },
+    "linear_system_solver": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 3.3299,
+      "dev_in_run": 11.6799,
+      "test": 11.94838242138097,
+      "test_median_instance": 11.957863578142415,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 8.622,
+      "dev_in_run": 11.9086,
+      "test": 12.129421834609648,
+      "test_median_instance": 12.15029433985837,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a3",
+      "cost_usd": 2.3694,
+      "dev_in_run": 9.05042,
+      "test": 8.8556837923235,
+      "test_median_instance": 8.911855304787588,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a3",
+      "cost_usd": 4.2308,
+      "dev_in_run": 9.05042,
+      "test": 8.8556837923235,
+      "test_median_instance": 8.911855304787588,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 2.213,
+      "dev_in_run": null,
+      "test": 7.220428970142836,
+      "test_median_instance": 7.310214642743327,
+      "capped_instances": 0,
+      "dev_rescored": 7.225723199692387
+     }
+    },
+    "lti_simulation": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 2.3715,
+      "dev_in_run": 14.5094,
+      "test": 14.073667739056356,
+      "test_median_instance": 14.0732377352724,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it4",
+      "cost_usd": 2.6414,
+      "dev_in_run": 14.5785,
+      "test": 13.859610267558292,
+      "test_median_instance": 13.819495344297902,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a3",
+      "cost_usd": 1.5248,
+      "dev_in_run": 12.8486,
+      "test": 12.935772848124552,
+      "test_median_instance": 12.936443843862868,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a3",
+      "cost_usd": 2.519,
+      "dev_in_run": 12.8486,
+      "test": 12.935772848124552,
+      "test_median_instance": 12.936443843862868,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 1.0008,
+      "dev_in_run": null,
+      "test": 12.988129502188583,
+      "test_median_instance": 12.989035139767203,
+      "capped_instances": 0,
+      "dev_rescored": 13.32465338072663
+     }
+    },
+    "lyapunov_stability": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 0.9677,
+      "dev_in_run": 921.935,
+      "test": 1191.647481635153,
+      "test_median_instance": 931.7670184632711,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 3.0016,
+      "dev_in_run": 1614.17,
+      "test": 1966.1698855202935,
+      "test_median_instance": 1524.5353793692384,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 0.7997,
+      "dev_in_run": 176.16,
+      "test": 193.9511737003158,
+      "test_median_instance": 208.71559604352763,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a5",
+      "cost_usd": 1.2739,
+      "dev_in_run": 222.486,
+      "test": 225.44254236411194,
+      "test_median_instance": 256.70818816230855,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 0.6668,
+      "dev_in_run": null,
+      "test": 398.6696735816163,
+      "test_median_instance": 390.3660357170644,
+      "capped_instances": 0,
+      "dev_rescored": 364.1276829520757
+     }
+    },
+    "matrix_exponential_sparse": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 22.5369,
+      "dev_in_run": 16.1795,
+      "test": 16.26807944836196,
+      "test_median_instance": 16.26133964653029,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 33.1123,
+      "dev_in_run": 31.2543,
+      "test": 31.888953717705213,
+      "test_median_instance": 32.05859757758718,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a2",
+      "cost_usd": 10.4365,
+      "dev_in_run": 8.16123,
+      "test": 8.272937914403029,
+      "test_median_instance": 8.297080848016815,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a5",
+      "cost_usd": 23.2392,
+      "dev_in_run": 11.2316,
+      "test": 11.335664480171296,
+      "test_median_instance": 11.36613270143716,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 8.5743,
+      "dev_in_run": null,
+      "test": 12.86243751243707,
+      "test_median_instance": 12.946477443974361,
+      "capped_instances": 0,
+      "dev_rescored": 12.82850693856417
+     }
+    },
+    "max_common_subgraph": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 0.9502,
+      "dev_in_run": 949.204,
+      "test": 850.4853107526144,
+      "test_median_instance": 834.6131941240114,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 1.2409,
+      "dev_in_run": 949.204,
+      "test": 850.4853107526144,
+      "test_median_instance": 834.6131941240114,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 0.7188,
+      "dev_in_run": 795.505,
+      "test": 722.7851233378327,
+      "test_median_instance": 722.6620394394224,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a5",
+      "cost_usd": 1.2662,
+      "dev_in_run": 898.171,
+      "test": 806.5787714299015,
+      "test_median_instance": 790.4983984768447,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 0.3886,
+      "dev_in_run": null,
+      "test": 882.3020912899495,
+      "test_median_instance": 859.8431683387919,
+      "capped_instances": 0,
+      "dev_rescored": 899.299021895495
+     }
+    },
+    "min_dominating_set": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 4.0852,
+      "dev_in_run": 692.515,
+      "test": 459.3982477850755,
+      "test_median_instance": 436.87282222983004,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 7.6721,
+      "dev_in_run": 827.101,
+      "test": 550.5434666726599,
+      "test_median_instance": 514.2897926813204,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 0.8378,
+      "dev_in_run": 393.858,
+      "test": 240.8968250524412,
+      "test_median_instance": 225.73855356425727,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a1",
+      "cost_usd": 1.3859,
+      "dev_in_run": 393.858,
+      "test": 240.8968250524412,
+      "test_median_instance": 225.73855356425727,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 2.6481,
+      "dev_in_run": null,
+      "test": 409.0620271218217,
+      "test_median_instance": 399.77595079301034,
+      "capped_instances": 0,
+      "dev_rescored": 601.0516000574789
+     }
+    },
+    "multi_dim_knapsack": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 2.6656,
+      "dev_in_run": 442.025,
+      "test": 340.8669330128676,
+      "test_median_instance": 333.7093654147636,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it4",
+      "cost_usd": 5.3403,
+      "dev_in_run": 496.936,
+      "test": 427.6521232518219,
+      "test_median_instance": 430.6851205488121,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 1.3149,
+      "dev_in_run": 436.855,
+      "test": 292.7496670113868,
+      "test_median_instance": 279.96502369022056,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a1",
+      "cost_usd": 2.0899,
+      "dev_in_run": 436.855,
+      "test": 292.7496670113868,
+      "test_median_instance": 279.96502369022056,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 0.3509,
+      "dev_in_run": null,
+      "test": 208.51331352618166,
+      "test_median_instance": 202.18097416306676,
+      "capped_instances": 0,
+      "dev_rescored": 252.95516643844377
+     }
+    },
+    "ode_hires": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 8.215,
+      "dev_in_run": 2128.88,
+      "test": 3004.782579095181,
+      "test_median_instance": 1562.213413225758,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 17.7412,
+      "dev_in_run": 3142.88,
+      "test": 4044.2598600569804,
+      "test_median_instance": 2073.206966527339,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a2",
+      "cost_usd": 2.7609,
+      "dev_in_run": 928.005,
+      "test": 1099.2851424719336,
+      "test_median_instance": 817.663211728042,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a2",
+      "cost_usd": 3.9427,
+      "dev_in_run": 928.005,
+      "test": 1099.2851424719336,
+      "test_median_instance": 817.663211728042,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 4.3909,
+      "dev_in_run": null,
+      "test": 910.2472312004046,
+      "test_median_instance": 565.5688634226697,
+      "capped_instances": 0,
+      "dev_rescored": 725.5965853980258
+     }
+    },
+    "qr_factorization": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 2.6228,
+      "dev_in_run": 109.068,
+      "test": 109.46077685610442,
+      "test_median_instance": 110.41261711842048,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 5.8774,
+      "dev_in_run": 117.138,
+      "test": 118.70938306367987,
+      "test_median_instance": 119.06775351760109,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 2.5464,
+      "dev_in_run": 53.4922,
+      "test": 52.912716673204926,
+      "test_median_instance": 52.86734385440427,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a1",
+      "cost_usd": 3.0415,
+      "dev_in_run": 53.4922,
+      "test": 52.912716673204926,
+      "test_median_instance": 52.86734385440427,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 4.8702,
+      "dev_in_run": null,
+      "test": 62.030456631892754,
+      "test_median_instance": 62.69904803744887,
+      "capped_instances": 0,
+      "dev_rescored": 61.364947409729794
+     }
+    },
+    "robust_linear_program": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 21.9282,
+      "dev_in_run": 1173.84,
+      "test": 1430.5585145952673,
+      "test_median_instance": 1424.8220424957194,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 28.1801,
+      "dev_in_run": 1359.15,
+      "test": 1576.3567760216224,
+      "test_median_instance": 1583.7605211486166,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 12.8544,
+      "dev_in_run": 328.607,
+      "test": 336.46416800187967,
+      "test_median_instance": 346.6662733834637,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a1",
+      "cost_usd": 18.6857,
+      "dev_in_run": 328.607,
+      "test": 336.46416800187967,
+      "test_median_instance": 346.6662733834637,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 7.6104,
+      "dev_in_run": null,
+      "test": 375.43696412192367,
+      "test_median_instance": 381.3360271911797,
+      "capped_instances": 0,
+      "dev_rescored": 375.5136390242165
+     }
+    },
+    "rocket_landing_optimization": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 4.3165,
+      "dev_in_run": 1274.73,
+      "test": 1308.0135206195673,
+      "test_median_instance": 1308.6557134795198,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 5.5569,
+      "dev_in_run": 1303.48,
+      "test": 1267.7591428729409,
+      "test_median_instance": 1290.5612638598755,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a2",
+      "cost_usd": 8.8988,
+      "dev_in_run": 595.004,
+      "test": 604.3948501906561,
+      "test_median_instance": 636.0263951804914,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a2",
+      "cost_usd": 12.4284,
+      "dev_in_run": 595.004,
+      "test": 604.3948501906561,
+      "test_median_instance": 636.0263951804914,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 4.9421,
+      "dev_in_run": null,
+      "test": 645.3975753080474,
+      "test_median_instance": 643.3764246861833,
+      "capped_instances": 0,
+      "dev_rescored": 648.2467711098211
+     }
+    },
+    "rotate_2d": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 5.448,
+      "dev_in_run": 58.7946,
+      "test": 61.305295526014206,
+      "test_median_instance": 59.837724322450285,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 15.4516,
+      "dev_in_run": 73.0499,
+      "test": 79.04510902102801,
+      "test_median_instance": 78.6428597739878,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a2",
+      "cost_usd": 3.9962,
+      "dev_in_run": 45.9178,
+      "test": 47.80722154290678,
+      "test_median_instance": 47.83635763949058,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a4",
+      "cost_usd": 7.1256,
+      "dev_in_run": 52.7582,
+      "test": 55.009772100796596,
+      "test_median_instance": 54.16703804158938,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 8.042,
+      "dev_in_run": null,
+      "test": 52.84447998941782,
+      "test_median_instance": 52.721730872497574,
+      "capped_instances": 0,
+      "dev_rescored": 50.88546519362967
+     }
+    },
+    "shortest_path_dijkstra": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 2.5306,
+      "dev_in_run": 3.09866,
+      "test": 3.1603844169218784,
+      "test_median_instance": 3.1586066152551835,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 3.5776,
+      "dev_in_run": 3.16328,
+      "test": 3.2243256440025485,
+      "test_median_instance": 3.224968163043575,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 3.0534,
+      "dev_in_run": 38.4051,
+      "test": 63.149469398735356,
+      "test_median_instance": 47.322800407765186,
+      "capped_instances": 6,
+      "audit": "evaluator artifact: numpy-scalar output defeats the echo subtraction; plain-call cost <= 3x",
+      "test_adjusted": 3.0
+     },
+     "best@5": {
+      "candidate": "best-a5",
+      "cost_usd": 6.3505,
+      "dev_in_run": 78.5641,
+      "test": 122.2323222801745,
+      "test_median_instance": 69.58662437901764,
+      "capped_instances": 33,
+      "audit": "evaluator artifact: numpy-scalar output defeats the echo subtraction; plain-call cost <= 3x",
+      "test_adjusted": 3.0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 0.9769,
+      "dev_in_run": null,
+      "test": 3.03807336246238,
+      "test_median_instance": 3.039746193049292,
+      "capped_instances": 0,
+      "dev_rescored": 3.1044136891595073
+     }
+    },
+    "sparse_lowest_eigenvalues_posdef": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 20.2336,
+      "dev_in_run": 40.4563,
+      "test": 39.89999186519942,
+      "test_median_instance": 39.65732235202693,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 25.985,
+      "dev_in_run": 53.6919,
+      "test": 52.161090184416224,
+      "test_median_instance": 51.2642017099504,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 8.7508,
+      "dev_in_run": 7.07768,
+      "test": 7.118290945980373,
+      "test_median_instance": 7.142439169291572,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a4",
+      "cost_usd": 12.1569,
+      "dev_in_run": 7.75551,
+      "test": 7.637805033328984,
+      "test_median_instance": 7.6198987446256,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 9.4827,
+      "dev_in_run": null,
+      "test": 12.508927542250905,
+      "test_median_instance": 12.402808646862082,
+      "capped_instances": 0,
+      "dev_rescored": 12.641478852911057
+     }
+    },
+    "unit_simplex_projection": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 2.2331,
+      "dev_in_run": 156.1,
+      "test": 181.12874025907018,
+      "test_median_instance": 177.36621358725074,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 3.152,
+      "dev_in_run": 157.774,
+      "test": 176.42207342859254,
+      "test_median_instance": 175.7296481533055,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a3",
+      "cost_usd": 1.9041,
+      "dev_in_run": 70.8673,
+      "test": 76.59963587060403,
+      "test_median_instance": 76.09216568062644,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a5",
+      "cost_usd": 3.3729,
+      "dev_in_run": 71.6704,
+      "test": 80.50203592534321,
+      "test_median_instance": 80.14548582466213,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 0.8389,
+      "dev_in_run": null,
+      "test": 142.8392246095546,
+      "test_median_instance": 142.142921329202,
+      "capped_instances": 0,
+      "dev_rescored": 134.15656191218108
+     }
+    },
+    "upfirdn1d": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 3.0818,
+      "dev_in_run": 105.308,
+      "test": 120.20135424467942,
+      "test_median_instance": 114.22312371477076,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it4",
+      "cost_usd": 4.2361,
+      "dev_in_run": 106.935,
+      "test": 123.33279528460953,
+      "test_median_instance": 120.01411653025923,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a2",
+      "cost_usd": 1.9407,
+      "dev_in_run": 44.9372,
+      "test": 53.27723086040026,
+      "test_median_instance": 47.963838989420125,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a4",
+      "cost_usd": 3.2025,
+      "dev_in_run": 57.1554,
+      "test": 66.31748116608873,
+      "test_median_instance": 55.03023243071597,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 1.3731,
+      "dev_in_run": null,
+      "test": 29.20060782641927,
+      "test_median_instance": 28.810945429884693,
+      "capped_instances": 0,
+      "dev_rescored": 26.867099695689614
+     }
+    },
+    "wasserstein_dist": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 1.6075,
+      "dev_in_run": 769.95,
+      "test": 802.5752801602226,
+      "test_median_instance": 785.0440328348109,
+      "capped_instances": 0
+     },
+     "autohelix@5": {
+      "candidate": "autohelix-it5",
+      "cost_usd": 4.1272,
+      "dev_in_run": 2345.77,
+      "test": 2817.3665663601914,
+      "test_median_instance": 2900.8562923937925,
+      "capped_instances": 0,
+      "audit": "task artifact: fits the generator's Gaussian mixture from 48 samples; iteration 3 is the genuine figure",
+      "test_adjusted": 802.5752801602226
+     },
+     "best@3": {
+      "candidate": "best-a3",
+      "cost_usd": 1.3838,
+      "dev_in_run": 598.773,
+      "test": 622.4672865627006,
+      "test_median_instance": 622.385226476543,
+      "capped_instances": 0
+     },
+     "best@5": {
+      "candidate": "best-a4",
+      "cost_usd": 2.1579,
+      "dev_in_run": 609.157,
+      "test": 601.5547697313817,
+      "test_median_instance": 600.8743308835351,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 0.4426,
+      "dev_in_run": null,
+      "test": 173.4450235068348,
+      "test_median_instance": 173.42257096463288,
+      "capped_instances": 0,
+      "dev_rescored": 173.29094307781978
+     }
+    }
+   },
+   "dev_progress": {
+    "aes_gcm_encryption": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": false,
+       "speedup": null,
+       "cost_usd": 0.4744
+      },
+      {
+       "iteration": 2,
+       "accepted": false,
+       "speedup": null,
+       "cost_usd": 0.378
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 2.76269,
+       "cost_usd": 3.9926
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 5.74961,
+       "cost_usd": 3.3461
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 5.76942,
+       "cost_usd": 0.5413
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": null,
+       "cost_usd": 0.5273
+      },
+      {
+       "attempt": 2,
+       "speedup": null,
+       "cost_usd": 3.6811
+      },
+      {
+       "attempt": 3,
+       "speedup": null,
+       "cost_usd": 0.5858
+      },
+      {
+       "attempt": 4,
+       "speedup": null,
+       "cost_usd": 0.5944
+      },
+      {
+       "attempt": 5,
+       "speedup": null,
+       "cost_usd": 0.4679
+      }
+     ]
+    },
+    "affine_transform_2d": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 6.26442,
+       "cost_usd": 0.2295
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 52.385,
+       "cost_usd": 2.841
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 57.6025,
+       "cost_usd": 3.5599
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 59.4069,
+       "cost_usd": 7.871
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 60.4324,
+       "cost_usd": 1.2231
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 59.0933,
+       "cost_usd": 1.4704
+      },
+      {
+       "attempt": 2,
+       "speedup": 25.6098,
+       "cost_usd": 0.7442
+      },
+      {
+       "attempt": 3,
+       "speedup": 42.0082,
+       "cost_usd": 2.4451
+      },
+      {
+       "attempt": 4,
+       "speedup": 55.0353,
+       "cost_usd": 2.7319
+      },
+      {
+       "attempt": 5,
+       "speedup": 25.9603,
+       "cost_usd": 2.251
+      }
+     ]
+    },
+    "battery_scheduling": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 331.011,
+       "cost_usd": 0.6721
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 975.768,
+       "cost_usd": 0.908
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 1514.18,
+       "cost_usd": 1.0197
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 1688.96,
+       "cost_usd": 1.1701
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 2399.16,
+       "cost_usd": 2.2003
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 365.639,
+       "cost_usd": 1.421
+      },
+      {
+       "attempt": 2,
+       "speedup": 68.0471,
+       "cost_usd": 0.4168
+      },
+      {
+       "attempt": 3,
+       "speedup": 58.7047,
+       "cost_usd": 0.307
+      },
+      {
+       "attempt": 4,
+       "speedup": 88.9372,
+       "cost_usd": 0.9061
+      },
+      {
+       "attempt": 5,
+       "speedup": 303.425,
+       "cost_usd": 0.8633
+      }
+     ]
+    },
+    "capacitated_facility_location": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 233.989,
+       "cost_usd": 0.5795
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 1624.7,
+       "cost_usd": 0.4951
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 2506.19,
+       "cost_usd": 0.5557
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 2525.52,
+       "cost_usd": 0.3714
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 3069.81,
+       "cost_usd": 0.529
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 412.626,
+       "cost_usd": 0.7026
+      },
+      {
+       "attempt": 2,
+       "speedup": 288.693,
+       "cost_usd": 0.4936
+      },
+      {
+       "attempt": 3,
+       "speedup": 321.556,
+       "cost_usd": 0.4311
+      },
+      {
+       "attempt": 4,
+       "speedup": 342.292,
+       "cost_usd": 0.2265
+      },
+      {
+       "attempt": 5,
+       "speedup": 368.422,
+       "cost_usd": 0.5482
+      }
+     ]
+    },
+    "clustering_outliers": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 14.977,
+       "cost_usd": 0.9735
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 72.9887,
+       "cost_usd": 7.9794
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 80.9377,
+       "cost_usd": 7.1373
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 123.662,
+       "cost_usd": 7.941
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 159.798,
+       "cost_usd": 9.7135
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 33.5167,
+       "cost_usd": 5.6526
+      },
+      {
+       "attempt": 2,
+       "speedup": 48.0436,
+       "cost_usd": 1.8208
+      },
+      {
+       "attempt": 3,
+       "speedup": 19.9846,
+       "cost_usd": 1.8677
+      },
+      {
+       "attempt": 4,
+       "speedup": 66.5326,
+       "cost_usd": 5.866
+      },
+      {
+       "attempt": 5,
+       "speedup": 28.6547,
+       "cost_usd": 3.61
+      }
+     ]
+    },
+    "convex_hull": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 82.1934,
+       "cost_usd": 0.6849
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 108.627,
+       "cost_usd": 0.7708
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 121.878,
+       "cost_usd": 0.6861
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 149.054,
+       "cost_usd": 1.5869
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 156.426,
+       "cost_usd": 1.7556
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 55.9869,
+       "cost_usd": 1.4035
+      },
+      {
+       "attempt": 2,
+       "speedup": 67.026,
+       "cost_usd": 0.6092
+      },
+      {
+       "attempt": 3,
+       "speedup": 116.844,
+       "cost_usd": 1.4199
+      },
+      {
+       "attempt": 4,
+       "speedup": 40.9067,
+       "cost_usd": 0.4759
+      },
+      {
+       "attempt": 5,
+       "speedup": 74.3419,
+       "cost_usd": 0.9773
+      }
+     ]
+    },
+    "convolve2d_full_fill": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 178.777,
+       "cost_usd": 0.1637
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 325.934,
+       "cost_usd": 1.262
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 1225.65,
+       "cost_usd": 3.5071
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 1576.28,
+       "cost_usd": 1.4253
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 1704.26,
+       "cost_usd": 3.3909
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 161.552,
+       "cost_usd": 0.2154
+      },
+      {
+       "attempt": 2,
+       "speedup": 143.112,
+       "cost_usd": 0.1774
+      },
+      {
+       "attempt": 3,
+       "speedup": 134.317,
+       "cost_usd": 0.1595
+      },
+      {
+       "attempt": 4,
+       "speedup": 155.676,
+       "cost_usd": 0.2636
+      },
+      {
+       "attempt": 5,
+       "speedup": 167.724,
+       "cost_usd": 0.1663
+      }
+     ]
+    },
+    "firls": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 4.00659,
+       "cost_usd": 4.8553
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 5.55532,
+       "cost_usd": 7.3712
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 7.5649,
+       "cost_usd": 19.0708
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 8.47506,
+       "cost_usd": 6.7426
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 8.75364,
+       "cost_usd": 4.4352
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 6.51651,
+       "cost_usd": 24.3167
+      },
+      {
+       "attempt": 2,
+       "speedup": 5.58643,
+       "cost_usd": 9.8674
+      },
+      {
+       "attempt": 3,
+       "speedup": 4.39768,
+       "cost_usd": 8.1615
+      },
+      {
+       "attempt": 4,
+       "speedup": 1.07447,
+       "cost_usd": 0.4809
+      },
+      {
+       "attempt": 5,
+       "speedup": 5.47192,
+       "cost_usd": 7.9072
+      }
+     ]
+    },
+    "generalized_eigenvectors_real": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 1.92807,
+       "cost_usd": 1.4892
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 1.97134,
+       "cost_usd": 0.4832
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 1.95557,
+       "cost_usd": 0.4986
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 2.02621,
+       "cost_usd": 0.5407
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 2.02602,
+       "cost_usd": 1.0081
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 1.99886,
+       "cost_usd": 0.7799
+      },
+      {
+       "attempt": 2,
+       "speedup": 1.79758,
+       "cost_usd": 1.0075
+      },
+      {
+       "attempt": 3,
+       "speedup": 2.01064,
+       "cost_usd": 1.6529
+      },
+      {
+       "attempt": 4,
+       "speedup": 1.62253,
+       "cost_usd": 0.8362
+      },
+      {
+       "attempt": 5,
+       "speedup": 1.99439,
+       "cost_usd": 0.8257
+      }
+     ]
+    },
+    "graph_isomorphism": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 90.9897,
+       "cost_usd": 0.2503
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 376.82,
+       "cost_usd": 0.3556
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 615.63,
+       "cost_usd": 0.3376
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 883.556,
+       "cost_usd": 0.9173
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 1152.17,
+       "cost_usd": 1.363
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 149.628,
+       "cost_usd": 0.3236
+      },
+      {
+       "attempt": 2,
+       "speedup": 86.5062,
+       "cost_usd": 0.2885
+      },
+      {
+       "attempt": 3,
+       "speedup": 239.072,
+       "cost_usd": 0.4581
+      },
+      {
+       "attempt": 4,
+       "speedup": 153.82,
+       "cost_usd": 0.4185
+      },
+      {
+       "attempt": 5,
+       "speedup": 192.707,
+       "cost_usd": 0.3687
+      }
+     ]
+    },
+    "kalman_filter": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 144.836,
+       "cost_usd": 0.7191
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 456.215,
+       "cost_usd": 4.103
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 739.914,
+       "cost_usd": 4.5127
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 755.565,
+       "cost_usd": 3.3224
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 818.526,
+       "cost_usd": 1.6638
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 107.565,
+       "cost_usd": 0.4763
+      },
+      {
+       "attempt": 2,
+       "speedup": 327.792,
+       "cost_usd": 2.7738
+      },
+      {
+       "attempt": 3,
+       "speedup": 497.117,
+       "cost_usd": 3.5181
+      },
+      {
+       "attempt": 4,
+       "speedup": 120.425,
+       "cost_usd": 0.624
+      },
+      {
+       "attempt": 5,
+       "speedup": 200.881,
+       "cost_usd": 1.2693
+      }
+     ]
+    },
+    "kd_tree": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 11.1984,
+       "cost_usd": 0.6519
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 18.1693,
+       "cost_usd": 6.4012
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 18.8752,
+       "cost_usd": 5.3626
+      },
+      {
+       "iteration": 4,
+       "accepted": false,
+       "speedup": null,
+       "cost_usd": 3.2412
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 20.607,
+       "cost_usd": 0.38
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 10.708,
+       "cost_usd": 0.9067
+      },
+      {
+       "attempt": 2,
+       "speedup": 4.83546,
+       "cost_usd": 0.5821
+      },
+      {
+       "attempt": 3,
+       "speedup": 10.653,
+       "cost_usd": 0.9254
+      },
+      {
+       "attempt": 4,
+       "speedup": 11.8169,
+       "cost_usd": 1.9475
+      },
+      {
+       "attempt": 5,
+       "speedup": 10.3352,
+       "cost_usd": 1.071
+      }
+     ]
+    },
+    "kmeans": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 62.7975,
+       "cost_usd": 0.9222
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 154.907,
+       "cost_usd": 2.321
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 257.589,
+       "cost_usd": 3.6087
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 389.939,
+       "cost_usd": 3.5967
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 474.641,
+       "cost_usd": 3.6405
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 34.2042,
+       "cost_usd": 0.4632
+      },
+      {
+       "attempt": 2,
+       "speedup": 34.8739,
+       "cost_usd": 0.4806
+      },
+      {
+       "attempt": 3,
+       "speedup": 59.3235,
+       "cost_usd": 2.1513
+      },
+      {
+       "attempt": 4,
+       "speedup": 85.6546,
+       "cost_usd": 0.6058
+      },
+      {
+       "attempt": 5,
+       "speedup": 16.9555,
+       "cost_usd": 0.7969
+      }
+     ]
+    },
+    "linear_system_solver": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 6.14004,
+       "cost_usd": 0.9626
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 10.7954,
+       "cost_usd": 0.651
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 11.6799,
+       "cost_usd": 1.7163
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 11.8997,
+       "cost_usd": 3.2677
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 11.9086,
+       "cost_usd": 2.0244
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 5.06215,
+       "cost_usd": 1.0292
+      },
+      {
+       "attempt": 2,
+       "speedup": 2.83535,
+       "cost_usd": 0.6122
+      },
+      {
+       "attempt": 3,
+       "speedup": 9.05042,
+       "cost_usd": 0.728
+      },
+      {
+       "attempt": 4,
+       "speedup": 6.52389,
+       "cost_usd": 1.1334
+      },
+      {
+       "attempt": 5,
+       "speedup": 5.28239,
+       "cost_usd": 0.728
+      }
+     ]
+    },
+    "lti_simulation": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 12.9769,
+       "cost_usd": 0.7413
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 13.8573,
+       "cost_usd": 0.6813
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 14.5094,
+       "cost_usd": 0.9489
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 14.5785,
+       "cost_usd": 0.1768
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 14.2365,
+       "cost_usd": 0.093
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 12.6893,
+       "cost_usd": 0.4568
+      },
+      {
+       "attempt": 2,
+       "speedup": 12.6159,
+       "cost_usd": 0.5389
+      },
+      {
+       "attempt": 3,
+       "speedup": 12.8486,
+       "cost_usd": 0.5292
+      },
+      {
+       "attempt": 4,
+       "speedup": 12.467,
+       "cost_usd": 0.5039
+      },
+      {
+       "attempt": 5,
+       "speedup": 12.6623,
+       "cost_usd": 0.4903
+      }
+     ]
+    },
+    "lyapunov_stability": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 144.874,
+       "cost_usd": 0.3983
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 379.687,
+       "cost_usd": 0.2828
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 921.935,
+       "cost_usd": 0.2866
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 1469.58,
+       "cost_usd": 0.8773
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 1614.17,
+       "cost_usd": 1.1566
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 176.16,
+       "cost_usd": 0.2337
+      },
+      {
+       "attempt": 2,
+       "speedup": 174.926,
+       "cost_usd": 0.2513
+      },
+      {
+       "attempt": 3,
+       "speedup": 161.694,
+       "cost_usd": 0.3147
+      },
+      {
+       "attempt": 4,
+       "speedup": 159.795,
+       "cost_usd": 0.1932
+      },
+      {
+       "attempt": 5,
+       "speedup": 222.486,
+       "cost_usd": 0.2811
+      }
+     ]
+    },
+    "matrix_exponential_sparse": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 9.51187,
+       "cost_usd": 9.2355
+      },
+      {
+       "iteration": 2,
+       "accepted": false,
+       "speedup": null,
+       "cost_usd": 13.0073
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 16.1795,
+       "cost_usd": 0.2941
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 26.0639,
+       "cost_usd": 6.8062
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 31.2543,
+       "cost_usd": 3.7692
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 4.38857,
+       "cost_usd": 1.8388
+      },
+      {
+       "attempt": 2,
+       "speedup": 8.16123,
+       "cost_usd": 6.7084
+      },
+      {
+       "attempt": 3,
+       "speedup": 4.21536,
+       "cost_usd": 1.8893
+      },
+      {
+       "attempt": 4,
+       "speedup": 9.125,
+       "cost_usd": 6.255
+      },
+      {
+       "attempt": 5,
+       "speedup": 11.2316,
+       "cost_usd": 6.5477
+      }
+     ]
+    },
+    "max_common_subgraph": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 665.179,
+       "cost_usd": 0.3012
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 837.603,
+       "cost_usd": 0.3702
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 949.204,
+       "cost_usd": 0.2789
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 874.421,
+       "cost_usd": 0.2064
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 883.683,
+       "cost_usd": 0.0842
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 795.505,
+       "cost_usd": 0.3023
+      },
+      {
+       "attempt": 2,
+       "speedup": 99.099,
+       "cost_usd": 0.1821
+      },
+      {
+       "attempt": 3,
+       "speedup": 645.102,
+       "cost_usd": 0.2344
+      },
+      {
+       "attempt": 4,
+       "speedup": 840.833,
+       "cost_usd": 0.2682
+      },
+      {
+       "attempt": 5,
+       "speedup": 898.171,
+       "cost_usd": 0.2792
+      }
+     ]
+    },
+    "min_dominating_set": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 257.865,
+       "cost_usd": 0.4219
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 515.428,
+       "cost_usd": 1.644
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 692.515,
+       "cost_usd": 2.0192
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 796.335,
+       "cost_usd": 2.3263
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 827.101,
+       "cost_usd": 1.2605
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 393.858,
+       "cost_usd": 0.234
+      },
+      {
+       "attempt": 2,
+       "speedup": 346.698,
+       "cost_usd": 0.3013
+      },
+      {
+       "attempt": 3,
+       "speedup": 323.504,
+       "cost_usd": 0.3024
+      },
+      {
+       "attempt": 4,
+       "speedup": 248.476,
+       "cost_usd": 0.2516
+      },
+      {
+       "attempt": 5,
+       "speedup": 296.642,
+       "cost_usd": 0.2965
+      }
+     ]
+    },
+    "multi_dim_knapsack": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 166.933,
+       "cost_usd": 0.7424
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 391.61,
+       "cost_usd": 0.5818
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 442.025,
+       "cost_usd": 1.3414
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 496.936,
+       "cost_usd": 1.5182
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 490.239,
+       "cost_usd": 1.1566
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 436.855,
+       "cost_usd": 0.6412
+      },
+      {
+       "attempt": 2,
+       "speedup": 80.0289,
+       "cost_usd": 0.2742
+      },
+      {
+       "attempt": 3,
+       "speedup": 142.422,
+       "cost_usd": 0.3994
+      },
+      {
+       "attempt": 4,
+       "speedup": 113.219,
+       "cost_usd": 0.2687
+      },
+      {
+       "attempt": 5,
+       "speedup": 105.929,
+       "cost_usd": 0.5063
+      }
+     ]
+    },
+    "ode_hires": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 351.718,
+       "cost_usd": 0.6182
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 2041.71,
+       "cost_usd": 6.1334
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 2128.88,
+       "cost_usd": 1.4634
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 2458.06,
+       "cost_usd": 8.8385
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 3142.88,
+       "cost_usd": 0.6877
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 374.739,
+       "cost_usd": 0.5473
+      },
+      {
+       "attempt": 2,
+       "speedup": 928.005,
+       "cost_usd": 1.6602
+      },
+      {
+       "attempt": 3,
+       "speedup": 290.475,
+       "cost_usd": 0.5534
+      },
+      {
+       "attempt": 4,
+       "speedup": 255.472,
+       "cost_usd": 0.4759
+      },
+      {
+       "attempt": 5,
+       "speedup": 224.42,
+       "cost_usd": 0.706
+      }
+     ]
+    },
+    "qr_factorization": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 51.6773,
+       "cost_usd": 0.3211
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 84.2092,
+       "cost_usd": 1.404
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 109.068,
+       "cost_usd": 0.8978
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 114.467,
+       "cost_usd": 1.1491
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 117.138,
+       "cost_usd": 2.1055
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 53.4922,
+       "cost_usd": 0.2679
+      },
+      {
+       "attempt": 2,
+       "speedup": 10.9107,
+       "cost_usd": 0.2532
+      },
+      {
+       "attempt": 3,
+       "speedup": 31.057,
+       "cost_usd": 2.0253
+      },
+      {
+       "attempt": 4,
+       "speedup": 53.444,
+       "cost_usd": 0.1811
+      },
+      {
+       "attempt": 5,
+       "speedup": 10.9623,
+       "cost_usd": 0.314
+      }
+     ]
+    },
+    "robust_linear_program": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 398.308,
+       "cost_usd": 6.1651
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 753.682,
+       "cost_usd": 3.2808
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 1173.84,
+       "cost_usd": 12.4824
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 1331.91,
+       "cost_usd": 5.4971
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 1359.15,
+       "cost_usd": 0.7548
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 328.607,
+       "cost_usd": 9.9899
+      },
+      {
+       "attempt": 2,
+       "speedup": 60.5726,
+       "cost_usd": 1.3888
+      },
+      {
+       "attempt": 3,
+       "speedup": 56.2965,
+       "cost_usd": 1.4756
+      },
+      {
+       "attempt": 4,
+       "speedup": 76.4138,
+       "cost_usd": 3.6607
+      },
+      {
+       "attempt": 5,
+       "speedup": 62.2015,
+       "cost_usd": 2.1707
+      }
+     ]
+    },
+    "rocket_landing_optimization": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 339.33,
+       "cost_usd": 2.3787
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 1182.72,
+       "cost_usd": 1.1965
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 1274.73,
+       "cost_usd": 0.7412
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 1240.26,
+       "cost_usd": 0.831
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 1303.48,
+       "cost_usd": 0.4093
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 90.9944,
+       "cost_usd": 3.5305
+      },
+      {
+       "attempt": 2,
+       "speedup": 595.004,
+       "cost_usd": 1.9824
+      },
+      {
+       "attempt": 3,
+       "speedup": 113.495,
+       "cost_usd": 3.3859
+      },
+      {
+       "attempt": 4,
+       "speedup": 249.164,
+       "cost_usd": 1.7205
+      },
+      {
+       "attempt": 5,
+       "speedup": 131.607,
+       "cost_usd": 1.8091
+      }
+     ]
+    },
+    "rotate_2d": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 22.5662,
+       "cost_usd": 1.1463
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 39.4469,
+       "cost_usd": 2.5485
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 58.7946,
+       "cost_usd": 1.7532
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 69.2968,
+       "cost_usd": 3.9486
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 73.0499,
+       "cost_usd": 6.0549
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 28.8007,
+       "cost_usd": 1.9916
+      },
+      {
+       "attempt": 2,
+       "speedup": 45.9178,
+       "cost_usd": 1.3889
+      },
+      {
+       "attempt": 3,
+       "speedup": 22.6181,
+       "cost_usd": 0.6157
+      },
+      {
+       "attempt": 4,
+       "speedup": 52.7582,
+       "cost_usd": 1.8247
+      },
+      {
+       "attempt": 5,
+       "speedup": 46.7831,
+       "cost_usd": 1.3048
+      }
+     ]
+    },
+    "shortest_path_dijkstra": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 2.92025,
+       "cost_usd": 0.9048
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 3.02344,
+       "cost_usd": 0.7285
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 3.09866,
+       "cost_usd": 0.8973
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 3.11597,
+       "cost_usd": 0.6222
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 3.16328,
+       "cost_usd": 0.4248
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 38.4051,
+       "cost_usd": 1.1365
+      },
+      {
+       "attempt": 2,
+       "speedup": 3.0485,
+       "cost_usd": 0.7808
+      },
+      {
+       "attempt": 3,
+       "speedup": 3.08695,
+       "cost_usd": 1.1361
+      },
+      {
+       "attempt": 4,
+       "speedup": 12.8105,
+       "cost_usd": 1.0923
+      },
+      {
+       "attempt": 5,
+       "speedup": 78.5641,
+       "cost_usd": 2.2048
+      }
+     ]
+    },
+    "sparse_lowest_eigenvalues_posdef": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 13.475,
+       "cost_usd": 5.4707
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 27.8824,
+       "cost_usd": 8.8251
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 40.4563,
+       "cost_usd": 5.9379
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 49.4278,
+       "cost_usd": 4.7762
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 53.6919,
+       "cost_usd": 0.9751
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 7.07768,
+       "cost_usd": 4.6522
+      },
+      {
+       "attempt": 2,
+       "speedup": 4.57292,
+       "cost_usd": 3.0746
+      },
+      {
+       "attempt": 3,
+       "speedup": 3.14967,
+       "cost_usd": 1.024
+      },
+      {
+       "attempt": 4,
+       "speedup": 7.75551,
+       "cost_usd": 1.196
+      },
+      {
+       "attempt": 5,
+       "speedup": 5.77798,
+       "cost_usd": 2.2101
+      }
+     ]
+    },
+    "unit_simplex_projection": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 75.3611,
+       "cost_usd": 0.7399
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 130.825,
+       "cost_usd": 0.2497
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 156.1,
+       "cost_usd": 1.2435
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 152.675,
+       "cost_usd": 0.6345
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 157.774,
+       "cost_usd": 0.2844
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 66.3116,
+       "cost_usd": 0.6905
+      },
+      {
+       "attempt": 2,
+       "speedup": 55.7663,
+       "cost_usd": 0.5265
+      },
+      {
+       "attempt": 3,
+       "speedup": 70.8673,
+       "cost_usd": 0.6871
+      },
+      {
+       "attempt": 4,
+       "speedup": 9.97372,
+       "cost_usd": 0.7986
+      },
+      {
+       "attempt": 5,
+       "speedup": 71.6704,
+       "cost_usd": 0.6702
+      }
+     ]
+    },
+    "upfirdn1d": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 45.9522,
+       "cost_usd": 0.6657
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 61.5293,
+       "cost_usd": 1.7002
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 105.308,
+       "cost_usd": 0.7158
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 106.935,
+       "cost_usd": 0.9051
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 106.368,
+       "cost_usd": 0.2492
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 25.0124,
+       "cost_usd": 0.5814
+      },
+      {
+       "attempt": 2,
+       "speedup": 44.9372,
+       "cost_usd": 0.9787
+      },
+      {
+       "attempt": 3,
+       "speedup": 17.8234,
+       "cost_usd": 0.3806
+      },
+      {
+       "attempt": 4,
+       "speedup": 57.1554,
+       "cost_usd": 0.8409
+      },
+      {
+       "attempt": 5,
+       "speedup": 25.7133,
+       "cost_usd": 0.421
+      }
+     ]
+    },
+    "wasserstein_dist": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 119.441,
+       "cost_usd": 0.3046
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 616.77,
+       "cost_usd": 0.5437
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 769.95,
+       "cost_usd": 0.7591
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 778.741,
+       "cost_usd": 0.4471
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 2345.77,
+       "cost_usd": 2.0727
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 204.882,
+       "cost_usd": 0.2959
+      },
+      {
+       "attempt": 2,
+       "speedup": 589.779,
+       "cost_usd": 0.4646
+      },
+      {
+       "attempt": 3,
+       "speedup": 598.773,
+       "cost_usd": 0.6233
+      },
+      {
+       "attempt": 4,
+       "speedup": 609.157,
+       "cost_usd": 0.3892
+      },
+      {
+       "attempt": 5,
+       "speedup": 317.275,
+       "cost_usd": 0.3849
+      }
+     ]
+    }
+   },
+   "dev_adjustments": {
+    "wasserstein_dist": "autohelix iteration 5 dropped (inverts the generator)",
+    "shortest_path_dijkstra": "best-of attempts 1 and 5 set to 3x (evaluator flaw)"
+   }
+  },
+  "pilot2": {
+   "labels": [
+    "autohelix@3",
+    "best@3",
+    "goal"
+   ],
+   "tasks": {
+    "kmeans": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 5.362,
+      "dev_in_run": 283.238,
+      "test": 285.61879610290686,
+      "test_median_instance": 282.1516703123066,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a2",
+      "cost_usd": 8.6103,
+      "dev_in_run": 211.053,
+      "test": 225.32425292715078,
+      "test_median_instance": 221.6688214205593,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 1.2294,
+      "dev_in_run": null,
+      "test": 114.50350788465626,
+      "test_median_instance": 113.25768649097117,
+      "capped_instances": 0,
+      "dev_rescored": 94.72083906305166
+     }
+    },
+    "lu_factorization": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 1.7006,
+      "dev_in_run": 278.94,
+      "test": 288.20623931625835,
+      "test_median_instance": 287.34422784059495,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a1",
+      "cost_usd": 3.2689,
+      "dev_in_run": 122.155,
+      "test": 131.1393746849327,
+      "test_median_instance": 131.1422230931097,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 2.1019,
+      "dev_in_run": null,
+      "test": 94.0119660073486,
+      "test_median_instance": 94.19124977077081,
+      "capped_instances": 0,
+      "dev_rescored": 83.42438561668409
+     }
+    },
+    "ode_stiff_vanderpol": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 2.1764,
+      "dev_in_run": 5239.62,
+      "test": 5518.031019978811,
+      "test_median_instance": 5538.048186126714,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a3",
+      "cost_usd": 1.9259,
+      "dev_in_run": 1163.81,
+      "test": 1223.0170867954555,
+      "test_median_instance": 1240.8311567902804,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 0.4098,
+      "dev_in_run": null,
+      "test": 1837.5490609405338,
+      "test_median_instance": 1845.0350984107777,
+      "capped_instances": 0,
+      "dev_rescored": 1846.9648041962428
+     }
+    },
+    "stable_matching": {
+     "autohelix@3": {
+      "candidate": "autohelix-it3",
+      "cost_usd": 3.4355,
+      "dev_in_run": 85.7271,
+      "test": 89.07999125925224,
+      "test_median_instance": 89.50929640580131,
+      "capped_instances": 0
+     },
+     "best@3": {
+      "candidate": "best-a3",
+      "cost_usd": 1.9581,
+      "dev_in_run": 58.2555,
+      "test": 58.516083501546426,
+      "test_median_instance": 58.654574446798236,
+      "capped_instances": 0
+     },
+     "goal": {
+      "candidate": "goal",
+      "cost_usd": 1.2715,
+      "dev_in_run": null,
+      "test": 68.1247287303649,
+      "test_median_instance": 68.43937447463354,
+      "capped_instances": 0,
+      "dev_rescored": 66.21713979460955
+     }
+    }
+   },
+   "dev_progress": {
+    "kmeans": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 116.461,
+       "cost_usd": 1.3334
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 151.787,
+       "cost_usd": 0.4064
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 283.238,
+       "cost_usd": 3.6222
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 89.1627,
+       "cost_usd": 1.4968
+      },
+      {
+       "attempt": 2,
+       "speedup": 211.053,
+       "cost_usd": 4.0283
+      },
+      {
+       "attempt": 3,
+       "speedup": 185.344,
+       "cost_usd": 3.0852
+      }
+     ]
+    },
+    "lu_factorization": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": false,
+       "speedup": null,
+       "cost_usd": 0.6703
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 115.179,
+       "cost_usd": 0.2728
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 278.94,
+       "cost_usd": 0.7575
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 122.155,
+       "cost_usd": 0.7661
+      },
+      {
+       "attempt": 2,
+       "speedup": 110.983,
+       "cost_usd": 0.7477
+      },
+      {
+       "attempt": 3,
+       "speedup": 88.231,
+       "cost_usd": 1.755
+      }
+     ]
+    },
+    "ode_stiff_vanderpol": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 714.361,
+       "cost_usd": 0.5126
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 1394.45,
+       "cost_usd": 0.6635
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 5239.62,
+       "cost_usd": 1.0003
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 685.57,
+       "cost_usd": 0.6416
+      },
+      {
+       "attempt": 2,
+       "speedup": 797.62,
+       "cost_usd": 0.689
+      },
+      {
+       "attempt": 3,
+       "speedup": 1163.81,
+       "cost_usd": 0.5953
+      }
+     ]
+    },
+    "stable_matching": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 48.5664,
+       "cost_usd": 0.3384
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 72.1789,
+       "cost_usd": 1.1027
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 85.7271,
+       "cost_usd": 1.9944
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 47.2213,
+       "cost_usd": 0.6078
+      },
+      {
+       "attempt": 2,
+       "speedup": 22.3581,
+       "cost_usd": 0.5344
+      },
+      {
+       "attempt": 3,
+       "speedup": 58.2555,
+       "cost_usd": 0.8158
+      }
+     ]
+    }
+   }
+  }
+ },
+ "notes": {
+  "aes_gcm_encryption": "evaluator artifact for every arm: the evaluator held all 100 problems (29 GB) in memory, so dev evaluations were OOM-killed at 32 GB during the runs (best-of has no valid candidate; AutoHelix padded its calls to survive). Rescored at 96 GB. Included as measured and flagged in the summaries and figures."
+ }
+}

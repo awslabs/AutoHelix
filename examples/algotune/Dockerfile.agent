@@ -1,0 +1,35 @@
+# AlgoTune agent image: the evaluator image plus Claude Code and AutoHelix. The agent runs as
+# `agent` (uid 1000, the nodes' ec2-user); the dev gate runs as root through one sudo rule
+# (algotune-gate) and drops solver code to the `solver` user. AlgoTune (/opt/algotune) and
+# the evaluator (/opt/algotune-eval) are root's alone: the goal describes the protocol.
+# Claude Code starts through claude-bedrock, which reads the Bedrock key run.py keeps fresh
+# in /run/bedrock/token (mounted read-only). Build from the repository root (a clean export:
+# `git archive HEAD` plus examples/algotune):
+#   docker build -f examples/algotune/Dockerfile.agent -t algotune-agent .
+FROM algotune-eval
+
+ARG CLAUDE_CODE_VERSION=2.1.328
+RUN apt-get update && apt-get install -y --no-install-recommends curl sudo ca-certificates procps \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* \
+    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+COPY . /tmp/autohelix-src/
+RUN pip install --no-cache-dir /tmp/autohelix-src && rm -rf /tmp/autohelix-src
+RUN useradd --uid 1000 --create-home --shell /bin/bash agent \
+    && git config --system user.name "AutoHelix" && git config --system user.email "autohelix@container" \
+    && git config --system commit.gpgsign false && git config --system --add safe.directory '*'
+COPY examples/algotune/algotune-gate examples/algotune/claude-bedrock /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/algotune-gate /usr/local/bin/claude-bedrock \
+    && echo 'agent ALL=(root) NOPASSWD: /usr/local/bin/algotune-gate' > /etc/sudoers.d/algotune-gate \
+    && echo 'Defaults!/usr/local/bin/algotune-gate env_reset' >> /etc/sudoers.d/algotune-gate \
+    && chmod 0440 /etc/sudoers.d/algotune-gate && visudo -cf /etc/sudoers.d/algotune-gate \
+    && mkdir -m 0755 /etc/algotune
+COPY examples/algotune/evaluate.py examples/algotune/make_data.py examples/algotune/setup.py \
+     examples/algotune/start.sh /opt/algotune-eval/
+COPY examples/algotune/templates /opt/algotune-eval/templates
+COPY examples/algotune/goal-text.py /opt/goal-text.py
+RUN chmod 0755 /opt/algotune-eval/start.sh && chmod 0700 /opt/algotune /opt/algotune-eval
+ENV CLAUDE_CODE_USE_BEDROCK=1 AWS_REGION=us-east-1 DISABLE_AUTOUPDATER=1 \
+    AUTOHELIX_CLAUDE_CODE_CMD=/usr/local/bin/claude-bedrock
+WORKDIR /work
+ENTRYPOINT ["/opt/algotune-eval/start.sh"]

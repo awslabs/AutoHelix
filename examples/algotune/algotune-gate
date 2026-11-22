@@ -1,0 +1,300 @@
+#!/usr/local/bin/python3 -I
+"""Dev evaluation of the solver in the current folder, run as root through sudo, so solver
+code runs as the separate `solver` user and can't read the instances:
+
+    sudo -n algotune-gate            # all dev instances (what the run's gate uses)
+    sudo -n algotune-gate --limit 5  # the first 5, for a quick check
+    sudo -n algotune-gate --stop     # stop the running gate (one you started)
+
+The task and the dev data are fixed when the container starts (/etc/algotune/). One gate
+runs at a time: another waits for it (up to WAIT_S), saying so. A gate ends, with every
+process it started, when the process that ran sudo ends (or sudo does), on SIGTERM, SIGHUP
+or SIGINT, and on `--stop`. Its output ends with the time it took.
+"""
+
+import contextlib
+import ctypes
+import fcntl
+import json
+import os
+import pwd
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+EVALUATOR = "/opt/algotune-eval/evaluate.py"
+ALGOTUNE = "/opt/algotune"
+SOLVER_USER = "solver"
+LOCK = "/run/algotune-gate.lock"
+OWNER = "/run/algotune-gate.json"
+WORK_BASE = Path("/var/lib/algotune-eval")  # evaluate.py's work folders (its WORK_BASE)
+SHARED_DIRS = ("/tmp", "/var/tmp", "/dev/shm", "/run/lock", "/dev/mqueue")  # as evaluate.py's
+WAIT_S = 60 * 60  # a second gate waits this long for the first
+POLL_S = 0.5
+USAGE = "usage: sudo -n algotune-gate [--limit N | --stop]"
+PR_SET_PDEATHSIG, PR_SET_CHILD_SUBREAPER = 1, 36
+
+stopping: list[str] = []  # why the gate is ending, once it is
+
+
+def note(text: str) -> None:
+    with contextlib.suppress(OSError):
+        print(f"algotune-gate: {text}", file=sys.stderr, flush=True)
+
+
+def parse(argv: list[str]) -> tuple[str, list[str]]:
+    """("run", evaluator arguments) or ("stop", []); exit 2 on anything else."""
+    if not argv:
+        return "run", []
+    if argv == ["--stop"]:
+        return "stop", []
+    if (len(argv) == 2 and argv[0] == "--limit" and argv[1].isascii() and argv[1].isdigit()
+            and 0 < int(argv[1]) <= 100_000):
+        return "run", ["--limit", str(int(argv[1]))]
+    print(USAGE, file=sys.stderr)
+    sys.exit(2)
+
+
+def caller_uid() -> int:
+    with contextlib.suppress(KeyError, ValueError):
+        return int(os.environ["SUDO_UID"])
+    return os.getuid()
+
+
+# ------------------------------------------------------------------------ processes
+
+def stat(pid: int) -> list[str] | None:
+    """/proc/<pid>/stat's fields after the command name (state first), or None."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    except (OSError, IndexError):
+        return None
+
+
+def started(pid: int) -> str | None:
+    """A live process's start time (clock ticks after boot); None if gone or a zombie."""
+    fields = stat(pid)
+    return fields[19] if fields and fields[0] not in ("Z", "X") else None
+
+
+def uids(pid: int) -> list[int]:
+    """Real, effective, saved and filesystem uid."""
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if line.startswith("Uid:"):
+                return [int(n) for n in line.split()[1:]]
+    except (OSError, ValueError):
+        pass
+    return []
+
+
+def pids() -> list[int]:
+    return [int(e.name) for e in Path("/proc").iterdir() if e.name.isdigit()]
+
+
+def callers() -> list[tuple[int, str]]:
+    """The processes between this one and the one that ran sudo (sudo, its monitor), and
+    that one: the first ancestor without a root uid; each with its start time, so that a
+    reused pid doesn't count as alive."""
+    chain, pid = [], os.getppid()
+    while pid > 1 and (start := started(pid)) is not None:
+        chain.append((pid, start))
+        if 0 not in uids(pid) or (fields := stat(pid)) is None:
+            break
+        pid = int(fields[1])
+    return chain
+
+
+def gone(chain: list[tuple[int, str]]) -> int | None:
+    return next((pid for pid, start in chain if started(pid) != start), None)
+
+
+def end_everything(evaluator: subprocess.Popen | None, solver_uid: int, since: float) -> None:
+    """Kill the evaluator's process group, every process it left (orphans come here, this
+    process being a subreaper) and every process of the solver user; then remove the solver
+    user's files in the shared folders, its System V IPC objects, the evaluator's work
+    folders and the multiprocessing folders of an evaluator that was killed (made since
+    `since`)."""
+    if evaluator is not None and evaluator.poll() is None:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(evaluator.pid, signal.SIGKILL)
+    me, quiet = str(os.getpid()), 0
+    for _ in range(500):
+        left = [pid for pid in pids()
+                if (s := stat(pid)) and s[1] == me or solver_uid in uids(pid)]
+        for pid in left:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(pid, signal.SIGKILL)
+        with contextlib.suppress(ChildProcessError):
+            while os.waitpid(-1, os.WNOHANG)[0] > 0:
+                pass
+        quiet = quiet + 1 if not left else 0
+        if quiet >= 3:  # a just-forked run may still have been dropping to the solver user
+            break
+        time.sleep(0.02)
+    for top in SHARED_DIRS:
+        for root, dirs, files in os.walk(top, topdown=False):
+            for name in files + dirs:
+                path = os.path.join(root, name)
+                with contextlib.suppress(OSError):
+                    if os.lstat(path).st_uid == solver_uid:
+                        if os.path.isdir(path) and not os.path.islink(path):
+                            shutil.rmtree(path, ignore_errors=True)
+                        else:
+                            os.unlink(path)
+    for kind, flag in (("shm", "-m"), ("msg", "-q"), ("sem", "-s")):
+        with contextlib.suppress(OSError, ValueError, IndexError):
+            header, *lines = Path(f"/proc/sysvipc/{kind}").read_text().splitlines()
+            column = header.split().index("uid")
+            for fields in (line.split() for line in lines if line.strip()):
+                if int(fields[column]) == solver_uid:
+                    subprocess.run(["ipcrm", flag, fields[1]], check=False,
+                                   stderr=subprocess.DEVNULL)
+    for path in WORK_BASE.glob("algotune-eval-*"):
+        shutil.rmtree(path, ignore_errors=True)
+    for path in Path("/tmp").glob("pymp-*"):
+        with contextlib.suppress(OSError):
+            info = path.lstat()
+            if info.st_uid == 0 and info.st_ctime >= since and path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+
+
+# ------------------------------------------------------------------------ the lock
+
+def open_lock() -> int:
+    return os.open(LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+
+
+def try_lock(lock: int) -> bool:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+
+
+def holder() -> dict | None:
+    """The running gate's record, if the process that wrote it is still running."""
+    try:
+        record = json.loads(Path(OWNER).read_text())
+        return record if started(int(record["pid"])) == record["start"] else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def acquire(lock: int, chain: list[tuple[int, str]]) -> bool:
+    """Take the lock, waiting up to WAIT_S for a running gate; False if the wait ended."""
+    if try_lock(lock):
+        return True
+    record = holder()
+    running = "another gate is running" if record is None else (
+        f"another gate is running (pid {record['pid']}, for "
+        f"{(time.time() - record['started']) / 60:.0f} min)")
+    note(f"{running}; waiting for it to end, up to {WAIT_S // 60} min. Gates can't run side "
+         "by side (they would kill each other's solver processes). `sudo -n algotune-gate "
+         "--stop` ends one you started.")
+    deadline = time.monotonic() + WAIT_S
+    while time.monotonic() < deadline:
+        time.sleep(POLL_S)
+        if not stopping and (pid := gone(chain)) is not None:
+            stopping.append(f"the process that started it (pid {pid}) ended")
+        if stopping:
+            return False
+        if try_lock(lock):
+            note("the other gate ended; starting")
+            return True
+    stopping.append(f"the other gate was still running after {WAIT_S // 60} min")
+    return False
+
+
+# ------------------------------------------------------------------------ commands
+
+def stop() -> int:
+    record = holder()
+    if record is None:
+        print("algotune-gate: no gate is running")
+        return 0
+    if caller_uid() not in (0, record["uid"]):
+        print(f"algotune-gate: the running gate was started by uid {record['uid']}, not you",
+              file=sys.stderr)
+        return 1
+    os.kill(int(record["pid"]), signal.SIGTERM)
+    lock, deadline = open_lock(), time.monotonic() + 60
+    while time.monotonic() < deadline:
+        if try_lock(lock):
+            print(f"algotune-gate: stopped the gate (pid {record['pid']})")
+            return 0
+        time.sleep(0.2)
+    print(f"algotune-gate: the gate (pid {record['pid']}) hasn't ended after 60 s",
+          file=sys.stderr)
+    return 1
+
+
+def duration(seconds: float) -> str:
+    s = round(seconds)
+    return f"{s // 3600}h{s // 60 % 60}m{s % 60}s" if s >= 3600 else f"{s // 60}m{s % 60}s"
+
+
+def run(evaluator_args: list[str]) -> int:
+    solver_uid = pwd.getpwnam(SOLVER_USER).pw_uid
+    chain = callers()
+    def on_signal(number, frame) -> None:
+        stopping.append(f"it got {signal.Signals(number).name}")
+
+    for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(number, on_signal)
+    lock = open_lock()
+    if not acquire(lock, chain):
+        note(f"not started: {stopping[0]}")
+        return 1
+    begin, since = time.monotonic(), time.time()
+    staged = f"{OWNER}.{os.getpid()}"
+    Path(staged).write_text(json.dumps({"pid": os.getpid(), "start": started(os.getpid()),
+                                        "uid": caller_uid(), "started": time.time()}))
+    os.replace(staged, OWNER)
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
+    task = Path("/etc/algotune/task").read_text().strip()
+    evaluator = None
+    try:
+        if not stopping:
+            evaluator = subprocess.Popen(
+                [sys.executable, "-I", EVALUATOR, "--task", task, "--solver", os.getcwd(),
+                 "--data", "/etc/algotune/data", "--split", "dev", "--run-as", SOLVER_USER,
+                 "--algotune", ALGOTUNE, *evaluator_args],
+                stdin=subprocess.DEVNULL, start_new_session=True,
+                # the evaluator dies with this process, whatever ends it
+                preexec_fn=lambda: libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0))
+        while evaluator is not None and evaluator.poll() is None and not stopping:
+            if (pid := gone(chain)) is not None:
+                stopping.append(f"the process that started it (pid {pid}) ended")
+                break
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                evaluator.wait(POLL_S)
+    finally:
+        end_everything(evaluator, solver_uid, since)
+        with contextlib.suppress(OSError):
+            os.unlink(OWNER)
+    took = duration(time.monotonic() - begin)
+    if stopping:
+        note(f"stopped after {took}: {stopping[0]}")
+        return 1
+    with contextlib.suppress(OSError):
+        print(f"algotune-gate: took {took}", flush=True)
+    code = evaluator.returncode
+    return 128 - code if code < 0 else code
+
+
+def main() -> int:
+    if os.geteuid() != 0:
+        print("algotune-gate runs as root: sudo -n algotune-gate", file=sys.stderr)
+        return 2
+    command, evaluator_args = parse(sys.argv[1:])
+    return stop() if command == "stop" else run(evaluator_args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

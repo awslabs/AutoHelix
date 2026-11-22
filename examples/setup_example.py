@@ -99,7 +99,7 @@ def print_list() -> None:
         )
         for name in bundled | reference
     }
-    entries["algotune"] = "fetch tasks with examples/algotune/setup.py"
+    entries["algotune"] = "set up tasks from an AlgoTune checkout: examples/algotune/README.md"
     entries["kernelbench"] = "download tasks with examples/kernelbench/setup.py"
     entries["autoresearch"] = "set up on a GPU box with examples/autoresearch/setup.py"
 
@@ -120,7 +120,7 @@ Examples:
   %(prog)s --list                  # show all examples
 
 Fetched task suites have their own setup.py:
-  python examples/algotune/setup.py eigenvalues_real
+  python examples/algotune/setup.py eigenvalues_real --algotune PATH_TO_ALGOTUNE
   python examples/kernelbench/setup.py L1_1_Square_matrix_multiplication
   python examples/autoresearch/setup.py ~/ar-project --local ~/ar-local
 """,
@@ -151,7 +151,7 @@ Fetched task suites have their own setup.py:
         print(f"Error: '{name}' is not a bundled example.")
         print()
         print(f"Bundled examples: {', '.join(list_bundled())}")
-        print("AlgoTune tasks live under examples/algotune/ (see its setup.py).")
+        print("AlgoTune tasks live under examples/algotune/ (see its README.md).")
         print("KernelBench tasks live under examples/kernelbench/ (see its setup.py).")
         print("Use --list to see everything.")
         return 1

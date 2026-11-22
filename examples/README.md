@@ -16,7 +16,7 @@ guidance.
 | Example | What is improved | What the agent can change |
 |---------|------------------|---------------------------|
 | [**sorting**](sorting/) | Sorting speed | Sorting implementation |
-| [**AlgoTune**](algotune/setup.py) | Solver speed | Solver implementation |
+| [**AlgoTune**](algotune/) | Solver speed | Solver implementation |
 | [**KernelBench**](kernelbench/setup.py) | GPU kernel speed | PyTorch implementation |
 | [**ml-recipe**](ml-recipe/) | Training recipe | Preprocessing, model choice, and hyperparameters |
 | [**posttrain**](posttrain/) | Trained model | Training code and generated model weights |
@@ -58,9 +58,9 @@ autohelix run -n 2
 AlgoTune and KernelBench use their own setup commands:
 
 ```bash
-python examples/algotune/setup.py --list
+python examples/algotune/setup.py --list --algotune PATH_TO_ALGOTUNE
 python examples/algotune/setup.py eigenvalues_real \
-  --dir /tmp/autohelix-algotune
+  --dir /tmp/autohelix-algotune --algotune PATH_TO_ALGOTUNE
 
 python examples/kernelbench/setup.py --download
 python examples/kernelbench/setup.py --list
