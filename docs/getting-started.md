@@ -373,12 +373,8 @@ Improves a short blog post guided by a `review:` observe entry: no numeric metri
 
 ### AlgoTune Tasks
 
-A large set of algorithmic optimization tasks are available:
-
-```bash
-python examples/algotune/setup.py kmeans
-cd kmeans
-autohelix run -n 5
-```
-
-Some tasks require additional dependencies (`scipy`, `networkx`, etc.).
+AlgoTune's 154 algorithmic optimization tasks, scored as AlgoTune does (reference time /
+solver time, only when every output passes the task's check). The evaluation runs in a
+container, where the instances and the evaluator are out of the agent's reach:
+[examples/algotune](../examples/algotune/README.md) has the images, the runner and a
+comparison of AutoHelix with independent attempts and Claude Code `/goal` on 30 tasks.

@@ -1,7 +1,7 @@
-"""Figures for the AlgoTune comparison (30 tasks): speedup against cost through the iterations, held-out
-speedup per task, and speedup against cost.
+"""Figures for the AlgoTune comparison (30 tasks): speedup against cost through the iterations,
+and held-out speedup per task.
 
-    python results/algotune/make_plot.py    # writes assets/algotune_{progress,tasks,cost}-{light,dark}.png
+    python results/algotune/make_plot.py    # writes assets/algotune_{progress,tasks}-{light,dark}.png
 
 results.json holds every arm's best dev candidate per task, rescored on held-out instances,
 and every iteration's and attempt's dev speedup (see examples/algotune/README.md). Speedups are
@@ -123,7 +123,9 @@ def draw_progress(theme):
                [sum(c[k] for c in ah_cost) / n for k in range(6)],
                [statistics.geometric_mean([s[k] for s in ah_speed]) for k in range(6)])]
     for name, color, marker, z, xs, ys in series:
-        ax.step(xs, ys, where="post", color=color, linewidth=2.2, zorder=z, label=name)
+        # Straight segments, not steps: each point averages tasks whose iterations cost very
+        # different amounts, so no single spend marks where the next result arrives.
+        ax.plot(xs, ys, color=color, linewidth=2.2, zorder=z, label=name, solid_capstyle="round")
         ax.scatter(xs[1:], ys[1:], s=48, marker=marker, color=color, edgecolors=t["surface"],
                    linewidths=1.5, zorder=z + 0.5)
         ax.annotate(f"{ys[-1]:.0f}×", xy=(xs[-1], ys[-1]), xytext=(9, 0), textcoords="offset points",
@@ -148,9 +150,7 @@ def draw_progress(theme):
               frameon=False, fontsize=9, labelcolor=t["text"])
     fig.suptitle(f"AlgoTune, {n} random tasks: speedup against what the agent cost",
                  x=0.07, ha="left", color=t["text"], fontsize=12.5, fontweight="bold")
-    ax.set_title("Best development score so far (100 dev instances), floored at 1×; audit adjustments "
-                 "applied. Best of N:\naveraged over every N of 5 attempts. Claude Opus 5.5, 8 cores. "
-                 "/goal stopped on its own in every task.",
+    ax.set_title("Best development score so far · Claude Opus 5.5 · /goal stopped on its own in every task",
                  loc="left", color=t["muted"], fontsize=8.8)
     fig.tight_layout()
     path = os.path.join(ASSETS, f"algotune_progress-{theme}.png")
@@ -202,47 +202,6 @@ def draw_tasks(theme):
     print("wrote", os.path.relpath(path))
 
 
-def draw_cost(theme):
-    t = THEMES[theme]
-    fig, ax = plt.subplots(figsize=(9, 5.2), dpi=160)
-    fig.patch.set_facecolor(t["surface"])
-    style(ax, t)
-    for (name, labels, marker), color in zip(ARMS, t["series"]):
-        xs, ys = [cost(l) for l in labels], [geomean(l) for l in labels]
-        ax.plot(xs, ys, color=color, linewidth=2, zorder=2, solid_capstyle="round")
-        ax.scatter(xs, ys, s=70, marker=marker, color=color, edgecolors=t["surface"], linewidths=2,
-                   zorder=3, label=name)
-        for x, y, label in zip(xs, ys, labels):
-            budget = label.split("@")[1] if "@" in label else None
-            text = (f"-n {budget}" if name == "AutoHelix" else f"{budget} attempts") if budget else "one session"
-            offset = {"autohelix@3": (-8, 6), "autohelix@5": (8, -3), "best@3": (-6, -16),
-                      "best@5": (8, -3), "goal": (-8, 9)}[label]
-            ax.annotate(f"{text}: {y:.0f}×", xy=(x, y), xytext=offset, textcoords="offset points",
-                        ha="right" if offset[0] < 0 else "left", color=t["text"], fontsize=9)
-    wins = sum(speedup(task, "autohelix@5") > speedup(task, "best@5") for task in TASKS)
-    wins_goal = sum(speedup(task, "autohelix@5") > speedup(task, "goal") for task in TASKS)
-    ax.text(0.99, 0.04, f"AutoHelix -n 5 is faster on {wins}/{len(TASKS)} tasks than the best of 5 "
-            f"attempts\nand on {wins_goal}/{len(TASKS)} than /goal", transform=ax.transAxes, ha="right",
-            va="bottom", color=t["muted"], fontsize=9)
-    ax.set_xlim(0, 400)
-    ax.set_ylim(0, 220)
-    ax.xaxis.set_major_formatter(lambda v, _: f"${v:.0f}")
-    ax.yaxis.set_major_formatter(lambda v, _: f"{v:.0f}×")
-    ax.set_xlabel(f"total agent API cost, {len(TASKS)} tasks (USD)", color=t["muted"], fontsize=10)
-    ax.set_ylabel("geometric mean held-out speedup", color=t["muted"], fontsize=10)
-    ax.legend(loc="upper left", frameon=False, fontsize=9, labelcolor=t["text"])
-    fig.suptitle(f"AlgoTune, {len(TASKS)} random tasks: speedup against cost",
-                 x=0.07, ha="left", color=t["text"], fontsize=12.5, fontweight="bold")
-    ax.set_title("Held-out instances, floored at 1×, audit adjustments applied, all 30 tasks. Claude Opus 5.5. "
-                 "Best-of: independent one-iteration\nAutoHelix runs; /goal: one Claude Code session "
-                 "per task, which stopped on its own (never at its $15 cap).",
-                 loc="left", color=t["muted"], fontsize=8.8)
-    fig.tight_layout()
-    path = os.path.join(ASSETS, f"algotune_cost-{theme}.png")
-    fig.savefig(path, facecolor=t["surface"])
-    print("wrote", os.path.relpath(path))
-
-
 for _, labels, _ in ARMS:
     for label in labels:
         print(f"{label:12s} ${cost(label):7.2f}  geomean {geomean(label):6.1f}x  "
@@ -250,4 +209,3 @@ for _, labels, _ in ARMS:
 for theme in THEMES:
     draw_progress(theme)
     draw_tasks(theme)
-    draw_cost(theme)
