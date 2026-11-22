@@ -1,7 +1,7 @@
 """Figures for the AlgoTune comparison (30 tasks): speedup against cost through the iterations,
 and held-out speedup per task.
 
-    python results/algotune/make_plot.py    # writes assets/algotune_{progress,tasks}-{light,dark}.png
+    python results/algotune-comparison/make_plot.py    # writes assets/algotune_{progress,tasks}-{light,dark}.png
 
 results.json holds every arm's best dev candidate per task, rescored on held-out instances,
 and every iteration's and attempt's dev speedup (see examples/algotune/README.md). Speedups are

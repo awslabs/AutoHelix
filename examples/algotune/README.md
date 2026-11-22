@@ -59,8 +59,8 @@ why the arms look closer there than in the geometric mean or the per-task wins.
 </p>
 
 The per-task numbers, costs and audit notes are in
-[`results/algotune/results.json`](../../results/algotune/results.json);
-[`make_plot.py`](../../results/algotune/make_plot.py) draws both figures from it.
+[`results/algotune-comparison/results.json`](../../results/algotune-comparison/results.json);
+[`make_plot.py`](../../results/algotune-comparison/make_plot.py) draws both figures from it.
 
 ## What was compared
 
