@@ -118,7 +118,7 @@ baseline, so a stream-changing change has to beat that too.
 ## Comparing loops
 
 `arms/` runs the same task under three loops on one 8-GPU box: AutoHelix (this
-`autohelix.yaml`), Karpathy's `program.md` loop (`arms/karpathy/`, upstream's text adapted
+`autohelix/autoresearch/config.yaml`), Karpathy's `program.md` loop (`arms/karpathy/`, upstream's text adapted
 to the experiment tool) and Claude Code's `/goal` (`arms/goal/`, this goal text). Each gets
 the same model (Claude Opus 5.5 on Bedrock), scorer and budget of 60 experiments of two
 trainings in 24 h, two runs each. The session loops also stop at $150 of API cost
@@ -162,7 +162,7 @@ relative to the folder `arms/` is in, setup's `--local` folder:
 python examples/autoresearch/setup.py ~/ar-local/projects/autoresearch --local ~/ar-local --heldout ~/ar-heldout
 cp -r examples/autoresearch/arms ~/ar-local/arms
 UV_PYTHON_INSTALL_DIR=~/ar-local/python uv venv --managed-python --python 3.12 ~/ar-local/autohelix-venv
-uv pip install --python ~/ar-local/autohelix-venv/bin/python .   # AutoHelix, from the checkout
+uv pip install --python ~/ar-local/autohelix-venv/bin/python .   # AutoHelix, from the checkout (the runs below: 9a4f0b4)
 HOME=~/ar-local/claude-home bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
 cd ~/ar-local && mkdir -p logs
 docker build --build-arg AGENT_UID=$(id -u) -t ar-arm arms/container
@@ -194,8 +194,11 @@ nohup bash arms/score_chain.sh 0,1 ~/ar-heldout/test.parquet autohelix:0 autohel
 
 ### Results
 
-Both AutoHelix runs ended 4.83% and 4.81% below the baseline on the test shard (3 seed
-pairs; the baseline is 0.99358), `/goal` 4.28% and 4.25%, and `program.md` 2.30% and
+These runs used AutoHelix at commit 9a4f0b4, whose config was `autohelix.yaml` at the
+project root (the settings of `autohelix/autoresearch/config.yaml` now; the goal wording
+changed since, see the end of this section). Both AutoHelix
+runs ended 4.83% and 4.81% below the baseline on the test shard (3 seed pairs; the
+baseline is 0.99358), `/goal` 4.28% and 4.25%, and `program.md` 2.30% and
 2.26%. The API cost (without AutoHelix's end-of-run report) was $27–36 per AutoHelix run,
 $36–37 per `/goal` run and $20–45 per `program.md` run. Test and validation scores agree
 within 0.0006 for every run, and the audit found no breaches. The [repository
@@ -236,7 +239,7 @@ autoresearch/
 ├── setup.py                 # upstream at 228791f, the environment, data, the project
 ├── patches/train.patch      # AR_SEED; ar.export.save(model) instead of evaluate_bpb
 ├── template/                # becomes the project (with upstream's train.py and prepare.py)
-│   ├── autohelix.yaml
+│   ├── autohelix/autoresearch/config.yaml   # the experiment (`autohelix run`)
 │   └── ar/
 │       ├── export.py        # save(model): the export contract
 │       ├── score.py         # the trusted scorer (validate, load, probes, bits per byte)

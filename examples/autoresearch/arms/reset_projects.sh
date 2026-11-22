@@ -43,10 +43,10 @@ for name in "${names[@]}"; do
     fi
     git clone -q "$ARMS/base.git" "$LOCAL/projects/$name"
     git -C "$LOCAL/projects/$name" remote remove origin
-    # Only the AutoHelix arms use autohelix.yaml; the others shouldn't read its goal text.
+    # Only the AutoHelix arms use the experiment folder autohelix/; the others shouldn't read its goal text.
     if [[ $name != ar-autohelix* ]]; then
-        git -C "$LOCAL/projects/$name" rm -q autohelix.yaml
-        git -C "$LOCAL/projects/$name" commit -q -m "Remove autohelix.yaml (not this arm's)"
+        git -C "$LOCAL/projects/$name" rm -rq autohelix
+        git -C "$LOCAL/projects/$name" commit -q -m "Remove autohelix/ (not this arm's)"
     fi
     echo "projects/$name at $(git -C "$LOCAL/projects/$name" rev-parse --short HEAD)"
 done

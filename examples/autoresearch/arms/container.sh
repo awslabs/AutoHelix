@@ -41,7 +41,7 @@ state=$ARMS/runs/$name
 . "$LOCAL/projects/autoresearch/ar/paths.sh"  # AR_VENV, AR_PYTHON_HOME, AR_HF_HOME, AR_DATA, AR_TOKENIZER
 claude=$(readlink -f "$LOCAL/claude-home/.local/bin/claude")
 autohelix=$LOCAL/autohelix-venv
-model=us.anthropic.claude-opus-5-5  # as template/autohelix.yaml's agent.model
+model=us.anthropic.claude-opus-5-5  # as template/autohelix/autoresearch/config.yaml's agent.model
 
 die() { echo "container: $*" >&2; exit 2; }
 [ -d "$project/.git" ] || die "no project $project: run arms/reset_projects.sh ar-$name"

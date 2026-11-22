@@ -1,5 +1,5 @@
 #!/bin/bash
-# The AutoHelix arm: `autohelix run` in projects/ar-NAME with its autohelix.yaml, in the
+# The AutoHelix arm: `autohelix run` in projects/ar-NAME with its autohelix/autoresearch/config.yaml, in the
 # run's container (../container.sh).
 #
 #   bash arms/autohelix/launch.sh NAME GPUS [RUN ARGS]   # e.g. autohelix 0,1; autohelix-2 6,7

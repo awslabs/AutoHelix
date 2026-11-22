@@ -1,6 +1,6 @@
 #!/bin/bash
 # The /goal arm: `claude -p "/goal <goal.md>"` in projects/ar-NAME, one headless session in
-# the run's container (../container.sh). goal.md is template/autohelix.yaml's goal text,
+# the run's container (../container.sh). goal.md is template/autohelix/autoresearch/config.yaml's goal text,
 # its scoring adapted to run_experiment.
 #
 #   bash arms/goal/launch.sh NAME GPUS   # e.g. goal 4,5; goal-2 4,5
