@@ -1306,6 +1306,1842 @@
       "dev_rescored": 173.29094307781978
      }
     }
+   },
+   "dev_progress": {
+    "aes_gcm_encryption": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": false,
+       "speedup": null,
+       "cost_usd": 0.4744
+      },
+      {
+       "iteration": 2,
+       "accepted": false,
+       "speedup": null,
+       "cost_usd": 0.378
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 2.76269,
+       "cost_usd": 3.9926
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 5.74961,
+       "cost_usd": 3.3461
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 5.76942,
+       "cost_usd": 0.5413
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": null,
+       "cost_usd": 0.5273
+      },
+      {
+       "attempt": 2,
+       "speedup": null,
+       "cost_usd": 3.6811
+      },
+      {
+       "attempt": 3,
+       "speedup": null,
+       "cost_usd": 0.5858
+      },
+      {
+       "attempt": 4,
+       "speedup": null,
+       "cost_usd": 0.5944
+      },
+      {
+       "attempt": 5,
+       "speedup": null,
+       "cost_usd": 0.4679
+      }
+     ]
+    },
+    "affine_transform_2d": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 6.26442,
+       "cost_usd": 0.2295
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 52.385,
+       "cost_usd": 2.841
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 57.6025,
+       "cost_usd": 3.5599
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 59.4069,
+       "cost_usd": 7.871
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 60.4324,
+       "cost_usd": 1.2231
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 59.0933,
+       "cost_usd": 1.4704
+      },
+      {
+       "attempt": 2,
+       "speedup": 25.6098,
+       "cost_usd": 0.7442
+      },
+      {
+       "attempt": 3,
+       "speedup": 42.0082,
+       "cost_usd": 2.4451
+      },
+      {
+       "attempt": 4,
+       "speedup": 55.0353,
+       "cost_usd": 2.7319
+      },
+      {
+       "attempt": 5,
+       "speedup": 25.9603,
+       "cost_usd": 2.251
+      }
+     ]
+    },
+    "battery_scheduling": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 331.011,
+       "cost_usd": 0.6721
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 975.768,
+       "cost_usd": 0.908
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 1514.18,
+       "cost_usd": 1.0197
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 1688.96,
+       "cost_usd": 1.1701
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 2399.16,
+       "cost_usd": 2.2003
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 365.639,
+       "cost_usd": 1.421
+      },
+      {
+       "attempt": 2,
+       "speedup": 68.0471,
+       "cost_usd": 0.4168
+      },
+      {
+       "attempt": 3,
+       "speedup": 58.7047,
+       "cost_usd": 0.307
+      },
+      {
+       "attempt": 4,
+       "speedup": 88.9372,
+       "cost_usd": 0.9061
+      },
+      {
+       "attempt": 5,
+       "speedup": 303.425,
+       "cost_usd": 0.8633
+      }
+     ]
+    },
+    "capacitated_facility_location": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 233.989,
+       "cost_usd": 0.5795
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 1624.7,
+       "cost_usd": 0.4951
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 2506.19,
+       "cost_usd": 0.5557
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 2525.52,
+       "cost_usd": 0.3714
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 3069.81,
+       "cost_usd": 0.529
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 412.626,
+       "cost_usd": 0.7026
+      },
+      {
+       "attempt": 2,
+       "speedup": 288.693,
+       "cost_usd": 0.4936
+      },
+      {
+       "attempt": 3,
+       "speedup": 321.556,
+       "cost_usd": 0.4311
+      },
+      {
+       "attempt": 4,
+       "speedup": 342.292,
+       "cost_usd": 0.2265
+      },
+      {
+       "attempt": 5,
+       "speedup": 368.422,
+       "cost_usd": 0.5482
+      }
+     ]
+    },
+    "clustering_outliers": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 14.977,
+       "cost_usd": 0.9735
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 72.9887,
+       "cost_usd": 7.9794
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 80.9377,
+       "cost_usd": 7.1373
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 123.662,
+       "cost_usd": 7.941
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 159.798,
+       "cost_usd": 9.7135
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 33.5167,
+       "cost_usd": 5.6526
+      },
+      {
+       "attempt": 2,
+       "speedup": 48.0436,
+       "cost_usd": 1.8208
+      },
+      {
+       "attempt": 3,
+       "speedup": 19.9846,
+       "cost_usd": 1.8677
+      },
+      {
+       "attempt": 4,
+       "speedup": 66.5326,
+       "cost_usd": 5.866
+      },
+      {
+       "attempt": 5,
+       "speedup": 28.6547,
+       "cost_usd": 3.61
+      }
+     ]
+    },
+    "convex_hull": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 82.1934,
+       "cost_usd": 0.6849
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 108.627,
+       "cost_usd": 0.7708
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 121.878,
+       "cost_usd": 0.6861
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 149.054,
+       "cost_usd": 1.5869
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 156.426,
+       "cost_usd": 1.7556
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 55.9869,
+       "cost_usd": 1.4035
+      },
+      {
+       "attempt": 2,
+       "speedup": 67.026,
+       "cost_usd": 0.6092
+      },
+      {
+       "attempt": 3,
+       "speedup": 116.844,
+       "cost_usd": 1.4199
+      },
+      {
+       "attempt": 4,
+       "speedup": 40.9067,
+       "cost_usd": 0.4759
+      },
+      {
+       "attempt": 5,
+       "speedup": 74.3419,
+       "cost_usd": 0.9773
+      }
+     ]
+    },
+    "convolve2d_full_fill": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 178.777,
+       "cost_usd": 0.1637
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 325.934,
+       "cost_usd": 1.262
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 1225.65,
+       "cost_usd": 3.5071
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 1576.28,
+       "cost_usd": 1.4253
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 1704.26,
+       "cost_usd": 3.3909
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 161.552,
+       "cost_usd": 0.2154
+      },
+      {
+       "attempt": 2,
+       "speedup": 143.112,
+       "cost_usd": 0.1774
+      },
+      {
+       "attempt": 3,
+       "speedup": 134.317,
+       "cost_usd": 0.1595
+      },
+      {
+       "attempt": 4,
+       "speedup": 155.676,
+       "cost_usd": 0.2636
+      },
+      {
+       "attempt": 5,
+       "speedup": 167.724,
+       "cost_usd": 0.1663
+      }
+     ]
+    },
+    "firls": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 4.00659,
+       "cost_usd": 4.8553
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 5.55532,
+       "cost_usd": 7.3712
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 7.5649,
+       "cost_usd": 19.0708
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 8.47506,
+       "cost_usd": 6.7426
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 8.75364,
+       "cost_usd": 4.4352
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 6.51651,
+       "cost_usd": 24.3167
+      },
+      {
+       "attempt": 2,
+       "speedup": 5.58643,
+       "cost_usd": 9.8674
+      },
+      {
+       "attempt": 3,
+       "speedup": 4.39768,
+       "cost_usd": 8.1615
+      },
+      {
+       "attempt": 4,
+       "speedup": 1.07447,
+       "cost_usd": 0.4809
+      },
+      {
+       "attempt": 5,
+       "speedup": 5.47192,
+       "cost_usd": 7.9072
+      }
+     ]
+    },
+    "generalized_eigenvectors_real": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 1.92807,
+       "cost_usd": 1.4892
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 1.97134,
+       "cost_usd": 0.4832
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 1.95557,
+       "cost_usd": 0.4986
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 2.02621,
+       "cost_usd": 0.5407
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 2.02602,
+       "cost_usd": 1.0081
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 1.99886,
+       "cost_usd": 0.7799
+      },
+      {
+       "attempt": 2,
+       "speedup": 1.79758,
+       "cost_usd": 1.0075
+      },
+      {
+       "attempt": 3,
+       "speedup": 2.01064,
+       "cost_usd": 1.6529
+      },
+      {
+       "attempt": 4,
+       "speedup": 1.62253,
+       "cost_usd": 0.8362
+      },
+      {
+       "attempt": 5,
+       "speedup": 1.99439,
+       "cost_usd": 0.8257
+      }
+     ]
+    },
+    "graph_isomorphism": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 90.9897,
+       "cost_usd": 0.2503
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 376.82,
+       "cost_usd": 0.3556
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 615.63,
+       "cost_usd": 0.3376
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 883.556,
+       "cost_usd": 0.9173
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 1152.17,
+       "cost_usd": 1.363
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 149.628,
+       "cost_usd": 0.3236
+      },
+      {
+       "attempt": 2,
+       "speedup": 86.5062,
+       "cost_usd": 0.2885
+      },
+      {
+       "attempt": 3,
+       "speedup": 239.072,
+       "cost_usd": 0.4581
+      },
+      {
+       "attempt": 4,
+       "speedup": 153.82,
+       "cost_usd": 0.4185
+      },
+      {
+       "attempt": 5,
+       "speedup": 192.707,
+       "cost_usd": 0.3687
+      }
+     ]
+    },
+    "kalman_filter": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 144.836,
+       "cost_usd": 0.7191
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 456.215,
+       "cost_usd": 4.103
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 739.914,
+       "cost_usd": 4.5127
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 755.565,
+       "cost_usd": 3.3224
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 818.526,
+       "cost_usd": 1.6638
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 107.565,
+       "cost_usd": 0.4763
+      },
+      {
+       "attempt": 2,
+       "speedup": 327.792,
+       "cost_usd": 2.7738
+      },
+      {
+       "attempt": 3,
+       "speedup": 497.117,
+       "cost_usd": 3.5181
+      },
+      {
+       "attempt": 4,
+       "speedup": 120.425,
+       "cost_usd": 0.624
+      },
+      {
+       "attempt": 5,
+       "speedup": 200.881,
+       "cost_usd": 1.2693
+      }
+     ]
+    },
+    "kd_tree": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 11.1984,
+       "cost_usd": 0.6519
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 18.1693,
+       "cost_usd": 6.4012
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 18.8752,
+       "cost_usd": 5.3626
+      },
+      {
+       "iteration": 4,
+       "accepted": false,
+       "speedup": null,
+       "cost_usd": 3.2412
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 20.607,
+       "cost_usd": 0.38
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 10.708,
+       "cost_usd": 0.9067
+      },
+      {
+       "attempt": 2,
+       "speedup": 4.83546,
+       "cost_usd": 0.5821
+      },
+      {
+       "attempt": 3,
+       "speedup": 10.653,
+       "cost_usd": 0.9254
+      },
+      {
+       "attempt": 4,
+       "speedup": 11.8169,
+       "cost_usd": 1.9475
+      },
+      {
+       "attempt": 5,
+       "speedup": 10.3352,
+       "cost_usd": 1.071
+      }
+     ]
+    },
+    "kmeans": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 62.7975,
+       "cost_usd": 0.9222
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 154.907,
+       "cost_usd": 2.321
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 257.589,
+       "cost_usd": 3.6087
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 389.939,
+       "cost_usd": 3.5967
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 474.641,
+       "cost_usd": 3.6405
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 34.2042,
+       "cost_usd": 0.4632
+      },
+      {
+       "attempt": 2,
+       "speedup": 34.8739,
+       "cost_usd": 0.4806
+      },
+      {
+       "attempt": 3,
+       "speedup": 59.3235,
+       "cost_usd": 2.1513
+      },
+      {
+       "attempt": 4,
+       "speedup": 85.6546,
+       "cost_usd": 0.6058
+      },
+      {
+       "attempt": 5,
+       "speedup": 16.9555,
+       "cost_usd": 0.7969
+      }
+     ]
+    },
+    "linear_system_solver": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 6.14004,
+       "cost_usd": 0.9626
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 10.7954,
+       "cost_usd": 0.651
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 11.6799,
+       "cost_usd": 1.7163
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 11.8997,
+       "cost_usd": 3.2677
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 11.9086,
+       "cost_usd": 2.0244
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 5.06215,
+       "cost_usd": 1.0292
+      },
+      {
+       "attempt": 2,
+       "speedup": 2.83535,
+       "cost_usd": 0.6122
+      },
+      {
+       "attempt": 3,
+       "speedup": 9.05042,
+       "cost_usd": 0.728
+      },
+      {
+       "attempt": 4,
+       "speedup": 6.52389,
+       "cost_usd": 1.1334
+      },
+      {
+       "attempt": 5,
+       "speedup": 5.28239,
+       "cost_usd": 0.728
+      }
+     ]
+    },
+    "lti_simulation": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 12.9769,
+       "cost_usd": 0.7413
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 13.8573,
+       "cost_usd": 0.6813
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 14.5094,
+       "cost_usd": 0.9489
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 14.5785,
+       "cost_usd": 0.1768
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 14.2365,
+       "cost_usd": 0.093
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 12.6893,
+       "cost_usd": 0.4568
+      },
+      {
+       "attempt": 2,
+       "speedup": 12.6159,
+       "cost_usd": 0.5389
+      },
+      {
+       "attempt": 3,
+       "speedup": 12.8486,
+       "cost_usd": 0.5292
+      },
+      {
+       "attempt": 4,
+       "speedup": 12.467,
+       "cost_usd": 0.5039
+      },
+      {
+       "attempt": 5,
+       "speedup": 12.6623,
+       "cost_usd": 0.4903
+      }
+     ]
+    },
+    "lyapunov_stability": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 144.874,
+       "cost_usd": 0.3983
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 379.687,
+       "cost_usd": 0.2828
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 921.935,
+       "cost_usd": 0.2866
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 1469.58,
+       "cost_usd": 0.8773
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 1614.17,
+       "cost_usd": 1.1566
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 176.16,
+       "cost_usd": 0.2337
+      },
+      {
+       "attempt": 2,
+       "speedup": 174.926,
+       "cost_usd": 0.2513
+      },
+      {
+       "attempt": 3,
+       "speedup": 161.694,
+       "cost_usd": 0.3147
+      },
+      {
+       "attempt": 4,
+       "speedup": 159.795,
+       "cost_usd": 0.1932
+      },
+      {
+       "attempt": 5,
+       "speedup": 222.486,
+       "cost_usd": 0.2811
+      }
+     ]
+    },
+    "matrix_exponential_sparse": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 9.51187,
+       "cost_usd": 9.2355
+      },
+      {
+       "iteration": 2,
+       "accepted": false,
+       "speedup": null,
+       "cost_usd": 13.0073
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 16.1795,
+       "cost_usd": 0.2941
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 26.0639,
+       "cost_usd": 6.8062
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 31.2543,
+       "cost_usd": 3.7692
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 4.38857,
+       "cost_usd": 1.8388
+      },
+      {
+       "attempt": 2,
+       "speedup": 8.16123,
+       "cost_usd": 6.7084
+      },
+      {
+       "attempt": 3,
+       "speedup": 4.21536,
+       "cost_usd": 1.8893
+      },
+      {
+       "attempt": 4,
+       "speedup": 9.125,
+       "cost_usd": 6.255
+      },
+      {
+       "attempt": 5,
+       "speedup": 11.2316,
+       "cost_usd": 6.5477
+      }
+     ]
+    },
+    "max_common_subgraph": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 665.179,
+       "cost_usd": 0.3012
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 837.603,
+       "cost_usd": 0.3702
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 949.204,
+       "cost_usd": 0.2789
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 874.421,
+       "cost_usd": 0.2064
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 883.683,
+       "cost_usd": 0.0842
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 795.505,
+       "cost_usd": 0.3023
+      },
+      {
+       "attempt": 2,
+       "speedup": 99.099,
+       "cost_usd": 0.1821
+      },
+      {
+       "attempt": 3,
+       "speedup": 645.102,
+       "cost_usd": 0.2344
+      },
+      {
+       "attempt": 4,
+       "speedup": 840.833,
+       "cost_usd": 0.2682
+      },
+      {
+       "attempt": 5,
+       "speedup": 898.171,
+       "cost_usd": 0.2792
+      }
+     ]
+    },
+    "min_dominating_set": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 257.865,
+       "cost_usd": 0.4219
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 515.428,
+       "cost_usd": 1.644
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 692.515,
+       "cost_usd": 2.0192
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 796.335,
+       "cost_usd": 2.3263
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 827.101,
+       "cost_usd": 1.2605
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 393.858,
+       "cost_usd": 0.234
+      },
+      {
+       "attempt": 2,
+       "speedup": 346.698,
+       "cost_usd": 0.3013
+      },
+      {
+       "attempt": 3,
+       "speedup": 323.504,
+       "cost_usd": 0.3024
+      },
+      {
+       "attempt": 4,
+       "speedup": 248.476,
+       "cost_usd": 0.2516
+      },
+      {
+       "attempt": 5,
+       "speedup": 296.642,
+       "cost_usd": 0.2965
+      }
+     ]
+    },
+    "multi_dim_knapsack": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 166.933,
+       "cost_usd": 0.7424
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 391.61,
+       "cost_usd": 0.5818
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 442.025,
+       "cost_usd": 1.3414
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 496.936,
+       "cost_usd": 1.5182
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 490.239,
+       "cost_usd": 1.1566
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 436.855,
+       "cost_usd": 0.6412
+      },
+      {
+       "attempt": 2,
+       "speedup": 80.0289,
+       "cost_usd": 0.2742
+      },
+      {
+       "attempt": 3,
+       "speedup": 142.422,
+       "cost_usd": 0.3994
+      },
+      {
+       "attempt": 4,
+       "speedup": 113.219,
+       "cost_usd": 0.2687
+      },
+      {
+       "attempt": 5,
+       "speedup": 105.929,
+       "cost_usd": 0.5063
+      }
+     ]
+    },
+    "ode_hires": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 351.718,
+       "cost_usd": 0.6182
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 2041.71,
+       "cost_usd": 6.1334
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 2128.88,
+       "cost_usd": 1.4634
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 2458.06,
+       "cost_usd": 8.8385
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 3142.88,
+       "cost_usd": 0.6877
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 374.739,
+       "cost_usd": 0.5473
+      },
+      {
+       "attempt": 2,
+       "speedup": 928.005,
+       "cost_usd": 1.6602
+      },
+      {
+       "attempt": 3,
+       "speedup": 290.475,
+       "cost_usd": 0.5534
+      },
+      {
+       "attempt": 4,
+       "speedup": 255.472,
+       "cost_usd": 0.4759
+      },
+      {
+       "attempt": 5,
+       "speedup": 224.42,
+       "cost_usd": 0.706
+      }
+     ]
+    },
+    "qr_factorization": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 51.6773,
+       "cost_usd": 0.3211
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 84.2092,
+       "cost_usd": 1.404
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 109.068,
+       "cost_usd": 0.8978
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 114.467,
+       "cost_usd": 1.1491
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 117.138,
+       "cost_usd": 2.1055
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 53.4922,
+       "cost_usd": 0.2679
+      },
+      {
+       "attempt": 2,
+       "speedup": 10.9107,
+       "cost_usd": 0.2532
+      },
+      {
+       "attempt": 3,
+       "speedup": 31.057,
+       "cost_usd": 2.0253
+      },
+      {
+       "attempt": 4,
+       "speedup": 53.444,
+       "cost_usd": 0.1811
+      },
+      {
+       "attempt": 5,
+       "speedup": 10.9623,
+       "cost_usd": 0.314
+      }
+     ]
+    },
+    "robust_linear_program": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 398.308,
+       "cost_usd": 6.1651
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 753.682,
+       "cost_usd": 3.2808
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 1173.84,
+       "cost_usd": 12.4824
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 1331.91,
+       "cost_usd": 5.4971
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 1359.15,
+       "cost_usd": 0.7548
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 328.607,
+       "cost_usd": 9.9899
+      },
+      {
+       "attempt": 2,
+       "speedup": 60.5726,
+       "cost_usd": 1.3888
+      },
+      {
+       "attempt": 3,
+       "speedup": 56.2965,
+       "cost_usd": 1.4756
+      },
+      {
+       "attempt": 4,
+       "speedup": 76.4138,
+       "cost_usd": 3.6607
+      },
+      {
+       "attempt": 5,
+       "speedup": 62.2015,
+       "cost_usd": 2.1707
+      }
+     ]
+    },
+    "rocket_landing_optimization": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 339.33,
+       "cost_usd": 2.3787
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 1182.72,
+       "cost_usd": 1.1965
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 1274.73,
+       "cost_usd": 0.7412
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 1240.26,
+       "cost_usd": 0.831
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 1303.48,
+       "cost_usd": 0.4093
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 90.9944,
+       "cost_usd": 3.5305
+      },
+      {
+       "attempt": 2,
+       "speedup": 595.004,
+       "cost_usd": 1.9824
+      },
+      {
+       "attempt": 3,
+       "speedup": 113.495,
+       "cost_usd": 3.3859
+      },
+      {
+       "attempt": 4,
+       "speedup": 249.164,
+       "cost_usd": 1.7205
+      },
+      {
+       "attempt": 5,
+       "speedup": 131.607,
+       "cost_usd": 1.8091
+      }
+     ]
+    },
+    "rotate_2d": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 22.5662,
+       "cost_usd": 1.1463
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 39.4469,
+       "cost_usd": 2.5485
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 58.7946,
+       "cost_usd": 1.7532
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 69.2968,
+       "cost_usd": 3.9486
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 73.0499,
+       "cost_usd": 6.0549
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 28.8007,
+       "cost_usd": 1.9916
+      },
+      {
+       "attempt": 2,
+       "speedup": 45.9178,
+       "cost_usd": 1.3889
+      },
+      {
+       "attempt": 3,
+       "speedup": 22.6181,
+       "cost_usd": 0.6157
+      },
+      {
+       "attempt": 4,
+       "speedup": 52.7582,
+       "cost_usd": 1.8247
+      },
+      {
+       "attempt": 5,
+       "speedup": 46.7831,
+       "cost_usd": 1.3048
+      }
+     ]
+    },
+    "shortest_path_dijkstra": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 2.92025,
+       "cost_usd": 0.9048
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 3.02344,
+       "cost_usd": 0.7285
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 3.09866,
+       "cost_usd": 0.8973
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 3.11597,
+       "cost_usd": 0.6222
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 3.16328,
+       "cost_usd": 0.4248
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 38.4051,
+       "cost_usd": 1.1365
+      },
+      {
+       "attempt": 2,
+       "speedup": 3.0485,
+       "cost_usd": 0.7808
+      },
+      {
+       "attempt": 3,
+       "speedup": 3.08695,
+       "cost_usd": 1.1361
+      },
+      {
+       "attempt": 4,
+       "speedup": 12.8105,
+       "cost_usd": 1.0923
+      },
+      {
+       "attempt": 5,
+       "speedup": 78.5641,
+       "cost_usd": 2.2048
+      }
+     ]
+    },
+    "sparse_lowest_eigenvalues_posdef": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 13.475,
+       "cost_usd": 5.4707
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 27.8824,
+       "cost_usd": 8.8251
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 40.4563,
+       "cost_usd": 5.9379
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 49.4278,
+       "cost_usd": 4.7762
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 53.6919,
+       "cost_usd": 0.9751
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 7.07768,
+       "cost_usd": 4.6522
+      },
+      {
+       "attempt": 2,
+       "speedup": 4.57292,
+       "cost_usd": 3.0746
+      },
+      {
+       "attempt": 3,
+       "speedup": 3.14967,
+       "cost_usd": 1.024
+      },
+      {
+       "attempt": 4,
+       "speedup": 7.75551,
+       "cost_usd": 1.196
+      },
+      {
+       "attempt": 5,
+       "speedup": 5.77798,
+       "cost_usd": 2.2101
+      }
+     ]
+    },
+    "unit_simplex_projection": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 75.3611,
+       "cost_usd": 0.7399
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 130.825,
+       "cost_usd": 0.2497
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 156.1,
+       "cost_usd": 1.2435
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 152.675,
+       "cost_usd": 0.6345
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 157.774,
+       "cost_usd": 0.2844
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 66.3116,
+       "cost_usd": 0.6905
+      },
+      {
+       "attempt": 2,
+       "speedup": 55.7663,
+       "cost_usd": 0.5265
+      },
+      {
+       "attempt": 3,
+       "speedup": 70.8673,
+       "cost_usd": 0.6871
+      },
+      {
+       "attempt": 4,
+       "speedup": 9.97372,
+       "cost_usd": 0.7986
+      },
+      {
+       "attempt": 5,
+       "speedup": 71.6704,
+       "cost_usd": 0.6702
+      }
+     ]
+    },
+    "upfirdn1d": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 45.9522,
+       "cost_usd": 0.6657
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 61.5293,
+       "cost_usd": 1.7002
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 105.308,
+       "cost_usd": 0.7158
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 106.935,
+       "cost_usd": 0.9051
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 106.368,
+       "cost_usd": 0.2492
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 25.0124,
+       "cost_usd": 0.5814
+      },
+      {
+       "attempt": 2,
+       "speedup": 44.9372,
+       "cost_usd": 0.9787
+      },
+      {
+       "attempt": 3,
+       "speedup": 17.8234,
+       "cost_usd": 0.3806
+      },
+      {
+       "attempt": 4,
+       "speedup": 57.1554,
+       "cost_usd": 0.8409
+      },
+      {
+       "attempt": 5,
+       "speedup": 25.7133,
+       "cost_usd": 0.421
+      }
+     ]
+    },
+    "wasserstein_dist": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 119.441,
+       "cost_usd": 0.3046
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 616.77,
+       "cost_usd": 0.5437
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 769.95,
+       "cost_usd": 0.7591
+      },
+      {
+       "iteration": 4,
+       "accepted": true,
+       "speedup": 778.741,
+       "cost_usd": 0.4471
+      },
+      {
+       "iteration": 5,
+       "accepted": true,
+       "speedup": 2345.77,
+       "cost_usd": 2.0727
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 204.882,
+       "cost_usd": 0.2959
+      },
+      {
+       "attempt": 2,
+       "speedup": 589.779,
+       "cost_usd": 0.4646
+      },
+      {
+       "attempt": 3,
+       "speedup": 598.773,
+       "cost_usd": 0.6233
+      },
+      {
+       "attempt": 4,
+       "speedup": 609.157,
+       "cost_usd": 0.3892
+      },
+      {
+       "attempt": 5,
+       "speedup": 317.275,
+       "cost_usd": 0.3849
+      }
+     ]
+    }
+   },
+   "dev_adjustments": {
+    "wasserstein_dist": "autohelix iteration 5 dropped (inverts the generator)",
+    "shortest_path_dijkstra": "best-of attempts 1 and 5 set to 3x (evaluator flaw)"
    }
   },
   "pilot2": {
@@ -1422,6 +3258,164 @@
       "capped_instances": 0,
       "dev_rescored": 66.21713979460955
      }
+    }
+   },
+   "dev_progress": {
+    "kmeans": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 116.461,
+       "cost_usd": 1.3334
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 151.787,
+       "cost_usd": 0.4064
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 283.238,
+       "cost_usd": 3.6222
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 89.1627,
+       "cost_usd": 1.4968
+      },
+      {
+       "attempt": 2,
+       "speedup": 211.053,
+       "cost_usd": 4.0283
+      },
+      {
+       "attempt": 3,
+       "speedup": 185.344,
+       "cost_usd": 3.0852
+      }
+     ]
+    },
+    "lu_factorization": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": false,
+       "speedup": null,
+       "cost_usd": 0.6703
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 115.179,
+       "cost_usd": 0.2728
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 278.94,
+       "cost_usd": 0.7575
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 122.155,
+       "cost_usd": 0.7661
+      },
+      {
+       "attempt": 2,
+       "speedup": 110.983,
+       "cost_usd": 0.7477
+      },
+      {
+       "attempt": 3,
+       "speedup": 88.231,
+       "cost_usd": 1.755
+      }
+     ]
+    },
+    "ode_stiff_vanderpol": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 714.361,
+       "cost_usd": 0.5126
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 1394.45,
+       "cost_usd": 0.6635
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 5239.62,
+       "cost_usd": 1.0003
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 685.57,
+       "cost_usd": 0.6416
+      },
+      {
+       "attempt": 2,
+       "speedup": 797.62,
+       "cost_usd": 0.689
+      },
+      {
+       "attempt": 3,
+       "speedup": 1163.81,
+       "cost_usd": 0.5953
+      }
+     ]
+    },
+    "stable_matching": {
+     "autohelix_dev": [
+      {
+       "iteration": 1,
+       "accepted": true,
+       "speedup": 48.5664,
+       "cost_usd": 0.3384
+      },
+      {
+       "iteration": 2,
+       "accepted": true,
+       "speedup": 72.1789,
+       "cost_usd": 1.1027
+      },
+      {
+       "iteration": 3,
+       "accepted": true,
+       "speedup": 85.7271,
+       "cost_usd": 1.9944
+      }
+     ],
+     "best_dev": [
+      {
+       "attempt": 1,
+       "speedup": 47.2213,
+       "cost_usd": 0.6078
+      },
+      {
+       "attempt": 2,
+       "speedup": 22.3581,
+       "cost_usd": 0.5344
+      },
+      {
+       "attempt": 3,
+       "speedup": 58.2555,
+       "cost_usd": 0.8158
+      }
+     ]
     }
    }
   }

@@ -1,11 +1,13 @@
-"""Figures for the AlgoTune comparison: held-out speedup per task, and speedup against cost.
+"""Figures for the AlgoTune comparison (30 tasks): median speedup by iteration, held-out
+speedup per task, and speedup against cost.
 
-    python results/algotune/make_plot.py    # writes assets/algotune_{tasks,cost}-{light,dark}.png
+    python results/algotune/make_plot.py    # writes assets/algotune_{steps,tasks,cost}-{light,dark}.png
 
-results.json holds every arm's best dev candidate per task, rescored on held-out instances
-(see examples/algotune/README.md). Speedups are held-out test, floored at 1x; the audit's
-adjustments are applied (`test_adjusted`) and aes_gcm_encryption is left out (an evaluator
-memory artifact during the runs).
+results.json holds every arm's best dev candidate per task, rescored on held-out instances,
+and every iteration's and attempt's dev speedup (see examples/algotune/README.md). Speedups are
+floored at 1x; the audit's adjustments are applied (`test_adjusted`, `dev_adjustments`).
+aes_gcm_encryption stays in as measured, flagged: the evaluator's memory use during the runs
+hurt AutoHelix and best-of there, not /goal.
 """
 
 import json
@@ -21,8 +23,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "..", "..", "assets")
 data = json.load(open(os.path.join(HERE, "results.json")))
 subset = data["sets"]["subset"]["tasks"]
-EXCLUDED = {"aes_gcm_encryption"}
-TASKS = sorted(t for t in subset if t not in EXCLUDED)
+progress = data["sets"]["subset"]["dev_progress"]
+TASKS = sorted(subset)
+FLAGGED = {"aes_gcm_encryption"}  # † without an adjustment
 
 ARMS = [  # (label, budget labels in results.json, marker); colors: categorical slots 1-3
     ("AutoHelix", ["autohelix@3", "autohelix@5"], "o"),
@@ -44,7 +47,87 @@ def speedup(task, label):
 
 
 def adjusted(task, label):
-    return "test_adjusted" in subset[task][label]
+    return "test_adjusted" in subset[task][label] or task in FLAGGED
+
+
+def dev_steps(task):
+    """Best-so-far dev speedup after 0..5 AutoHelix iterations and after 1..5 best-of attempts
+    (index 0: the baseline, 1x), floored at 1x, with the audit's adjustments."""
+    ah, best = [1.0], [1.0]
+    for k in range(1, 6):
+        accepted = [i["speedup"] for i in progress[task]["autohelix_dev"]
+                    if i["iteration"] <= k and i["accepted"] and i["speedup"]
+                    and not (task == "wasserstein_dist" and i["iteration"] == 5)]
+        ah.append(max(accepted + [1.0]))
+        attempts = [3.0 if task == "shortest_path_dijkstra" and a["attempt"] in (1, 5) and a["speedup"]
+                    else a["speedup"] or 1.0 for a in progress[task]["best_dev"] if a["attempt"] <= k]
+        best.append(max(attempts + [1.0]))
+    return ah, best
+
+
+def quartiles(values):
+    q = statistics.quantiles(values, n=4)
+    return q[0], statistics.median(values), q[2]
+
+
+def draw_steps(theme):
+    t = THEMES[theme]
+    blue, orange, aqua = t["series"]
+    steps = [dev_steps(task) for task in TASKS]
+    ks = list(range(6))
+    ah = [quartiles([s[0][k] for s in steps]) for k in ks]
+    best = [quartiles([s[1][k] for s in steps]) for k in ks]
+    goal_dev = statistics.median(max(subset[task]["goal"].get("dev_rescored") or 1.0, 1.0) for task in TASKS)
+    fig, ax = plt.subplots(figsize=(9, 5.4), dpi=160)
+    fig.patch.set_facecolor(t["surface"])
+    style(ax, t)
+    edges = ks + [5.5]
+    ax.fill_between(edges, [a[0] for a in ah] + [ah[-1][0]], [a[2] for a in ah] + [ah[-1][2]],
+                    step="post", color=blue, alpha=0.13, linewidth=0, zorder=1,
+                    label="AutoHelix: middle half of tasks")
+    for series, color, name, marker, z in ((best, aqua, "Best of N independent attempts", "s", 3),
+                                           (ah, blue, "AutoHelix, after N iterations", "o", 4)):
+        ys = [m[1] for m in series]
+        ax.step(edges, ys + [ys[-1]], where="post", color=color, linewidth=2.2, zorder=z, label=name)
+        ax.scatter(ks, ys, s=46, marker=marker, color=color, edgecolors=t["surface"], linewidths=1.5,
+                   zorder=z + 0.5)
+        ax.annotate(f"{ys[-1]:.0f}×", xy=(5.5, ys[-1]), xytext=(6, 0), textcoords="offset points",
+                    va="center", color=t["text"], fontsize=10.5, fontweight="bold")
+    ax.plot([0.6, 5.5], [goal_dev, goal_dev], color=orange, linewidth=2, linestyle=(0, (5, 3)), zorder=2,
+               label="Claude Code /goal, one session per task")
+    ax.annotate(f"{goal_dev:.0f}×", xy=(5.5, goal_dev), xytext=(6, 0), textcoords="offset points",
+                va="center", color=t["text"], fontsize=10.5, fontweight="bold")
+    held = [(k, statistics.median(speedup(task, f"{arm}@{k}") for task in TASKS), color, marker)
+            for arm, color, marker in (("autohelix", blue, "o"), ("best", aqua, "s")) for k in (3, 5)]
+    held.append((5.25, statistics.median(speedup(task, "goal") for task in TASKS), orange, "D"))
+    for k, y, color, marker in held:
+        ax.scatter([k + 0.18 if k in (3, 5) else k], [y], s=62, marker=marker, facecolors=t["surface"],
+                   edgecolors=color, linewidths=2, zorder=5)
+    ax.scatter([], [], s=50, marker="o", facecolors=t["surface"], edgecolors=t["muted"], linewidths=2,
+               label="held-out median (100 new instances)")
+    ax.set_yscale("log")
+    ax.set_ylim(0.8, 1500)
+    ax.yaxis.set_major_formatter(lambda v, _: f"{v:g}×")
+    ax.set_xlim(-0.3, 6.1)
+    ax.set_xticks(ks, ["baseline", "1", "2", "3", "4", "5"])
+    ax.set_xlabel("iterations (AutoHelix) or attempts (best of N)", color=t["muted"], fontsize=10)
+    ax.set_ylabel("median speedup over reference (dev)", color=t["muted"], fontsize=10)
+    handles, labels = ax.get_legend_handles_labels()
+    order = [labels.index(n) for n in ("AutoHelix, after N iterations", "AutoHelix: middle half of tasks",
+             "Best of N independent attempts", "Claude Code /goal, one session per task",
+             "held-out median (100 new instances)")]
+    ax.legend([handles[i] for i in order], [labels[i] for i in order], loc="upper left", frameon=False,
+              fontsize=9, labelcolor=t["text"])
+    fig.suptitle(f"AlgoTune, {len(TASKS)} random tasks: median speedup by iteration",
+                 x=0.07, ha="left", color=t["text"], fontsize=12.5, fontweight="bold")
+    ax.set_title("Lines: best accepted development score so far (100 dev instances). Open markers: the "
+                 "same candidates at 3 and 5,\nrescored on held-out instances generated after the runs. "
+                 "Claude Opus 5.5, 8 cores; audit adjustments applied.", loc="left", color=t["muted"],
+                 fontsize=8.8)
+    fig.tight_layout()
+    path = os.path.join(ASSETS, f"algotune_steps-{theme}.png")
+    fig.savefig(path, facecolor=t["surface"])
+    print("wrote", os.path.relpath(path))
 
 
 def cost(label):
@@ -97,13 +180,13 @@ def draw_tasks(theme):
     ax.set_xlabel("held-out speedup over AlgoTune's reference solve() (log scale)", color=t["muted"],
                   fontsize=10)
     ax.legend(loc="lower right", frameon=False, fontsize=9, labelcolor=t["text"])
-    fig.suptitle("AlgoTune, 29 random tasks: held-out speedup per task",
+    fig.suptitle(f"AlgoTune, {len(TASKS)} random tasks: held-out speedup per task",
                  x=0.02, ha="left", color=t["text"], fontsize=12.5, fontweight="bold")
     ax.set_title("Each arm's best development candidate, rescored on 100 instances generated after\n"
                  "the runs (10 runs each). Claude Opus 5.5, 8 cores. † audit adjustment: wasserstein dist\n"
                  "AutoHelix uses iteration 3 (iteration 5 inverts the generator); shortest path dijkstra\n"
-                 "best-of set to 3× (its output exploited an evaluator flaw). aes gcm encryption left out\n"
-                 "(an evaluator memory artifact during the runs).", loc="left", color=t["muted"], fontsize=8.3)
+                 "best-of set to 3× (its output exploited an evaluator flaw); aes gcm encryption as measured\n"
+                 "(the evaluator's memory use during the runs hurt AutoHelix and best-of there).", loc="left", color=t["muted"], fontsize=8.3)
     fig.tight_layout()
     path = os.path.join(ASSETS, f"algotune_tasks-{theme}.png")
     fig.savefig(path, facecolor=t["surface"])
@@ -141,7 +224,7 @@ def draw_cost(theme):
     ax.legend(loc="upper left", frameon=False, fontsize=9, labelcolor=t["text"])
     fig.suptitle(f"AlgoTune, {len(TASKS)} random tasks: speedup against cost",
                  x=0.07, ha="left", color=t["text"], fontsize=12.5, fontweight="bold")
-    ax.set_title("Held-out instances, floored at 1×, audit adjustments applied. Claude Opus 5.5. "
+    ax.set_title("Held-out instances, floored at 1×, audit adjustments applied, all 30 tasks. Claude Opus 5.5. "
                  "Best-of: independent one-iteration\nAutoHelix runs; /goal: one Claude Code session "
                  "per task, which stopped on its own (never at its $15 cap).",
                  loc="left", color=t["muted"], fontsize=8.8)
@@ -156,5 +239,6 @@ for _, labels, _ in ARMS:
         print(f"{label:12s} ${cost(label):7.2f}  geomean {geomean(label):6.1f}x  "
               f"median {statistics.median(speedup(t, label) for t in TASKS):6.1f}x")
 for theme in THEMES:
+    draw_steps(theme)
     draw_tasks(theme)
     draw_cost(theme)
