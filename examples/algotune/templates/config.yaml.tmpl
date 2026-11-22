@@ -33,7 +33,8 @@ observe:
   - name: dev
     command: sudo -n algotune-gate
     timeout: 3h
-    metrics: {{speedup: higher}}
+    metrics:
+      speedup: higher
 
 gates:
   - metric: speedup
