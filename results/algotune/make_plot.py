@@ -10,7 +10,9 @@ aes_gcm_encryption stays in as measured, flagged: the evaluator's memory use dur
 hurt AutoHelix and best-of there, not /goal.
 """
 
+import itertools
 import json
+import math
 import os
 import statistics
 
@@ -85,39 +87,46 @@ def style(ax, t):
 
 
 def step_costs(task):
-    """Agent cost after 0..5 AutoHelix iterations and after 0..5 best-of attempts."""
-    ah = [0.0] + [sum(i["cost_usd"] for i in progress[task]["autohelix_dev"] if i["iteration"] <= k)
-                  for k in range(1, 6)]
-    best = [0.0] + [sum(a["cost_usd"] for a in progress[task]["best_dev"] if a["attempt"] <= k)
+    """Agent cost after 0..5 AutoHelix iterations (in run order)."""
+    return [0.0] + [sum(i["cost_usd"] for i in progress[task]["autohelix_dev"] if i["iteration"] <= k)
                     for k in range(1, 6)]
-    return ah, best
+
+
+def best_of(task):
+    """Best of N independent attempts for N = 0..5, averaged over every subset of N of the 5
+    attempts (as pass@k is estimated), so the attempts' run order adds no noise: (speedup as the
+    geometric mean over subsets of the best, cost as N times the mean attempt cost)."""
+    attempts = [(3.0 if task == "shortest_path_dijkstra" and a["attempt"] in (1, 5) and a["speedup"]
+                 else max(a["speedup"] or 1.0, 1.0), a["cost_usd"]) for a in progress[task]["best_dev"]]
+    speed, cost = [1.0], [0.0]
+    for k in range(1, 6):
+        subsets = list(itertools.combinations(attempts, k))
+        speed.append(math.exp(statistics.mean(math.log(max(a[0] for a in c)) for c in subsets)))
+        cost.append(statistics.mean(sum(a[1] for a in c) for c in subsets))
+    return speed, cost
 
 
 def draw_progress(theme):
     t = THEMES[theme]
     blue, orange, aqua = t["series"]
     n = len(TASKS)
-    steps = [dev_steps(task) for task in TASKS]
-    costs = [step_costs(task) for task in TASKS]
+    ah_speed = [dev_steps(task)[0] for task in TASKS]
+    ah_cost = [step_costs(task) for task in TASKS]
+    best = [best_of(task) for task in TASKS]
     fig, ax = plt.subplots(figsize=(9, 5.4), dpi=160)
     fig.patch.set_facecolor(t["surface"])
     style(ax, t)
-    end = 12.6
-    for arm, (name, color, marker, z) in enumerate((("Best of 1-5 independent attempts", aqua, "s", 3),
-                                                    ("AutoHelix: iterations 1-5", blue, "o", 4))):
-        arm = 1 - arm  # steps/costs hold AutoHelix first, best-of second
-        xs = [sum(c[arm][k] for c in costs) / n for k in range(6)]
-        ys = [statistics.geometric_mean([s[arm][k] for s in steps]) for k in range(6)]
-        edge = xs + [end if arm == 0 else xs[-1] + 0.6]
-        ax.step(edge, ys + [ys[-1]], where="post", color=color, linewidth=2.2, zorder=z, label=name)
-        ax.scatter(xs, ys, s=48, marker=marker, color=color, edgecolors=t["surface"], linewidths=1.5,
-                   zorder=z + 0.5)
-        word = "iteration" if arm == 0 else "attempt"
-        for k in (1, 3, 5):
-            ax.annotate(f"{word} {k}", xy=(xs[k], ys[k]), xytext=(-5, 7) if arm == 0 else (4, -13),
-                        ha="right" if arm == 0 else "left", textcoords="offset points",
-                        color=t["muted"], fontsize=8.5)
-        ax.annotate(f"{ys[-1]:.0f}×", xy=(edge[-1], ys[-1]), xytext=(6, 0), textcoords="offset points",
+    series = [("Best of N independent attempts", aqua, "s", 3,
+               [sum(b[1][k] for b in best) / n for k in range(6)],
+               [statistics.geometric_mean([b[0][k] for b in best]) for k in range(6)]),
+              ("AutoHelix: iterations 1-5", blue, "o", 4,
+               [sum(c[k] for c in ah_cost) / n for k in range(6)],
+               [statistics.geometric_mean([s[k] for s in ah_speed]) for k in range(6)])]
+    for name, color, marker, z, xs, ys in series:
+        ax.step(xs, ys, where="post", color=color, linewidth=2.2, zorder=z, label=name)
+        ax.scatter(xs[1:], ys[1:], s=48, marker=marker, color=color, edgecolors=t["surface"],
+                   linewidths=1.5, zorder=z + 0.5)
+        ax.annotate(f"{ys[-1]:.0f}×", xy=(xs[-1], ys[-1]), xytext=(9, 0), textcoords="offset points",
                     va="center", color=t["text"], fontsize=10.5, fontweight="bold")
     goal_x = sum(subset[task]["goal"]["cost_usd"] for task in TASKS) / n
     goal = [max(subset[task]["goal"].get("dev_rescored") or 1.0, 1.0) for task in TASKS]
@@ -134,13 +143,14 @@ def draw_progress(theme):
     ax.set_ylabel("speedup over reference (geometric mean)", color=t["muted"], fontsize=10)
     handles, labels = ax.get_legend_handles_labels()
     order = [labels.index(name) for name in ("AutoHelix: iterations 1-5",
-             "Claude Code /goal: one session per task", "Best of 1-5 independent attempts")]
+             "Claude Code /goal: one session per task", "Best of N independent attempts")]
     ax.legend([handles[i] for i in order], [labels[i] for i in order], loc="upper left",
               frameon=False, fontsize=9, labelcolor=t["text"])
     fig.suptitle(f"AlgoTune, {n} random tasks: speedup against what the agent cost",
                  x=0.07, ha="left", color=t["text"], fontsize=12.5, fontweight="bold")
     ax.set_title("Best development score so far (100 dev instances), floored at 1×; audit adjustments "
-                 "applied.\nClaude Opus 5.5, 8 cores. /goal stopped on its own in every task.",
+                 "applied. Best of N:\naveraged over every N of 5 attempts. Claude Opus 5.5, 8 cores. "
+                 "/goal stopped on its own in every task.",
                  loc="left", color=t["muted"], fontsize=8.8)
     fig.tight_layout()
     path = os.path.join(ASSETS, f"algotune_progress-{theme}.png")
