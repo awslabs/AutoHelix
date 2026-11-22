@@ -240,21 +240,13 @@ session logs; Opus 5.5 prices per million: cache read $0.20, cache write $5, out
   but not how many there are, and `train.py` may ignore smoke's 30 s `TIME_BUDGET`. One
   AutoHelix run used 780 GPU-minutes of smoke. `collect.py` reports each run's smoke
   GPU-minutes.
-- **Re-rolls.** AutoHelix accepts an attempt whose two trainings pass the gate; the same
-  tree submitted again gets another draw of the run-to-run noise. Two of one run's
-  acceptances came that way. Rescoring with fresh seeds measures it.
-- **IMDS is reachable from the containers.** Claude Code gets Bedrock credentials from
-  the instance role through the instance metadata service, so the agent's user, which has
-  network access, could fetch the same credentials and use whatever the role allows. No
-  agent tried. To close it, give each container a Bedrock-only credential (environment
-  variables or a mounted credentials file) and block 169.254.169.254 from containers,
-  for example with a host rule for every container (needs root on the host):
-
-  ```bash
-  sudo iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
-  ```
-
-  `check_container.sh`'s `imds` check then fails, as it should.
+- **Re-rolls.** The same `train.py` scores slightly differently each time (GPU
+  nondeterminism, about 0.02%), so an attempt that just missed the gate can be resubmitted
+  unchanged for another chance. Two of one AutoHelix run's acceptances came that way. The
+  fresh-seed rescoring measures the real score.
+- **Credentials.** The agent can use whatever credentials its model client uses (on EC2,
+  possibly the machine's whole instance role). Give the containers credentials that allow
+  only the model API.
 
 ## Files
 

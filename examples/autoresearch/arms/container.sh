@@ -20,9 +20,9 @@
 #   the training shards, the validation shard and the tokenizer in /srv/ar-data, and the
 #   arms' base commit (arms/base.git) in /srv/ar, both out of the agent's reach;
 # - arms/runs/NAME at /srv/ar/state (root only): the run's logs and ar-gpu's counter and logs;
-# - its own PID namespace (Docker's) and a bridge network: IMDS answers there, so Claude
-#   Code reaches Bedrock with the instance role (in AWS_REGION, default us-west-2), and so
-#   could any process of the agent (README.md, "Known limitations");
+# - its own PID namespace (Docker's) and a bridge network, so Claude Code reaches the model
+#   API with the machine's credentials (AWS_REGION, default us-west-2), and so could any
+#   process of the agent (README.md, "Known limitations");
 # - seccomp=unconfined and systempaths=unconfined, for ar/sandbox.sh's namespaces and fresh
 #   /proc (the agent's user has no capabilities either way).
 # Nothing else of the host: no other project or arm, no test shard.

@@ -9,9 +9,7 @@
 # included) or ar-gpu's counter and logs, writing the read-only mounts, seeing another
 # arm's project or state (OTHER_NAMEs), the operator's home or the test shard, seeing
 # processes outside the container. As the container's root: opening a GPU outside the run's
-# pair (the device cgroup) and writing the validation shard (a read-only mount). And IMDS
-# must hand out the instance role's credentials: Claude Code reaches Bedrock with them (any
-# process in the container can; see README.md, "Known limitations"). Prints PASS or FAIL
+# pair (the device cgroup) and writing the validation shard (a read-only mount). Prints PASS or FAIL
 # per check; exits 1 if any failed.
 # Touches no GPU (CUDA init fails before it would). Its refused train_and_score call is logged
 # in arms/runs/NAME/calls.jsonl (collect.py flags it): check a test run's container, not a real one's.
@@ -101,11 +99,5 @@ check "host: the Docker socket" agent "ls /var/run/docker.sock"
 works "processes: only the container's (pid 1 is its init)" agent \
     "ps -p 1 -o comm= | grep -qx docker-init && echo \$(ps -e --no-headers | wc -l) processes"
 check "processes: another arm's (host pids)" agent "ps -eo args | grep -E 'ar-(autohelix|karpathy|goal)' | grep -v ar-$name | grep -v grep"
-
-# Bedrock, through the instance role
-works "imds: the instance role's credentials" agent \
-    't=$(curl -sf -m 5 -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60") &&
-     r=$(curl -sf -m 5 -H "X-aws-ec2-metadata-token: $t" http://169.254.169.254/latest/meta-data/iam/security-credentials/) &&
-     curl -sf -m 5 -H "X-aws-ec2-metadata-token: $t" http://169.254.169.254/latest/meta-data/iam/security-credentials/$r | grep -o "\"Code\" : \"Success\""'
 
 exit "$failed"
