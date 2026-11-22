@@ -238,8 +238,7 @@ def main() -> int:
     s.add_argument("--test-data", required=True)
     s.add_argument("--dev-data", required=True)
     s.add_argument("--results", default="results", help="folder under --rescore")
-    s.add_argument("--memory", default="32g", help="container memory (aes_gcm_encryption: the "
-                   "evaluator holds every problem's pickle, ~29 GB, so it needs more)")
+    s.add_argument("--memory", default="32g", help="container memory")
     s.add_argument("--limit", type=int, help="only the first N instances (smoke test)")
     s.add_argument("--only", help="only this candidate (smoke test)")
     args = parser.parse_args()

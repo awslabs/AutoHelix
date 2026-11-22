@@ -3421,6 +3421,6 @@
   }
  },
  "notes": {
-  "aes_gcm_encryption": "evaluator artifact for every arm: the evaluator held all 100 problems (29 GB) in memory, so dev evaluations were OOM-killed at 32 GB during the runs (best-of has no valid candidate; AutoHelix padded its calls to survive). Rescored at 96 GB. Excluded from the adjusted summary."
+  "aes_gcm_encryption": "evaluator artifact for every arm: the evaluator held all 100 problems (29 GB) in memory, so dev evaluations were OOM-killed at 32 GB during the runs (best-of has no valid candidate; AutoHelix padded its calls to survive). Rescored at 96 GB. Included as measured and flagged in the summaries and figures."
  }
 }

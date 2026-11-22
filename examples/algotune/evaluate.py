@@ -551,7 +551,9 @@ def _child(conn, kind: str, task: str, solver_dir: str, scratch: str,
 
 def _materialize(value):
     """AlgoTune's deep_materialize_fast (isolated_benchmark.py:246), timed with the solve:
-    array-likes become arrays, containers are walked. Like it, imports numpy on every call."""
+    array-likes become arrays, containers are walked. Like it, imports numpy on every call.
+    Adapted from AlgoTune (MIT License, Copyright (c) 2025 Ori Press and the AlgoTune
+    contributors)."""
     import numpy  # noqa: PLC0415
 
     if hasattr(value, "__array__"):

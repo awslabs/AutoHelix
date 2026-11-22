@@ -23,7 +23,8 @@ geometric mean) and faster than `/goal` on **27 of 30** (2.0×).
 ## Results
 
 30 tasks sampled from AlgoTune's 154 (`subset-30.txt`, seed 20261119), Claude Opus 5.5,
-November 2026. Each arm's best candidate on the development instances, rescored on 100
+November 2026. (`results.json` also has `pilot2`: four tasks from an earlier pilot with
+three iterations and three attempts, rescored the same way, not part of these numbers.) Each arm's best candidate on the development instances, rescored on 100
 **held-out** instances generated after the runs (10 runs each). A speedup below 1× or an
 invalid output counts as 1×.
 
@@ -75,11 +76,13 @@ same goal text, the same 100 development instances and the same evaluation comma
   so each attempt is exactly an AutoHelix first iteration; the score is the best of N.
   The curve averages over every choice of N of the five attempts.
 - **Claude Code `/goal`:** one `claude -p "/goal <the same goal>"` session per task, with a
-  $15 safety cap that no session reached (the most any spent was $10.70; every one stopped
+  $15 safety cap that no session reached (the most any spent was $10.67; every one stopped
   on its own). It could run the same evaluation itself as often as it liked.
 
-Each container had 8 physical cores (Intel Xeon Platinum 8275CL), no GPU, 32 GB, and no
-network beyond the model API. Thread variables started at 1, and agents were told they may
+Each container had 8 physical cores (Intel Xeon Platinum 8275CL), no GPU and 32 GB. Its
+network reached the internet (the model API needs it) with the instance metadata endpoint
+blocked, the same for every arm. Agents could look things up or install packages; the
+held-out rescoring ran each solver from its own files in a fresh container without network. Thread variables started at 1, and agents were told they may
 raise them (the reference stays single-threaded).
 
 ## How it is measured
@@ -138,6 +141,8 @@ Other findings, not adjusted because they hold on AlgoTune's own instances:
   and threads were allowed for every arm.
 - One run per task for AutoHelix and `/goal`; the best-of attempts (five per task) show how
   much a single agent call varies.
+- The agents' containers had internet access (see above); nothing suggests an arm used it to
+  fetch solutions, but it wasn't blocked.
 - `/goal` decides by itself when it is done. A longer `/goal` session (told to keep going)
   would add points further along the cost axis; we didn't run that.
 
