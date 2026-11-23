@@ -5,7 +5,7 @@
   Observe    bench (speed ↑, mem_mb ↓)
   Scope      editable: sort.py
   Budget     7 iterations · $10.00 · 30m each
-  Steer      autohelix view krp3 · hint --run krp3 "…" · stop krp3
+  Steer      autohelix view krp3 · autohelix hint --run krp3 "…" · autohelix stop krp3
   ────────────────────────────────────────────────────────────────────────────────────────────────
              time    cost     speed ↑         mem_mb ↓
   · base                       46.9              120
@@ -25,7 +25,8 @@
   mem_mb     120 → 95  -21%  iter 6
   run        7 iterations · 3 accepted · 38m 43s · $2.65
   landed     3 commits on main
-  next       autohelix view krp3 · autohelix resume krp3
-             .autohelix/runs/20261115-1402-sorting-krp3/
+  next       autohelix view krp3      the run's page in your browser
+             autohelix resume krp3    one more iteration (-n N for more)
+  folder     .autohelix/runs/20261115-1402-sorting-krp3/
   page       .autohelix/runs/20261115-1402-sorting-krp3/report.html
   summary    .autohelix/runs/20261115-1402-sorting-krp3/report.md

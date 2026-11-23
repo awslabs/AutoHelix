@@ -13,4 +13,8 @@
   ✓ 3      2m 06s   $0.32  35,310.7 753×          96 -20%
   ⠋ 4      1m 12s  agent
 
-  autohelix view krp3 · hint --run krp3 "…" · stop krp3 · Ctrl-C now
+  from another terminal:
+    autohelix view krp3              watch it in your browser
+    autohelix hint --run krp3 "…"    tell the agent something (next iteration)
+    autohelix stop krp3              stop after this iteration
+  Ctrl-C here stops now (accepted work is kept)

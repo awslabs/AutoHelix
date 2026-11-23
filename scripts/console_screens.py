@@ -219,7 +219,8 @@ def run_in_pty(argv, cwd, env, width, *, keys=(), frame_when=None, timeout=180):
     return snapshot(screen), live, code
 
 
-MENU = "(q: quit)"  # the last line the entry screen's menu draws
+MENU = "(q: quit)"  # the last line a menu draws ("Which agent?")
+QUESTION = "Enter/q"  # the entry screen's one question
 
 
 def showing(*texts: str):
@@ -357,11 +358,11 @@ def main() -> int:
                 run_in_pty([*cli, "run", "-n", "3", "--no-report"], project, env, width,
                            keys=[(4.0, b"\x03")], timeout=60)
                 # With runs, as drawn while choosing; q quits (exit 0).
-                _, live, code = run_in_pty([*cli], project, env, width, keys=[(MENU, b"q")],
-                                           frame_when=showing(MENU), timeout=30)
+                _, live, code = run_in_pty([*cli], project, env, width, keys=[(QUESTION, b"q")],
+                                           frame_when=showing(QUESTION), timeout=30)
                 record(f"entry-runs-{width}", live or [], width, f"autohelix · runs (then q) · {width} cols", code)
                 # The same, Enter: the first option starts the (fake) agent with its first prompt.
-                final, _, code = run_in_pty([*cli], project, env, width, keys=[(MENU, b"\r")], timeout=30)
+                final, _, code = run_in_pty([*cli], project, env, width, keys=[(QUESTION, b"\r")], timeout=30)
                 record(f"entry-ask-{width}", final, width, f"autohelix · runs, Enter · {width} cols", code)
                 # Two agents: the labels say "an agent", then "Which agent?"; q there quits.
                 two = environment(root, width, ("claude", "codex"))
@@ -372,8 +373,8 @@ def main() -> int:
                        f"autohelix · two agents, ↓ Enter (then q) · {width} cols", code)
 
                 configs = make_project(root, "half-done", True)  # autohelix/sorting/config.yaml, no runs yet
-                _, live, code = run_in_pty([*cli], configs, env, width, keys=[(MENU, b"q")],
-                                           frame_when=showing(MENU), timeout=30)
+                _, live, code = run_in_pty([*cli], configs, env, width, keys=[(QUESTION, b"q")],
+                                           frame_when=showing(QUESTION), timeout=30)
                 record(f"entry-config-{width}", live or [], width,
                        f"autohelix · a config, no runs (then q) · {width} cols", code)
 

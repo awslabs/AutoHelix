@@ -265,7 +265,7 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
         tail = table.ending(_outcome(run), spent=terminal.money(run["progress"]["cost_usd"],
                                                                  run["progress"]["cost_incomplete"]),
                             landing=_landed(run, accepted), commands=commands, files=list(saved.files),
-                            folder=saved.folder)
+                            folder=saved.folder, target=run.get("target_branch") or "")
     return head, rows, tail
 
 

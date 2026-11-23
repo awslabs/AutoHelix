@@ -549,12 +549,14 @@ class Table:
                              width or self._label_width(word))
 
     def ending(self, outcome: tuple[str, str, str | None], *, spent: str, landing: tuple[str, str, str | None] | None,
-               commands: list[str], files: list[tuple[str, str]], folder: str = "") -> list[Text]:
+               commands: list[str], files: list[tuple[str, str]], folder: str = "", target: str = ""
+               ) -> list[Text]:
         """After a rule: the outcome, each metric's baseline → tip value with its change,
         the run's totals, what landed (`landing`: label, text, style; the commits'
-        summaries are on the run page), then what to type next, ending with the run's
-        `folder` (`.autohelix/runs/<id>/`; on a line of its own when it doesn't fit), and
-        the files written (label, path)."""
+        summaries are on the run page), then what to type next (one command per line,
+        with what it does: `command_hint`, `target` the branch the run lands on), the
+        run's `folder` (`.autohelix/runs/<id>/`), and the files
+        written (label, path)."""
         iterations = [row for row in self.rows if row.iteration > 0]
         accepted = sum(row.accepted for row in iterations)
         seconds = sum(row.seconds or 0 for row in iterations)
@@ -582,18 +584,10 @@ class Table:
         if landing:
             label, text, landing_style = landing
             lines += self._wrapped(label, text, landing_style, "dim", width)
-        if 2 + width + len(" · ".join(commands)) <= self.width:
-            parts: list[tuple[str, str | None]] = []
-            for i, command in enumerate(commands):
-                parts += [(" · ", "dim")] * bool(i) + [(command, TEAL)]
-            if folder and 2 + width + len(" · ".join([*commands, folder])) <= self.width:
-                parts += [(" · ", "dim")] * bool(commands) + [(clean(folder), None)]
-                folder = ""
-            lines.append(field("next", *parts))
-        else:  # one per line
-            lines += [field("next" if i == 0 else "", (command, TEAL)) for i, command in enumerate(commands)]
+        lines += command_lines(Text(f"  {'next':<{width}}", style="dim"), " " * (2 + width),
+                               [(command, command_hint(command, target)) for command in commands], self.width)
         if folder:  # not cut: a path is only useful whole
-            lines.append(_parts(("  ", None), (" " * width, None), (clean(folder), None)))
+            lines.append(_parts(("  ", None), (f"{'folder':<{width}}", "dim"), (clean(folder), None)))
         for label, path in files:  # not cut: a path is only useful whole
             lines.append(_parts(("  ", None), (f"{label:<{width}}", "dim"), (clean(path), None)))
         return lines
@@ -608,23 +602,55 @@ def live_line(label: str, seconds: float, what: str, frame: int = 0, width: int 
                width)
 
 
-def with_room(renderable, under: Text | None = None) -> Group:
-    """`renderable` (then a blank line and the line `under` it) with `ROOM` blank lines
+def with_room(renderable, under: list[Text] = ()) -> Group:
+    """`renderable` (then a blank line and the lines `under` it) with `ROOM` blank lines
     under it: a live row shown at the bottom of the terminal doesn't sit on its last
     lines (gone with the live display)."""
-    return Group(renderable, *[Text(), under] * (under is not None), *[Text() for _ in range(ROOM)])
+    return Group(renderable, *[Text(), *under] * bool(under), *[Text() for _ in range(ROOM)])
 
 
-def steer_text(short: str, interrupt: bool = True) -> str:
-    """The commands that steer a running run: `autohelix view krp3 · hint --run krp3 "…" ·
-    stop krp3` (after this iteration), then `Ctrl-C now` (interrupt, progress kept) in
-    the terminal that runs it."""
-    return f'autohelix view {short} · hint --run {short} "…" · stop {short}' + " · Ctrl-C now" * interrupt
+def steer_commands(short: str, view: bool = True) -> list[tuple[str, str]]:
+    """The commands that steer a running run from another terminal, each with what it
+    does: look at it (`view`: not from the view itself), send its agent a hint, stop it
+    after the current iteration."""
+    return ([(f"autohelix view {short}", "watch it in your browser")] if view else []) + [
+        (f'autohelix hint --run {short} "…"', "tell the agent something (next iteration)"),
+        (f"autohelix stop {short}", "stop after this iteration")]
 
 
-def steer_line(short: str, width: int) -> Text:
-    """`run`/`resume`'s line under the live row (the header has long scrolled away)."""
-    return cut(Text("  " + steer_text(short), style="dim"), width)
+def steer_text(short: str) -> str:
+    """The steering commands on one line (a piped run's `Steer` header field)."""
+    return " · ".join(command for command, _ in steer_commands(short))
+
+
+def steer_lines(short: str, width: int, indent: str = "  ", view: bool = True,
+                ctrl_c: str = "stops now (accepted work is kept)") -> list[Text]:
+    """What steers a running run, under its live row (`run`/`resume`: the header has
+    long scrolled away; `view --terminal`, without `view`): `from another terminal:`,
+    the commands with what they do (`command_lines`), then what Ctrl-C does here."""
+    return [cut(Text(f"{indent}from another terminal:", style="dim"), width),
+            *command_lines(Text(indent + "  "), indent + "  ", steer_commands(short, view), width),
+            cut(Text(f"{indent}Ctrl-C here {ctrl_c}", style="dim"), width)]
+
+
+def command_lines(first: Text, rest: str, commands: list[tuple[str, str]], width: int) -> list[Text]:
+    """Commands one per line, after `first` (the next ones after `rest`, as wide), each
+    with what it does, dim, in one column after the widest `autohelix` command (a longer
+    command, `git merge autohelix/<id>`, has its hint after it). The hints are left out
+    when one doesn't fit; a command is cut only past the terminal's width."""
+    gap = 4
+    column = max((len(c) for c, _ in commands if c.startswith("autohelix ")),
+                 default=max((len(c) for c, _ in commands), default=0))
+    ends = [max(column, len(c)) + gap + len(hint) for c, hint in commands if hint]
+    hints = first.cell_len + max(ends, default=0) <= width
+    lines = []
+    for i, (command, hint) in enumerate(commands):
+        line = first.copy() if i == 0 else Text(rest)
+        line.append(command, style=TEAL)
+        if hints and hint:
+            line.append(" " * (max(column, len(command)) - len(command) + gap)).append(hint, style="dim")
+        lines.append(cut(line, width))
+    return lines
 
 
 def outcome(stop: dict | None, error: BaseException | None, interrupted_at: int | None) -> tuple[str, str, str | None]:
@@ -706,6 +732,24 @@ def next_commands(short: str, view: bool = True, also=()) -> list[str]:
     `autohelix land <id>` when the target can fast-forward, `git merge autohelix/<id>`
     when it diverged)."""
     return ([f"autohelix view {short}"] if view else []) + [f"autohelix resume {short}", *also]
+
+
+def command_hint(command: str, target: str = "") -> str:
+    """What a command `next_commands` suggests does, in a few words: the end block's
+    column after it. The landing commands are `runs.landing_words`' three shapes;
+    `target`, the branch they land on (else `the branch`)."""
+    branch = target or "the branch"
+    if command.startswith("autohelix view "):
+        return "the run's page in your browser"
+    if command.startswith("autohelix resume "):
+        return "one more iteration (-n N for more)"
+    if command.startswith("autohelix land "):
+        return f"put its commits on {branch}"
+    if command.startswith("git merge "):
+        return f"merge its commits into {branch} by hand"
+    if command.startswith("git cherry-pick "):
+        return f"apply its newer commits to {branch} by hand"
+    return ""
 
 
 def shown_path(path) -> str:

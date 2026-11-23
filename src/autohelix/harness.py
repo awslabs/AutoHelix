@@ -519,7 +519,7 @@ class Harness:
                                     getattr(self.agent, "executable", None))
         fields = terminal.run_fields(self.config, budget_text(budget, start_iter - 1), agent)
         if not self.console.is_terminal:  # no live row to show them under
-            fields.append(("Steer", terminal.steer_text(short_id(self.paths.run_id), interrupt=False)))
+            fields.append(("Steer", terminal.steer_text(short_id(self.paths.run_id))))
         terminal.print_lines(self.console, terminal.header(title, fields, width, terminal.shows_mark(self.console)))
         self._table = terminal.Table.of(self.config, width)
         if start_iter > 1:  # resuming: the rows so far, for context
@@ -553,8 +553,8 @@ class Harness:
         already showing (the whole iteration's, so its row stays up between phases), else
         in a new one."""
         # Not on the terminal's last line; under it, the commands that steer the run.
-        steer = terminal.steer_line(short_id(self.paths.run_id), self.console.width or 100)
-        renderable = terminal.with_room(renderable, steer if self.console.is_terminal else None)
+        steer = terminal.steer_lines(short_id(self.paths.run_id), self.console.width or 100)
+        renderable = terminal.with_room(renderable, steer if self.console.is_terminal else [])
         outer = getattr(self, "_live_display", None)
         if outer is not None:
             previous = outer.renderable
@@ -1917,7 +1917,8 @@ class Harness:
             commands = terminal.next_commands(short, also=self._relation()[1].commands)
             lines = table.ending(outcome, spent=format_total_cost(self.history.cost_usages), landing=self._landing,
                                  commands=commands, files=self._files,
-                                 folder=terminal.shown_path(self.paths.run_dir) + "/")
+                                 folder=terminal.shown_path(self.paths.run_dir) + "/",
+                                 target=self.run_info.get("target_branch") or "")
         except Exception as e:  # noqa: BLE001 - the outcome line still shows
             self.log.warn(f"Could not render the ending: {e}")
             lines = [Text(f"  {outcome[0]}  {outcome[1]}")]
