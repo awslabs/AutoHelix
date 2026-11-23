@@ -365,10 +365,6 @@ class ClaudeCodeAgent:
             env.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
         else:
             env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
-        if self.config.timeout is not None:
-            # `claude -p` stops background tasks 10 minutes after the last turn; with a
-            # deadline (which kills the whole process group) wait for them instead.
-            env.setdefault("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")
 
         try:
             result = run_process(

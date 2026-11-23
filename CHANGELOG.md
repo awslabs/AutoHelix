@@ -172,12 +172,9 @@ has the checklist.
 
 ### Fixed
 
-- With `agent.timeout`, Claude Code waits for the agent's background tasks
-  instead of stopping them 10 minutes after its last turn (the timeout still
-  ends the call).
-- When no cost is known for a run and its calls give one reason, the end says
-  it (`cost unavailable: set agent.model ...` for Codex, whose output names no
-  model).
+- When no cost is known for a run and all its calls give the same reason, the
+  end says it (`cost unavailable: set agent.model` for Codex, whose output names
+  no model).
 - An OpenCode `error` event (an invalid key) fails the call, the main agent's
   or a judge's: OpenCode exits 0 after one, which read as a successful call
   that changed nothing.

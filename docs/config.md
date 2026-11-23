@@ -583,10 +583,7 @@ supports it, the agent also sees the time left, so it can wrap up and write
 notes first: Claude Code through hooks after each tool call, Codex through the
 same hook on CLI versions that support it (an older Codex warns and runs without
 hints), OpenCode through a plugin. Every agent can run
-`bash "$AUTOHELIX_TIME_LEFT_SCRIPT"`, and the prompt says so. With a timeout,
-Claude Code also waits for the agent's background tasks after its last turn
-(`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`, unless you set it): without one, it
-stops them 10 minutes after that turn. See
+`bash "$AUTOHELIX_TIME_LEFT_SCRIPT"`, and the prompt says so. See
 [ML Experiments](ml-experiments.md) for when this matters.
 
 ## Prompt template

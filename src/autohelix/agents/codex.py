@@ -286,8 +286,8 @@ class CodexAgent:
         model = self._model or self.config.model
         if not self._usage["usage_complete"]:
             self._usage["cost_unavailable_reason"] = "Codex did not report complete successful usage."
-        elif not model:
-            self._usage["cost_unavailable_reason"] = "set agent.model (Codex's output names no model)"
+        elif not model:  # Codex's output names no model (0.171)
+            self._usage["cost_unavailable_reason"] = "set agent.model"
         else:
             self._usage.update(estimate_cost(
                 self._usage, model, output_includes_reasoning=self._usage.get("output_includes_reasoning", True),
@@ -295,7 +295,8 @@ class CodexAgent:
         if self._usage.get("cost_unavailable_reason") and error is None:
             self._emit(
                 event_callback, AgentEventKind.WARNING,
-                f"Cost unavailable: {self._usage['cost_unavailable_reason']}",
+                f"Cost unavailable: {self._usage['cost_unavailable_reason']}"
+                + (" (Codex's output names no model)" if not model else ""),
             )
 
         success = result.exit_code == 0 and error is None

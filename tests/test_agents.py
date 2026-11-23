@@ -330,52 +330,6 @@ class TestClaudeCodeRunResult:
         assert result.error == "API Error: invalid model"
 
 
-class TestClaudeCodeBackgroundWait:
-    """With a deadline, `claude -p` waits for background tasks after its last turn
-    (its default stops them after 10 minutes); without one, the default stays."""
-
-    @staticmethod
-    def _env(config, environ=None):
-        import os
-        from pathlib import Path
-        from unittest.mock import MagicMock, patch
-        from autohelix.agents.claudecode import ClaudeCodeAgent
-
-        agent = ClaudeCodeAgent(config=config)
-        captured = {}
-
-        def fake_run_process(**kwargs):
-            captured.update(kwargs.get("env") or {})
-            result = MagicMock()
-            result.exit_code, result.timed_out = 0, False
-            return result
-
-        with patch("autohelix.agents.claudecode.run_process", side_effect=fake_run_process), \
-                patch.dict(os.environ, environ or {}):
-            agent.run(copy_path=Path("/tmp/fake"), prompt="test", iteration=1, log_path=Path("/tmp/fake.log"),
-                      event_callback=lambda e: None, project_path=Path("/tmp/project"))
-        return captured
-
-    def test_a_timeout_waits_for_background_tasks(self):
-        assert self._env(AgentConfig(timeout=600))["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "0"
-
-    def test_without_a_timeout_claude_codes_default_stays(self):
-        import os
-        with patch_env_without("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"):
-            assert "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS" not in self._env(AgentConfig())
-
-    def test_a_value_the_user_set_is_kept(self):
-        env = self._env(AgentConfig(timeout=600), {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "60000"})
-        assert env["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "60000"
-
-
-def patch_env_without(name):
-    import os
-    from unittest.mock import patch
-    environ = {k: v for k, v in os.environ.items() if k != name}
-    return patch.dict(os.environ, environ, clear=True)
-
-
 class TestClaudeCodeAutoMemory:
     def test_auto_memory_disabled_sets_env(self):
         """When auto_memory is False, env should include CLAUDE_CODE_DISABLE_AUTO_MEMORY."""

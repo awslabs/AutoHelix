@@ -70,8 +70,12 @@ def format_total_cost(usages: Iterable[dict]) -> str:
     usages = list(usages)
     total = summarize_costs(usages)
     if total.cost_usd is None:
-        reasons = {u["cost_unavailable_reason"] for u in usages
-                   if u.get("cost_usd") is None and u.get("cost_unavailable_reason")}
-        return f"cost unavailable: {reasons.pop()}" if len(reasons) == 1 else "cost unavailable"
+        # Shown only when every unpriced call gives the same reason, a plain string (usage
+        # records can come from files candidate code writes: cleaned, never trusted).
+        reasons = {reason if isinstance(reason := u.get("cost_unavailable_reason"), str) else None
+                   for u in usages if u.get("cost_usd") is None}
+        reason = reasons.pop() if len(reasons) == 1 else None
+        reason = clean(reason, 80).rstrip(".") if reason else ""
+        return f"cost unavailable: {reason}" if reason else "cost unavailable"
     text = format_cost(total.cost_usd)
     return f"{text} (incomplete)" if total.incomplete else text
