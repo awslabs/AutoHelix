@@ -152,7 +152,7 @@ class CodexAgent:
 
         event_type = payload.get("type")
         if isinstance(payload.get("model"), str) and payload["model"]:
-            self._model = payload["model"]  # unconfirmed: which events name it (if any) varies by version
+            self._model = payload["model"]  # Codex 0.171 names none (checked); kept for a version that does
         if event_type in {"thread.started", "turn.started"}:
             self._emit(event_callback, AgentEventKind.STATUS, event_type)
             return

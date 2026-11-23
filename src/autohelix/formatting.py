@@ -65,9 +65,13 @@ def format_cap(cost: float) -> str:
 
 
 def format_total_cost(usages: Iterable[dict]) -> str:
-    """Describe a total as incomplete when some agent calls have no known cost."""
+    """Describe a total as incomplete when some agent calls have no known cost; an
+    unavailable one says why when its calls give one reason (`set agent.model ...`)."""
+    usages = list(usages)
     total = summarize_costs(usages)
     if total.cost_usd is None:
-        return "cost unavailable"
+        reasons = {u["cost_unavailable_reason"] for u in usages
+                   if u.get("cost_usd") is None and u.get("cost_unavailable_reason")}
+        return f"cost unavailable: {reasons.pop()}" if len(reasons) == 1 else "cost unavailable"
     text = format_cost(total.cost_usd)
     return f"{text} (incomplete)" if total.incomplete else text

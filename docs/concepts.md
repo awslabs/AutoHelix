@@ -505,7 +505,9 @@ subscription charges or provider bills. The normal display uses the same
 The snapshot was verified on November 6, 2026. It supports listed GPT-6 models
 and common GPT-5 Codex models; unknown names and expiring promotional prices are
 not guessed. The model priced is the one Codex's JSON output names, else
-`agent.model`; with neither, the cost is unavailable ("set agent.model").
+`agent.model`; with neither, the cost is unavailable, and the run's end says
+so ("cost unavailable: set agent.model"). Codex 0.171's output names no model,
+so set `agent.model` to have Codex calls priced.
 AutoHelix doesn't read Codex's session files or guess from `extra_args`: a model
 chosen there (`-m`, a profile) is priced as `agent.model` says, so set
 `agent.model` to the model you run.

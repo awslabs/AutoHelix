@@ -295,7 +295,7 @@ We'd love to hear what you point AutoHelix at. Please
   title   = {AutoHelix: Running Agents with Protocols},
   author  = {Trager, Matthew and Mansimov, Elman and Zhang, Yi and Xia, Wei and Soatto, Stefano},
   year    = {2026},
-  version = {0.1.1},
+  version = {0.2.0},
   url     = {https://github.com/awslabs/AutoHelix}
 }
 ```
