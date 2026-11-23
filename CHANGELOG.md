@@ -172,6 +172,9 @@ has the checklist.
 
 ### Fixed
 
+- When no cost is known for a run and all its calls give the same reason, the
+  end says it (`cost unavailable: set agent.model` for Codex, whose output names
+  no model).
 - An OpenCode `error` event (an invalid key) fails the call, the main agent's
   or a judge's: OpenCode exits 0 after one, which read as a successful call
   that changed nothing.
