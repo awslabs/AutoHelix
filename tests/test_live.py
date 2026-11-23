@@ -348,8 +348,12 @@ def test_a_live_view_keeps_a_blank_line_at_the_bottom(tmp_path):
     log = W.LogFollower(tmp_path, None, Console(file=io.StringIO()), "test")
     data = (_running(_run_data(3), time.time()), W.run_table.Saved())
     running = W.view_screen(data, log, {"state": "running", "phase": "agent", "iteration": 3}, 40).renderables
-    assert [line.plain for line in running[-2:]] == ["", ""] and running[-4].plain.startswith("Running")
-    assert running[-3].plain == 'Ctrl-C quits this view · autohelix stop test stops the run · hint --run test "…"'
+    assert [line.plain for line in running[-2:]] == ["", ""] and running[-7].plain.startswith("Running")
+    assert [line.plain for line in running[-6:-2]] == [
+        "from another terminal:",
+        '  autohelix hint --run test "…"    tell the agent something (next iteration)',
+        "  autohelix stop test              stop after this iteration",
+        "Ctrl-C here quits this view (the run goes on)"]
     stopped = W.view_screen((_run_data(3), W.run_table.Saved()), log, {"state": "finished"}, 40).renderables
     assert stopped[-1].plain.startswith("Finished")
 

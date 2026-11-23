@@ -17,7 +17,7 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.text import Text
 
-from autohelix import run_table
+from autohelix import run_table, terminal
 from autohelix.display import LiveDisplay
 from autohelix.formatting import clean, format_duration
 from autohelix.replay import LogTail
@@ -157,19 +157,19 @@ class LogFollower:
     def render(self, status: dict | None, height: int | None = None) -> list:
         """The panel (at most `height` lines, none below MIN_LOG_LINES), if there is a log,
         then the status line; while the run goes, what Ctrl-C does here and the commands
-        that steer the run (`steer_line`)."""
+        that steer the run (`steer_lines`)."""
         running = bool(status) and status.get("state") == "running"
         # A crashed run has no stopped_at; its last status update is when it was last alive.
         end = time.time() if running or not status else (
             status.get("stopped_at") or status.get("updated_at") or time.time())
         show = self.display and (height is None or height >= MIN_LOG_LINES)
         parts = [self.display.render(elapsed=int(end - self.started), height=height)] if show else []
-        return parts + [Text(status_line(status), style="dim")] + [self.steer_line()] * running
+        return parts + [Text(status_line(status), style="dim"), *self.steer_lines() * running]
 
-    def steer_line(self) -> Text:
-        short = short_id(self.run_id)
-        return cut(Text(f'Ctrl-C quits this view · autohelix stop {short} stops the run · hint --run {short} "…"',
-                        style="dim"), self.console.width or 100)
+    def steer_lines(self) -> list[Text]:
+        """What steers the run from another terminal, and what Ctrl-C does here."""
+        return terminal.steer_lines(short_id(self.run_id), self.console.width or 100, indent="", view=False,
+                                    ctrl_c="quits this view (the run goes on)")
 
 
 def fit(parts: tuple[list, list[list], list], height: int) -> list:
@@ -239,9 +239,9 @@ def view_screen(data: tuple[dict, run_table.Saved] | str | None, log: LogFollowe
         folded = lambda lines: [piece for line in lines for piece in fold(line, width)]  # noqa: E731
         parts = (folded(head), [folded(row) for row in rows], folded(tail))
     running = bool(status) and status.get("state") == "running"
-    # The status line (and the steer line under a live run), a spare line so the terminal
+    # The status line (and the steer lines under a live run), a spare line so the terminal
     # doesn't scroll, the blank lines under a live run.
-    room = height - 2 - (1 + ROOM) * running
+    room = height - 2 - (len(log.steer_lines()) + ROOM) * running
     lines = fit(parts, room - (MIN_LOG_LINES if log.display else 0)) if parts else []
     log_height = room - len(lines)
     if parts and (log_height < MIN_LOG_LINES or (parts[2] and lines[-1] is not parts[2][-1])):

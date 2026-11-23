@@ -256,16 +256,20 @@ VPN alive.
   out-of-scope paths.
 - **While an iteration runs**, a live row shows its time and phase (`agent`,
   `gates`, `observe · bench` with the entry running, `stop`). Under it, after a
-  blank line, the commands that steer the run, dim: `autohelix view krp3 · hint
-  --run krp3 "…" · stop krp3 · Ctrl-C now` (`stop` ends it after the current
-  iteration; Ctrl-C interrupts it now, progress kept), then two blank lines.
-  Piped, the header has them as its `Steer` line instead.
+  blank line, the commands that steer the run from another terminal, one per
+  line with what each does (`autohelix view krp3`, `autohelix hint --run krp3
+  "…"`, `autohelix stop krp3`: after the current iteration), then what Ctrl-C
+  does here: it stops the run now (accepted work is kept: the running iteration
+  is recorded as rejected, the accepted ones stay and land), then two blank
+  lines. Piped, the
+  header has the commands as its `Steer` line instead.
 - **The end block** says how the segment ended (`Done`, `Stopped`,
   `Interrupted`, `Error`), each metric from the baseline to the run's tip, the
   totals, what landed (`landing  failed: …` in yellow when auto landing
-  couldn't, the commits then waiting for `autohelix land`), what to type next,
-  then the run's folder (`report.md`, `history.jsonl`, `iterations/` are in
-  it; on its own line when it doesn't fit), and the files written.
+  couldn't, the commits then waiting for `autohelix land`), what to type next
+  (one command per line, with what it does; left out when it doesn't fit), the
+  run's `folder` (`report.md`, `history.jsonl`, `iterations/` are in it), and
+  the files written.
 - **`resume`** shows the baseline and the last 5 rows before `resumed HH:MM`.
 
 Wide terminals (where a reason still fits after the values) space the columns out;
@@ -853,7 +857,7 @@ A section you open or close stays so as you move between iterations. Notes that 
    - once the run stopped, its end block, as in `run`: how it ended, each metric's baseline → latest accepted value, totals, what landed (commits still waiting read `unlanded  3 commits on autohelix/<id> (manual landing)`, or `(diverged from main)` when the run diverged from its target), what to type next (`autohelix land`, or `git merge autohelix/<id>` for a diverged run, since `autohelix land` only fast-forwards), and the run's report.html and report.md once written.
 2. Live output (tool calls, text, elapsed time) of the agent during an iteration, of the latest `autohelix ask` or `review` call while gates, observe entries or stop commands make one (followed live, then from its stored transcript), and of the summary agent at the end. Works with Claude Code, Codex and OpenCode logs.
 3. A status line: the iteration, the phase (in the live row's words: agent, gates, observe, stop) and time in that phase, read from `.autohelix/runs/<id>/.internal/status.json`.
-4. While the run goes, a last line: `Ctrl-C quits this view · autohelix stop krp3 stops the run · hint --run krp3 "…"`. Ctrl-C quits the view, never the run.
+4. While the run goes, what steers it from another terminal (`autohelix hint --run krp3 "…"`, `autohelix stop krp3`, one per line with what each does), then `Ctrl-C here quits this view (the run goes on)`. Ctrl-C quits the view, never the run.
 
 On a short terminal the live output gets fewer lines first, then the oldest iteration rows are left out (the baseline stays). When the run stops, the view says how and when, and waits for the next segment.
 

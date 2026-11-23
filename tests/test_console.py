@@ -288,10 +288,12 @@ def test_ending_after_landing(project, monkeypatch):
     assert ending[1] == "  speed      3"  # no accepted change measured it again
     assert ending[2].startswith("  run        1 iteration · 1 accepted")
     assert ending[3] == "  landed     1 commit on main"
-    assert ending[4] == f"  next       autohelix view {short} · autohelix resume {short}"
-    assert ending[5] == f"             .autohelix/runs/{run_id}/"  # the run's folder: too long for the line above
-    assert ending[6].startswith("  page       ") and ending[6].endswith(f"{run_id}/report.html")
-    assert len(ending) == 7
+    # One command per line, with what it does in a column after the widest.
+    assert ending[4] == f"  next       autohelix view {short}      the run's page in your browser"
+    assert ending[5] == f"             autohelix resume {short}    one more iteration (-n N for more)"
+    assert ending[6] == f"  folder     .autohelix/runs/{run_id}/"
+    assert ending[7].startswith("  page       ") and ending[7].endswith(f"{run_id}/report.html")
+    assert len(ending) == 8
 
 
 def test_ending_from_a_subfolder_names_the_run_folder_absolutely(project, monkeypatch):
@@ -322,7 +324,9 @@ def test_ending_with_manual_landing(project):
     assert result.exit_code == 0, result.output
     ending = _ending(result.output)
     assert ending[2] == f"  unlanded   1 commit on autohelix/{run_id} (manual landing)"
-    assert ending[3] == f"  next       autohelix view {short} · autohelix resume {short} · autohelix land {short}"
+    assert ending[3:6] == [f"  next       autohelix view {short}      the run's page in your browser",
+                           f"             autohelix resume {short}    one more iteration (-n N for more)",
+                           f"             autohelix land {short}      put its commits on main"]
 
 
 def test_ending_when_landing_fails(project, monkeypatch):
@@ -359,8 +363,8 @@ def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):
     totals = next(i for i, line in enumerate(ending) if line.startswith("  run "))
     assert " ".join(" ".join(ending[:totals]).split()) == f"Error {message}"  # wrapped, not cut
     # Run from outside the project: the run's folder is absolute, as the page is.
-    assert [line.split()[0] for line in ending[totals:]] == ["run", "landed", "next",
-                                                             f"{project / '.autohelix' / 'runs' / run_id}/", "page"]
+    assert [line.split()[0] for line in ending[totals:]] == ["run", "landed", "next", "autohelix", "folder", "page"]
+    assert ending[-2].split() == ["folder", f"{project / '.autohelix' / 'runs' / run_id}/"]
     assert result.output.count("Error") == 1  # not repeated by the CLI
 
 

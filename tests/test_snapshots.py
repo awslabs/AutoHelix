@@ -63,7 +63,7 @@ def _header(width: int, budget: Budget, done: int = 0, show_mark: bool = True) -
     """`Harness._print_header`: piped (no mark), with the Steer field (no live row to show it under)."""
     title = terminal.title("run krp3", "sorting", terminal.clock(NOW), version="0.3.0")
     fields = terminal.run_fields(CONFIG, terminal.budget_text(budget, done))
-    fields += [] if show_mark else [("Steer", terminal.steer_text("krp3", interrupt=False))]
+    fields += [] if show_mark else [("Steer", terminal.steer_text("krp3"))]
     return terminal.header(title, fields, width, show_mark)
 
 
@@ -98,7 +98,7 @@ def live_screen(width: int) -> list:
         lines += table.add(row)
     from rich.text import Text
 
-    return lines + [table.live(4, 72, "agent"), Text(), terminal.steer_line("krp3", width)]
+    return lines + [table.live(4, 72, "agent"), Text(), *terminal.steer_lines("krp3", width)]
 
 
 def resume_screen(width: int) -> list:
@@ -312,7 +312,8 @@ def test_view_says_what_waits_for_a_manual_landing():
     run = {**_run_payload(False), "land": "manual", "landing": {"relation": "ahead", "commits": 3, "behind": 0, "fast_forward": True}}
     text = _text(view_lines({**PROJECT, "run": with_words(run)}, Saved(CONFIG, ROWS, []), 120, now=T))
     assert "  unlanded   3 commits on autohelix/20261115-1402-sorting-krp3 (manual landing)\n" in text
-    assert "  next       autohelix resume krp3 · autohelix land krp3\n" in text
+    assert ("  next       autohelix resume krp3    one more iteration (-n N for more)\n"
+            "             autohelix land krp3      put its commits on main\n") in text
 
 
 def test_view_offers_git_merge_for_a_diverged_run():
@@ -324,7 +325,10 @@ def test_view_offers_git_merge_for_a_diverged_run():
                                              "fast_forward": False}}
     text = _text(view_lines({**PROJECT, "run": with_words(run)}, Saved(CONFIG, ROWS, []), 140, now=T))
     assert "  unlanded   2 commits on autohelix/20261115-1402-sorting-krp3 (diverged from main)\n" in text
-    assert "  next       autohelix resume krp3 · git merge autohelix/20261115-1402-sorting-krp3\n" in text
+    # The hints line up after the `autohelix` commands; the longer merge has its own after it.
+    assert ("  next       autohelix resume krp3    one more iteration (-n N for more)\n"
+            "             git merge autohelix/20261115-1402-sorting-krp3    merge its commits into main by hand\n"
+            ) in text
     assert "moved on" not in text and "autohelix land" not in text
 
 
