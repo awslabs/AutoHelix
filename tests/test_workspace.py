@@ -547,6 +547,17 @@ def test_a_tracked_file_in_an_ignored_folder_is_staged(repo_dir, copies, edit):
         assert ".vscode/settings.json" not in names(repo_dir, tree)
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs")
+def test_a_fifo_in_place_of_a_kept_file_is_rejected(repo_dir, copies):
+    """A special file can't be committed: the iteration is rejected, not taken as a deletion."""
+    _, _, copy = agent_copy(repo_dir, copies)
+    (copy.path / "code.py").unlink()
+    os.mkfifo(copy.path / "code.py")
+    (copy.path / "test_code.py").write_text("assert 'out of scope'\n")
+    with pytest.raises(CandidateRejected, match="code.py is not a regular file or symbolic link"):
+        copy.snapshot(Scope(editable=("code.py",)))
+
+
 def test_a_file_turned_into_a_folder_keeps_its_out_of_scope_files_unhashed(repo_dir, copies):
     """An in-scope name now a folder: adding it would add what is below it; the frozen
     file there is excluded, discarded and never hashed."""

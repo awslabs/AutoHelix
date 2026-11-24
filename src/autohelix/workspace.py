@@ -516,14 +516,19 @@ class Copy:
         return tree, sorted(outside | (changes.keys() - (self._changes() if reset else changes).keys()))
 
     def _staged(self, name: str) -> bool:
-        """Whether `name` is a file or symbolic link in the copy, not below a symbolic link."""
+        """Whether `name` is a file or symbolic link in the copy, not below a symbolic link.
+        A FIFO, socket or device there can't be committed: CandidateRejected."""
         if any(os.path.islink(self.path / parent) for parent in _parents(name)):
             return False
         try:
             mode = os.lstat(self.path / name).st_mode
         except OSError:  # deleted, or below what is now a file
             return False
-        return stat.S_ISREG(mode) or stat.S_ISLNK(mode)
+        if stat.S_ISREG(mode) or stat.S_ISLNK(mode):
+            return True
+        if stat.S_ISDIR(mode):
+            return False
+        raise CandidateRejected(f"could not snapshot the candidate: {name} is not a regular file or symbolic link")
 
     def _changes(self) -> dict[str, tuple[str, str]]:
         """Index entries that differ from `files`: name -> (mode, oid) in `files`."""
