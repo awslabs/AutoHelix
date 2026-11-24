@@ -522,6 +522,31 @@ def test_a_touched_out_of_scope_file_is_not_discarded(repo_dir, copies):
     assert discarded == [] and blob(repo_dir, tree, "code.py") == b"print('edited')\n"
 
 
+@pytest.mark.parametrize("edit", [True, False])
+def test_a_tracked_file_in_an_ignored_folder_is_staged(repo_dir, copies, edit):
+    """A file committed despite `.gitignore` (`.vscode/settings.json` under `.vscode/`):
+    its edit or deletion is kept, also beside an out-of-scope change."""
+    (repo_dir / ".gitignore").write_text(".vscode/\n")
+    (repo_dir / ".vscode").mkdir()
+    (repo_dir / ".vscode" / "settings.json").write_text("{}\n")
+    git(repo_dir, "add", "-f", ".gitignore", ".vscode/settings.json")
+    git(repo_dir, "commit", "-qm", "settings")
+    head = git(repo_dir, "rev-parse", "HEAD").stdout.strip()
+    copy = Copy.create(Repo(repo_dir), copies / "c", files=head, head=head, watched=True)
+    settings = copy.path / ".vscode" / "settings.json"
+    if edit:
+        settings.write_text('{"edited": true}\n')
+    else:
+        settings.unlink()
+    (copy.path / "test_code.py").write_text("assert 'out of scope'\n")
+    tree, discarded = copy.snapshot(Scope(frozen=("test_code.py",)))
+    assert discarded == ["test_code.py"]
+    if edit:
+        assert blob(repo_dir, tree, ".vscode/settings.json") == b'{"edited": true}\n'
+    else:
+        assert ".vscode/settings.json" not in names(repo_dir, tree)
+
+
 def test_a_file_turned_into_a_folder_keeps_its_out_of_scope_files_unhashed(repo_dir, copies):
     """An in-scope name now a folder: adding it would add what is below it; the frozen
     file there is excluded, discarded and never hashed."""

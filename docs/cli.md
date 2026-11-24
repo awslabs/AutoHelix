@@ -722,7 +722,7 @@ autohelix land [RUN_ID] [-p PATH] [--into BRANCH]
 ```
 
 Fast-forward the run's starting branch to its accepted tip, preserving unrelated
-checkout edits. Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on).
+checkout edits. Without `RUN_ID`, the [latest run that isn't running](#which-run-a-command-acts-on).
 
 - It only fast-forwards: when the target diverged (a commit on it after the
   run's base, during a segment or since), it refuses, says so, and gives what
@@ -1254,7 +1254,7 @@ Write (or rewrite) the run summary.
 autohelix report [RUN_ID] [-p PATH]
 ```
 
-Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on).
+Without `RUN_ID`, the [latest run that isn't running](#which-run-a-command-acts-on).
 
 One agent call reads the run's history, notes, logs and commits and writes a
 short summary to `.autohelix/runs/<id>/report.md`: what was achieved, which

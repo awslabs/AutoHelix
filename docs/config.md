@@ -371,7 +371,7 @@ are logged but reject nothing (the agent may be meant to make a gate pass), and
 metric gates aren't checked. A setup that can't work stops the run at the
 baseline with a setup error naming it: a gate or entry that modifies the code
 it checks; a command gate that exits 126 or 127 (not executable, not found),
-unless its first word is a file the agent may write (it may create it; only
+unless its first word is a file the agent may write and git doesn't ignore (it may create it; only
 the first word counts, so name such a script `./tests/new.sh`, not
 `bash tests/new.sh`); an
 `ask:` gate that exits 2 (no answer: its judge changed files, or its calls

@@ -1433,7 +1433,8 @@ class Harness:
         return None
 
     def _agent_may_write(self, command: str) -> bool:
-        """Whether a command's first word is a project path the scope lets the agent write."""
+        """Whether a command's first word is a project path the scope lets the agent write
+        and git doesn't ignore (an ignored file, `.venv/bin/pytest`, never reaches a copy)."""
         try:
             first = shlex.split(command)[0]
         except (ValueError, IndexError):
@@ -1443,7 +1444,9 @@ class Harness:
             return False
         editable = self.config.editable
         return ((not editable or path_in_scope(path, editable))
-                and not path_in_scope(path, self.config.frozen_patterns()))
+                and not path_in_scope(path, self.config.frozen_patterns())
+                and git(self.project_path, "--no-optional-locks", "check-ignore", "-q", "--", path,
+                        check=False).returncode != 0)
 
     def _capture_baseline(self) -> dict[str, str] | None:
         """Evaluate A in a checks copy and check stop commands.

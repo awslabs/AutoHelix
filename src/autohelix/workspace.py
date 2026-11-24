@@ -152,8 +152,8 @@ class Repo:
         return os.fsdecode(self.git(*args, **kwargs).stdout).strip()
 
     def unfrozen_excludes(self, work_tree: Path, index: Path, **kwargs) -> list[str]:
-        """Pathspecs keeping `.autohelix/` and `.autohelix-iteration/` out of an `add -A`
-        in a copy, so their files are never hashed. `add` refuses an exclude naming an
+        """Pathspecs keeping `.autohelix/` and `.autohelix-iteration/` out of a listing or
+        an `add` in a copy, so their files are never hashed. `add` refuses an exclude naming an
         ignored folder; an ignored folder isn't added anyway, so it needs none."""
         unfrozen = [f"{self.prefix}{name}" for name in _UNFROZEN]
         ignored = set(_records(self.git("check-ignore", "-z", "--stdin", work_tree=work_tree, index=index,
@@ -455,9 +455,9 @@ class Copy:
         """The candidate tree: the copy's files with out-of-scope changes reset to
         `files` in the harness index only. Returns (tree, discarded names).
 
-        The change set is listed first, hashing nothing; only in-scope names are added,
+        The change set is listed first, hashing nothing; only in-scope names are staged,
         so an out-of-scope file (a dataset, a checkpoint) never enters the user's object
-        store. Out-of-scope entries an add replaced anyway (a path turned into a folder)
+        store. Out-of-scope entries a staged name replaced (a folder turned into a file)
         are reset afterwards."""
         _check_copy(self.path)
         repo = self.repo
@@ -491,26 +491,21 @@ class Copy:
         listed.update(new)
         added = {name for name in listed if kept(name)}
         outside = listed.difference(added)
-        # A tracked file under a folder now a symbolic link is gone (git refuses it as a
-        # pathspec): its entry is removed.
-        gone = sorted(name for name in added if any(os.path.islink(self.path / p) for p in _parents(name)))
-        if gone:
-            repo.git("update-index", "-z", "--force-remove", "--stdin", index=self.index,
-                     input=b"".join(os.fsencode(name) + b"\0" for name in gone))
-        if added := added.difference(gone):
-            if outside:
-                # A literal name also covers what is below it (a file turned into a folder):
-                # out-of-scope files there are excluded too, so they aren't hashed either.
-                below = sorted(name for name in outside if self._below(name, added))
-                pathspecs = [f":(top,literal){name}" for name in sorted(added)] + [f":(top,literal,exclude){name}" for name in below]
-            else:  # everything listed is kept: one pathspec (thousands of names are slow to match)
-                pathspecs = [".", *excludes]
-            try:
-                repo.git(*attributes, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
+        # The kept names go straight into the harness index (`update-index`: unlike `add`, it
+        # stages a tracked file in an ignored folder): a file or symbolic link is hashed and
+        # staged; any other name (deleted, now a folder, below a folder now a symbolic link)
+        # loses its entry. A folder's new files are listed names of their own.
+        staged = sorted(name for name in added if self._staged(name))
+        try:
+            if removed := sorted(added.difference(staged)):
+                repo.git("update-index", "-z", "--force-remove", "--stdin", index=self.index,
+                         input=b"".join(os.fsencode(name) + b"\0" for name in removed))
+            if staged:
+                repo.git(*attributes, "update-index", "-z", "--add", "--replace", "--stdin",
                          work_tree=self.path, index=self.index,
-                         input=b"".join(os.fsencode(spec) + b"\0" for spec in pathspecs))
-            except RuntimeError as e:  # e.g. an unreadable file
-                raise CandidateRejected(f"could not snapshot the candidate: {e}") from e
+                         input=b"".join(os.fsencode(name) + b"\0" for name in staged))
+        except RuntimeError as e:  # e.g. an unreadable file
+            raise CandidateRejected(f"could not snapshot the candidate: {e}") from e
         changes = self._changes()
         # Reset to `files` in the index only; git drops new entries that conflict with a restored path.
         reset = [f"{old_mode} {old_oid}\t{name}" for name, (old_mode, old_oid) in changes.items() if not kept(name)]
@@ -520,12 +515,15 @@ class Copy:
         tree = repo.out("write-tree", index=self.index)
         return tree, sorted(outside | (changes.keys() - (self._changes() if reset else changes).keys()))
 
-    def _below(self, name: str, added) -> bool:
-        """Whether `name` is a file in the copy inside a folder one of the `added` names
-        now is (git refuses a pathspec beyond a symbolic link: none is needed there)."""
-        parents = list(_parents(name))
-        return (any(parent in added for parent in parents) and os.path.lexists(self.path / name)
-                and not any(os.path.islink(self.path / parent) for parent in parents))
+    def _staged(self, name: str) -> bool:
+        """Whether `name` is a file or symbolic link in the copy, not below a symbolic link."""
+        if any(os.path.islink(self.path / parent) for parent in _parents(name)):
+            return False
+        try:
+            mode = os.lstat(self.path / name).st_mode
+        except OSError:  # deleted, or below what is now a file
+            return False
+        return stat.S_ISREG(mode) or stat.S_ISLNK(mode)
 
     def _changes(self) -> dict[str, tuple[str, str]]:
         """Index entries that differ from `files`: name -> (mode, oid) in `files`."""

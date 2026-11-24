@@ -785,7 +785,7 @@ def resume(target: str | None, path: Path, verbose: bool, no_report: bool, land_
 @click.option("--into", help="Target branch, required for runs created detached.")
 def land(run_id: str | None, path: Path, into: str | None):
     """Fast-forward a target branch to a run's accepted code (RUN_ID or its last part, else
-    the running run, else the most recently active one)."""
+    the most recently active run that isn't running or archived)."""
     paths = _chosen_run(_project(path), run_id, running=False)
     try:
         with RunLock(paths.lock):
@@ -1255,7 +1255,8 @@ def _serve(project: Path, port: int | None, open_browser: bool, page: str) -> No
 @click.argument("run_id", required=False)
 @_path_option()
 def report(run_id: str | None, path: Path):
-    """Write (or rewrite) a run's summary (RUN_ID or its last part, else the running or latest run).
+    """Write (or rewrite) a run's summary (RUN_ID or its last part, else the most recently
+    active run that isn't running or archived).
 
     One agent call reads the run's history, notes, reviews, logs and commits, and writes
     the selected run's report.md. `run` and `resume` do this automatically when a run

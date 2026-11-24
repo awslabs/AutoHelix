@@ -444,6 +444,17 @@ def test_a_gate_that_cant_run_at_the_baseline_is_a_setup_error(project, gate, sa
     assert not record.accepted and record.reason.startswith("baseline failed: Baseline setup error: gate ")
 
 
+def test_a_gate_in_an_ignored_folder_is_a_setup_error_also_without_editable(project):
+    """No `editable:` lets the agent write any path, but not an ignored one: `.venv/`
+    never reaches a copy, so the gate would fail every iteration."""
+    (project / ".gitignore").write_text(".autohelix/\n.venv/\n")
+    git(project, "commit", "-qam", "ignore .venv")
+    _configure(project, gates=[".venv/bin/pytest -q"])
+    with pytest.raises(RuntimeError, match=r"^Baseline setup error: gate `\.venv/bin/pytest -q` could not run "
+                                           r"\(exit 127: command not found\)"):
+        Harness(project, verbose=False).run(Budget(until=1), report=False)
+
+
 def test_a_missing_gate_script_the_agent_may_create_is_left_to_it(project):
     _configure(project, gates=["./checks/new_check.sh"], scope={"editable": ["hello.py", "checks/"]})
     records = _run(project, 1)

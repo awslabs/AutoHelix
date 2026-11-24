@@ -193,7 +193,7 @@ has the checklist.
 - A setup that can't work stops the run at the baseline, before any agent call
   is paid for, with a setup error naming the gate and its last stderr line: a
   gate command that exits 126 or 127 (not executable, not found; unless its
-  first word is a file the agent may write), and an `ask:` gate that exits 2
+  first word is a file the agent may write and git doesn't ignore), and an `ask:` gate that exits 2
   (no answer). Each iteration used to be paid for and rejected the same way.
 - Every `resume` checks that the agents' executables can be found, as the
   first `run` does; a missing one cost an iteration.
