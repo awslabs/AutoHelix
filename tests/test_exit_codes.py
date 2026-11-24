@@ -46,6 +46,25 @@ def test_a_resume_whose_preflight_fails_exits_1_and_records_a_failed_segment(pro
     assert read_run_status(project, paths.run_id)["segment"] == second["segment"] == 2
 
 
+def test_a_resume_after_the_baseline_checks_the_agents_command_first(project, tmp_path, monkeypatch):
+    """A missing agent executable on a later resume (another shell, another machine) is
+    refused before an iteration is spent, as on the first start."""
+    agent = tmp_path / "bin" / "claude"
+    agent.parent.mkdir()
+    agent.write_text("#!/bin/sh\nexit 1\n")
+    agent.chmod(0o755)
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", str(agent))
+    configure(project, agent={"cli": "claude-code"})
+    cli(project, "run", "-n", "1", "--no-report")
+    paths = latest_run(project)
+    assert [r.iteration for r in History(project, paths.run_id).load()] == [0, 1]
+    agent.unlink()
+    result = cli(project, "resume", short_id(paths.run_id), "-n", "1", "--no-report")
+    assert result.exit_code == 1 and "Preflight checks failed" in result.output, result.output
+    assert str(agent) in "".join(result.output.split())
+    assert [r.iteration for r in History(project, paths.run_id).load()] == [0, 1]  # nothing spent
+
+
 def test_an_interrupt_in_the_loop_exits_130(project, monkeypatch):
     def interrupted(self, n):
         raise KeyboardInterrupt

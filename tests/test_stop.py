@@ -227,7 +227,7 @@ def test_stop_writes_a_request_for_the_running_segment(project, running):
     result = cli(project, "stop", short, "--why", "done for today")
     assert result.exit_code == 0, result.output
     assert result.output.splitlines() == [f"Run {short} stops after its current iteration (3).",
-                                          f"See when it has ended: autohelix wait -p {project} {short} "
+                                          f"See when it has ended: autohelix wait -p {cli_module._shown(project)} {short} "
                                           "(repeat until it prints ended or idle)"]
     request = json.loads(running.stop_request.read_text())
     assert {k: request[k] for k in ("why", "now", "segment", "host", "pid")} == {
@@ -297,6 +297,15 @@ def test_stop_with_an_unknown_id_stops_nothing(project, running):
     assert not running.stop_request.exists()  # ids are resolved before anything is asked
 
 
+def test_stop_advice_names_the_project_relative_to_where_it_is_typed(project, running, monkeypatch):
+    # From a folder near the project (a checkout under $TMPDIR, say) the advice is relative.
+    monkeypatch.chdir(project.parent)
+    short = short_id(running.run_id)
+    result = cli(project, "stop", short)
+    assert result.exit_code == 0, result.output
+    assert f"See when it has ended: autohelix wait -p {project.name} {short} " in result.output
+
+
 def test_stop_handles_every_known_id_and_fails_if_any_failed(project, running):
     short = short_id(running.run_id)
     other = RunPaths(project, "20260101-0000-idle-zzzz")
@@ -305,8 +314,9 @@ def test_stop_handles_every_known_id_and_fails_if_any_failed(project, running):
     assert result.exit_code == 1
     assert "Run zzzz is not running." in result.output
     assert f"Run {short} stops after its current iteration (3)." in result.output
-    assert (f"See when it has ended: autohelix wait -p {project} {short} (repeat until it prints ended or idle)"
-            in result.output)
+    # The project as the CLI names it from here (relative when that is shorter), wherever pytest runs.
+    assert (f"See when it has ended: autohelix wait -p {cli_module._shown(project)} {short} "
+            "(repeat until it prints ended or idle)" in result.output)
     assert running.stop_request.exists()
 
 

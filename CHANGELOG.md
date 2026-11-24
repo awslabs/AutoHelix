@@ -172,6 +172,28 @@ has the checklist.
 
 ### Fixed
 
+- A gate, observe or stop command that leaves a background process holding
+  its output (`./server & curl ...`) ends when its shell exits, with the
+  shell's exit code; it waited for its whole timeout and was reported as timed
+  out.
+- A JSON line from the agent that isn't an object (a wrapper script's `0` on
+  stderr) is shown as output; for Claude Code and OpenCode it ended the run
+  with a Python error. Any error while an agent runs now kills its process
+  group: the agent kept running, past its timeout.
+- A failed command's output in the record and the prompt is its last 15
+  lines, each cut at 500 characters: one long line (a JSON dump) made the
+  prompt too large to start the agent, and every resume failed the same way.
+- Files the agent writes outside the scope (a dataset, a checkpoint) are no
+  longer hashed into your repository's objects at each freeze, and the record
+  and the next prompt list at most 20 discarded paths (`discarded_more` counts
+  the rest).
+- A setup that can't work stops the run at the baseline, before any agent call
+  is paid for, with a setup error naming the gate and its last stderr line: a
+  gate command that exits 126 or 127 (not executable, not found; unless its
+  first word is a file the agent may write), and an `ask:` gate that exits 2
+  (no answer). Each iteration used to be paid for and rejected the same way.
+- Every `resume` checks that the agents' executables can be found, as the
+  first `run` does; a missing one cost an iteration.
 - When no cost is known for a run and all its calls give the same reason, the
   end says it (`cost unavailable: set agent.model` for Codex, whose output names
   no model).

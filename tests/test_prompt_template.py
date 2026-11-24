@@ -355,6 +355,18 @@ def test_after_a_rejection_with_patch_and_discarded_paths(tmp_path):
     assert "Last accepted" not in rendered
 
 
+def test_discarded_paths_past_the_listed_ones_are_counted(tmp_path):
+    rejected = {"iteration": 1, "accepted": False, "reason": "gate failed: pytest -q",
+                "discarded": ["data/a.bin", "tests/test_sort.py"], "discarded_frozen": ["tests/test_sort.py"],
+                "discarded_more": 4998, "tree": "abc",
+                "gates": [{"text": "pytest -q", "kind": "command", "passed": False}]}
+    variables, rendered = _render(tmp_path, [BASELINE, rejected], 2)
+    assert variables["discarded_more"] == 4998
+    assert "Your changes to data/a.bin were discarded: outside the editable scope." in rendered
+    assert "Your changes to tests/test_sort.py were discarded: frozen." in rendered
+    assert "Your changes to 4998 more paths outside the scope were discarded too." in rendered
+
+
 def test_rejection_after_observe_shows_what_it_produced(tmp_path):
     rejected = {"iteration": 1, "accepted": False, "reason": "metric gate: speed 5 is 50.0% worse than 10",
                 "gates": [{"text": "pytest -q", "kind": "command", "passed": True},

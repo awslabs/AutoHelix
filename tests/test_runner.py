@@ -21,7 +21,7 @@ def _run(tmp_path, script, **kwargs):
         cmd=["sh", "-c", script],
         cwd=tmp_path,
         log_path=tmp_path / "agent.log",
-        line_callback=lines.append,
+        line_callback=kwargs.pop("line_callback", lines.append),
         **kwargs,
     )
     return result, lines, time.monotonic() - started
@@ -181,3 +181,17 @@ def test_a_signal_while_a_child_starts_is_still_ignored():
     handler = signal.getsignal(signal.SIGINT)
     with child_signals():
         assert signal.getsignal(signal.SIGINT) is handler
+
+
+def test_an_exception_while_the_agent_runs_kills_its_group(tmp_path):
+    """A line callback that raises (or a full disk writing the log) ends the call: the
+    agent doesn't go on working, past its timeout, after the harness has moved on."""
+    late = tmp_path / "late"
+
+    def fail(line):
+        raise RuntimeError(f"can't handle {line}")
+
+    with pytest.raises(RuntimeError, match="can't handle hi"):
+        _run(tmp_path, f"echo hi; sleep 2; touch {late}", line_callback=fail)
+    time.sleep(3)
+    assert not late.exists()

@@ -337,7 +337,7 @@ function summaryCell(r) {
   const flags = [
     baselineGates.length && `gate failed at the baseline: ${baselineGates.join(', ')}`,
     failed.length && `${failed.join(', ')} failed`,
-    r.discarded?.length && `${plural(r.discarded.length, 'out-of-scope change')} discarded`,
+    r.discarded?.length && `${plural(r.discarded.length + (r.discarded_more || 0), 'out-of-scope change')} discarded`,
   ].filter(Boolean).join(' · ');
   return el('td', { className: 'summary' },
     why ? el('div', { className: 'why', textContent: why }) : null,
@@ -567,10 +567,11 @@ function discardedSection(d, where) {
   if (!discarded.length) return null;
   const frozen = new Set(d.discarded_frozen || []);
   const s = section('discarded', 'Discarded changes', true, `${where}/record.json`);
-  fill(s, plural(discarded.length, 'path'), JSON.stringify([discarded, [...frozen]]), () => [
+  const more = d.discarded_more || 0;
+  fill(s, plural(discarded.length + more, 'path'), JSON.stringify([discarded, [...frozen], more]), () => [
     el('p', { textContent: 'Changes outside the scope (not editable, or frozen) were discarded:' }),
     el('ul', { className: 'paths' }, ...discarded.map((p) => el('li', {}, el('code', { textContent: p }),
-      frozen.has(p) ? ' (frozen)' : '')))]);
+      frozen.has(p) ? ' (frozen)' : '')), more ? el('li', { textContent: `and ${more} more` }) : null)]);
   return s;
 }
 

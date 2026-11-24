@@ -140,6 +140,24 @@ def test_frozen_directory_replaced_by_symlink_is_restored(repo_dir, copies, tmp_
     assert (elsewhere / "test_a.py").read_text() == "weakened\n"
 
 
+@pytest.mark.parametrize("editable", [(), ("tests/test_a.py",)])
+def test_a_directory_replaced_by_a_symlink_in_scope(repo_dir, copies, tmp_path, editable):
+    """The files below the link are gone (git refuses them as pathspecs); the link is
+    kept when it is in scope, discarded when only the file below it was."""
+    (repo_dir / "tests").mkdir()
+    (repo_dir / "tests" / "test_a.py").write_text("frozen\n")
+    head = commit_all(repo_dir)
+    copy = Copy.create(Repo(repo_dir), copies / "c", files=head, head=head, watched=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "test_a.py").write_text("weakened\n")
+    shutil.rmtree(copy.path / "tests")
+    (copy.path / "tests").symlink_to(elsewhere)
+    tree, discarded = copy.snapshot(Scope(editable=editable))
+    assert discarded == ([] if not editable else ["tests"])
+    assert names(repo_dir, tree) == {"code.py", "test_code.py"} | ({"tests"} if not editable else set())
+
+
 def test_crlf_autocrlf_and_working_tree_encoding_round_trip(repo_dir, copies):
     (repo_dir / ".gitattributes").write_text(
         "*.txt eol=crlf\nutf16.dat working-tree-encoding=UTF-16LE-BOM text\n")
@@ -429,6 +447,66 @@ def test_the_freeze_never_hashes_harness_material(repo_dir, copies):
     assert subprocess.run(["git", "cat-file", "-e", f"{tree}:code.py"], cwd=repo_dir).returncode == 0
 
 
+def _objects(root) -> set[str]:
+    """Every object in the repository's store, loose or packed, reachable or not."""
+    listing = subprocess.run(["git", "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"],
+                             cwd=root, capture_output=True, text=True, check=True).stdout
+    return set(listing.split())
+
+
+def _stored(root, content: bytes) -> bool:
+    oid = subprocess.run(["git", "hash-object", "--stdin"], cwd=root, input=content,
+                         capture_output=True, check=True).stdout.decode().strip()
+    return subprocess.run(["git", "cat-file", "-e", oid], cwd=root).returncode == 0
+
+
+def test_out_of_scope_files_are_never_hashed_into_the_users_store(repo_dir, copies):
+    """A dataset or checkpoint outside `editable:`: listed and discarded, never hashed.
+    The store gains only the in-scope edit's blob and the tree."""
+    _, _, copy = agent_copy(repo_dir, copies)
+    big = os.urandom(3_000_000)
+    (copy.path / "data").mkdir()
+    (copy.path / "data" / "big.bin").write_bytes(big)
+    for index in range(200):
+        (copy.path / "data" / f"part-{index}.txt").write_text(f"part {index} {os.urandom(8).hex()}\n")
+    (copy.path / "test_code.py").write_text("assert 'out of scope'\n")
+    (copy.path / "code.py").write_text("print('edited')\n")
+    before = _objects(repo_dir)
+    tree, discarded = copy.snapshot(Scope(editable=("code.py",)))
+    assert len(discarded) == 202 and discarded[:2] == ["data/big.bin", "data/part-0.txt"]
+    assert discarded[-1] == "test_code.py"
+    assert names(repo_dir, tree) == {"code.py", "test_code.py"}
+    assert blob(repo_dir, tree, "code.py") == b"print('edited')\n"
+    assert len(_objects(repo_dir) - before) == 2  # code.py's blob and the tree
+    assert not _stored(repo_dir, big) and not _stored(repo_dir, b"assert 'out of scope'\n")
+
+
+def test_a_touched_out_of_scope_file_is_not_discarded(repo_dir, copies):
+    _, _, copy = agent_copy(repo_dir, copies)
+    later = time.time() + 5
+    os.utime(copy.path / "test_code.py", (later, later))
+    (copy.path / "code.py").write_text("print('edited')\n")
+    tree, discarded = copy.snapshot(Scope(editable=("code.py",)))
+    assert discarded == [] and blob(repo_dir, tree, "code.py") == b"print('edited')\n"
+
+
+def test_a_file_turned_into_a_folder_keeps_its_out_of_scope_files_unhashed(repo_dir, copies):
+    """An in-scope name now a folder: adding it would add what is below it; the frozen
+    file there is excluded, discarded and never hashed."""
+    (repo_dir / "data").write_text("a file\n")
+    head = commit_all(repo_dir)
+    copy = Copy.create(Repo(repo_dir), copies / "c", files=head, head=head, watched=True)
+    (copy.path / "data").unlink()
+    (copy.path / "data").mkdir()
+    (copy.path / "data" / "ok.txt").write_text("in scope\n")
+    secret = os.urandom(64)
+    (copy.path / "data" / "secret.bin").write_bytes(secret)
+    tree, discarded = copy.snapshot(Scope(frozen=("data/secret.bin",)))
+    assert discarded == ["data/secret.bin"]
+    assert names(repo_dir, tree) == {"code.py", "test_code.py", "data/ok.txt"}
+    assert not _stored(repo_dir, secret)
+
+
 def test_linked_worktree_project(repo_dir, tmp_path):
     linked = tmp_path / "linked"
     git(repo_dir, "worktree", "add", "-q", "-b", "side", str(linked))
@@ -479,6 +557,13 @@ def test_changed_or_new_gitlink_is_rejected(repo_dir, copies, with_submodule):
     with pytest.raises(CandidateRejected, match="^nested git repository at vendor: remove its .git "
                                                 "or clone outside the project$"):
         copy.snapshot(Scope())
+
+
+def test_a_deleted_submodule_is_rejected_also_outside_the_scope(repo_dir, copies, with_submodule):
+    copy = Copy.create(Repo(repo_dir), copies / "c", files=with_submodule, head=with_submodule, watched=True)
+    (copy.path / "lib").rmdir()
+    with pytest.raises(CandidateRejected, match="^submodule changes are not supported: lib$"):
+        copy.snapshot(Scope(editable=("code.py",)))
 
 
 @pytest.mark.parametrize("commits", [True, False])

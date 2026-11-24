@@ -110,6 +110,11 @@ def _field(record, name: str):
     return getattr(record, name, None) if record is not None else None
 
 
+def _count(value) -> int:
+    """A count from a history record: a non-negative int, else 0."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
 def _object(value) -> str | None:
     """A git object name from a history record, or None: never an option or a rev expression."""
     return value if isinstance(value, str) and COMMIT.fullmatch(value) else None
@@ -317,6 +322,7 @@ class RunData:
                 "stops": [item for item in _field(r, "stops") or [] if isinstance(item, dict)],
                 "discarded": [p for p in _field(r, "discarded") or [] if isinstance(p, str)],
                 "discarded_frozen": [p for p in _field(r, "discarded_frozen") or [] if isinstance(p, str)],
+                "discarded_more": _count(_field(r, "discarded_more")),
             })
         return rows
 
@@ -458,6 +464,7 @@ class RunData:
             "summary": summary if isinstance(summary, str) and summary.strip() else None,
             "discarded": [p for p in _field(record, "discarded") or [] if isinstance(p, str)],
             "discarded_frozen": [p for p in _field(record, "discarded_frozen") or [] if isinstance(p, str)],
+            "discarded_more": _count(_field(record, "discarded_more")),
             # What `/iteration/<n>/diff` compares: the commit the attempt started from and its frozen tree.
             "attempt": {"base": base, "tree": tree, "commit": record.commit if record else None,
                         "rejected_ref": rejected_ref if isinstance(rejected_ref, str) else None}

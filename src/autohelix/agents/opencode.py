@@ -61,6 +61,9 @@ class OpenCodeAgent:
         except json.JSONDecodeError:
             self._emit(event_callback, AgentEventKind.RAW, line)
             return
+        if not isinstance(payload, dict):  # `0`, `[1]` on stderr (a wrapper's): output, not an event
+            self._emit(event_callback, AgentEventKind.RAW, line)
+            return
 
         event_type = payload.get("type")
         part = payload.get("part", {})

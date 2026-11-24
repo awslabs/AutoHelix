@@ -191,7 +191,7 @@ latest iteration:
   how to report it). The copy holds its code.
 - **After a rejection:** the rejected attempt's gate results (passed, failed,
   or not reached; a failing gate with the folder holding its whole output), the
-  failure output, the observations it produced before being rejected, and
+  failure output (the last 15 lines, each cut at 500 characters), the observations it produced before being rejected, and
   `.autohelix-iteration/rejected.patch` (for a change over 2 MiB, the `git diff`
   command that shows it instead). The copy is still the last accepted code, and
   the prompt names the folder of the last accepted iteration too.

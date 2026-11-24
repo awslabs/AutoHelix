@@ -426,7 +426,7 @@ def test_cost_alone_stops_when_only_the_judges_are_priced(project, monkeypatch):
         return result
 
     monkeypatch.setattr(MockAgent, "run", run)
-    configure(project, gates=["ask: Is it fine?"])
+    configure(project, gates=[{"ask": "Is it fine?"}])  # an `ask:` entry (a string would be a shell command)
     result = cli(project, "run", "--no-report", "--cost", "5")
     assert result.exit_code == 0, result.output
     paths = latest_run(project)

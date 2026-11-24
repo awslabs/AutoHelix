@@ -68,11 +68,13 @@ def format_timeout_seconds(timeout_seconds: int | None) -> str:
 
 
 def _kill_process_group(process: subprocess.Popen, grace: float = 3) -> None:
-    """Kill a process and its entire process group (SIGTERM, then SIGKILL after `grace` s)."""
+    """Kill a process and its entire process group (SIGTERM, then SIGKILL after `grace` s).
+    The group is the process's own (`start_new_session`): its id is the process's pid,
+    also when the process exits right after the `poll` (where `getpgid` would raise)."""
     if process.poll() is not None:
         return
 
-    pgid = os.getpgid(process.pid)
+    pgid = process.pid
 
     try:
         os.killpg(pgid, signal.SIGTERM)
@@ -204,7 +206,9 @@ def run_process(
             # outlive a normal exit either.
             end_group(process)
             return ProcessRunResult(exit_code=exit_code)
-    except KeyboardInterrupt:
+    except BaseException:
+        # Ctrl-C, or anything raised while the agent runs (a line callback, a full disk
+        # writing the log): the agent must not go on working, unbounded, without the loop.
         if process is not None:
             _kill_process_group(process)
             end_group(process)

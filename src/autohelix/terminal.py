@@ -329,6 +329,7 @@ class Row:
     stops: list = field(default_factory=list)
     discarded: list = field(default_factory=list)
     discarded_frozen: list = field(default_factory=list)
+    discarded_more: int = 0  # past the record's listed ones
 
     @classmethod
     def of(cls, record) -> "Row":
@@ -339,7 +340,8 @@ class Row:
                    seconds=wall_ms / 1000 if wall_ms else None, cost=cost.cost_usd, cost_incomplete=cost.incomplete,
                    commit=record.commit, reason=record.reason, agent_error=record.agent_error,
                    summary=record.summary, gates=record.gates, observe=record.observe, stops=record.stops,
-                   discarded=record.discarded, discarded_frozen=record.discarded_frozen)
+                   discarded=record.discarded, discarded_frozen=record.discarded_frozen,
+                   discarded_more=record.discarded_more)
 
 
 LABEL = 6  # "✓ 12  "
@@ -522,7 +524,8 @@ class Table:
         if row.discarded:
             frozen = set(row.discarded_frozen)
             shown = ", ".join(clean(p) + " (frozen)" * (p in frozen) for p in row.discarded[:3])
-            more = f", … {len(row.discarded) - 3} more" if len(row.discarded) > 3 else ""
+            hidden = len(row.discarded) - 3 + row.discarded_more
+            more = f", … {hidden} more" if hidden > 0 else ""
             notes.append((f"discarded, outside the scope: {shown}{more}", "dim"))
         return notes
 

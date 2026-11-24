@@ -46,6 +46,9 @@ Your changes to {{ not_editable | join(', ') }} were discarded: outside the edit
 {% if discarded_frozen %}
 Your changes to {{ discarded_frozen | join(', ') }} were discarded: frozen.
 {% endif %}
+{% if discarded_more %}
+Your changes to {{ discarded_more }} more paths outside the scope were discarded too.
+{% endif %}
 
 {% if gates %}
 Gates (must pass — failure means your changes are discarded):

@@ -127,6 +127,7 @@ def build_prompt_variables(
         "rejected_diff": rejected_diff,
         "discarded": [clean(path) for path in latest.discarded] if latest else [],
         "discarded_frozen": [clean(path) for path in latest.discarded_frozen] if latest else [],
+        "discarded_more": latest.discarded_more if latest else 0,
         "last": _describe_last(latest, state) if latest else None,
         "last_accepted": _describe_accepted(history, iteration, state),
         "recent_iterations": SEEDED_ITERATIONS,
@@ -266,7 +267,7 @@ def _describe_accepted(history, iteration: int, state: Path) -> dict[str, Any] |
 # gets a warning at run start (`unknown_variables`).
 VARIABLES = frozenset({
     "goal", "title", "iteration", "copy", "history", "gates", "observe", "stop", "editable", "frozen",
-    "notes_path", "hints", "hints_text", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "last", "last_accepted",
+    "notes_path", "hints", "hints_text", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "discarded_more", "last", "last_accepted",
     "recent_iterations", "time_limit", "group", "group_runs", "imported", "experiment",
 })
 

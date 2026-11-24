@@ -333,6 +333,12 @@ def _records(output: bytes) -> list[str]:
     return [os.fsdecode(record) for record in output.split(b"\0") if record]
 
 
+def _parents(name: str):
+    """`a/b/c`'s folders: `a`, `a/b`."""
+    parts = name.split("/")
+    return ("/".join(parts[:depth]) for depth in range(1, len(parts)))
+
+
 def _remove_tree(path: Path) -> None:
     """Remove a tree, including read-only or unreadable folders, without following symlinks."""
     try:
@@ -447,7 +453,12 @@ class Copy:
 
     def snapshot(self, scope: Scope) -> tuple[str, list[str]]:
         """The candidate tree: the copy's files with out-of-scope changes reset to
-        `files` in the harness index only. Returns (tree, discarded names)."""
+        `files` in the harness index only. Returns (tree, discarded names).
+
+        The change set is listed first, hashing nothing; only in-scope names are added,
+        so an out-of-scope file (a dataset, a checkpoint) never enters the user's object
+        store. Out-of-scope entries an add replaced anyway (a path turned into a folder)
+        are reset afterwards."""
         _check_copy(self.path)
         repo = self.repo
         for name in self.gitlinks:  # git ignores writes inside an uninitialized submodule
@@ -457,22 +468,61 @@ class Copy:
         attributes = [f"--attr-source={self.files}"] if repo.attr_source else []
         self._check_index()
         unfrozen = [f"{repo.prefix}{name}" for name in _UNFROZEN]
+
+        def kept(name: str) -> bool:
+            return scope.allows(name) and not any(name == d or name.startswith(d + "/") for d in unfrozen)
+
+        excludes = repo.unfrozen_excludes(self.path, self.index)
         try:
-            repo.git(*attributes, "add", "-A", "--", ".", *repo.unfrozen_excludes(self.path, self.index),
-                     work_tree=self.path, index=self.index)
-        except RuntimeError as e:  # e.g. an unreadable file or an embedded repo without commits
-            if nested := re.search(r"'([^'\n]+?)/?' does not have a commit checked out", str(e)):
-                raise CandidateRejected(nested_repository(nested.group(1))) from e
+            # Stat data only (no object is written), so a touched file isn't listed as changed.
+            repo.git(*attributes, "update-index", "-q", "--refresh", work_tree=self.path, index=self.index,
+                     check=False)
+            listed = set(_records(repo.git(*attributes, "diff-files", "-z", "--name-only", "--", ".", *excludes,
+                                           work_tree=self.path, index=self.index).stdout))
+            new = _records(repo.git("ls-files", "-z", "--others", "--exclude-standard", "--", ".", *excludes,
+                                    work_tree=self.path, index=self.index).stdout)
+        except RuntimeError as e:
             raise CandidateRejected(f"could not snapshot the candidate: {e}") from e
+        for name in new:
+            if name.endswith("/"):  # a repository the agent made or cloned, with or without commits
+                raise CandidateRejected(nested_repository(name.rstrip("/")))
+        if gitlink := next((name for name in self.gitlinks if name in listed), None):
+            raise CandidateRejected(f"submodule changes are not supported: {gitlink}")
+        listed.update(new)
+        added = {name for name in listed if kept(name)}
+        outside = listed.difference(added)
+        # A tracked file under a folder now a symbolic link is gone (git refuses it as a
+        # pathspec): its entry is removed.
+        gone = sorted(name for name in added if any(os.path.islink(self.path / p) for p in _parents(name)))
+        if gone:
+            repo.git("update-index", "-z", "--force-remove", "--stdin", index=self.index,
+                     input=b"".join(os.fsencode(name) + b"\0" for name in gone))
+        if added := added.difference(gone):
+            # A literal name also covers what is below it (a file turned into a folder):
+            # out-of-scope files there are excluded too, so they aren't hashed either.
+            below = sorted(name for name in outside if self._below(name, added))
+            pathspecs = [f":(top,literal){name}" for name in sorted(added)] + [f":(top,literal,exclude){name}" for name in below]
+            try:
+                repo.git(*attributes, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
+                         work_tree=self.path, index=self.index,
+                         input=b"".join(os.fsencode(spec) + b"\0" for spec in pathspecs))
+            except RuntimeError as e:  # e.g. an unreadable file
+                raise CandidateRejected(f"could not snapshot the candidate: {e}") from e
         changes = self._changes()
         # Reset to `files` in the index only; git drops new entries that conflict with a restored path.
-        reset = [f"{old_mode} {old_oid}\t{name}" for name, (old_mode, old_oid) in changes.items()
-                 if not scope.allows(name) or any(name == d or name.startswith(d + "/") for d in unfrozen)]
+        reset = [f"{old_mode} {old_oid}\t{name}" for name, (old_mode, old_oid) in changes.items() if not kept(name)]
         if reset:
             repo.git("update-index", "-z", "--index-info", index=self.index,
                      input=b"".join(os.fsencode(line) + b"\0" for line in reset))
         tree = repo.out("write-tree", index=self.index)
-        return tree, sorted(changes.keys() - (self._changes() if reset else changes).keys())
+        return tree, sorted(outside | (changes.keys() - (self._changes() if reset else changes).keys()))
+
+    def _below(self, name: str, added) -> bool:
+        """Whether `name` is a file in the copy inside a folder one of the `added` names
+        now is (git refuses a pathspec beyond a symbolic link: none is needed there)."""
+        parents = list(_parents(name))
+        return (any(parent in added for parent in parents) and os.path.lexists(self.path / name)
+                and not any(os.path.islink(self.path / parent) for parent in parents))
 
     def _changes(self) -> dict[str, tuple[str, str]]:
         """Index entries that differ from `files`: name -> (mode, oid) in `files`."""

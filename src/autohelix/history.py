@@ -20,6 +20,11 @@ from autohelix.runs import RunPaths, SCHEMA, iteration_folder, remove_planted
 logger = logging.getLogger(__name__)
 
 
+# The discarded paths a record lists (the rest are counted): an agent writing thousands of
+# files outside the scope mustn't grow the history, the record and the next prompt by each.
+DISCARDED_LISTED = 20
+
+
 @dataclass
 class IterationResult:
     """Result of a single iteration."""
@@ -57,6 +62,7 @@ class IterationResult:
     tree: str | None = None
     discarded: list[str] = field(default_factory=list)
     discarded_frozen: list[str] = field(default_factory=list)  # those of `discarded` that are frozen
+    discarded_more: int = 0  # discarded paths past the first `DISCARDED_LISTED`, not listed
     # Why the main agent's call failed or timed out (the attempt was rejected unchecked).
     agent_error: str | None = None
     # The failure was the infrastructure's (`AgentRunResult.infrastructure`: credentials,

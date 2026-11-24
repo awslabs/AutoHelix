@@ -5,7 +5,9 @@ _PREVIOUS, _OBSERVATIONS)."""
 
 import json
 import os
+import re
 import subprocess
+import time
 
 import pytest
 import yaml
@@ -89,6 +91,19 @@ def test_failing_gate_skips_later_gates_and_observe(project, log):
     # At the baseline the gates ran but didn't reject; metric gates aren't checked there.
     assert baseline.accepted
     assert [g["passed"] for g in baseline.gates] == [True, True, True, None]
+
+
+def test_a_long_output_line_is_cut_in_the_record_and_the_next_prompt(project):
+    # A gate ending with one 1.5 MB line made the next prompt too large to start the agent.
+    _configure(project, gates=['[ "$AUTOHELIX_ITERATION" = 0 ] || '
+                               'python3 -c "print(\'x\' * 1500000); raise SystemExit(1)"'])
+    records = _run(project, 2)
+    assert [r.accepted for r in records] == [True, False, False]
+    assert records[1].failure_output == "x" * 500 + "…"
+    assert records[1].gates[0]["output"] == records[1].failure_output
+    paths = latest_run(project)
+    assert len((paths.iteration_dir(2) / "prompt.md").read_text()) < 20_000
+    assert len((paths.iteration_dir(1) / "gates" / "1" / "stdout.txt").read_bytes()) > 1_000_000  # capped 64 KB + 1 MB
 
 
 def test_metric_gate_failure_after_an_entry_skips_the_next(project, log):
@@ -412,6 +427,52 @@ def test_failed_command_entry_at_the_baseline_is_a_setup_error(project):
     assert not record.accepted and record.observe[0]["error"] == "exited 1"
 
 
+@pytest.mark.parametrize("gate,said", [
+    ("pytset -q", "gate `pytset -q` could not run (exit 127: command not found): "),
+    ("./.gitignore", "gate `./.gitignore` could not run (exit 126: not executable): "),
+    ("autohelix/lib/check.sh", "gate `autohelix/lib/check.sh` could not run (exit 127: command not found): "),
+    ("sh -c 'exit 127'", "gate `sh -c 'exit 127'` could not run (exit 127: command not found)"),
+])
+def test_a_gate_that_cant_run_at_the_baseline_is_a_setup_error(project, gate, said):
+    """Every iteration would be paid for and rejected the same way; `autohelix/` is
+    frozen, so the agent can't create a missing helper there either."""
+    _configure(project, gates=[gate], scope={"editable": ["hello.py", "checks/"]})
+    with pytest.raises(RuntimeError, match="^Baseline setup error: " + re.escape(said)) as error:
+        Harness(project, verbose=False).run(Budget(until=1), report=False)
+    assert "Fix it and run `autohelix run demo` again" in str(error.value)
+    [record] = History(project, latest_run(project).run_id).load()
+    assert not record.accepted and record.reason.startswith("baseline failed: Baseline setup error: gate ")
+
+
+def test_a_missing_gate_script_the_agent_may_create_is_left_to_it(project):
+    _configure(project, gates=["./checks/new_check.sh"], scope={"editable": ["hello.py", "checks/"]})
+    records = _run(project, 1)
+    assert records[0].accepted and records[0].gates[0]["return_code"] == 127  # a note, as any failing gate
+    assert not records[1].accepted
+
+
+def test_an_ask_gate_without_an_answer_at_the_baseline_is_a_setup_error(project):
+    _configure(project, gates=[{"ask": "Does it keep the API?"}])
+    config = yaml.safe_load(config_file(project).read_text())
+    config["agent"]["mock"]["judge_change_file"] = "hello.py"
+    write_config(project, yaml.safe_dump(config, sort_keys=False))
+    with pytest.raises(RuntimeError, match=r"^Baseline setup error: gate `ask: Does it keep the API\?` got no "
+                                           r"answer \(autohelix ask: no valid answer: the judge changed files"):
+        Harness(project, verbose=False).run(Budget(until=1), report=False)
+
+
+def test_an_ask_gate_answering_no_at_the_baseline_continues(project):
+    _configure(project, gates=[{"ask": "Is it fast yet?"}])
+    config = yaml.safe_load(config_file(project).read_text())
+    config["agent"]["mock"]["judge_answer"] = "no"
+    write_config(project, yaml.safe_dump(config, sort_keys=False))
+    harness = Harness(project, verbose=False)
+    harness._capture_baseline()
+    harness.close()
+    [baseline] = History(project, latest_run(project).run_id).load()
+    assert baseline.accepted and baseline.gates[0]["return_code"] == 1
+
+
 def test_failed_entry_without_metrics_at_the_baseline_continues(project):
     _configure(project, gates=["exit 1", {"metric": "speed", "regress": "5%"}], observe=[
         {"name": "notes", "command": "echo nothing; exit 4"},
@@ -575,6 +636,19 @@ def test_run_command_kills_background_children_after_a_normal_exit(tmp_path):
     assert result.passed and result.output == "started\n"
     subprocess.run(["sleep", "2"])
     assert not late.exists()
+
+
+def test_a_background_child_holding_the_output_ends_with_the_shell(tmp_path):
+    # `./server & curl ...`: the child keeps stdout and stderr open after the shell exits.
+    from autohelix.checks import run_command
+
+    late = tmp_path / "late"
+    start = time.monotonic()
+    result = run_command(f"(sleep 2; touch {late}) & sleep 30 & echo started; exit 3", tmp_path, timeout=20)
+    assert time.monotonic() - start < 5
+    assert not result.timed_out and result.return_code == 3 and result.output == "started\n"
+    subprocess.run(["sleep", "3"])
+    assert not late.exists()  # the group went with the shell
 
 
 def test_metrics_file_is_not_passed_to_gates_and_observe(project, log, monkeypatch):

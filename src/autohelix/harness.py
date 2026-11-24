@@ -9,6 +9,7 @@ import hashlib
 import itertools
 import math
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -31,7 +32,7 @@ from autohelix.costs import summarize_costs
 from autohelix import terminal
 from autohelix.display import LiveDisplay, clean
 from autohelix.terminal import LiveRow, Row, budget_text
-from autohelix.history import History, IterationResult
+from autohelix.history import DISCARDED_LISTED, History, IterationResult
 from autohelix.runs import (RunPaths, RunState, select_run, reconcile, land, git,
                             claim_copies, critical_section, new_run_name,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, landing,
@@ -40,7 +41,7 @@ from autohelix.runs import (RunPaths, RunState, select_run, reconcile, land, git
                             write_json)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
-from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
+from autohelix.checks import (agent_issues, metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning, StopCheckResult)
 from autohelix.events import iteration_fields
 from autohelix.experiment import shown, snapshot_changes, snapshot_files
@@ -164,8 +165,16 @@ def _call_env(folders: dict) -> dict[str, str]:
             "AUTOHELIX_EXPERIMENT": str(folders["experiment"]) if "experiment" in folders else None}
 
 
-def _tail(output: str, lines: int = 15) -> str:
-    return "\n".join(output.strip().splitlines()[-lines:])
+TAIL_LINES = 15
+TAIL_LINE_CHARS = 500  # so a failure's tail, in the record and the next prompts, stays under 8 KB
+
+
+def _tail(output: str, lines: int = TAIL_LINES) -> str:
+    """A failed command's last lines for the record and the prompt, each cut at
+    `TAIL_LINE_CHARS` ("…" where cut): one long line (a JSON dump) can't make the
+    prompt too large to start the agent. The whole output stays in its stored folder."""
+    return "\n".join(line if len(line) <= TAIL_LINE_CHARS else line[:TAIL_LINE_CHARS] + "…"
+                     for line in output.strip().splitlines()[-lines:])
 
 
 class Harness:
@@ -1003,7 +1012,8 @@ class Harness:
         result.summary = workspace.summary
         result.base = workspace.base
         result.tree = workspace.tree if workspace.iteration else None
-        result.discarded = self._discarded(workspace)
+        discarded = self._discarded(workspace)
+        result.discarded, result.discarded_more = discarded[:DISCARDED_LISTED], max(len(discarded) - DISCARDED_LISTED, 0)
         result.discarded_frozen = [path for path in result.discarded if path_in_scope(path, self.config.frozen_patterns())]
 
     def _gate_text(self, command: str) -> str:
@@ -1374,6 +1384,36 @@ class Harness:
             self.history.append(baseline)
         self.segment_log.iteration(ended_at=baseline.ended_at, **iteration_fields(baseline))
 
+    def _unworkable_gate(self, evaluation: _Evaluation) -> str | None:
+        """At the baseline, a gate that can't work, which would reject every paid
+        iteration the same way: a command gate exiting 126 or 127 (the shell's "not
+        executable", "not found"), unless its first word is a path the agent may write
+        (it may be meant to create it), and an `ask:` gate exiting 2 (no valid answer).
+        Other failing gates are the agent's to make pass."""
+        for spec, result in zip(self.config.gate_commands(), evaluation.constraints):
+            said = next((clean(line, 300) for line in reversed(result.stderr.splitlines()) if line.strip()), "")
+            if spec.label is not None:  # an `ask:` entry
+                if result.return_code == 2:
+                    return f"gate `{spec.text}` got no answer" + (f" ({said})" if said else "")
+            elif result.return_code in (126, 127) and not self._agent_may_write(spec.command):
+                what = "command not found" if result.return_code == 127 else "not executable"
+                return f"gate `{spec.text}` could not run (exit {result.return_code}: {what})" + (
+                    f": {said}" if said else "")
+        return None
+
+    def _agent_may_write(self, command: str) -> bool:
+        """Whether a command's first word is a project path the scope lets the agent write."""
+        try:
+            first = shlex.split(command)[0]
+        except (ValueError, IndexError):
+            return False
+        path = os.path.normpath(first)
+        if "/" not in first or os.path.isabs(path) or path == ".." or path.startswith("../"):
+            return False
+        editable = self.config.editable
+        return ((not editable or path_in_scope(path, editable))
+                and not path_in_scope(path, self.config.frozen_patterns()))
+
     def _capture_baseline(self) -> dict[str, str] | None:
         """Evaluate A in a checks copy and check stop commands.
 
@@ -1400,6 +1440,10 @@ class Harness:
                     reason = f"Baseline setup error: {reason}"
                 self.log.info(f"baseline FAILED — {reason}")
                 raise AutoHelixRunError(reason) from e
+
+            if problem := self._unworkable_gate(evaluation):
+                self.log.info(f"baseline FAILED — {problem}")
+                raise RuntimeError(f"Baseline setup error: {problem}")
 
             # A missing number is a setup error, except a review's that no gate uses: an
             # LLM's answer missing once may be flakiness. A failed entry produces none.
@@ -1606,10 +1650,10 @@ class Harness:
             raise RuntimeError("Preflight checks failed. Fix the issues above before running.")
         self._preflight_done = True
 
-    def _preflight(self) -> bool:
-        """Print preflight warnings and errors; False if there are errors (the caller
-        then raises, saying the checks failed)."""
-        issues = preflight_check(self.config, self.project_path)
+    def _preflight(self, issues=None) -> bool:
+        """Print preflight warnings and errors (`issues`, default: all of preflight's); False
+        if there are errors (the caller then raises, saying the checks failed)."""
+        issues = preflight_check(self.config, self.project_path) if issues is None else issues
         for w in (i for i in issues if i.level == "warning"):
             self._warn(w.message)
         errors = [i for i in issues if i.level == "error"]
@@ -1736,8 +1780,13 @@ class Harness:
                                "place are lost).")
 
         # Run preflight checks before the baseline (silent on success); a first
-        # start already ran them before allocating the run.
-        if needs_baseline and not self._preflight_done and not self._preflight():
+        # start already ran them before allocating the run. Later segments check only
+        # that every agent can start (a resume in another shell or on another machine).
+        if needs_baseline:
+            ready = self._preflight_done or self._preflight()
+        else:
+            ready = self._preflight(agent_issues(self.config))
+        if not ready:
             raise AutoHelixRunError("Preflight checks failed. Fix the issues above before running.")
         self._segment_checked = True
 
