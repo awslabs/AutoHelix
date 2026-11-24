@@ -195,9 +195,13 @@ def test_an_auto_resume_after_a_squash_merged_landing_refuses(project):
     data = harness.paths.read_identity()
     assert data["landed"]["tip"] == harness.run_state.expected_tip
     squash_main_onto_base(project, data)
-    with pytest.raises(RuntimeError, match=r"landed on main \(`autohelix land`\), which has other commits in their place since .* --import"):
+    with pytest.raises(RuntimeError, match=r"landed on main, which has other commits in their place since .* --import"):
         Harness(project)
-    delete(harness.paths)  # nothing unlanded: no --force needed
+    # Landed, but its tip is on no branch: a squash merge can't be told from a reset.
+    with pytest.raises(RuntimeError, match=r"its tip isn't on any branch, tag or remote-tracking branch.* It reads "
+                                           r"landed: `land` put it on main, which lacks it now"):
+        delete(harness.paths)
+    delete(harness.paths, force=True)
     assert not harness.paths.run_dir.exists()
 
 
@@ -377,3 +381,43 @@ def test_run_json_commit_ids_that_are_not_hex_count_as_missing(project):
     found = landing(paths, bad)
     assert (found.relation, found.since, found.accepted) == ("diverged", None, True)
     assert found.ahead == 1  # the landed commit, no longer excused
+
+
+def test_delete_refuses_a_landed_run_whose_target_was_reset(project):
+    """05-1's reproduction: auto landing, then `git reset --hard` to the base and a new
+    commit. The run reads landed, but `delete` without --force would drop the only ref
+    to its commits; `land` says it did nothing."""
+    from tests.helpers import cli
+
+    harness = Harness(project)
+    harness.run(Budget(until=1), report=False)  # lands on main, records `landed`
+    paths, tip = harness.paths, harness.run_state.expected_tip
+    short = short_id(paths.run_id)
+    git(project, "reset", "-q", "--hard", harness.run_info["base_commit"])
+    commit_on_main(project, "after")
+    assert relation(paths, paths.read_identity())[0] == "landed"
+    result = cli(project, "land", short)
+    assert result.exit_code == 0, result.output
+    said = " ".join(result.output.split())
+    assert (f"Run {short} landed on main before, which has other commits in their place since; to land it again: "
+            f"`git merge autohelix/{paths.run_id}`.") in said and "Landed" not in said
+    result = cli(project, "delete", short)
+    assert result.exit_code == 1 and paths.run_dir.exists()
+    assert (f"Not deleting run {short}: its tip isn't on any branch, tag or remote-tracking branch, so its commits "
+            f"would be lost.") in " ".join(result.output.split())
+    git(project, "tag", "kept", tip)  # on a tag: deleting loses nothing
+    assert cli(project, "delete", short).exit_code == 0 and not paths.run_dir.exists()
+
+
+def test_land_says_when_there_is_nothing_to_do(project):
+    from tests.helpers import cli
+
+    harness = Harness(project)
+    harness.run(Budget(until=1), report=False)  # auto landing: already on main
+    short = short_id(harness.paths.run_id)
+    result = cli(project, "land", short)
+    assert result.exit_code == 0 and f"Run {short} is already in main." in result.output
+    assert "Landed" not in result.output
+    git(project, "update-ref", harness.paths.ref, harness.run_info["base_commit"])  # as if it accepted nothing
+    result = cli(project, "land", short)
+    assert result.exit_code == 0 and f"Run {short} has nothing accepted to land." in result.output

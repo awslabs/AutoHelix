@@ -363,7 +363,11 @@ def test_an_error_heads_the_ending_then_landing_and_the_run_page(project):
     totals = next(i for i, line in enumerate(ending) if line.startswith("  run "))
     assert " ".join(" ".join(ending[:totals]).split()) == f"Error {message}"  # wrapped, not cut
     # Run from outside the project: the run's folder is absolute, as the page is.
-    assert [line.split()[0] for line in ending[totals:]] == ["run", "landed", "next", "autohelix", "folder", "page"]
+    # The next commands: a new run and delete, as the error says (a failed first baseline).
+    assert [line.split()[0] for line in ending[totals:]] == ["run", "landed", "next", "autohelix", "autohelix",
+                                                             "folder", "page"]
+    assert [line.split()[:3] for line in ending[totals + 2:totals + 5]] == [
+        ["next", "autohelix", "view"], ["autohelix", "run", NAME], ["autohelix", "delete", short]]
     assert ending[-2].split() == ["folder", f"{project / '.autohelix' / 'runs' / run_id}/"]
     assert result.output.count("Error") == 1  # not repeated by the CLI
 

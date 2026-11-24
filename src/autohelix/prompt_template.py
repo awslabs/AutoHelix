@@ -264,7 +264,7 @@ def _describe_accepted(history, iteration: int, state: Path) -> dict[str, Any] |
 
 
 # The documented variables (`build_prompt_variables`); a custom template naming others
-# gets a warning at run start (`unknown_variables`).
+# is a config error (`template_problem`).
 VARIABLES = frozenset({
     "goal", "title", "iteration", "copy", "history", "gates", "observe", "stop", "editable", "frozen",
     "notes_path", "hints", "hints_text", "rejected_patch", "rejected_diff", "discarded", "discarded_frozen", "discarded_more", "last", "last_accepted",
@@ -275,36 +275,93 @@ VARIABLES = frozenset({
 # Variables that were renamed: a template naming the old one is a config error.
 RENAMED_VARIABLES = {"worktree": "copy"}
 
+# A sample history (a baseline, an accepted iteration, a rejected one) that a custom
+# template is rendered against at validation (`template_problem`); docs/phases.md's
+# prompt is rendered from it too.
+SAMPLE_OBSERVED = [{"name": "bench", "ok": True, "error": None, "metrics": {"speed": 10.0}},
+                   {"name": "clarity", "ok": True, "error": None, "metrics": {}}]
+SAMPLE_RECORDS = [
+    {"iteration": 0, "accepted": True, "metrics": {"speed": 10.0}, "reason": "baseline",
+     "gates": [{"text": "pytest -q", "kind": "command", "passed": True},
+               {"text": "speed regress 5%", "kind": "metric", "passed": None}],
+     "observe": SAMPLE_OBSERVED},
+    {"iteration": 1, "accepted": True, "metrics": {"speed": 14.2}, "summary": "Insertion sort for short runs",
+     "gates": [{"text": "pytest -q", "kind": "command", "passed": True},
+               {"text": "speed regress 5%", "kind": "metric", "passed": True}],
+     "observe": [{**SAMPLE_OBSERVED[0], "metrics": {"speed": 14.2}}, SAMPLE_OBSERVED[1]]},
+    {"iteration": 2, "accepted": False, "reason": "gate failed: pytest -q",
+     "failure_output": "FAILED test_sort.py::test_negative_numbers - assert [-1, -3] == [-3, -1]",
+     "summary": "Radix sort", "discarded": ["test_sort.py"], "tree": "abc",
+     "rejected_ref": "refs/autohelix-rejected/20261118-1205-sort-x7k2/2",
+     "gates": [{"text": "pytest -q", "kind": "command", "passed": False},
+               {"text": "speed regress 5%", "kind": "metric", "passed": None}]},
+]
+
 
 def template_problem(config) -> str | None:
-    """Why the config's `prompt_template:` can't be used (a config error naming the file
-    and line: it doesn't parse, or can't be read), else None. Config validation calls it,
-    so a broken template fails `run`, not the agent."""
+    """Why the config's `prompt_template:` can't be used (a config error naming the file:
+    it doesn't parse, can't be read, names a variable the prompt doesn't have or a path
+    of the old copy layout, or fails to render against `SAMPLE_RECORDS` after each of
+    their iterations), else None. Config validation calls it, so a broken template fails
+    `run --check` and `run`, not the agent."""
     name = config.prompt_template.name if config.prompt_template else "prompt template"
     try:
-        parsed = _create_env().parse(load_template(config))
+        text = load_template(config)
+        env = _create_env()
+        parsed = env.parse(text)
     except TemplateSyntaxError as e:
         return f"prompt_template {name}, line {e.lineno}: {e.message}"
     except (RuntimeError, UnicodeDecodeError) as e:
         return f"prompt_template {name}: {e}"
     from jinja2 import meta
 
-    renamed = sorted(old for old in RENAMED_VARIABLES if old in meta.find_undeclared_variables(parsed))
+    names = meta.find_undeclared_variables(parsed)
+    renamed = sorted(old for old in RENAMED_VARIABLES if old in names)
     if renamed:
         return f"prompt_template {name}: " + "; ".join(
             f"`{old}` is now `{RENAMED_VARIABLES[old]}` ({{{{ {RENAMED_VARIABLES[old]} }}}})" for old in renamed)
+    if unknown := sorted(names - VARIABLES - set(env.globals)):
+        return (f"prompt_template {name} uses variables the prompt doesn't have: {', '.join(unknown)}. "
+                "See docs/concepts.md#prompt for the names.")
+    if uses_old_layout(text):
+        from autohelix.workspace import ITERATION_DIR
+
+        return (f"prompt_template {name} names .autohelix/ paths in the agent's copy; they are now "
+                f"{ITERATION_DIR}/.")
+    try:
+        for variables in _sample_variables(config):
+            render_template(text, variables, name)
+    except RuntimeError as e:
+        return str(e)
     return None
 
 
-def unknown_variables(template: str) -> list[str]:
-    """Names a template uses that are not prompt variables (nor Jinja globals), sorted:
-    e.g. `constraints` or `history_summary` from before config v2. The template parses
-    (config validation, `template_problem`)."""
-    from jinja2 import meta
+def _sample_variables(config):
+    """The variables for iterations 1 to 3 of `SAMPLE_RECORDS`, with `config`'s gates and
+    entries, built in a temporary folder; nothing if the config can't build them (its
+    other problems are reported on their own)."""
+    import tempfile
 
-    env = _create_env()
-    names = meta.find_undeclared_variables(env.parse(template))
-    return sorted(names - VARIABLES - set(env.globals))
+    from autohelix.history import History, IterationResult
+    from autohelix.workspace import ITERATION_DIR
+
+    with tempfile.TemporaryDirectory(prefix="autohelix-template-") as folder:
+        try:
+            project = Path(folder) / "project"
+            (project / ".autohelix").mkdir(parents=True)
+            history = History(project)
+            history.paths.hints.write_text("- [2026-11-18 13:02] A sample hint\n")
+            state = Path(folder) / "copy" / ITERATION_DIR
+            (state / "notes").mkdir(parents=True)
+            (state / "rejected.patch").write_text("diff --git a/sort.py b/sort.py\n")
+            built = []
+            for record in SAMPLE_RECORDS:
+                history.append(IterationResult(**record))
+                built.append(build_prompt_variables(config, history, record["iteration"] + 1, state.parent,
+                                                    head="sample"))
+        except Exception:  # noqa: BLE001
+            return []
+        return built
 
 
 def _describe_gate(gate) -> str:

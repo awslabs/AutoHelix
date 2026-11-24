@@ -15,7 +15,7 @@ from typing import Any
 from autohelix.config import capture_problem
 from autohelix.formatting import SUMMARY_LIMIT, clean, clean_block
 from autohelix.costs import CostSummary, summarize_costs
-from autohelix.runs import RunPaths, SCHEMA, iteration_folder, remove_planted
+from autohelix.runs import RunPaths, SCHEMA, damaged_history, iteration_folder, remove_planted
 
 logger = logging.getLogger(__name__)
 
@@ -467,7 +467,7 @@ class History:
                     results.append(IterationResult(**data))
                 except (json.JSONDecodeError, TypeError, ValueError) as e:
                     if lineno != len(lines) or terminated:
-                        raise RuntimeError(f"Corrupt history record {lineno}: {self.history_path}") from e
+                        raise damaged_history(self.paths, lineno) from e
                     logger.warning("Incomplete final history record in %s: %s", self.history_path, e)
         self._cache = results
         self._cache_key = key

@@ -26,7 +26,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import (Config, ConfigError, MetricGate, config_changes, config_relative, find_config,
+from autohelix.config import (CONFIG_DIR, Config, ConfigError, MetricGate, config_changes, config_relative, find_config,
                               load_config, not_an_experiment, run_command)
 from autohelix.costs import summarize_costs
 from autohelix import terminal
@@ -34,7 +34,7 @@ from autohelix.display import LiveDisplay, clean
 from autohelix.terminal import LiveRow, Row, budget_text
 from autohelix.history import DISCARDED_LISTED, History, IterationResult
 from autohelix.runs import (RunPaths, RunState, select_run, reconcile, land, git,
-                            claim_copies, critical_section, new_run_name,
+                            claim_copies, critical_section, new_run_name, new_run_notices,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, landing,
                             Landing, LandingWords, landing_words, WHY_LIMIT,
                             imported_run, is_live, group_landing_note, has_baseline, land_first, target_ahead_refusal,
@@ -49,8 +49,7 @@ from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read
 from autohelix.usage_log import ENV as USAGE_ENV, append_usage, read_usage, superseded_marker
 from autohelix.formatting import clean_block, format_cap, format_cost, format_duration, format_total_cost
 from autohelix.iteration_time import format_limit
-from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
-                                       uses_old_layout)
+from autohelix.prompt_template import build_prompt_variables, load_template, render_template
 from autohelix.run_log import RunLog
 from autohelix.workspace import (path_in_scope, SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, OPENCODE_PLUGIN,
                                  CandidateRejected, GitExcludeError, Repo, Scope, ensure_git_exclude_entry,
@@ -268,9 +267,11 @@ class Harness:
                     raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
                 raise RuntimeError(target_ahead_refusal(planned, data, found))
         self._agent_settings(self.config)  # an unreadable user --settings: refused before any write
-        if check_only:  # nothing written; the scope advice a run prints at its start too
+        if check_only:  # nothing written; what a run prints at its start too
             if warning := scope_warning(self.config):
                 self._warn(warning)
+            self._say(self._check_notices(config_file, land_mode or ("manual" if group else "auto"), group,
+                                          import_run))
             return
         # The first writes: the local excludes, before .autohelix/ exists.
         ensure_runtime_ignored(self.project_path)
@@ -314,12 +315,11 @@ class Harness:
             notices.append(("warn", note))
         self.land_mode = land_mode or self.run_info.get("land") or "auto"
         if self.paths.run_id not in existing and self.land_mode == "auto":
-            notices.extend(("warn", text) for text in self._uncommitted_config())
-        for level, text in notices:
-            if level == "warn":
-                self._warn(text)
-            else:
-                terminal.show(self.console, text, style="dim")
+            snapshot = self.paths.experiment
+            stored = [path.relative_to(snapshot).as_posix() for path in snapshot.rglob("*") if path.is_file()]
+            notices.extend(("warn", text) for text in self._uncommitted_config(self.run_info.get("target_branch"),
+                                                                               stored))
+        self._say(notices)
         try:
             self.history = History(self.project_path, self.paths.run_id)
             tip, warning = reconcile(self.paths, self.run_info, self.history, self.land_mode)
@@ -354,22 +354,43 @@ class Harness:
             self.close()
             raise
 
-    def _uncommitted_config(self) -> list[str]:
+    def _say(self, notices: list[tuple[str, str]]) -> None:
+        """Print `(level, text)` notices: warnings, else dim."""
+        for level, text in notices:
+            if level == "warn":
+                self._warn(text)
+            else:
+                terminal.show(self.console, text, style="dim")
+
+    def _check_notices(self, config_file: Path, land_mode: str, group: str | None,
+                       imported: str | None) -> list[tuple[str, str]]:
+        """`run --check`'s notices: what `run` would say at its start about the config's
+        other runs (`new_run_notices`) and, landing automatically, its uncommitted files."""
+        base = git(self.project_path, "rev-parse", "HEAD").stdout.strip()
+        target = git(self.project_path, "symbolic-ref", "--quiet", "HEAD",
+                     check=False).stdout.strip().removeprefix("refs/heads/") or None
+        notices = new_run_notices(self.project_path, config_relative(self.project_path, config_file), target,
+                                  group, imported, base, land_mode)
+        if land_mode == "auto":
+            stored = [file.name for file in snapshot_files(self.config, self.project_path)]
+            notices.extend(("warn", text) for text in self._uncommitted_config(target, stored))
+        return notices
+
+    def _uncommitted_config(self, branch: str | None, stored: list[str]) -> list[str]:
         """A new auto-landing run's warning when its config file, prompt template or a file
-        the snapshot stores of its experiment folder is untracked or modified (not ignored): committing it
-        after the run lands puts the branch past the run's tip, and `resume` then refuses."""
-        branch = self.run_info.get("target_branch")
+        the snapshot stores of its experiment folder (`stored`, names in it) is untracked or
+        modified (not ignored): committing it after the run lands on `branch` puts the
+        branch past the run's tip, and `resume` then refuses."""
         files = [f for f in (self.config_file, self.config.prompt_template) if f is not None]
         if not branch or not files:
             return []
-        consequence = f"a commit on {branch} after this run lands makes `resume` refuse."
+        consequence = (f"a commit on {branch} after this run lands makes `resume` refuse. Or keep "
+                       f"{CONFIG_DIR}/ private (docs/concepts.md#where-configs-live).")
         warnings = []
         if (folder := self.config.experiment).is_dir():
             # What the run stored (a link, as git lists it, by the files under it) that is
             # untracked and not ignored (tracked files are clean: `require_clean`).
             where = config_relative(self.project_path, folder)
-            snapshot = self.paths.experiment
-            stored = [path.relative_to(snapshot).as_posix() for path in snapshot.rglob("*") if path.is_file()]
             listed = git(self.project_path, "--no-optional-locks", "ls-files", "-z", "--others", "--exclude-standard",
                          "--", where, check=False).stdout.split("\0")
             changed = {name[len(where) + 1:] for name in listed if name.startswith(f"{where}/")}
@@ -450,11 +471,12 @@ class Harness:
             raise RuntimeError(f"{said}run {short} has no accepted baseline: start a new run, "
                                f"`{run_command(data['config_path'])}` (`autohelix delete {short}` removes "
                                "this attempt).")
+        command = f"`{run_command(data['config_path'])} --import {short}`"
+        # The landing first, when there is one: a new run started before it lacks the code.
         first = land_first(paths, data, data.get("target_branch"))
-        raise RuntimeError(
-            f"{said}{keeps}. To apply the new {what}, start a new run "
-            f"that continues from this one: `{run_command(data['config_path'])} --import {short}`"
-            f"{'. ' + first if first else '.'} To continue this run, restore the {restore}.")
+        apply = (f"{first}\nThen {command} applies the new {what}." if first else
+                 f"To apply the new {what}, start a new run that continues from this one: {command}.")
+        raise RuntimeError(f"{said}{keeps}.\n{apply}\nTo continue this run, restore the {restore}.")
 
     def _metric_label(self, name: str) -> str:
         """Format metric name with direction arrow."""
@@ -1013,8 +1035,10 @@ class Harness:
         result.base = workspace.base
         result.tree = workspace.tree if workspace.iteration else None
         discarded = self._discarded(workspace)
-        result.discarded, result.discarded_more = discarded[:DISCARDED_LISTED], max(len(discarded) - DISCARDED_LISTED, 0)
-        result.discarded_frozen = [path for path in result.discarded if path_in_scope(path, self.config.frozen_patterns())]
+        frozen = [path for path in discarded if path_in_scope(path, self.config.frozen_patterns())]
+        listed = (frozen + [path for path in discarded if path not in set(frozen)])[:DISCARDED_LISTED]  # frozen first
+        result.discarded, result.discarded_more = listed, len(discarded) - len(listed)
+        result.discarded_frozen = [path for path in listed if path in set(frozen)]
 
     def _gate_text(self, command: str) -> str:
         """A gate command's display text (`ask: <question>` for ask entries)."""
@@ -1496,8 +1520,8 @@ class Harness:
             self._write_baseline(baseline)
             return baseline.stop
         except BaseException as error:
-            baseline = IterationResult(iteration=0, accepted=False, reason=f"baseline failed: {error}",
-                                       base=workspace.base)
+            reason = "baseline interrupted" if isinstance(error, KeyboardInterrupt) else f"baseline failed: {error}"
+            baseline = IterationResult(iteration=0, accepted=False, reason=reason, base=workspace.base)
             self._complete_record(baseline, started_at, time.monotonic(), evaluation)
             if any(r.iteration == 0 and r.accepted for r in self.history.load()):
                 raise
@@ -1771,13 +1795,6 @@ class Harness:
                                "prompt is used. To keep a custom prompt, move it next to your config, set "
                                "`prompt_template: <file>` there, and update its .autohelix/ paths to "
                                f"{ITERATION_DIR}/. Otherwise delete it.")
-        if self.config.prompt_template and (unknown := unknown_variables(load_template(self.config))):
-            self._warn(f"{self.config.prompt_template.name} uses variables the prompt doesn't have "
-                       f"(they render empty): {', '.join(unknown)}. See docs/concepts.md#prompt for the names.")
-        if self.config.prompt_template and uses_old_layout(load_template(self.config)):
-            self._warn(f"{self.config.prompt_template.name} names .autohelix/ paths "
-                               f"in the agent's copy; they are now {ITERATION_DIR}/ (notes written to the old "
-                               "place are lost).")
 
         # Run preflight checks before the baseline (silent on success); a first
         # start already ran them before allocating the run. Later segments check only
@@ -1963,7 +1980,11 @@ class Harness:
             short = short_id(self.paths.run_id)
             # What lands the commits that wait (a manual run, an auto landing that failed):
             # `autohelix land` when the target can fast-forward, else `git merge`.
-            commands = terminal.next_commands(short, also=self._relation()[1].commands)
+            # A failed first baseline: `resume` would refuse the fixed setup (an interrupted one resumes).
+            last = (self.history.load() or [None])[-1]
+            failed = last is not None and last.iteration == 0 and not last.accepted and last.reason != "baseline interrupted"
+            restart = run_command(self.run_info["config_path"]) if failed else None
+            commands = terminal.next_commands(short, also=self._relation()[1].commands, restart=restart)
             lines = table.ending(outcome, spent=format_total_cost(self.history.cost_usages), landing=self._landing,
                                  commands=commands, files=self._files,
                                  folder=terminal.shown_path(self.paths.run_dir) + "/",

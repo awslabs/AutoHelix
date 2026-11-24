@@ -17,12 +17,16 @@ part). Without one they act on the **running run**, else the **most recently
 active run that isn't [archived](#autohelix-archive)**, and say which on stderr
 ("Run k3f9 (the running run; name one to choose another)").
 
-- With several runs running they refuse: "Several runs are running: k3f9,
-  m2x7; name one."
+- `land` and `report` skip running runs (a running run refuses them): they
+  take the most recently active run that isn't running or archived ("Run m2x7
+  (the most recently active run that isn't running; …)").
+- With several runs running `hint` and `view --terminal` refuse: "Several runs
+  are running: k3f9, m2x7; name one."
 - With no run to act on, they say so and how to start one ("No runs in
   /path/to/project; start one with `autohelix run`.").
 - `resume` has its own rule (a config's latest run,
-  [below](#autohelix-resume)).
+  [below](#autohelix-resume)). Other commands take run ids only: given a
+  config name (`land perf`), they name its latest run instead.
 - Commands that take several ids (`archive`, `delete`, `stop`, `wait`) check
   every id first: an unknown one refuses the whole command, nothing done. Then
   they act on each, report each, and exit 1 if any failed.
@@ -53,7 +57,8 @@ The screen has:
   `resume` one that stopped before its end, `land` waiting commits,
   `git merge autohelix/<id>` for a run whose branch diverged from its target.
   An interrupted run or one that stopped unexpectedly gets `resume` even with
-  commits to land, which an auto-landing resume lands;
+  commits to land, which an auto-landing resume lands; a run whose first
+  baseline failed gets `autohelix run <name>`;
 - how many runs are archived, and a pointer to `autohelix --help`;
 - the question.
 
@@ -267,7 +272,9 @@ VPN alive.
   `Interrupted`, `Error`), each metric from the baseline to the run's tip, the
   totals, what landed (`landing  failed: …` in yellow when auto landing
   couldn't, the commits then waiting for `autohelix land`), what to type next
-  (one command per line, with what it does; left out when it doesn't fit), the
+  (one command per line, with what it does; left out when it doesn't fit;
+  after a failed first baseline, `autohelix run <name>` and `autohelix delete
+  <id>` instead of `resume`, which would refuse the fixed setup), the
   run's `folder` (`report.md`, `history.jsonl`, `iterations/` are in it), and
   the files written.
 - **`resume`** shows the baseline and the last 5 rows before `resumed HH:MM`.
@@ -292,7 +299,7 @@ pipe, a log file) or colours there is no mark and no live row. The renders at 80
 | `--why TEXT` | Why this run is started: one line (at most 300 characters), stored in `run.json` and shown by `autohelix view` |
 | `--verbose` | Show agent command details, file paths, heartbeats |
 | `--no-report` | Don't write the run summary when this segment finishes (not stored: pass it to each `resume` too) |
-| `--check` | Start nothing: make every check the run makes before writing anything (the config and its prompt template, the experiment folder, a clean checkout, the agent command, scope patterns, commands naming an `autohelix/` path the commit lacks, `--import`'s run), print what it finds, exit 0 when the run would start, else 1. For setup and CI |
+| `--check` | Start nothing: make every check the run makes before writing anything (the config and its prompt template, the experiment folder, a clean checkout, the agent command, scope patterns, commands naming an `autohelix/` path the commit lacks, `--import`'s run), print what it finds, the warnings `run` gives at its start included (other runs' unlanded commits, an uncommitted config), exit 0 when the run would start, else 1. For setup and CI |
 
 `run` always starts a **new** run, with its own notes and history; to
 continue one, use [`autohelix resume`](#autohelix-resume) (scripts that want
@@ -720,6 +727,10 @@ checkout edits. Without `RUN_ID`, the [running or latest run](#which-run-a-comma
   trying to land it.
 - Auto landing at a segment's end refuses the same way; AutoHelix never
   rewinds user commits.
+- When there is nothing to land it says so instead of "Landed": the run is
+  already in the branch, it accepted nothing, or it landed there before and
+  the branch has other commits in their place (to land it again: `git merge
+  autohelix/<id>`).
 - A run created from a detached checkout requires `--into BRANCH`.
 - Landing also refuses branches that are being rebased.
 
@@ -734,12 +745,15 @@ git push origin main:perf-pr            # push it as a branch and open a PR from
 git fetch origin && git reset --hard origin/main   # your main as the remote has it
 ```
 
-The runs table, `view`, the entry screen and `delete` then read k3f9 as
-landed (no `--force` needed), while its tip isn't on main: the target lacks the
-tip, but run.json says `land` landed that tip on this same branch.
+The runs table, `view` and the entry screen then read k3f9 as landed, while
+its tip isn't on main: the target lacks the tip, but run.json says `land`
+landed that tip on this same branch.
 
 - Nothing compares the code, so if the PR is abandoned and main reset, the run
-  still reads landed (its commits stay on `autohelix/<id>`).
+  still reads landed, and `autohelix/<id>` is the only ref to its commits.
+  So `delete` asks for `--force` for any run whose tip is on no branch, tag or
+  remote-tracking branch, landed or not; once the PR's branch is gone, use
+  `--force` or `archive`.
 - Only a landing on the run's own target is recorded: a landing on another
   branch (`land --into other`) leaves the record alone, and a squash merge of
   the run's branch done without `land` (`git merge --squash autohelix/<id>`)
@@ -788,8 +802,10 @@ Deletes runs:
   (`refs/autohelix-rejected/<id>/<n>`);
 - any leftover copies.
 
-It refuses a running run, and a run with accepted commits that its target
-branch lacks (they would be lost) unless `--force`. Code on your branch and
+It refuses a running run, and, unless `--force`, a run with accepted commits
+that its target branch lacks or whose tip is on no branch, tag or
+remote-tracking branch (they would be lost; a squash-merged PR's run once its
+branch is gone, too). Code on your branch and
 external artifacts stay intact. To keep a run but hide it, use `archive`.
 
 ## `autohelix view`
@@ -906,7 +922,7 @@ With `RUN_ID`:
     - `segment_started_at`, when that segment started (its `--time` counts from there), and `segment`, its number (1, 2, … in the run);
     - `entry`: the name of the observe entry running, else `null`;
   - `stop_requested`: while the running segment has been asked to end by [`autohelix stop`](#autohelix-stop), `requested_at`, `why` and `now`; else `null`;
-  - `accepted`: the number of accepted iterations;
+  - `accepted`: the number of accepted iterations, and `baseline`: whether its baseline was accepted;
   - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
   - `progress`:
     - `iterations` attempted, `cost_usd` and `cost_incomplete` (the whole run's), `seconds` (the recorded iterations' wall clock, the baseline's included);

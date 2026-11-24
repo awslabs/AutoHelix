@@ -371,7 +371,9 @@ are logged but reject nothing (the agent may be meant to make a gate pass), and
 metric gates aren't checked. A setup that can't work stops the run at the
 baseline with a setup error naming it: a gate or entry that modifies the code
 it checks; a command gate that exits 126 or 127 (not executable, not found),
-unless its first word is a file the agent may write (it may create it); an
+unless its first word is a file the agent may write (it may create it; only
+the first word counts, so name such a script `./tests/new.sh`, not
+`bash tests/new.sh`); an
 `ask:` gate that exits 2 (no answer: its judge changed files, or its calls
 failed). A metric from a `command:` entry that is missing at the baseline stops
 the run too (there would be no reference). A metric from a `review:` entry stops it
@@ -499,7 +501,7 @@ Changes outside the scope are discarded when the agent's copy is frozen, before
 any gate runs, so gates check exactly the tree that would be accepted. Nothing
 is written back into the agent's copy, and an out-of-scope file is never stored
 in your repository's objects. Discarded paths are recorded with the
-iteration (`discarded` in history, the first 20; `discarded_more` counts the
+iteration (`discarded` in history, the first 20, frozen ones first; `discarded_more` counts the
 rest; the frozen ones also in `discarded_frozen`),
 shown in the console, `view` and the viewer, and the next agent is told ("Your
 changes to tests/x.py were discarded: outside the editable scope", or "...:
@@ -596,10 +598,11 @@ hints), OpenCode through a plugin. Every agent can run
 
 `prompt_template:` is optional: a [Jinja2](https://jinja.palletsprojects.com/)
 file that replaces the built-in agent prompt, as a path relative to the config
-file (so it lives beside it). A template that doesn't parse is a config
-error naming the file and line, and one that fails to render (say `{{
-last.gates.x.y }}`) stops the run with an error naming the file, before its
-agent call. A run stores the template's text with its config when it starts, so
+file (so it lives beside it). These are config errors naming the file, so
+`run --check` finds them: a template that doesn't parse (with its line), one
+naming a variable the prompt doesn't have, or the old `.autohelix/` paths in the
+agent's copy, and one that fails to render (say `{{ last.gates.x.y }}`) against
+a sample history: a baseline, an accepted iteration and a rejected one. A run stores the template's text with its config when it starts, so
 editing the template changes later runs, not this one. Most configs need only
 `goal:`. The
 variables a template gets are a documented contract; see

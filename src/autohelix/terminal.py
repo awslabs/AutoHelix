@@ -729,12 +729,14 @@ def not_landed(error) -> tuple[str, str, str | None]:
     return "landing", f"failed: {clean(error)}", "yellow"
 
 
-def next_commands(short: str, view: bool = True, also=()) -> list[str]:
+def next_commands(short: str, view: bool = True, also=(), restart: str | None = None) -> list[str]:
     """What to type after a run: look at it (`view`: not from the view itself), continue
     it, then `also`: what lands commits that wait (`runs.LandingWords.commands`:
     `autohelix land <id>` when the target can fast-forward, `git merge autohelix/<id>`
-    when it diverged)."""
-    return ([f"autohelix view {short}"] if view else []) + [f"autohelix resume {short}", *also]
+    when it diverged). A run whose baseline failed (`restart`: the command that starts
+    its config's runs) isn't continued: a new run once the setup is fixed, or delete it."""
+    go_on = [restart, f"autohelix delete {short}"] if restart else [f"autohelix resume {short}"]
+    return ([f"autohelix view {short}"] if view else []) + [*go_on, *also]
 
 
 def command_hint(command: str, target: str = "") -> str:
@@ -746,6 +748,10 @@ def command_hint(command: str, target: str = "") -> str:
         return "the run's page in your browser"
     if command.startswith("autohelix resume "):
         return "one more iteration (-n N for more)"
+    if command.startswith("autohelix run "):
+        return "a new run, once the setup is fixed"
+    if command.startswith("autohelix delete "):
+        return "remove this attempt"
     if command.startswith("autohelix land "):
         return f"put its commits on {branch}"
     if command.startswith("git merge "):

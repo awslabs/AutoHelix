@@ -120,7 +120,9 @@ has the checklist.
 - **`run --import RUN_ID`**: a new run from your checkout that reads another
   run's notes, history and code.
 - **`run --check`** makes every check a run makes before it writes anything,
-  then exits.
+  says what `run` would say at its start (other runs' unlanded commits, the
+  imported run's, an uncommitted config), and names the command it checked,
+  flags included.
 - **`run --why`** and **`archive --why`**: one line kept with the run.
 - **A summary at the end of each segment**: `runs/<id>/report.md` and
   `report.html`, a one-file copy of the run page (`--no-report` skips the
@@ -185,8 +187,9 @@ has the checklist.
   prompt too large to start the agent, and every resume failed the same way.
 - Files the agent writes outside the scope (a dataset, a checkpoint) are no
   longer hashed into your repository's objects at each freeze, and the record
-  and the next prompt list at most 20 discarded paths (`discarded_more` counts
-  the rest).
+  and the next prompt list at most 20 discarded paths, frozen ones first
+  (`discarded_more` counts the rest). An unreadable file outside the scope is
+  now discarded instead of rejecting the iteration.
 - A setup that can't work stops the run at the baseline, before any agent call
   is paid for, with a setup error naming the gate and its last stderr line: a
   gate command that exits 126 or 127 (not executable, not found; unless its
@@ -194,6 +197,32 @@ has the checklist.
   (no answer). Each iteration used to be paid for and rejected the same way.
 - Every `resume` checks that the agents' executables can be found, as the
   first `run` does; a missing one cost an iteration.
+- A custom prompt template that names a variable the prompt doesn't have, or
+  the old `.autohelix/` copy paths, or fails to render against a sample
+  history, is a config error, so `run --check` finds it. A misspelt variable
+  rendered empty (the agent got no goal), and a render error failed iteration
+  1 after the baseline, in a run that couldn't take the fix.
+- A damaged line in an old run's `history.jsonl` no longer stops new runs of
+  its config; that run's own commands name the line and what works (fix or
+  remove it, or `autohelix archive`), where `report` and `resume --until`
+  ended in a traceback. A blank line resumes, as it views.
+- `delete` without `--force` refuses a run whose tip is on no branch, tag or
+  remote-tracking branch: a run that read landed after its target was reset
+  was deleted with the only ref to its commits. `land` says when it did
+  nothing (already there, nothing accepted, landed before) instead of
+  "Landed".
+- Bare `land` and `report` take the most recently active run that isn't
+  running: they took the running run, which refuses them.
+- The refusal of a changed config gives the landing first, then the `run
+  --import` command, a line each: a new run started first lacked the code.
+- A config name given where a run id goes (`land perf`) names the config's
+  latest run; an unknown id lists the latest real ids instead of "e.g. k3f9".
+- After a failed first baseline, the end block, `view --terminal` and the
+  entry screen suggest `autohelix run <name>` (and `autohelix delete <id>`),
+  as the error does, not `resume`, which refuses the fixed setup. `view
+  --json` runs have `baseline`.
+- An interrupted baseline is recorded as "baseline interrupted", not
+  "baseline failed: " with nothing after it.
 - When no cost is known for a run and all its calls give the same reason, the
   end says it (`cost unavailable: set agent.model` for Codex, whose output names
   no model).
@@ -296,9 +325,8 @@ Each old key is an error naming its replacement; there are no aliases.
 
 #### Prompt template variables
 
-For a custom `prompt_template:`. `worktree` is a config error naming its new
-name; the others are no longer variables: they render
-empty, and the run warns at start naming them.
+For a custom `prompt_template:`. Each old name is a config error: `worktree`
+names its new name, the others are listed as variables the prompt doesn't have.
 
 | 0.1.1 | Now |
 |---|---|

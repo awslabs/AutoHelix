@@ -161,8 +161,14 @@ def test_ids_sort_by_start_and_commands_accept_the_suffix(project, tmp_path, mon
     assert paths.run_id.startswith(time.strftime("%Y%m%d-")) and paths.run_id.split("-")[2] == "perf"
     result = cli(project, "view", short_id(paths.run_id), "--json")
     assert result.exit_code == 0 and json.loads(result.stdout)["run"]["id"] == paths.run_id
-    result = cli(project, "view", "perf", "--json")
-    assert result.exit_code == 1 and "names aren't ids" in result.output
+    short = short_id(paths.run_id)
+    for args in (["view", "perf", "--json"], ["land", "perf"], ["hint", "--run", "perf", "x"], ["stop", "perf"]):
+        result = cli(project, *args)  # a config name: the run it means, named
+        assert result.exit_code == 1, args
+        assert f"perf is an experiment, not a run: its latest run is {short}; name that ({short})." in " ".join(
+            result.output.split()), (args, result.output)
+    result = cli(project, "view", "nope", "--json")  # real ids, not a made-up one
+    assert f"Use a run id or its last part (the latest: {short});" in " ".join(result.output.split())
     (tmp_path / "bench").mkdir()
     monkeypatch.chdir(tmp_path)
     result = cli(project, "view", "bench", "--json")

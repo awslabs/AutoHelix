@@ -16,7 +16,7 @@ from autohelix.checks import run_command
 from autohelix.config import Config
 from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.history import History, IterationResult
-from autohelix.prompt_template import build_prompt_variables, load_template, render_template, unknown_variables
+from autohelix.prompt_template import build_prompt_variables, load_template, render_template
 from autohelix.workspace import ITERATION_DIR
 from tests.helpers import CONFIG, config_file, git, latest_run, write_config
 
@@ -352,19 +352,48 @@ def test_summary_is_cleaned_and_capped_for_record_and_commit(repo):
     assert body.index("w" * 500) < body.index("AutoHelix-Run:")
 
 
-def test_unknown_template_variables():
-    template = ("{{ goal }} {{ constraints }} {% for g in gates %}{{ g.text }}{% endfor %} {{ range(2) }} "
-                "{% if history_summary %}{% endif %}{% set local = 1 %}{{ local }}")
-    assert unknown_variables(template) == ["constraints", "history_summary"]
+def _refused(project, capsys) -> str:
+    """The config errors a new run prints, refused before anything is written."""
+    with pytest.raises(SystemExit, match="Config validation failed"):
+        Harness(project, verbose=False, land_mode="manual")
+    assert not (project / ".autohelix" / "runs").exists()
+    return " ".join(capsys.readouterr().out.split())
 
 
-def test_a_custom_template_with_old_variables_warns_at_run_start(repo, capsys):
+def test_unknown_template_variables_are_a_config_error(repo, capsys):
+    """Old names (`constraints`, `history_summary`) rendered empty: the agent got a prompt
+    without them. Loop, `set` names and Jinja globals are not unknown."""
     project = _project(repo)
-    _prompt(project, "Goal: {{ goal }}\n{{ history_summary }}\n")
+    _prompt(project, "{{ goal }} {{ constraints }} {% for g in gates %}{{ g.text }}{{ loop.index }}{% endfor %} "
+                     "{{ range(2) | list }} {% if history_summary %}{% endif %}{% set local = 1 %}{{ local }}\n")
+    _configure(project, repo, prompt_template="prompt.md")
+    assert ("prompt_template prompt.md uses variables the prompt doesn't have: constraints, history_summary. "
+            "See docs/concepts.md#prompt for the names.") in _refused(project, capsys)
+
+
+def test_a_template_that_fails_to_render_is_a_config_error(repo, capsys):
+    """It used to fail iteration 1, after the baseline, and the stored template kept the
+    run from taking the fix."""
+    project = _project(repo)
+    _prompt(project, "{{ goal }}{% if last %}{{ last.gates.x.y }}{% endif %}\n")
+    _configure(project, repo, prompt_template="prompt.md")
+    assert "prompt_template prompt.md could not be rendered:" in _refused(project, capsys)
+
+
+def test_a_template_branch_over_observe_items_is_rendered_too(repo, capsys):
+    """After an accepted iteration, `last.observe` has items: that branch is rendered."""
+    project = _project(repo)
+    _prompt(project, "{{ goal }}{% for item in last.observe %}{{ item.name.x.y }}{% endfor %}\n")
+    _configure(project, repo, prompt_template="prompt.md")
+    assert "prompt_template prompt.md could not be rendered:" in _refused(project, capsys)
+
+
+def test_a_good_custom_template_passes(repo):
+    project = _project(repo)
+    _prompt(project, "{{ goal }}{% if last %}{% for g in last.gates %}{{ g.text }} {{ g.status }}{% endfor %}"
+                     "{% for o in last.observe %}{{ o.name }}{% endfor %}{% endif %} {{ notes_path }}\n")
     _configure(project, repo, prompt_template="prompt.md")
     Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
-    out = capsys.readouterr().out
-    assert "prompt.md uses variables the prompt doesn't have" in out and "history_summary" in out
 
 
 def test_status_names_the_running_observe_entry(repo):
@@ -476,14 +505,21 @@ def test_run_start_warnings_wrap_under_their_label(repo, capsys):
     project = _project(repo)
     (project / ".autohelix").mkdir(exist_ok=True)
     (project / ".autohelix" / "prompt.md").write_text("old\n")
-    _prompt(project, "Goal: {{ goal }}; notes in .autohelix/notes/iter-1.md\n")
-    _configure(project, repo, prompt_template="prompt.md")
+    _configure(project, repo)
     Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)
     out = capsys.readouterr().out
     text = " ".join(out.split())
     assert ".autohelix/prompt.md is no longer read" in text
-    assert "prompt.md names .autohelix/ paths in the agent's copy" in text
+    assert "No gates or observe entries defined" in text  # another warning
     assert all(not line.strip() or line.startswith("  ") for line in out.splitlines()[:12])
+
+
+def test_a_template_naming_the_old_copy_layout_is_a_config_error(repo, capsys):
+    project = _project(repo)
+    _prompt(project, "Goal: {{ goal }}; notes in .autohelix/notes/iter-1.md\n")
+    _configure(project, repo, prompt_template="prompt.md")
+    assert ("prompt_template prompt.md names .autohelix/ paths in the agent's copy; they are now "
+            ".autohelix-iteration/.") in _refused(project, capsys)
 
 
 def test_a_preflight_failure_keeps_a_long_path_whole(repo, capsys, monkeypatch):

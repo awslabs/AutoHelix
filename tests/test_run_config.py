@@ -155,15 +155,16 @@ def refused(paths, result, keys, unlanded):
     text = " ".join(result.output.split())
     assert result.exit_code == 1, result.output
     said = (f"{CONFIG_PATH} changed since run {short} started (changed: {keys}); the run keeps the config it "
-            f"started with. To apply the new config, start a new run that continues from this one: "
-            f"`autohelix run {NAME} --import {short}`. ")
+            f"started with. ")
     assert said in text and text.endswith("To continue this run, restore the file."), text
     between = text[text.index(said) + len(said):].removesuffix("To continue this run, restore the file.")
     # Its unlanded commits (`unlanded`: manual landing; main can fast-forward to them): land
-    # them first, to start the new run from them.
+    # them first, then the new run starts from them.
     assert between == (f"{short}'s 1 accepted commit isn't in main: land it first (`autohelix land {short}`, "
-                       f"or `git switch -c <branch> autohelix/{paths.run_id}`) to start "
-                       "from it. " if unlanded else ""), between
+                       f"or `git switch -c <branch> autohelix/{paths.run_id}`) to start from it. Then "
+                       f"`autohelix run {NAME} --import {short}` applies the new config. " if unlanded else
+                       f"To apply the new config, start a new run that continues from this one: "
+                       f"`autohelix run {NAME} --import {short}`. "), between
     assert History(paths.project, paths.run_id).get_last_iteration() == 1  # nothing spent
 
 

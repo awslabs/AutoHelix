@@ -1008,6 +1008,7 @@ class ProjectRuns:
             # `autohelix stop` asked the running segment to end ({requested_at, why, now}), else None.
             "stop_requested": pending_stop(paths, status),
             "accepted": accepted,
+            "baseline": any(r.iteration == 0 and r.accepted for r in records),  # its baseline was accepted
             "metrics": self._metrics(records, config.get("directions") or {}),
             # The caps of the latest segment (`run`/`resume` flags), from its status; None
             # where it had none. Iterations and cost as run totals (spent before it plus its

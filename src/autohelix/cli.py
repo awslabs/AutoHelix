@@ -101,16 +101,17 @@ def _warn(message: str, err: bool = False) -> None:
     terminal.warn(Console(stderr=err), message)
 
 
-def _chosen_run(project: Path, value: str | None) -> RunPaths:
+def _chosen_run(project: Path, value: str | None, running: bool = True) -> RunPaths:
     """The run a command acts on: `value` (an id or its last part), else `runs.default_run`'s
-    (the running run, else the most recently active one that isn't archived), named."""
+    (the running run, else the most recently active one that isn't archived; without
+    `running`, one that isn't running), named."""
     if value is not None:
         return RunPaths(project, _run_id(project, value))
     try:
-        paths, _, why = default_run(project)
+        paths, _, why = default_run(project, running)
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
-    click.echo(click.style(f"Run {short_id(paths.run_id)} (the {why} run; name one to choose another)", dim=True),
+    click.echo(click.style(f"Run {short_id(paths.run_id)} (the {why}; name one to choose another)", dim=True),
                err=True)
     return paths
 
@@ -614,9 +615,9 @@ def _last_iteration(project: Path, config: Path | None, run_id: str | None) -> i
     written; -1 when there is none to read (`_start` then refuses as usual)."""
     try:
         planned = planned_run(project, config, run_id=run_id, create=False)
-    except (RuntimeError, ValueError):
+        return History(project, planned.run_id).get_last_iteration() if planned else -1
+    except (RuntimeError, ValueError):  # `_start` refuses as usual (a damaged history: as `resume` says it)
         return -1
-    return History(project, planned.run_id).get_last_iteration() if planned else -1
 
 
 def _segment(harness: Harness, budget: Budget, report: bool) -> None:
@@ -695,7 +696,10 @@ def run(config_name: str | None, path: Path, verbose: bool, no_report: bool, lan
                      group=group or None, import_run=imported, why=why, check_only=check)
     if check:
         shown = config_relative(project, config)
-        click.echo(f"OK: {shown} is ready; `{run_command(shown)}` would start a new run.")
+        flags = "".join(f" {flag} {shlex.quote(value)}" for flag, value in
+                        (("--import", imported and short_id(imported)), ("--group", group), ("--land", land_mode))
+                        if value)
+        click.echo(f"OK: {shown} is ready; `{run_command(shown)}{flags}` would start a new run.")
         return
     _segment(harness, budget, not no_report)
 
@@ -781,12 +785,12 @@ def resume(target: str | None, path: Path, verbose: bool, no_report: bool, land_
 def land(run_id: str | None, path: Path, into: str | None):
     """Fast-forward a target branch to a run's accepted code (RUN_ID or its last part, else
     the running run, else the most recently active one)."""
-    paths = _chosen_run(_project(path), run_id)
+    paths = _chosen_run(_project(path), run_id, running=False)
     try:
         with RunLock(paths.lock):
             data = paths.read_identity()
-            land_run(paths, data, run_tip(paths, data), into)
-        click.echo(f"Landed {short_id(paths.run_id)}.")
+            unchanged = land_run(paths, data, run_tip(paths, data), into)
+        click.echo(unchanged or f"Landed {short_id(paths.run_id)}.")
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
 
@@ -1259,9 +1263,13 @@ def report(run_id: str | None, path: Path):
 
     console = Console()
     project_path = _project(path)
-    paths = _chosen_run(project_path, run_id)
+    paths = _chosen_run(project_path, run_id, running=False)
     run_id = paths.run_id
-    if History(project_path, run_id).get_last_iteration() == 0:
+    try:
+        last = History(project_path, run_id).get_last_iteration()
+    except RuntimeError as e:  # a damaged history
+        raise click.ClickException(str(e)) from e
+    if last == 0:
         _warn(f"Run {short_id(run_id)} has no iterations yet. Nothing to report.")
         raise SystemExit(1)
     from rich.text import Text

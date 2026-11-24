@@ -91,6 +91,18 @@ def test_an_interrupt_in_the_baseline_exits_130(project, monkeypatch):
     assert segment["state"] == "interrupted"
 
 
+def test_an_interrupted_baseline_is_recorded_as_interrupted(project, monkeypatch):
+    """Not "baseline failed: " with nothing after it (str of a KeyboardInterrupt)."""
+    def interrupted(self, *args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Harness, "_evaluate", interrupted)
+    result = cli(project, "run", "-n", "1", "--no-report")
+    assert result.exit_code == 130, result.output
+    [record] = History(project, latest_run(project).run_id).load()
+    assert (record.iteration, record.accepted, record.reason) == (0, False, "baseline interrupted")
+
+
 def test_no_run_to_resume_exits_1(project):
     result = cli(project, "resume")
     assert result.exit_code == 1 and "No run to resume for autohelix/demo/config.yaml" in result.output

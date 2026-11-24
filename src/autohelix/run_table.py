@@ -24,6 +24,7 @@ from rich.text import Text
 from autohelix import terminal
 from autohelix.formatting import clean, format_cap, format_duration
 from autohelix.iteration_time import format_limit
+from autohelix.config import config_name, run_command
 from autohelix.runs import LandingWords, short_id
 from autohelix.terminal import Row, Table
 
@@ -261,7 +262,7 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
         tail = [Text(), terminal.rule(width), *table.outcome_lines(_outcome(run))]
     else:
         accepted = sum(1 for r in table.rows if r.accepted and r.iteration > 0 and r.commit)
-        commands = terminal.next_commands(short, view=False, also=_words(run).commands)
+        commands = terminal.next_commands(short, view=False, also=_words(run).commands, restart=_restart(run))
         tail = table.ending(_outcome(run), spent=terminal.money(run["progress"]["cost_usd"],
                                                                  run["progress"]["cost_incomplete"]),
                             landing=_landed(run, accepted), commands=commands, files=list(saved.files),
@@ -398,11 +399,23 @@ def suggestion(run: dict) -> tuple[str, str] | None:
         command = f"autohelix resume {short}"
     elif lands:
         command, where = lands[0], _words(run).cell
+    elif state == "failed" and (restart := _restart(run)):
+        command = restart
     elif state in ("failed", "idle", None) and resumable:
         command = f"autohelix resume {short}"
     else:
         return None
     return f"{_word(run)} · {where}", command
+
+
+def _restart(run: dict) -> str | None:
+    """For a run that ended without an accepted baseline (a setup error: `resume` would
+    refuse the fixed config), the command that starts a new run of its config."""
+    if run.get("baseline") is not False or (run.get("status") or {}).get("state") != "failed":
+        return None
+    if not isinstance(file := run.get("config_file"), str) or config_name(file) is None:
+        return None
+    return run_command(file)
 
 
 def entry_header(folder: str, width: int = 100, git: tuple | None = None, version: str | None = None

@@ -150,7 +150,7 @@ def test_history_tail_repair_preserves_valid_unterminated_record(run_paths, tail
 def test_history_corruption_is_not_repaired(run_paths, content):
     path = run_paths.history
     path.write_bytes(content)
-    with pytest.raises(RuntimeError, match="history record"):
+    with pytest.raises(RuntimeError, match=r"history\.jsonl line [12] is damaged: fix or remove the line"):
         repair_history(run_paths)
     assert path.read_bytes() == content
 

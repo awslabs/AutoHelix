@@ -454,6 +454,38 @@ def _objects(root) -> set[str]:
     return set(listing.split())
 
 
+def test_an_unreadable_out_of_scope_file_is_discarded_not_rejected(repo_dir, copies):
+    """Only kept files are read: an unreadable file outside the scope is listed and
+    discarded; the in-scope edit is kept."""
+    _, _, copy = agent_copy(repo_dir, copies)
+    unreadable = copy.path / "new.txt"
+    unreadable.write_text("secret")
+    unreadable.chmod(0)
+    (copy.path / "code.py").write_text("print('edited')\n")
+    try:
+        if os.access(unreadable, os.R_OK):
+            pytest.skip("running as a user that reads anything")
+        tree, discarded = copy.snapshot(Scope(editable=("code.py",)))
+        assert discarded == ["new.txt"] and blob(repo_dir, tree, "code.py") == b"print('edited')\n"
+    finally:
+        unreadable.chmod(0o644)
+
+
+def test_many_kept_files_are_added_and_the_frozen_still_reset(repo_dir, copies):
+    """No path outside the scope (the one-pathspec add): every new file is kept, and
+    .autohelix-iteration/ still isn't."""
+    _, _, copy = agent_copy(repo_dir, copies)
+    (copy.path / "data").mkdir()
+    for index in range(50):
+        (copy.path / "data" / f"part-{index}.txt").write_text(f"{index}\n")
+    (copy.path / ".autohelix-iteration").mkdir(exist_ok=True)
+    (copy.path / ".autohelix-iteration" / "commit_summary.txt").write_text("summary\n")
+    tree, discarded = copy.snapshot(Scope())
+    assert discarded == []
+    assert {f"data/part-{index}.txt" for index in range(50)} <= names(repo_dir, tree)
+    assert not any(name.startswith(".autohelix") for name in names(repo_dir, tree))
+
+
 def _stored(root, content: bytes) -> bool:
     oid = subprocess.run(["git", "hash-object", "--stdin"], cwd=root, input=content,
                          capture_output=True, check=True).stdout.decode().strip()

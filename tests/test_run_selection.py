@@ -36,11 +36,21 @@ def test_default_run_is_the_running_one_else_the_latest_not_archived(tmp_path):
     old = add_run(tmp_path, "old-aaaa", created_at=1000)
     add_run(tmp_path, "new-bbbb", created_at=3000, archived=True)
     middle = add_run(tmp_path, "mid-cccc", created_at=2000)
-    assert default_run(tmp_path)[::2] == (middle, "most recently active")
+    assert default_run(tmp_path)[::2] == (middle, "most recently active run")
     with RunLock(old.lock):
-        assert default_run(tmp_path)[::2] == (old, "running")
+        assert default_run(tmp_path)[::2] == (old, "running run")
         with RunLock(middle.lock), pytest.raises(RuntimeError, match="Several runs are running: (aaaa, cccc|cccc, aaaa); name one"):
             default_run(tmp_path)
+
+
+def test_land_and_report_default_to_a_run_that_isnt_running(tmp_path):
+    """They take the run's lock: the running run (06-1) could only refuse."""
+    old = add_run(tmp_path, "old-aaaa", created_at=1000)
+    middle = add_run(tmp_path, "mid-cccc", created_at=2000)
+    with RunLock(middle.lock):
+        assert default_run(tmp_path, running=False)[::2] == (old, "most recently active run that isn't running")
+        with RunLock(old.lock), pytest.raises(RuntimeError, match=r"Every run is running or archived \(running: "):
+            default_run(tmp_path, running=False)
 
 
 def test_a_probe_creates_no_lock_file(tmp_path):

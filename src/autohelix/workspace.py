@@ -498,10 +498,13 @@ class Copy:
             repo.git("update-index", "-z", "--force-remove", "--stdin", index=self.index,
                      input=b"".join(os.fsencode(name) + b"\0" for name in gone))
         if added := added.difference(gone):
-            # A literal name also covers what is below it (a file turned into a folder):
-            # out-of-scope files there are excluded too, so they aren't hashed either.
-            below = sorted(name for name in outside if self._below(name, added))
-            pathspecs = [f":(top,literal){name}" for name in sorted(added)] + [f":(top,literal,exclude){name}" for name in below]
+            if outside:
+                # A literal name also covers what is below it (a file turned into a folder):
+                # out-of-scope files there are excluded too, so they aren't hashed either.
+                below = sorted(name for name in outside if self._below(name, added))
+                pathspecs = [f":(top,literal){name}" for name in sorted(added)] + [f":(top,literal,exclude){name}" for name in below]
+            else:  # everything listed is kept: one pathspec (thousands of names are slow to match)
+                pathspecs = [".", *excludes]
             try:
                 repo.git(*attributes, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
                          work_tree=self.path, index=self.index,
