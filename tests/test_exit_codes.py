@@ -3,6 +3,8 @@ condition, `autohelix stop`), 1 on an error, 130 when interrupted. And a segment
 as soon as its command holds the run's lock: a start its checks refuse is a recorded
 segment that failed."""
 
+import json
+
 import pytest
 
 from autohelix.events import Watcher
@@ -63,6 +65,30 @@ def test_a_resume_after_the_baseline_checks_the_agents_command_first(project, tm
     assert result.exit_code == 1 and "Preflight checks failed" in result.output, result.output
     assert str(agent) in "".join(result.output.split())
     assert [r.iteration for r in History(project, paths.run_id).load()] == [0, 1]  # nothing spent
+
+
+@pytest.mark.parametrize(("status", "kind", "failed"), [
+    (503, "agent", 3),  # an outage is an ordinary failure: three in a row end the run
+    (429, "agent", 3),
+    (401, "infrastructure", 1),  # a rejected key stops it at once
+])
+def test_only_401_and_403_stop_a_run_at_once(project, tmp_path, monkeypatch, status, kind, failed):
+    """A Claude Code that answers every call with an API error, through the real backend."""
+    result_line = json.dumps({"type": "result", "subtype": "success", "is_error": True, "terminal_reason": "api_error",
+                              "api_error_status": status, "result": f"API Error: {status}", "usage": {}})
+    agent = tmp_path / "bin" / "claude"
+    agent.parent.mkdir()
+    agent.write_text(f"#!/bin/sh\necho '{result_line}'\nexit 1\n")
+    agent.chmod(0o755)
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", str(agent))
+    configure(project, agent={"cli": "claude-code"})
+    result = cli(project, "run", "-n", "5", "--no-report")
+    assert result.exit_code == 1, result.output
+    paths = latest_run(project)
+    records = History(project, paths.run_id).load()
+    assert [r.accepted for r in records] == [True] + [False] * failed
+    assert {r.agent_error for r in records[1:]} == {f"API Error: {status}"}
+    assert read_run_status(project, paths.run_id)["stop_reason"]["kind"] == kind
 
 
 def test_an_interrupt_in_the_loop_exits_130(project, monkeypatch):

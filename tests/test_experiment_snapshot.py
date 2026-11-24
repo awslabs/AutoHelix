@@ -855,3 +855,18 @@ def test_the_advice_follows_what_the_snapshot_stores(project, folder):
         "`$AUTOHELIX_EXPERIMENT/lib/m.py`."]
 
 
+
+
+def test_the_remedy_does_not_read_file_names(project, folder):
+    """A changed file whose name looks like the message's own `; added: ` is still only
+    a change to restore."""
+    odd = folder / "x; added: y.txt"
+    odd.write_text("a\n")
+    assert cli(project, "run", "exp", "-n", "1", "--no-report").exit_code == 0
+    [(paths, _)] = project_runs(project)
+    odd.write_text("b\n")
+    result = resumed(project, paths)
+    assert result.exit_code == 1
+    message = " ".join(result.output.split())
+    assert "(changed: x; added: y.txt)" in message
+    assert message.endswith("To continue this run, restore the files.")

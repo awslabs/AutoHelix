@@ -80,8 +80,8 @@ def _phase(run: dict, now: float | None = None) -> str:
 
 
 def time_cap(run: dict, now: float) -> str:
-    """The running segment's time against its --time, as the web pages say it: `12m 5s
-    of 1h (this segment)`, past it `... (time up)`. "" when the run isn't running or the
+    """The running segment's time against its --time, as the web pages say it: `12m 05s
+    of 1h (this segment)` (the web: `12m5s of 1h`), past it `... (time up)`. "" when the run isn't running or the
     segment has no --time (a stopped run's stop reason says when time ended it). Never
     a run total."""
     status = run.get("status") or {}

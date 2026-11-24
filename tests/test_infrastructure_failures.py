@@ -1,4 +1,4 @@
-"""Infrastructure failures (credentials, the model service): each backend reports one
+"""Infrastructure failures (HTTP 401/403: credentials, access): each backend reports one
 from its CLI's specific signals only; anything else stays an ordinary failure.
 
 The lines are small hand-made fixtures with only the fields the backends read, in the

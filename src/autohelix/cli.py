@@ -444,11 +444,15 @@ def _git_project(path: Path) -> Path:
 
 def _ancestor_configs(project: Path) -> str:
     """For a project without a config: the nearest folder above it, up to the top of
-    its checkout (`_checkout_top`), that has one (`run` from src/ by mistake)."""
+    its checkout (`_checkout_top`), that has one (`run` from src/ by mistake). Still
+    used: 06-3's subfolder lookup that would replace it is for later."""
     top = _checkout_top(project)
-    folder = next((folder for folder in project.parents
-                   if top is not None and folder.is_relative_to(top) and project_configs(folder)), None)
-    return f" {folder} has {', '.join(project_configs(folder))}; run from there or pass -p {folder}." if folder else ""
+    for folder in project.parents if top is not None else ():
+        if not folder.is_relative_to(top):
+            break
+        if configs := project_configs(folder):
+            return f" {folder} has {', '.join(configs)}; run from there or pass -p {folder}."
+    return ""
 
 
 def _how_to_write(name: str | None = None) -> str:

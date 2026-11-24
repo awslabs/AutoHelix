@@ -219,8 +219,8 @@ def test_metric_gate_rejection_names_the_iteration_it_compares_with():
 
 def test_a_timed_out_agent_row():
     table = Table.of(Config.from_dict({"goal": "g", "agent": {"timeout": "30m"}}), 100)
-    [_, row] = table.add(Row(4, False, reason="Iteration 4 agent failed: timed out after 30 minutes",
-                             agent_error="timed out after 30 minutes"))
+    [_, row] = table.add(Row(4, False, reason="Iteration 4 agent failed: timed out after 30m",
+                             agent_error="timed out after 30m"))
     assert row.plain.rstrip().endswith("agent timed out (30m)")
 
 

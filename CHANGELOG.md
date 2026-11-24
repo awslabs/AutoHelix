@@ -230,7 +230,7 @@ has the checklist.
   the run list's does (`view --json` gives the baseline's `seconds`); `view`'s
   Budget names the run totals it shows (`to iteration 8 · $5.04 run total`)
   and the time used of `--time` as the web pages do (`12m 05s of 1h (this
-  segment)`); an incomplete cost is `$0.07+` everywhere (was `$0.07
+  segment)`; the web pages write `12m5s`); an incomplete cost is `$0.07+` everywhere (was `$0.07
   (incomplete)` on `run` and the run page); a resumed segment's `landed` says
   `(this segment)`.
 - The run page words the phase as the console does (`gates`, `observe ·
@@ -287,6 +287,12 @@ has the checklist.
 - A nested git repository in the project is refused with "nested git
   repository at X: remove its .git or clone outside the project".
 - Rich markup in a goal (`[/bold]`) no longer crashes `--verbose`.
+- The examples run as written: Docker's steps name the AutoHelix checkout and
+  `run.sh` refuses a missing `--env` script; autoresearch's polite stop names
+  the run; AlgoTune's collector reads `base_commit`; kernelbench and
+  autoresearch commit without a git identity and autoresearch's setup reruns;
+  kernelbench's model is `opus` (its published Bedrock id is a comment), and
+  autoresearch's Bedrock id says the example runs on Bedrock.
 
 ### Upgrading from 0.1.1
 

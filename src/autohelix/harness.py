@@ -195,8 +195,9 @@ class Harness:
         folder (`config.config_name`; `name` replaces that, for library callers and tests).
 
         A new run may import another (`import_run`, a full id: `run --import`): every
-        agent copy shows that run's state read-only, and the baseline's observe entries
-        get its last outputs as `$AUTOHELIX_PREVIOUS`. `why` is the new run's note
+        agent copy shows that run's state read-only, and each observe entry gets its
+        last output as `$AUTOHELIX_PREVIOUS` until the entry succeeds in this run
+        (normally the baseline). `why` is the new run's note
         (`run --why`). A resume refuses, before writing anything, when its target branch
         moved past its tip and it lands automatically (`runs.landing`: `behind`).
 
@@ -458,11 +459,11 @@ class Harness:
         if not config.experiment.is_dir():
             terminal.show(self.console, f"{folder} is gone; run {short} continues with the files it "
                           "stored when it started.", style="dim")
-        elif changed := snapshot_changes(config, self.project_path, paths.experiment):
+        elif found := snapshot_changes(config, self.project_path, paths.experiment):
             # Added files (an evaluator's test output) are removed, not restored.
-            parts = [part.split(": ", 1)[0] for part in changed.split("; ")]
-            remedy = ("remove the added files" if parts == ["added"] else
-                      "restore the files and remove the added ones" if "added" in parts else "restore the files")
+            changed, kinds = found
+            remedy = ("remove the added files" if kinds == {"added"} else
+                      "restore the files and remove the added ones" if "added" in kinds else "restore the files")
             self._refuse_changed(paths, data, f"{folder} changed since run {short} started ({changed}); ",
                                  "the run keeps the experiment folder it started with", "folder", remedy)
 

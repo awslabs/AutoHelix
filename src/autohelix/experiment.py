@@ -235,15 +235,16 @@ def sweep_staging(beside: Path) -> None:
             shutil.rmtree(path, ignore_errors=True)
 
 
-def snapshot_changes(config: Config, project: Path, stored: Path) -> str | None:
-    """How the live experiment folder differs from a run's snapshot (`stored`), as
-    words: the files changed (bytes or exec bit), added and removed, or why the folder
-    can no longer be stored (a file that can't be read too); None when they match.
-    Compared file by file: the snapshot is the manifest."""
+def snapshot_changes(config: Config, project: Path, stored: Path) -> tuple[str, set[str]] | None:
+    """How the live experiment folder differs from a run's snapshot (`stored`): words
+    naming the files changed (bytes or exec bit), added and removed, or why the folder
+    can no longer be stored (a file that can't be read too), and which of `changed`,
+    `added`, `removed` there are (none for a folder that can't be stored); None when
+    they match. Compared file by file: the snapshot is the manifest."""
     try:
         live = {file.name: file for file in snapshot_files(config, project)}
     except ConfigError as e:
-        return f"it can no longer be stored: {e}"
+        return f"it can no longer be stored: {e}", set()
     kept = {path.relative_to(stored).as_posix(): path for path in stored.rglob("*")
             if path.is_file() and not path.is_symlink()}
     changed = []
@@ -254,8 +255,10 @@ def snapshot_changes(config: Config, project: Path, stored: Path) -> str | None:
                     or file.size != copy.stat().st_size or file.source.read_bytes() != copy.read_bytes()):
                 changed.append(name)
         except OSError as e:  # gone or unreadable since the walk
-            return f"it can no longer be stored: {e.filename or name} can't be read ({e.strerror or e})"
-    parts = [f"{label}: {', '.join(names)}" for label, names in (
+            return f"it can no longer be stored: {e.filename or name} can't be read ({e.strerror or e})", set()
+    found = {label: names for label, names in (
         ("changed", changed), ("added", sorted(live.keys() - kept.keys())),
-        ("removed", sorted(kept.keys() - live.keys()))) if names]
-    return "; ".join(parts) or None
+        ("removed", sorted(kept.keys() - live.keys()))) if names}
+    if not found:
+        return None
+    return "; ".join(f"{label}: {', '.join(names)}" for label, names in found.items()), set(found)

@@ -39,7 +39,9 @@ goal: |
 
 agent:
   cli: claude-code
-  model: opus   # the published result pinned us.anthropic.claude-opus-5-5, a Bedrock id (Claude Code on Bedrock only)
+  # A Bedrock id: the arms run Claude Code on Bedrock (arms/container.sh sets it up), and the
+  # session arm uses the same id. Outside Bedrock, use `opus` instead.
+  model: us.anthropic.claude-opus-5-5
   effort: high
   timeout: 30m
 

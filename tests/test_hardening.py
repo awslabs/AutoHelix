@@ -583,12 +583,12 @@ def test_a_timeout_then_an_accept_with_its_patch(repo):
     project = _project(repo)
     _configure(project, repo)
     harness = Harness(project, verbose=False, land_mode="manual")
-    agent = Agent(harness, _failing({1}, error="timed out after 30 minutes"))
+    agent = Agent(harness, _failing({1}, error="timed out after 30m"))
     harness.run(Budget(until=2), report=False)
     records = History(project, latest_run(project).run_id).load()
     assert [(r.iteration, r.accepted) for r in records] == [(0, True), (1, False), (2, True)]
     timed_out = records[1]
-    assert timed_out.agent_error == "timed out after 30 minutes" and timed_out.gates == []
+    assert timed_out.agent_error == "timed out after 30m" and timed_out.gates == []
     assert timed_out.rejected_ref and timed_out.cost is not None
     patch = agent.seen[2]["patch"]
     assert patch and b"+attempt 1" in patch and "rejected.patch" in agent.seen[2]["prompt"]
