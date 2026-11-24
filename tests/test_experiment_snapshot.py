@@ -422,7 +422,8 @@ def test_a_changed_folder_refuses(project, folder, run_of_folder, edit, words):
     message = " ".join(result.output.split())
     assert f"autohelix/exp/ changed since run {short} started ({words}); the run keeps the experiment folder" in message
     assert f"`autohelix run exp --import {short}`" in message
-    assert "restore the files." in message
+    remedy = "remove the added files." if words.startswith("added") else "restore the files."  # added: not restored
+    assert message.endswith(f"To continue this run, {remedy}")
     assert History(project, run_of_folder.run_id).get_last_iteration() == 1  # nothing ran
 
 
@@ -432,7 +433,9 @@ def test_several_changes_are_named_together(project, folder, run_of_folder):
     (folder / "b.txt").write_text("b\n")
     result = resumed(project, run_of_folder)
     assert result.exit_code == 1
-    assert "(changed: data.txt; added: b.txt; removed: render.sh)" in " ".join(result.output.split())
+    message = " ".join(result.output.split())
+    assert "(changed: data.txt; added: b.txt; removed: render.sh)" in message
+    assert message.endswith("To continue this run, restore the files and remove the added ones.")
 
 
 def test_a_folder_that_can_no_longer_be_stored_refuses(project, folder, run_of_folder, tmp_path):

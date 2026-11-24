@@ -25,8 +25,12 @@ ARGS=(
   --network=host
 )
 
-# Mount and source env script
-if [ -n "$ENV_SCRIPT" ] && [ -f "$ENV_SCRIPT" ]; then
+# Mount and source env script (a mistyped one would run without credentials)
+if [ -n "$ENV_SCRIPT" ] && [ ! -f "$ENV_SCRIPT" ]; then
+  echo "env script not found: $ENV_SCRIPT" >&2
+  exit 1
+fi
+if [ -n "$ENV_SCRIPT" ]; then
   ARGS+=(-v "$(cd "$(dirname "$ENV_SCRIPT")" && pwd)/$(basename "$ENV_SCRIPT"):/home/user/env.sh:ro")
   ARGS+=(-e AUTOHELIX_ENV_SCRIPT=/home/user/env.sh)
 fi

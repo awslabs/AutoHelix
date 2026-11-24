@@ -728,10 +728,10 @@ class TestOpenCodeRunResult:
 
     def test_a_timeout_is_an_error_with_unknown_cost(self, monkeypatch, tmp_path):
         result, events = self._run(monkeypatch, tmp_path, exit_code=124, timed_out=True)
-        assert not result.success and result.error == "timed out after 4 seconds"
+        assert not result.success and result.error == "timed out after 4s"
         assert "cost_usd" not in result.usage and result.usage["partial_cost_usd"] == 0.25
         assert "timed out" in result.usage["cost_unavailable_reason"]
-        assert any(event.text == "Agent timed out after 4 seconds" for event in events)
+        assert any(event.text == "Agent timed out after 4s" for event in events)
 
     def test_a_failed_call_says_its_status_and_keeps_its_cost(self, monkeypatch, tmp_path):
         result, _ = self._run(monkeypatch, tmp_path, exit_code=3)

@@ -135,8 +135,6 @@ def encode_cursor(marks: dict[str, Marks]) -> str:
 def decode_cursor(cursor: str) -> dict[str, Marks]:
     """The marks a cursor holds; ValueError if it isn't one."""
     version, _, body = cursor.strip().partition(".")
-    if version == "1" and body:
-        raise ValueError("a cursor of an older AutoHelix: start again with `autohelix wait` (no --after)")
     if version != CURSOR_VERSION or not body:
         raise ValueError(_NOT_A_CURSOR)
     try:

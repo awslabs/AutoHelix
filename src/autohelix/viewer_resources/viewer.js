@@ -150,8 +150,9 @@ function bestSoFar() {
   return out;
 }
 
-// Best metric, then run totals (as in the terminal's run summary): time over the
-// iterations (finished, and the running one so far); cost also includes the baseline's calls.
+// Best metric, then run totals (as in the terminal's run summary): time over every
+// recorded row, the baseline's included (as the run list's), and the running iteration so
+// far; cost also includes the baseline's calls.
 function renderStats() {
   const its = state.iterations.filter((r) => r.iteration > 0);
   const cost = state.cost;
@@ -165,14 +166,15 @@ function renderStats() {
   const started = state.status?.iteration_started_at;
   const running = live > 0 && !row(live) && isNumber(started) ? Math.max(0, Date.now() / 1000 - started) : null;
   if (its.length || running !== null) {
-    const timed = its.filter((r) => isNumber(r.seconds));
+    const timed = state.iterations.filter((r) => isNumber(r.seconds));
     stats.push(['Time', timed.length || running !== null
-      ? fmtDuration(timed.reduce((sum, r) => sum + r.seconds, running ?? 0)) + (timed.length < its.length ? ' (incomplete)' : '')
+      ? fmtDuration(timed.reduce((sum, r) => sum + r.seconds, running ?? 0))
+        + (timed.length < state.iterations.length ? ' (incomplete)' : '')
       : '—']);
   }
   if (its.length || isNumber(cost?.cost_usd) || cost?.incomplete) {
     stats.push(['Cost', isNumber(cost?.cost_usd)
-      ? fmtMoney(cost.cost_usd) + (cost.incomplete ? ' (incomplete)' : '')
+      ? fmtMoney(cost.cost_usd) + (cost.incomplete ? '+' : '')
       : 'unavailable']);
   }
   $('stats').replaceChildren(...stats.map(([k, v, extra]) => el('div', { className: 'stat' },
@@ -299,7 +301,7 @@ function renderRows() {
         el('td', { className: 'value' }, metric ? fmtNumber(v) : '', metric && r.iteration > 0 ? deltaEl(v, base) : null),
         summaryCell(r),
         el('td', { className: 'num', textContent: fmtDuration(r.seconds) }),
-        el('td', { className: 'num', textContent: (fmtMoney(r.cost) || '—') + (isNumber(r.cost) && r.cost_incomplete ? ' (incomplete)' : ''),
+        el('td', { className: 'num', textContent: (fmtMoney(r.cost) || '—') + (isNumber(r.cost) && r.cost_incomplete ? '+' : ''),
           title: r.cost_incomplete ? 'Some call costs are unavailable' : '' }),
       ]);
     });
@@ -307,7 +309,7 @@ function renderRows() {
       rows.push(rowEl(running, [
         el('td', { textContent: String(running) }),
         el('td', {}, el('span', { className: 'pill running', textContent: 'running' })),
-        el('td'), el('td', { className: 'summary muted', textContent: phaseText(state.status.phase) }), el('td'), el('td'),
+        el('td'), el('td', { className: 'summary muted', textContent: state.status.phase_word || '' }), el('td'), el('td'),
       ]));
     }
     if (report) {
@@ -371,13 +373,6 @@ function shortReason(reason) {
   }
   return reason.length > 40 ? reason.slice(0, 40) + '…' : reason;
 }
-
-const PHASES = {
-  starting: 'Starting…', baseline: 'Measuring the baseline…', agent: 'Agent is working…',
-  checks: 'Running gates…', observe: 'Running observe entries…',
-  merge: 'Merging the accepted change…', 'between iterations': 'Wrapping up…',
-};
-const phaseText = (phase) => PHASES[phase] || `${phase}…`;
 
 function rowEl(iteration, cells) {
   const tr = el('tr', { tabIndex: 0 }, ...cells);
@@ -522,7 +517,7 @@ function renderPanel() {
   const why = outcome === 'rejected' ? rejection(r) : '';
   $('panel-title').replaceChildren(el('span', { textContent: label(n) }), ...[
     n > 0 && outcome && el('span', { className: `pill ${outcome}`, textContent: outcome }),
-    live && el('span', { className: 'muted', textContent: phaseText(state.status.phase) }),
+    live && el('span', { className: 'muted', textContent: state.status.phase_word || '' }),
     why && el('span', { className: 'muted', textContent: why }),
   ].filter(Boolean));
   const d = panel.detail;

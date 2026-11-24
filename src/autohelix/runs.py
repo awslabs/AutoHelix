@@ -963,12 +963,14 @@ def resolve_run(project: Path, value: str) -> str:
         raise RuntimeError(f"{value!r} matches several runs ({', '.join(matches)}); use the full id.")
     project = Path(project).resolve()
     if "/" not in value and (project / experiment_config(value)).is_file():  # a config name, as `resume` takes
-        latest = next((p for p, d in project_runs(project, experiment_config(value)) if not is_archived(d)), None)
+        found = project_runs(project, experiment_config(value))
+        latest = next(((p, False) for p, d in found if not is_archived(d)), None) or next(
+            ((p, True) for p, _ in found), None)
         if latest:
-            short = short_id(latest.run_id)
-            raise RuntimeError(f"{value} is an experiment, not a run: its latest run is {short}; name that "
-                               f"({short}).")
-        raise RuntimeError(f"{value} is an experiment, not a run, and has no run to act on; "
+            short, archived = short_id(latest[0].run_id), " (archived)" if latest[1] else ""
+            raise RuntimeError(f"{value} is an experiment, not a run: its latest run is {short}{archived}; "
+                               f"use {short}.")
+        raise RuntimeError(f"{value} is an experiment, not a run, and has no runs; "
                            f"`autohelix run {value}` starts one.")
     folder = f" ({value} is a folder: use -p {value})" if Path(value).is_dir() else ""
     where = os.path.relpath(project, Path.cwd())

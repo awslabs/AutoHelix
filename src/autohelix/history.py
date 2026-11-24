@@ -65,8 +65,8 @@ class IterationResult:
     discarded_more: int = 0  # discarded paths past the first `DISCARDED_LISTED`, not listed
     # Why the main agent's call failed or timed out (the attempt was rejected unchecked).
     agent_error: str | None = None
-    # The failure was the infrastructure's (`AgentRunResult.infrastructure`: credentials,
-    # the model service), which ended the segment.
+    # The failure was the infrastructure's (`AgentRunResult.infrastructure`: rejected
+    # credentials, HTTP 401/403), which ended the segment.
     infrastructure: str | None = None
     rejected_ref: str | None = None
 

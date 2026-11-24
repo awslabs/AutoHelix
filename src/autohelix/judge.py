@@ -128,14 +128,9 @@ def judge_config(base: AgentConfig, *, cli: str | None = None, model: str | None
     )
 
 
-def load_base_config(cwd: Path) -> AgentConfig:
-    """`agent:` from $AUTOHELIX_CONFIG, else the config a bare `run` here would use
-    (`find_config`), else defaults (`base_config`)."""
-    return base_config(cwd)[0]
-
-
 def base_config(cwd: Path) -> tuple[AgentConfig, str]:
-    """`load_base_config`'s settings, with where they came from, for a by-hand `ask` or
+    """`agent:` from $AUTOHELIX_CONFIG, else the config a bare `run` here would use
+    (`find_config`), else defaults; with where they came from, for a by-hand `ask` or
     `review` to say ("autohelix/a/config.yaml", "defaults: several configs", ...).
 
     A set but unreadable $AUTOHELIX_CONFIG, or a malformed `agent:`, is an error

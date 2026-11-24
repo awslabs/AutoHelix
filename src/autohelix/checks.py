@@ -17,8 +17,6 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 from autohelix.agents.runner import _kill_process_group, child_signals, end_group
 from autohelix.agents import command_path
 from autohelix.config import (CONFIG_DIR, CONFIG_FILE, DEFAULT_CHECK_TIMEOUT, CommandSpec, Config, ConfigError, MetricGate,
@@ -27,7 +25,7 @@ from autohelix.experiment import snapshot_files
 from autohelix.sandbox import build_copy_env
 from autohelix.workspace import git_env, path_in_scope, run_git
 
-# Progress callback type: (phase, command, elapsed_seconds | None)
+logger = logging.getLogger(__name__)
 
 
 @dataclass

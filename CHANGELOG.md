@@ -159,9 +159,9 @@ has the checklist.
 ### Changed
 
 - **A failed or timed-out agent call is a rejected iteration**, and the loop
-  goes on; three in a row stop the run. An infrastructure failure (a rejected
-  key or credentials, HTTP 401/403; for Claude Code and OpenCode also HTTP 429
-  or 5xx) stops it after the one call, with an error (exit 1) that says to fix
+  goes on; three in a row stop the run (also a rate limit or an outage, HTTP
+  429 or 5xx). An infrastructure failure (a rejected key or credentials, HTTP
+  401/403) stops it after the one call, with an error (exit 1) that says to fix
   it and `autohelix resume`.
 - **Notes are saved as a version per iteration**: a note the agent deletes
   stays deleted.
@@ -201,7 +201,9 @@ has the checklist.
   the old `.autohelix/` copy paths, or fails to render against a sample
   history, is a config error, so `run --check` finds it. A misspelt variable
   rendered empty (the agent got no goal), and a render error failed iteration
-  1 after the baseline, in a run that couldn't take the fix.
+  1 after the baseline, in a run that couldn't take the fix. A run whose
+  stored template has one of these problems no longer resumes: continue from
+  it with `autohelix run <name> --import <id>` after fixing the template.
 - A damaged line in an old run's `history.jsonl` no longer stops new runs of
   its config; that run's own commands name the line and what works (fix or
   remove it, or `autohelix archive`), where `report` and `resume --until`
@@ -223,6 +225,32 @@ has the checklist.
   --json` runs have `baseline`.
 - An interrupted baseline is recorded as "baseline interrupted", not
   "baseline failed: " with nothing after it.
+- One set of numbers for a run on every screen: `run`'s baseline row has its
+  judges' cost, as `view` shows it; the run page's time counts the baseline, as
+  the run list's does (`view --json` gives the baseline's `seconds`); `view`'s
+  Budget names the run totals it shows (`to iteration 8 · $5.04 run total`)
+  and the time used of `--time` as the web pages do (`12m 05s of 1h (this
+  segment)`); an incomplete cost is `$0.07+` everywhere (was `$0.07
+  (incomplete)` on `run` and the run page); a resumed segment's `landed` says
+  `(this segment)`.
+- The run page words the phase as the console does (`gates`, `observe ·
+  bench`), not "Running gates…" or "accept…".
+- A stopped run's `view --terminal` waits for `autohelix resume <id>`, not
+  "the next run" (a new run never shows there).
+- The run page and report.html no longer show a stored config or template
+  that is a symlink (read as the rest of run state is).
+- `resume`'s refusal of a changed config names the field and the entry
+  (`agent.timeout`, `gates entry 2`, `observe bench (added)`), not only
+  `agent` or `observe`; for files added to the experiment folder it says to
+  remove them, not to restore them.
+- The config template's `model: opus` is commented out: a user who changed
+  only `cli:` kept a Claude model name for Codex or OpenCode.
+- `run --help` forks from a run's code on a branch (`git switch -c <branch>
+  autohelix/<id>`), not a detached checkout, which can't land.
+- A timed-out agent call's error reads `timed out after 30m`, as a timed-out
+  command's does (was `timed out after 30 minutes`).
+- A second `autohelix view` on a port in use names the page to open in the
+  one already serving, or `--port 0`, instead of "Address already in use".
 - When no cost is known for a run and all its calls give the same reason, the
   end says it (`cost unavailable: set agent.model` for Codex, whose output names
   no model).

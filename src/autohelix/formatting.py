@@ -65,7 +65,7 @@ def format_cap(cost: float) -> str:
 
 
 def format_total_cost(usages: Iterable[dict]) -> str:
-    """Describe a total as incomplete when some agent calls have no known cost; an
+    """A total, `$0.25+` when some agent calls have no known cost (the known part); an
     unavailable one says why when its calls give one reason (`set agent.model ...`)."""
     usages = list(usages)
     total = summarize_costs(usages)
@@ -78,4 +78,4 @@ def format_total_cost(usages: Iterable[dict]) -> str:
         reason = clean(reason, 80).rstrip(".") if reason else ""
         return f"cost unavailable: {reason}" if reason else "cost unavailable"
     text = format_cost(total.cost_usd)
-    return f"{text} (incomplete)" if total.incomplete else text
+    return f"{text}+" if total.incomplete else text  # `+`: the known part, as `terminal.money`

@@ -3,6 +3,7 @@
 
 """Command-line interface."""
 
+import errno
 import functools
 import json
 import os
@@ -443,17 +444,11 @@ def _git_project(path: Path) -> Path:
 
 def _ancestor_configs(project: Path) -> str:
     """For a project without a config: the nearest folder above it, up to the top of
-    its repository, that has one (`run` from src/ by mistake)."""
-    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=project, capture_output=True, text=True)
-    if top.returncode:
-        return ""
-    top_path = Path(top.stdout.strip()).resolve()
-    for folder in project.parents:
-        if not folder.is_relative_to(top_path):
-            break
-        if configs := project_configs(folder):
-            return f" {folder} has {', '.join(configs)}; run from there or pass -p {folder}."
-    return ""
+    its checkout (`_checkout_top`), that has one (`run` from src/ by mistake)."""
+    top = _checkout_top(project)
+    folder = next((folder for folder in project.parents
+                   if top is not None and folder.is_relative_to(top) and project_configs(folder)), None)
+    return f" {folder} has {', '.join(project_configs(folder))}; run from there or pass -p {folder}." if folder else ""
 
 
 def _how_to_write(name: str | None = None) -> str:
@@ -645,7 +640,8 @@ def _segment(harness: Harness, budget: Budget, report: bool) -> None:
                               "(landing defaults to manual).")
 @click.option("--import", "import_run", metavar="RUN_ID",
               help="Continue from another run: its notes and history (read-only) in every iteration, its last "
-                   "observe outputs at the baseline. Code still comes from your checkout.")
+                   "observe outputs until each entry succeeds here (normally the baseline). Code still comes from "
+                   "your checkout.")
 @click.option("--why", help="Why this run is started (one line, shown by `autohelix view`).")
 @click.option("--check", is_flag=True,
               help="Only make the checks a run makes before it writes anything (config, prompt template, "
@@ -677,10 +673,11 @@ def run(config_name: str | None, path: Path, verbose: bool, no_report: bool, lan
 
     With --import RUN_ID (or its last part), the new run continues from that
     one: its agents see its run.json, history and notes (read-only, in
-    .autohelix-iteration/runs/<id>/) and its code's ref, and the baseline's
-    observe entries get its last outputs as $AUTOHELIX_PREVIOUS. Your notes,
-    budgets, metric reference and group are this run's own. To fork from the
-    run's code, `git checkout autohelix/<id>` first.
+    .autohelix-iteration/runs/<id>/) and its code's ref, and each observe entry
+    gets its last output as $AUTOHELIX_PREVIOUS until the entry succeeds here
+    (normally the baseline). Your notes, budgets, metric reference and group are
+    this run's own. To fork from the run's code, start a branch at it first
+    (`git switch -c <branch> autohelix/<id>`).
 
     With --check, nothing is started or written: the command makes every check
     the run would make before writing anything, prints what it finds, and exits
@@ -1232,6 +1229,10 @@ def _serve(project: Path, port: int | None, open_browser: bool, page: str) -> No
     try:
         server = make_server(project, port)
     except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:  # one server serves every run of its project
+            raise click.ClickException(
+                f"Port {port} is in use (another `autohelix view`?). If it serves this project, open "
+                f"http://127.0.0.1:{port}{page} there; else pass --port 0 (any free port).") from exc
         raise click.ClickException(f"Cannot listen on port {port}: {exc}") from exc
     url = f"http://127.0.0.1:{server.server_port}{page}"
     click.echo(f"Viewing {project.resolve().name} at {url}  (Ctrl-C to stop)")

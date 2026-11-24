@@ -47,10 +47,13 @@ DATA_DIR = SETUP_DIR / "data"
 
 
 def git_init(directory: Path) -> None:
+    # Its own identity: a fresh GPU box or container often has none, and the commit
+    # would fail after the project was written.
     subprocess.run(["git", "init", "-q"], cwd=directory, check=True)
     subprocess.run(["git", "add", "-A"], cwd=directory, check=True)
     subprocess.run(
-        ["git", "commit", "-q", "-m", "Initial commit"],
+        ["git", "-c", "user.name=AutoHelix", "-c", "user.email=autohelix@localhost", "-c", "commit.gpgsign=false",
+         "commit", "-q", "-m", "Initial commit"],
         cwd=directory,
         check=True,
     )

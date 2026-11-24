@@ -35,13 +35,14 @@ STOPPED = {"finished": "Finished", "interrupted": "Interrupted", "failed": "Fail
            "crashed": "Stopped unexpectedly"}
 
 
-def status_line(status: dict | None, now: float | None = None) -> str:
+def status_line(status: dict | None, now: float | None = None, run_id: str | None = None) -> str:
     """One line, worded like the viewer's status (the stop reason and phase come from
-    the run's files: no control characters)."""
-    return clean(_status_line(status, now))
+    the run's files: no control characters). A stopped run waits for its own resume
+    (`run_id`'s): the view follows one run, and a new `run` never shows in it."""
+    return clean(_status_line(status, now, run_id))
 
 
-def _status_line(status: dict | None, now: float | None = None) -> str:
+def _status_line(status: dict | None, now: float | None = None, run_id: str | None = None) -> str:
     now = now or time.time()
     if not status:
         return "No run recorded yet. Waiting for `autohelix run`…"
@@ -51,7 +52,8 @@ def _status_line(status: dict | None, now: float | None = None) -> str:
         # Interrupted with a reason: `autohelix stop --now`, or Ctrl-C while the ending landed.
         reason = status.get("stop_reason") if status.get("state") in ("finished", "interrupted") else None
         why = f" · {reason['detail']}" if isinstance(reason, dict) and reason.get("detail") else ""
-        return f"{word}{' at ' + when if when else ''}{why}. Waiting for the next run…"
+        resume = f"autohelix resume {short_id(run_id)}" if run_id else "autohelix resume"
+        return f"{word}{' at ' + when if when else ''}{why}. Waiting for `{resume}`…"
     since = format_duration(now - status.get("phase_started_at", now))
     if status.get("phase") == "report":
         return f"Running · writing the summary · {since}"
@@ -164,7 +166,7 @@ class LogFollower:
             status.get("stopped_at") or status.get("updated_at") or time.time())
         show = self.display and (height is None or height >= MIN_LOG_LINES)
         parts = [self.display.render(elapsed=int(end - self.started), height=height)] if show else []
-        return parts + [Text(status_line(status), style="dim"), *self.steer_lines() * running]
+        return parts + [Text(status_line(status, run_id=self.run_id), style="dim"), *self.steer_lines() * running]
 
     def steer_lines(self) -> list[Text]:
         """What steers the run from another terminal, and what Ctrl-C does here."""

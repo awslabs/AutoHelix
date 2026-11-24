@@ -23,8 +23,9 @@ goal: |
     under `$ARTIFACTS/checkpoints` — absolute paths OUTSIDE this working directory
     (see `config.sh` for the value of `$ARTIFACTS`). The eval reads exclusively from
     `$ARTIFACTS/final_model`.
-  - You may continue training from your best previous checkpoint (see
-    `$ARTIFACTS/final_model`); iterations are meant to compound.
+  - You may continue training from the last model saved at `$ARTIFACTS/final_model`,
+    which may be a rejected iteration's; keep your own best checkpoint under
+    `$ARTIFACTS/checkpoints`. Iterations are meant to compound.
 
   Rules:
   1. Operate autonomously — there is no user to ask.

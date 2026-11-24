@@ -11,7 +11,7 @@ from click.testing import CliRunner
 
 from autohelix.cli import main
 from autohelix.config import ConfigNotFound, config_name, find_config, project_configs, run_command
-from autohelix.judge import CONFIG_ENV, load_base_config
+from autohelix.judge import CONFIG_ENV, base_config
 from autohelix.harness import Harness
 from autohelix.history import History
 from autohelix.runs import NoRunToResume, RunPaths, git, load_run_config, new_run_name, select_run, short_id
@@ -387,9 +387,9 @@ def test_run_without_a_commit_refuses_and_leaves_nothing(tmp_path, monkeypatch):
 def test_ask_and_review_read_the_only_config_in_the_folder(tmp_path, monkeypatch):
     monkeypatch.delenv(CONFIG_ENV, raising=False)
     write(tmp_path / "autohelix" / "perf" / "config.yaml", yaml.safe_dump({"agent": {"cli": "codex", "model": "m"}}))
-    assert (load_base_config(tmp_path).cli, load_base_config(tmp_path).model) == ("codex", "m")
+    assert (base_config(tmp_path)[0].cli, base_config(tmp_path)[0].model) == ("codex", "m")
     write(tmp_path / "autohelix" / "fast" / "config.yaml", yaml.safe_dump({"agent": {"cli": "codex"}}))
-    assert load_base_config(tmp_path).cli == "claude-code"  # ambiguous: the defaults, not an error
+    assert base_config(tmp_path)[0].cli == "claude-code"  # ambiguous: the defaults, not an error
 
 
 def _answers(path, answer):

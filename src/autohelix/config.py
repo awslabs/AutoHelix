@@ -5,6 +5,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PurePosixPath
+import dataclasses
 import glob as globmod
 import math
 import os
@@ -852,9 +853,32 @@ def config_changes(stored: Config, current: Config) -> list[str]:
     """The settings in which two parsed configs differ, as the config names them: what
     the harness uses, so formatting, comments and other spellings of the same value
     (`600` and `10m`, `- pytest` and `- command: pytest`, a default written out) don't
-    count. `prompt_template` also differs when the templates' texts do (`template_text`;
-    ConfigError when one can't be read)."""
-    changed = [name for attr, name in _COMPARED if getattr(stored, attr) != getattr(current, attr)]
+    count. Named one level down (`_detail`): `agent.timeout`, `gates entry 2`, `observe
+    bench (added)`. `prompt_template` also differs when the templates' texts do
+    (`template_text`; ConfigError when one can't be read)."""
+    changed = [part for attr, name in _COMPARED if getattr(stored, attr) != getattr(current, attr)
+               for part in _detail(name, getattr(stored, attr), getattr(current, attr))]
     if "prompt_template" not in changed and template_text(stored) != template_text(current):
         changed.append("prompt_template")
     return changed
+
+
+def _detail(name: str, old, new) -> list[str]:
+    """Where one differing setting differs: the agent's fields (`agent.timeout`), list
+    entries by position (`gates entry 2`, `stop entry 1 (added)`), observe entries by
+    name (`observe bench`, `(added)`, `(removed)`; `observe (order)`); else `name`."""
+    if name == "agent":
+        fields = [f.name for f in dataclasses.fields(old) if getattr(old, f.name) != getattr(new, f.name)]
+        return [f"agent.{field}" for field in fields] or [name]
+    if name == "observe":
+        before, after = {e.name: e for e in old}, {e.name: e for e in new}
+        parts = [f"observe {entry}" + ("" if entry in before and entry in after else
+                                       " (added)" if entry in after else " (removed)")
+                 for entry in [*before, *(e for e in after if e not in before)]
+                 if before.get(entry) != after.get(entry)]
+        return parts or ["observe (order)"]
+    if name in ("gates", "stop"):
+        return [f"{name} entry {k}" + (" (added)" if k > len(old) else " (removed)" if k > len(new) else "")
+                for k in range(1, max(len(old), len(new)) + 1)
+                if old[k - 1:k] != new[k - 1:k]] or [name]
+    return [name]

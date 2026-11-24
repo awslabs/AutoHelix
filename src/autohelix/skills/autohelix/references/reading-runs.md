@@ -36,8 +36,8 @@ agent's one-line summary), `metrics`, `commit` (accepted), `gates` (each
 `output` tail; metric gates `value` and `reference`), `observe` (each `name`,
 `ok`, `error`, `metrics`), `stops`, `discarded` (out-of-scope paths dropped),
 `agent_error` (the agent call failed or timed out: rejected unchecked),
-`infrastructure` (that failure was the credentials' or the model service's:
-the run stopped there),
+`infrastructure` (that failure was rejected credentials, HTTP 401/403: the
+run stopped there),
 `base`, `tree`, `rejected_ref`, `started_at`/`ended_at`, `calls`.
 For numbers across iterations:
 `jq -c '[.iteration, .accepted, .metrics, .reason]' .autohelix/runs/<id>/history.jsonl`.

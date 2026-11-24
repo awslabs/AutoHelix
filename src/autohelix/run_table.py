@@ -80,17 +80,17 @@ def _phase(run: dict, now: float | None = None) -> str:
 
 
 def time_cap(run: dict, now: float) -> str:
-    """What is left of the running segment's --time: `47m 55s left (--time 1h)`, past
-    it `time up (--time 1h)` (the limit as the flag spells it). "" when the run isn't
-    running or the segment has no --time (a stopped run's stop reason says when time
-    ended it). Never a run total."""
+    """The running segment's time against its --time, as the web pages say it: `12m 5s
+    of 1h (this segment)`, past it `... (time up)`. "" when the run isn't running or the
+    segment has no --time (a stopped run's stop reason says when time ended it). Never
+    a run total."""
     status = run.get("status") or {}
     cap, started = status.get("max_time_seconds"), status.get("segment_started_at")
     if (not _live(run) or not isinstance(cap, (int, float)) or isinstance(cap, bool) or cap <= 0
             or not isinstance(started, (int, float))):
         return ""
-    left = int(cap) - max(0, int(now - started))
-    return f"{format_duration(left)} left (--time {format_limit(cap)})" if left > 0 else f"time up (--time {format_limit(cap)})"
+    used = max(0, int(now - started))
+    return f"{format_duration(used)} of {format_limit(cap)} (this segment)" + " (time up)" * (used >= cap)
 
 
 def _iterations(run: dict) -> str:
@@ -231,8 +231,9 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
                            version=terminal.version())
     if config is not None:
         progress = run["progress"]
-        budget = [f"{progress['max_iterations']} iterations"] if progress.get("max_iterations") else []
-        budget += [format_cap(progress["max_cost_usd"])] if progress.get("max_cost_usd") is not None else []
+        # The status's caps are run totals (`run`'s header says this segment's "2 more"): said so.
+        budget = [f"to iteration {progress['max_iterations']}"] if progress.get("max_iterations") else []
+        budget += [f"{format_cap(progress['max_cost_usd'])} run total"] if progress.get("max_cost_usd") is not None else []
         budget += [left] if (left := time_cap(run, now)) else []
         called = run.get("agent") or {}  # the latest main-agent call's (`latest_agent_call`)
         agent = terminal.agent_text(config.agent.cli, called.get("model") or config.agent.model,

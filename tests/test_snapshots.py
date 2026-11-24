@@ -69,10 +69,10 @@ def _header(width: int, budget: Budget, done: int = 0, show_mark: bool = True) -
 
 def _ending(table: Table, stop: dict, first: int = 1) -> list:
     """The end block as the harness assembles it (`Harness._print_ending`): auto landing
-    of this segment's commits, the run's cost so far."""
+    of this segment's commits (said so after the first), the run's cost so far."""
     landed = [row for row in table.rows if row.iteration >= first and row.accepted and row.commit]
     return table.ending(terminal.outcome(stop, None, None), spent=terminal.money(sum(r.cost or 0 for r in table.rows)),
-                        landing=terminal.landed(len(landed), "main"), commands=terminal.next_commands("krp3"),
+                        landing=terminal.landed(len(landed), "main", segment=first > 1), commands=terminal.next_commands("krp3"),
                         files=FILES, folder=FOLDER)
 
 

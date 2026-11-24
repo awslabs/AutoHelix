@@ -337,9 +337,10 @@ def template_problem(config) -> str | None:
 
 
 def _sample_variables(config):
-    """The variables for iterations 1 to 3 of `SAMPLE_RECORDS`, with `config`'s gates and
-    entries, built in a temporary folder; nothing if the config can't build them (its
-    other problems are reported on their own)."""
+    """The variables for iterations 1 to 3 of `SAMPLE_RECORDS`, built in a temporary
+    folder: the top-level `gates` and `observe` are `config`'s, the records' (`last`,
+    `history`) the sample's. Nothing if the config can't build them (its other problems
+    are reported on their own)."""
     import tempfile
 
     from autohelix.history import History, IterationResult

@@ -16,7 +16,7 @@ from autohelix.agents import AgentRunResult
 from autohelix.harness import Budget, AutoHelixRunError, Harness
 from autohelix.run_status import RunStatus, read_run_status
 from autohelix.runs import RunLock
-from autohelix.viewer import make_server
+from autohelix.viewer import ProjectRuns, make_server
 from autohelix.runs import RunPaths, short_id
 from tests.test_integration import integration_project  # noqa: F401  (fixture)
 from tests.helpers import CONFIG, NAME, config_file, latest_run, with_words
@@ -325,7 +325,7 @@ def test_viewer_index_is_private_and_one_per_run(viewer, integration_project):  
     assert [p.name for p in _private_index_dir().glob(f"view-{run}-*")] == [f"view-{run}-iter-4-agent.index"]
 
 
-@pytest.mark.parametrize("phase, shown", [("preparing checks", True), ("checks", True), ("review", True),
+@pytest.mark.parametrize("phase, shown", [("preparing checks", True), ("checks", True), ("observe", True),
                                            ("agent", False), ("between iterations", False)])
 def test_frozen_candidate_diff_only_once_this_iteration_froze(viewer, integration_project, phase, shown):  # noqa: F811
     # As if a segment were live: the pin holds iteration 2's tree; iteration 3 has no copy yet.
@@ -442,6 +442,10 @@ def test_dashboard_lists_runs_and_serves_each_run(integration_project):  # noqa:
         progress = one["progress"]
         assert (progress["iterations"], progress["max_iterations"], progress["max_cost_usd"]) == (2, 2, None)
         assert progress["seconds"] > 0 and progress["max_seconds"] is None
+        # The run page's rows (what its Time stat sums) count the baseline too, as the list does.
+        rows = ProjectRuns(integration_project).run(first.paths.run_id)["run"]["iterations"]
+        assert rows[0]["iteration"] == 0 and rows[0]["seconds"] > 0
+        assert sum(r["seconds"] for r in rows) == pytest.approx(progress["seconds"])
         # Budget figures come from the run's status (its latest segment's flags: iterations
         # and cost as run totals, time as the segment's own), never from the config.
         assert (two["progress"]["max_iterations"], two["progress"]["max_cost_usd"],
@@ -684,3 +688,14 @@ def test_pin_is_announced_before_the_checks_copy(integration_project, monkeypatc
         phases.append(phase), original(self, phase, iteration))[1])
     Harness(integration_project).run(Budget(until=1), report=False)
     assert phases.index("agent") < phases.index("preparing checks") < phases.index("checks")
+
+
+def test_the_run_page_words_the_phase_as_the_console_does():
+    """The running row and the panel title said "Running gates…" or "accept…" from a
+    table of the page's own while the status line said `gates`: now both use the
+    server's `phase_word` (`run_table._live_what`), as the run list does."""
+    from importlib.resources import files
+
+    source = files("autohelix").joinpath("viewer_resources", "viewer.js").read_text()
+    assert "PHASES" not in source and "phaseText" not in source
+    assert source.count("state.status.phase_word") == 2

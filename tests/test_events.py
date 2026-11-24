@@ -223,8 +223,8 @@ def test_cursors_round_trip_and_bad_ones_are_refused(tmp_path):
     for bad in ["", "nonsense", "2.", "2.!!!", good[:-3], "2." + "A" * 40]:
         with pytest.raises(ValueError, match="not a cursor"):
             decode_cursor(bad)
-    with pytest.raises(ValueError, match="older AutoHelix.*no --after"):
-        decode_cursor("1." + good[2:])  # the previous format's: says so
+    with pytest.raises(ValueError, match="not a cursor"):
+        decode_cursor("1." + good[2:])  # the previous format's, as any other
     import base64
     import zlib
     for payload in [b"[]", b'{"r": []}', b'{"r": {"x/y": [1, 2]}}', b'{"r": {"a": [1, 2, 3]}}', b'{"r": {"a": [1]}}',

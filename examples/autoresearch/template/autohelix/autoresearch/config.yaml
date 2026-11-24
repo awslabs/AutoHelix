@@ -39,7 +39,7 @@ goal: |
 
 agent:
   cli: claude-code
-  model: us.anthropic.claude-opus-5-5   # Bedrock id; pin a model for a result
+  model: opus   # the published result pinned us.anthropic.claude-opus-5-5, a Bedrock id (Claude Code on Bedrock only)
   effort: high
   timeout: 30m
 

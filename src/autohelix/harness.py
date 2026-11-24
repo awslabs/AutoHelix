@@ -444,7 +444,7 @@ class Harness:
             changed = f"it no longer reads: {e}"
         if changed:
             self._refuse_changed(paths, data, f"{data['config_path']} changed since run {short} started ({changed}); ",
-                                 "the run keeps the config it started with", "config", "file")
+                                 "the run keeps the config it started with", "config", "restore the file")
         self._check_experiment(paths, data, config)
         return config
 
@@ -459,13 +459,17 @@ class Harness:
             terminal.show(self.console, f"{folder} is gone; run {short} continues with the files it "
                           "stored when it started.", style="dim")
         elif changed := snapshot_changes(config, self.project_path, paths.experiment):
+            # Added files (an evaluator's test output) are removed, not restored.
+            parts = [part.split(": ", 1)[0] for part in changed.split("; ")]
+            remedy = ("remove the added files" if parts == ["added"] else
+                      "restore the files and remove the added ones" if "added" in parts else "restore the files")
             self._refuse_changed(paths, data, f"{folder} changed since run {short} started ({changed}); ",
-                                 "the run keeps the experiment folder it started with", "folder", "files")
+                                 "the run keeps the experiment folder it started with", "folder", remedy)
 
     @staticmethod
-    def _refuse_changed(paths: RunPaths, data: dict, said: str, keeps: str, what: str, restore: str):
+    def _refuse_changed(paths: RunPaths, data: dict, said: str, keeps: str, what: str, remedy: str):
         """`_run_config`'s refusal of a changed config or experiment folder (`said`, how):
-        with a baseline, `run --import`, else a new run."""
+        with a baseline, `run --import`, else a new run; `remedy` continues this one."""
         short = short_id(paths.run_id)
         if not has_baseline(paths):  # a failed first attempt: nothing to continue or import
             raise RuntimeError(f"{said}run {short} has no accepted baseline: start a new run, "
@@ -476,7 +480,7 @@ class Harness:
         first = land_first(paths, data, data.get("target_branch"))
         apply = (f"{first}\nThen {command} applies the new {what}." if first else
                  f"To apply the new {what}, start a new run that continues from this one: {command}.")
-        raise RuntimeError(f"{said}{keeps}.\n{apply}\nTo continue this run, restore the {restore}.")
+        raise RuntimeError(f"{said}{keeps}.\n{apply}\nTo continue this run, {remedy}.")
 
     def _metric_label(self, name: str) -> str:
         """Format metric name with direction arrow."""
@@ -1035,10 +1039,12 @@ class Harness:
         result.base = workspace.base
         result.tree = workspace.tree if workspace.iteration else None
         discarded = self._discarded(workspace)
-        frozen = [path for path in discarded if path_in_scope(path, self.config.frozen_patterns())]
-        listed = (frozen + [path for path in discarded if path not in set(frozen)])[:DISCARDED_LISTED]  # frozen first
+        patterns = self.config.frozen_patterns()
+        frozen = {path for path in discarded if path_in_scope(path, patterns)}
+        listed = ([path for path in discarded if path in frozen]
+                  + [path for path in discarded if path not in frozen])[:DISCARDED_LISTED]  # frozen first
         result.discarded, result.discarded_more = listed, len(discarded) - len(listed)
-        result.discarded_frozen = [path for path in listed if path in set(frozen)]
+        result.discarded_frozen = [path for path in listed if path in frozen]
 
     def _gate_text(self, command: str) -> str:
         """A gate command's display text (`ask: <question>` for ask entries)."""
@@ -1498,8 +1504,6 @@ class Harness:
                 self.log.info(f"baseline FAILED — missing metrics: {names}")
                 raise RuntimeError(f"Baseline setup error: {why(missing - advisory)}: every declared metric "
                                    "needs a value at the baseline")
-            self._print_row(IterationResult(iteration=0, accepted=True, metrics=metrics,
-                                            gates=evaluation.gates, observe=evaluation.observe))
             if metrics:
                 self.log.info("baseline: " + ", ".join(f"{name}: {value:g}" for name, value in metrics.items()))
 
@@ -1518,6 +1522,7 @@ class Harness:
                     )
             self._complete_record(baseline, started_at, time.monotonic(), evaluation)
             self._write_baseline(baseline)
+            self._print_row(baseline)  # the stored record, its judges' cost included, as `view` shows it
             return baseline.stop
         except BaseException as error:
             reason = "baseline interrupted" if isinstance(error, KeyboardInterrupt) else f"baseline failed: {error}"
@@ -1706,7 +1711,7 @@ class Harness:
                     before = self._target_tip()
                     land(self.paths, self.run_info, self.run_state.expected_tip)
                     self._landed_count = self._commits_between(before, self.run_state.expected_tip)
-                    self._landing = terminal.landed(self._landed_count, target)
+                    self._landing = terminal.landed(self._landed_count, target, segment=(self._segment or 1) > 1)
                 else:
                     found, words = self._relation()
                     self._landing = terminal.unlanded(found.ahead, f"autohelix/{self.paths.run_id}", words.note,
@@ -1893,7 +1898,7 @@ class Harness:
                 if result.stop:
                     stop_reason = self._condition_stop(result.stop, iteration)
                     break
-                if result.infrastructure:  # credentials or the model service: the next call fails too
+                if result.infrastructure:  # rejected credentials (401/403): the next call fails too
                     stop_reason = {"kind": "infrastructure", "iteration": iteration,
                                    "infrastructure": result.infrastructure, "error": result.agent_error,
                                    "detail": f"the agent call failed: {result.infrastructure}: "

@@ -11,7 +11,7 @@ from autohelix.agents import (
     AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path,
     infrastructure_reason,
 )
-from autohelix.agents.runner import format_timeout_seconds, run_process
+from autohelix.agents.runner import run_process, timeout_error
 from autohelix.sandbox import build_copy_env
 
 
@@ -291,7 +291,7 @@ class ClaudeCodeAgent:
                 self._result_error = str(
                     payload.get("result") or f"Claude Code returned {subtype}"
                 )
-                # Credentials or the model service (401/403, 429/5xx), as the CLI reports
+                # Rejected credentials (401/403; `infrastructure_reason`), as the CLI reports
                 # them; an earlier `completed` result doesn't change it: the call failed.
                 # The last failed result decides.
                 self._infrastructure = None
@@ -392,7 +392,7 @@ class ClaudeCodeAgent:
             event_callback(
                 AgentEvent(
                     kind=AgentEventKind.WARNING,
-                    text=f"Agent {format_timeout_seconds(self.config.timeout)}",
+                    text=f"Agent {timeout_error(self.config.timeout)}",
                 )
             )
 
@@ -403,7 +403,7 @@ class ClaudeCodeAgent:
 
         error = self._result_error
         if result.timed_out:
-            error = format_timeout_seconds(self.config.timeout)
+            error = timeout_error(self.config.timeout)
         elif result.exit_code != 0 and error is None:
             error = f"Claude Code exited with status {result.exit_code}"
 

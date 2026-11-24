@@ -520,7 +520,7 @@ evaluator calls count when they record usage through `$AUTOHELIX_USAGE_FILE`.
 Codex agent duration is measured locally even when usage is unavailable.
 
 Missing, invalid, or interrupted usage remains **unavailable**, not zero, and
-totals with unavailable parts are labeled **incomplete**. `--cost` counts the
+a total with unavailable parts gets the same `+` (`$0.25+`: what is known). `--cost` counts the
 saved amounts (Codex estimates included) and is checked between iterations, so
 it is an approximate stopping threshold, not a guaranteed spending cap; what it
 does when a cost is unavailable is in [CLI → Budgets](cli.md#budgets).

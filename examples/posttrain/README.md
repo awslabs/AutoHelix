@@ -44,6 +44,11 @@ posttrain/
   committed with the iteration (`.gitignore` ignores the usual training by-products).
   Either way it isn't where the eval looks. If `$ARTIFACTS` is left at its in-repo
   default, `check_final_model.sh` fails with an error saying so.
+- **One model folder, never rolled back:** a rejected iteration rolls back code only.
+  Its model stays at `$ARTIFACTS/final_model`, where the next agent continues from it
+  and the next eval scores it unless that agent retrains. The metric gate rejects the
+  iteration, not the model. For a model per iteration, see
+  [ML experiments](../../docs/ml-experiments.md#one-folder-per-iteration).
 - **The eval's chat template is the base model's,** read from the Hugging Face cache
   each time (`evaluate.py --chat-template-model`), so the prompt format stays fixed
   whatever the agent's model ships. It isn't kept in this folder: a copy holds only

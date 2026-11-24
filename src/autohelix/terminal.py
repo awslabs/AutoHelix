@@ -713,10 +713,13 @@ def commits(n: int) -> str:
     return f"{n} commit{'s' * (n != 1)}"
 
 
-def landed(count: int, target: str) -> tuple[str, str, str | None]:
+def landed(count: int, target: str, segment: bool = False) -> tuple[str, str, str | None]:
     """The end block's landing line (label, text, style): `landed  3 commits on main`,
-    `landed  nothing (no accepted changes)`."""
-    return ("landed", f"{commits(count)} on {target}", None) if count else ("landed", "nothing (no accepted changes)", "dim")
+    `landed  nothing (no accepted changes)`. `segment`: `count` is one segment's of a
+    resumed run (`run`'s end block), said so, where `view` counts the run's."""
+    if not count:
+        return "landed", "nothing (no accepted changes" + " this segment" * segment + ")", "dim"
+    return "landed", f"{commits(count)} on {target}" + " (this segment)" * segment, None
 
 
 def unlanded(count: int, branch: str, note: str = "", style: str | None = None) -> tuple[str, str, str | None]:

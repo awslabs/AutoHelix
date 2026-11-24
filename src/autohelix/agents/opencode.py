@@ -10,7 +10,7 @@ from autohelix.agents import (
     AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, EventCallback, call_fields, command_path,
     infrastructure_reason,
 )
-from autohelix.agents.runner import format_timeout_seconds, run_process
+from autohelix.agents.runner import run_process, timeout_error
 from autohelix.sandbox import build_copy_env
 
 
@@ -98,8 +98,7 @@ class OpenCodeAgent:
             data = error.get("data") if isinstance(error.get("data"), dict) else {}
             message = data.get("message") or error.get("message") or error.get("name") or "OpenCode reported an error"
             self._error = str(message)
-            # 401/403 seen for real (an invalid key); 429/5xx not yet: an error event is
-            # assumed to come after OpenCode's own retries (`isRetryable` aside).
+            # 401/403 seen for real (an invalid key): the only statuses that stop a run.
             self._infrastructure = infrastructure_reason(data.get("statusCode"))
             self._emit(event_callback, AgentEventKind.ERROR, self._error)
             return
@@ -162,7 +161,7 @@ class OpenCodeAgent:
 
         error = None
         if result.timed_out:
-            error = format_timeout_seconds(self.config.timeout)
+            error = timeout_error(self.config.timeout)
             event_callback(AgentEvent(kind=AgentEventKind.WARNING, text=f"Agent {error}"))
             # Its finished steps' costs only: the call's cost is unknown (kept apart).
             if "cost_usd" in self._usage:

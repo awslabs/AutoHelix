@@ -29,8 +29,8 @@ def _run(monkeypatch, tmp_path, agent, module, lines, *, exit_code=1, timed_out=
 @pytest.mark.parametrize(("status", "reason"), [
     (401, "authentication failed (HTTP 401)"),
     (403, "authentication failed (HTTP 403)"),
-    (429, "model service error (HTTP 429)"),
-    (503, "model service error (HTTP 503)"),
+    # A rate limit or an outage is an ordinary failure: three in a row end the run.
+    (429, None), (503, None),
     (400, None), (404, None), (None, None), ("403", None), (True, None),
 ])
 def test_infrastructure_reason(status, reason):
@@ -55,8 +55,8 @@ class TestClaudeCode:
         (401, "authentication failed (HTTP 401)"),
         (403, "authentication failed (HTTP 403)"),
         # No real sample of these (none captured): the same fields, by the CLI's schema.
-        (429, "model service error (HTTP 429)"),
-        (529, "model service error (HTTP 529)"),
+        (429, None),
+        (529, None),
     ])
     def test_an_api_error_result_is_an_infrastructure_failure(self, monkeypatch, tmp_path, status, reason):
         result = self._run(monkeypatch, tmp_path, [_api_error(status)])
@@ -137,8 +137,8 @@ class TestOpenCode:
 
     @pytest.mark.parametrize(("status", "reason"), [
         (403, "authentication failed (HTTP 403)"),
-        (429, "model service error (HTTP 429)"),
-        (502, "model service error (HTTP 502)"),
+        (429, None),
+        (502, None),
         (400, None),
         (None, None),
     ])
