@@ -3,6 +3,7 @@
 
 """Command-line interface."""
 
+import errno
 import functools
 import json
 import os
@@ -101,16 +102,17 @@ def _warn(message: str, err: bool = False) -> None:
     terminal.warn(Console(stderr=err), message)
 
 
-def _chosen_run(project: Path, value: str | None) -> RunPaths:
+def _chosen_run(project: Path, value: str | None, running: bool = True) -> RunPaths:
     """The run a command acts on: `value` (an id or its last part), else `runs.default_run`'s
-    (the running run, else the most recently active one that isn't archived), named."""
+    (the running run, else the most recently active one that isn't archived; without
+    `running`, one that isn't running), named."""
     if value is not None:
         return RunPaths(project, _run_id(project, value))
     try:
-        paths, _, why = default_run(project)
+        paths, _, why = default_run(project, running)
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
-    click.echo(click.style(f"Run {short_id(paths.run_id)} (the {why} run; name one to choose another)", dim=True),
+    click.echo(click.style(f"Run {short_id(paths.run_id)} (the {why}; name one to choose another)", dim=True),
                err=True)
     return paths
 
@@ -442,13 +444,11 @@ def _git_project(path: Path) -> Path:
 
 def _ancestor_configs(project: Path) -> str:
     """For a project without a config: the nearest folder above it, up to the top of
-    its repository, that has one (`run` from src/ by mistake)."""
-    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=project, capture_output=True, text=True)
-    if top.returncode:
-        return ""
-    top_path = Path(top.stdout.strip()).resolve()
-    for folder in project.parents:
-        if not folder.is_relative_to(top_path):
+    its checkout (`_checkout_top`), that has one (`run` from src/ by mistake). Still
+    used: 06-3's subfolder lookup that would replace it is for later."""
+    top = _checkout_top(project)
+    for folder in project.parents if top is not None else ():
+        if not folder.is_relative_to(top):
             break
         if configs := project_configs(folder):
             return f" {folder} has {', '.join(configs)}; run from there or pass -p {folder}."
@@ -614,9 +614,9 @@ def _last_iteration(project: Path, config: Path | None, run_id: str | None) -> i
     written; -1 when there is none to read (`_start` then refuses as usual)."""
     try:
         planned = planned_run(project, config, run_id=run_id, create=False)
-    except (RuntimeError, ValueError):
+        return History(project, planned.run_id).get_last_iteration() if planned else -1
+    except (RuntimeError, ValueError):  # `_start` refuses as usual (a damaged history: as `resume` says it)
         return -1
-    return History(project, planned.run_id).get_last_iteration() if planned else -1
 
 
 def _segment(harness: Harness, budget: Budget, report: bool) -> None:
@@ -644,7 +644,8 @@ def _segment(harness: Harness, budget: Budget, report: bool) -> None:
                               "(landing defaults to manual).")
 @click.option("--import", "import_run", metavar="RUN_ID",
               help="Continue from another run: its notes and history (read-only) in every iteration, its last "
-                   "observe outputs at the baseline. Code still comes from your checkout.")
+                   "observe outputs until each entry succeeds here (normally the baseline). Code still comes from "
+                   "your checkout.")
 @click.option("--why", help="Why this run is started (one line, shown by `autohelix view`).")
 @click.option("--check", is_flag=True,
               help="Only make the checks a run makes before it writes anything (config, prompt template, "
@@ -676,10 +677,11 @@ def run(config_name: str | None, path: Path, verbose: bool, no_report: bool, lan
 
     With --import RUN_ID (or its last part), the new run continues from that
     one: its agents see its run.json, history and notes (read-only, in
-    .autohelix-iteration/runs/<id>/) and its code's ref, and the baseline's
-    observe entries get its last outputs as $AUTOHELIX_PREVIOUS. Your notes,
-    budgets, metric reference and group are this run's own. To fork from the
-    run's code, `git checkout autohelix/<id>` first.
+    .autohelix-iteration/runs/<id>/) and its code's ref, and each observe entry
+    gets its last output as $AUTOHELIX_PREVIOUS until the entry succeeds here
+    (normally the baseline). Your notes, budgets, metric reference and group are
+    this run's own. To fork from the run's code, start a branch at it first
+    (`git switch -c <branch> autohelix/<id>`).
 
     With --check, nothing is started or written: the command makes every check
     the run would make before writing anything, prints what it finds, and exits
@@ -695,7 +697,10 @@ def run(config_name: str | None, path: Path, verbose: bool, no_report: bool, lan
                      group=group or None, import_run=imported, why=why, check_only=check)
     if check:
         shown = config_relative(project, config)
-        click.echo(f"OK: {shown} is ready; `{run_command(shown)}` would start a new run.")
+        flags = "".join(f" {flag} {shlex.quote(value)}" for flag, value in
+                        (("--import", imported and short_id(imported)), ("--group", group), ("--land", land_mode))
+                        if value)
+        click.echo(f"OK: {shown} is ready; `{run_command(shown)}{flags}` would start a new run.")
         return
     _segment(harness, budget, not no_report)
 
@@ -780,13 +785,13 @@ def resume(target: str | None, path: Path, verbose: bool, no_report: bool, land_
 @click.option("--into", help="Target branch, required for runs created detached.")
 def land(run_id: str | None, path: Path, into: str | None):
     """Fast-forward a target branch to a run's accepted code (RUN_ID or its last part, else
-    the running run, else the most recently active one)."""
-    paths = _chosen_run(_project(path), run_id)
+    the most recently active run that isn't running or archived)."""
+    paths = _chosen_run(_project(path), run_id, running=False)
     try:
         with RunLock(paths.lock):
             data = paths.read_identity()
-            land_run(paths, data, run_tip(paths, data), into)
-        click.echo(f"Landed {short_id(paths.run_id)}.")
+            unchanged = land_run(paths, data, run_tip(paths, data), into)
+        click.echo(unchanged or f"Landed {short_id(paths.run_id)}.")
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
 
@@ -1228,6 +1233,10 @@ def _serve(project: Path, port: int | None, open_browser: bool, page: str) -> No
     try:
         server = make_server(project, port)
     except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:  # one server serves every run of its project
+            raise click.ClickException(
+                f"Port {port} is in use (another `autohelix view`?). If it serves this project, open "
+                f"http://127.0.0.1:{port}{page} there; else pass --port 0 (any free port).") from exc
         raise click.ClickException(f"Cannot listen on port {port}: {exc}") from exc
     url = f"http://127.0.0.1:{server.server_port}{page}"
     click.echo(f"Viewing {project.resolve().name} at {url}  (Ctrl-C to stop)")
@@ -1246,7 +1255,8 @@ def _serve(project: Path, port: int | None, open_browser: bool, page: str) -> No
 @click.argument("run_id", required=False)
 @_path_option()
 def report(run_id: str | None, path: Path):
-    """Write (or rewrite) a run's summary (RUN_ID or its last part, else the running or latest run).
+    """Write (or rewrite) a run's summary (RUN_ID or its last part, else the most recently
+    active run that isn't running or archived).
 
     One agent call reads the run's history, notes, reviews, logs and commits, and writes
     the selected run's report.md. `run` and `resume` do this automatically when a run
@@ -1259,9 +1269,13 @@ def report(run_id: str | None, path: Path):
 
     console = Console()
     project_path = _project(path)
-    paths = _chosen_run(project_path, run_id)
+    paths = _chosen_run(project_path, run_id, running=False)
     run_id = paths.run_id
-    if History(project_path, run_id).get_last_iteration() == 0:
+    try:
+        last = History(project_path, run_id).get_last_iteration()
+    except RuntimeError as e:  # a damaged history
+        raise click.ClickException(str(e)) from e
+    if last == 0:
         _warn(f"Run {short_id(run_id)} has no iterations yet. Nothing to report.")
         raise SystemExit(1)
     from rich.text import Text

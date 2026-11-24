@@ -6,7 +6,9 @@
 #
 # RUN ARGS default to `-n 60 --time 24h`. The run's state is in projects/ar-NAME/.autohelix/
 # (collect.py and rescore.py read it there), its console output in arms/runs/NAME/console.log.
-# Stop it politely with `docker exec -u agent -w PROJECT ar-NAME autohelix stop`.
+# Stop it politely (after its current iteration) with
+# `docker exec -u agent -w PROJECT ar-NAME sh -c 'autohelix stop "$(ls .autohelix/runs | tail -1)"'`
+# (`stop` needs the run's id; the header names it too).
 set -euo pipefail
 ARMS=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 name=$1 gpus=$2

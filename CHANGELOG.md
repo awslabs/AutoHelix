@@ -120,7 +120,9 @@ has the checklist.
 - **`run --import RUN_ID`**: a new run from your checkout that reads another
   run's notes, history and code.
 - **`run --check`** makes every check a run makes before it writes anything,
-  then exits.
+  says what `run` would say at its start (other runs' unlanded commits, the
+  imported run's, an uncommitted config), and names the command it checked,
+  flags included.
 - **`run --why`** and **`archive --why`**: one line kept with the run.
 - **A summary at the end of each segment**: `runs/<id>/report.md` and
   `report.html`, a one-file copy of the run page (`--no-report` skips the
@@ -157,9 +159,9 @@ has the checklist.
 ### Changed
 
 - **A failed or timed-out agent call is a rejected iteration**, and the loop
-  goes on; three in a row stop the run. An infrastructure failure (a rejected
-  key or credentials, HTTP 401/403; for Claude Code and OpenCode also HTTP 429
-  or 5xx) stops it after the one call, with an error (exit 1) that says to fix
+  goes on; three in a row stop the run (also a rate limit or an outage, HTTP
+  429 or 5xx). An infrastructure failure (a rejected key or credentials, HTTP
+  401/403) stops it after the one call, with an error (exit 1) that says to fix
   it and `autohelix resume`.
 - **Notes are saved as a version per iteration**: a note the agent deletes
   stays deleted.
@@ -172,6 +174,83 @@ has the checklist.
 
 ### Fixed
 
+- A gate, observe or stop command that leaves a background process holding
+  its output (`./server & curl ...`) ends when its shell exits, with the
+  shell's exit code; it waited for its whole timeout and was reported as timed
+  out.
+- A JSON line from the agent that isn't an object (a wrapper script's `0` on
+  stderr) is shown as output; for Claude Code and OpenCode it ended the run
+  with a Python error. Any error while an agent runs now kills its process
+  group: the agent kept running, past its timeout.
+- A failed command's output in the record and the prompt is its last 15
+  lines, each cut at 500 characters: one long line (a JSON dump) made the
+  prompt too large to start the agent, and every resume failed the same way.
+- Files the agent writes outside the scope (a dataset, a checkpoint) are no
+  longer hashed into your repository's objects at each freeze, and the record
+  and the next prompt list at most 20 discarded paths, frozen ones first
+  (`discarded_more` counts the rest). An unreadable file outside the scope is
+  now discarded instead of rejecting the iteration.
+- A setup that can't work stops the run at the baseline, before any agent call
+  is paid for, with a setup error naming the gate and its last stderr line: a
+  gate command that exits 126 or 127 (not executable, not found; unless its
+  first word is a file the agent may write and git doesn't ignore), and an `ask:` gate that exits 2
+  (no answer). Each iteration used to be paid for and rejected the same way.
+- Every `resume` checks that the agents' executables can be found, as the
+  first `run` does; a missing one cost an iteration.
+- A custom prompt template that names a variable the prompt doesn't have, or
+  the old `.autohelix/` copy paths, or fails to render against a sample
+  history, is a config error, so `run --check` finds it. A misspelt variable
+  rendered empty (the agent got no goal), and a render error failed iteration
+  1 after the baseline, in a run that couldn't take the fix. A run whose
+  stored template has one of these problems no longer resumes: continue from
+  it with `autohelix run <name> --import <id>` after fixing the template.
+- A damaged line in an old run's `history.jsonl` no longer stops new runs of
+  its config; that run's own commands name the line and what works (fix or
+  remove it, or `autohelix archive`), where `report` and `resume --until`
+  ended in a traceback. A blank line resumes, as it views.
+- `delete` without `--force` refuses a run whose tip is on no branch, tag or
+  remote-tracking branch: a run that read landed after its target was reset
+  was deleted with the only ref to its commits. `land` says when it did
+  nothing (already there, nothing accepted, landed before) instead of
+  "Landed".
+- Bare `land` and `report` take the most recently active run that isn't
+  running: they took the running run, which refuses them.
+- The refusal of a changed config gives the landing first, then the `run
+  --import` command, a line each: a new run started first lacked the code.
+- A config name given where a run id goes (`land perf`) names the config's
+  latest run; an unknown id lists the latest real ids instead of "e.g. k3f9".
+- After a failed first baseline, the end block, `view --terminal` and the
+  entry screen suggest `autohelix run <name>` (and `autohelix delete <id>`),
+  as the error does, not `resume`, which refuses the fixed setup. `view
+  --json` runs have `baseline`.
+- An interrupted baseline is recorded as "baseline interrupted", not
+  "baseline failed: " with nothing after it.
+- One set of numbers for a run on every screen: `run`'s baseline row has its
+  judges' cost, as `view` shows it; the run page's time counts the baseline, as
+  the run list's does (`view --json` gives the baseline's `seconds`); `view`'s
+  Budget names the run totals it shows (`to iteration 8 · $5.04 run total`)
+  and the time used of `--time` as the web pages do (`12m 05s of 1h (this
+  segment)`; the web pages write `12m5s`); an incomplete cost is `$0.07+` everywhere (was `$0.07
+  (incomplete)` on `run` and the run page); a resumed segment's `landed` says
+  `(this segment)`.
+- The run page words the phase as the console does (`gates`, `observe ·
+  bench`), not "Running gates…" or "accept…".
+- A stopped run's `view --terminal` waits for `autohelix resume <id>`, not
+  "the next run" (a new run never shows there).
+- The run page and report.html no longer show a stored config or template
+  that is a symlink (read as the rest of run state is).
+- `resume`'s refusal of a changed config names the field and the entry
+  (`agent.timeout`, `gates entry 2`, `observe bench (added)`), not only
+  `agent` or `observe`; for files added to the experiment folder it says to
+  remove them, not to restore them.
+- The config template's `model: opus` is commented out: a user who changed
+  only `cli:` kept a Claude model name for Codex or OpenCode.
+- `run --help` forks from a run's code on a branch (`git switch -c <branch>
+  autohelix/<id>`), not a detached checkout, which can't land.
+- A timed-out agent call's error reads `timed out after 30m`, as a timed-out
+  command's does (was `timed out after 30 minutes`).
+- A second `autohelix view` on a port in use names the page to open in the
+  one already serving, or `--port 0`, instead of "Address already in use".
 - When no cost is known for a run and all its calls give the same reason, the
   end says it (`cost unavailable: set agent.model` for Codex, whose output names
   no model).
@@ -208,6 +287,12 @@ has the checklist.
 - A nested git repository in the project is refused with "nested git
   repository at X: remove its .git or clone outside the project".
 - Rich markup in a goal (`[/bold]`) no longer crashes `--verbose`.
+- The examples run as written: Docker's steps name the AutoHelix checkout and
+  `run.sh` refuses a missing `--env` script; autoresearch's polite stop names
+  the run; AlgoTune's collector reads `base_commit`; kernelbench and
+  autoresearch commit without a git identity and autoresearch's setup reruns;
+  kernelbench's model is `opus` (its published Bedrock id is a comment), and
+  autoresearch's Bedrock id says the example runs on Bedrock.
 
 ### Upgrading from 0.1.1
 
@@ -274,9 +359,8 @@ Each old key is an error naming its replacement; there are no aliases.
 
 #### Prompt template variables
 
-For a custom `prompt_template:`. `worktree` is a config error naming its new
-name; the others are no longer variables: they render
-empty, and the run warns at start naming them.
+For a custom `prompt_template:`. Each old name is a config error: `worktree`
+names its new name, the others are listed as variables the prompt doesn't have.
 
 | 0.1.1 | Now |
 |---|---|

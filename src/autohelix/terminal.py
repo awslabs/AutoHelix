@@ -329,6 +329,7 @@ class Row:
     stops: list = field(default_factory=list)
     discarded: list = field(default_factory=list)
     discarded_frozen: list = field(default_factory=list)
+    discarded_more: int = 0  # past the record's listed ones
 
     @classmethod
     def of(cls, record) -> "Row":
@@ -339,7 +340,8 @@ class Row:
                    seconds=wall_ms / 1000 if wall_ms else None, cost=cost.cost_usd, cost_incomplete=cost.incomplete,
                    commit=record.commit, reason=record.reason, agent_error=record.agent_error,
                    summary=record.summary, gates=record.gates, observe=record.observe, stops=record.stops,
-                   discarded=record.discarded, discarded_frozen=record.discarded_frozen)
+                   discarded=record.discarded, discarded_frozen=record.discarded_frozen,
+                   discarded_more=record.discarded_more)
 
 
 LABEL = 6  # "✓ 12  "
@@ -522,7 +524,8 @@ class Table:
         if row.discarded:
             frozen = set(row.discarded_frozen)
             shown = ", ".join(clean(p) + " (frozen)" * (p in frozen) for p in row.discarded[:3])
-            more = f", … {len(row.discarded) - 3} more" if len(row.discarded) > 3 else ""
+            hidden = len(row.discarded) - 3 + row.discarded_more
+            more = f", … {hidden} more" if hidden > 0 else ""
             notes.append((f"discarded, outside the scope: {shown}{more}", "dim"))
         return notes
 
@@ -710,10 +713,13 @@ def commits(n: int) -> str:
     return f"{n} commit{'s' * (n != 1)}"
 
 
-def landed(count: int, target: str) -> tuple[str, str, str | None]:
+def landed(count: int, target: str, segment: bool = False) -> tuple[str, str, str | None]:
     """The end block's landing line (label, text, style): `landed  3 commits on main`,
-    `landed  nothing (no accepted changes)`."""
-    return ("landed", f"{commits(count)} on {target}", None) if count else ("landed", "nothing (no accepted changes)", "dim")
+    `landed  nothing (no accepted changes)`. `segment`: `count` is one segment's of a
+    resumed run (`run`'s end block), said so, where `view` counts the run's."""
+    if not count:
+        return "landed", "nothing (no accepted changes" + " this segment" * segment + ")", "dim"
+    return "landed", f"{commits(count)} on {target}" + " (this segment)" * segment, None
 
 
 def unlanded(count: int, branch: str, note: str = "", style: str | None = None) -> tuple[str, str, str | None]:
@@ -726,12 +732,14 @@ def not_landed(error) -> tuple[str, str, str | None]:
     return "landing", f"failed: {clean(error)}", "yellow"
 
 
-def next_commands(short: str, view: bool = True, also=()) -> list[str]:
+def next_commands(short: str, view: bool = True, also=(), restart: str | None = None) -> list[str]:
     """What to type after a run: look at it (`view`: not from the view itself), continue
     it, then `also`: what lands commits that wait (`runs.LandingWords.commands`:
     `autohelix land <id>` when the target can fast-forward, `git merge autohelix/<id>`
-    when it diverged)."""
-    return ([f"autohelix view {short}"] if view else []) + [f"autohelix resume {short}", *also]
+    when it diverged). A run whose baseline failed (`restart`: the command that starts
+    its config's runs) isn't continued: a new run once the setup is fixed, or delete it."""
+    go_on = [restart, f"autohelix delete {short}"] if restart else [f"autohelix resume {short}"]
+    return ([f"autohelix view {short}"] if view else []) + [*go_on, *also]
 
 
 def command_hint(command: str, target: str = "") -> str:
@@ -743,6 +751,10 @@ def command_hint(command: str, target: str = "") -> str:
         return "the run's page in your browser"
     if command.startswith("autohelix resume "):
         return "one more iteration (-n N for more)"
+    if command.startswith("autohelix run "):
+        return "a new run, once the setup is fixed"
+    if command.startswith("autohelix delete "):
+        return "remove this attempt"
     if command.startswith("autohelix land "):
         return f"put its commits on {branch}"
     if command.startswith("git merge "):

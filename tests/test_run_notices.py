@@ -46,7 +46,10 @@ def test_the_config_change_refusal_says_land_it_first(project):
     result = cli(project, "resume", short, "-n", "1", "--no-report")
     assert result.exit_code == 1
     said = " ".join(result.output.split())
-    assert f"`autohelix run demo --import {short}`. {short}'s 1 accepted commit isn't in main: land it first" in said
+    assert (f"started with. {short}'s 1 accepted commit isn't in main: land it first (`autohelix land {short}`, or "
+            f"`git switch -c <branch> autohelix/{first.run_id}`) to start from it. Then `autohelix run demo --import "
+            f"{short}` applies the new config.") in said
+    assert result.output.count("\n") >= 3  # a line each
 
 
 def failing_baseline(project):
@@ -60,6 +63,13 @@ def test_a_failed_baseline_is_a_disposable_attempt(project):
     paths = latest_run(project)
     short = short_id(paths.run_id)
     said = " ".join(result.output.split())
+    # The end block's next commands say what the error says, not `resume` (02-2).
+    assert "autohelix run demo a new run, once the setup is fixed" in said, said
+    assert f"autohelix delete {short} remove this attempt" in said and f"autohelix resume {short}" not in said
+    import json
+    from autohelix.run_table import suggestion
+    [run] = json.loads(cli(project, "view", "--json").stdout)["runs"]
+    assert run["baseline"] is False and suggestion(run)[1] == "autohelix run demo"
     assert (f"every declared metric needs a value at the baseline. Fix it and run `autohelix run demo` again "
             f"(`autohelix delete {short}` removes this attempt).") in said
     # The history keeps the error itself, without the advice.
@@ -150,3 +160,34 @@ def test_import_on_a_detached_head_offers_the_branch(project):
     _, result = started(project, "--import", short, "--land", "manual")  # detached: nothing to land on
     assert (f"{short}'s 1 accepted commit isn't in HEAD: land it first (`git switch -c <branch> "
             f"autohelix/{first.run_id}`) to start from it.") in before_header(result)
+
+
+def _damage(paths, line: str) -> None:
+    """Insert `line` as the history's second line."""
+    lines = paths.history.read_text().splitlines(keepends=True)
+    paths.history.write_text("".join(lines[:1] + [line] + lines[1:]))
+
+
+def test_a_damaged_history_of_the_previous_run_doesnt_stop_a_new_run(project):
+    """A bad line before the last in the previous run's history: `run` starts as `run
+    --check` said, and that run's own commands name the line and what works, without
+    a traceback."""
+    first, _ = started(project, "--land", "manual")
+    short = short_id(first.run_id)
+    _damage(first, "{broken\n")
+    assert cli(project, "run", "--check").exit_code == 0
+    started(project, "--land", "manual")
+    message = f"Run {short}'s history.jsonl line 2 is damaged: fix or remove the line, or `autohelix archive {short}`."
+    for args in (["resume", short, "-n", "1", "--no-report"], ["resume", short, "--until", "5", "--no-report"],
+                 ["report", short]):
+        result = cli(project, *args)
+        assert result.exit_code == 1, (args, result.output)
+        assert message in " ".join(result.output.split()), (args, result.output)
+        assert not isinstance(result.exception, RuntimeError), args  # said, not a traceback
+
+
+def test_a_blank_history_line_resumes_as_it_views(project):
+    first, _ = started(project, "--land", "manual")
+    _damage(first, "\n")
+    result = cli(project, "resume", short_id(first.run_id), "-n", "1", "--no-report")
+    assert result.exit_code == 0, result.output

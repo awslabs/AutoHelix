@@ -39,7 +39,8 @@ goal: |
 
 agent:
   cli: claude-code
-  model: us.anthropic.claude-opus-5-5   # Bedrock id; pin a model for a result
+  # No model: Claude Code's own. The arms pin one model for every arm (arms/container.sh's
+  # ANTHROPIC_MODEL, a Bedrock id).
   effort: high
   timeout: 30m
 

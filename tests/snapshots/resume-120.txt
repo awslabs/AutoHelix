@@ -23,7 +23,7 @@
   speed      46.9 → 61,004.2  1301×  iter 8
   mem_mb     120 → 94  -22%  iter 8
   run        8 iterations · 4 accepted · 40m 21s · $2.92
-  landed     1 commit on main
+  landed     1 commit on main (this segment)
   next       autohelix view krp3      the run's page in your browser
              autohelix resume krp3    one more iteration (-n N for more)
   folder     .autohelix/runs/20261115-1402-sorting-krp3/

@@ -9,6 +9,7 @@ import hashlib
 import itertools
 import math
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -25,22 +26,22 @@ from rich.panel import Panel
 from rich.text import Text
 
 from autohelix.agents import AgentConfig, AgentEvent, AgentEventKind, AgentRunResult, create_agent
-from autohelix.config import (Config, ConfigError, MetricGate, config_changes, config_relative, find_config,
+from autohelix.config import (CONFIG_DIR, Config, ConfigError, MetricGate, config_changes, config_relative, find_config,
                               load_config, not_an_experiment, run_command)
 from autohelix.costs import summarize_costs
 from autohelix import terminal
 from autohelix.display import LiveDisplay, clean
 from autohelix.terminal import LiveRow, Row, budget_text
-from autohelix.history import History, IterationResult
+from autohelix.history import DISCARDED_LISTED, History, IterationResult
 from autohelix.runs import (RunPaths, RunState, select_run, reconcile, land, git,
-                            claim_copies, critical_section, new_run_name,
+                            claim_copies, critical_section, new_run_name, new_run_notices,
                             iteration_folder, load_run_config, planned_run, remove_copies, require_clean, short_id, landing,
                             Landing, LandingWords, landing_words, WHY_LIMIT,
                             imported_run, is_live, group_landing_note, has_baseline, land_first, target_ahead_refusal,
                             write_json)
 from autohelix.iteration import IterationWorkspace
 from autohelix.launcher import command_path
-from autohelix.checks import (metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
+from autohelix.checks import (agent_issues, metric_gate_failure, metric_reference, preflight_check, run_gate_commands,
                               run_observe_entry, run_stop_checks, scope_warning, StopCheckResult)
 from autohelix.events import iteration_fields
 from autohelix.experiment import shown, snapshot_changes, snapshot_files
@@ -48,8 +49,7 @@ from autohelix.run_status import RunStatus, SegmentLog, clear_stop_request, read
 from autohelix.usage_log import ENV as USAGE_ENV, append_usage, read_usage, superseded_marker
 from autohelix.formatting import clean_block, format_cap, format_cost, format_duration, format_total_cost
 from autohelix.iteration_time import format_limit
-from autohelix.prompt_template import (build_prompt_variables, load_template, render_template, unknown_variables,
-                                       uses_old_layout)
+from autohelix.prompt_template import build_prompt_variables, load_template, render_template
 from autohelix.run_log import RunLog
 from autohelix.workspace import (path_in_scope, SCRUBBED_GIT_ENV, ATTR_SOURCE_LIMITATION, ITERATION_DIR, OPENCODE_PLUGIN,
                                  CandidateRejected, GitExcludeError, Repo, Scope, ensure_git_exclude_entry,
@@ -164,8 +164,16 @@ def _call_env(folders: dict) -> dict[str, str]:
             "AUTOHELIX_EXPERIMENT": str(folders["experiment"]) if "experiment" in folders else None}
 
 
-def _tail(output: str, lines: int = 15) -> str:
-    return "\n".join(output.strip().splitlines()[-lines:])
+TAIL_LINES = 15
+TAIL_LINE_CHARS = 500  # so a failure's tail, in the record and the next prompts, stays under 8 KB
+
+
+def _tail(output: str, lines: int = TAIL_LINES) -> str:
+    """A failed command's last lines for the record and the prompt, each cut at
+    `TAIL_LINE_CHARS` ("…" where cut): one long line (a JSON dump) can't make the
+    prompt too large to start the agent. The whole output stays in its stored folder."""
+    return "\n".join(line if len(line) <= TAIL_LINE_CHARS else line[:TAIL_LINE_CHARS] + "…"
+                     for line in output.strip().splitlines()[-lines:])
 
 
 class Harness:
@@ -187,8 +195,9 @@ class Harness:
         folder (`config.config_name`; `name` replaces that, for library callers and tests).
 
         A new run may import another (`import_run`, a full id: `run --import`): every
-        agent copy shows that run's state read-only, and the baseline's observe entries
-        get its last outputs as `$AUTOHELIX_PREVIOUS`. `why` is the new run's note
+        agent copy shows that run's state read-only, and each observe entry gets its
+        last output as `$AUTOHELIX_PREVIOUS` until the entry succeeds in this run
+        (normally the baseline). `why` is the new run's note
         (`run --why`). A resume refuses, before writing anything, when its target branch
         moved past its tip and it lands automatically (`runs.landing`: `behind`).
 
@@ -259,9 +268,11 @@ class Harness:
                     raise RuntimeError(f"Run {short_id(planned.run_id)} is running.")
                 raise RuntimeError(target_ahead_refusal(planned, data, found))
         self._agent_settings(self.config)  # an unreadable user --settings: refused before any write
-        if check_only:  # nothing written; the scope advice a run prints at its start too
+        if check_only:  # nothing written; what a run prints at its start too
             if warning := scope_warning(self.config):
                 self._warn(warning)
+            self._say(self._check_notices(config_file, land_mode or ("manual" if group else "auto"), group,
+                                          import_run))
             return
         # The first writes: the local excludes, before .autohelix/ exists.
         ensure_runtime_ignored(self.project_path)
@@ -305,12 +316,11 @@ class Harness:
             notices.append(("warn", note))
         self.land_mode = land_mode or self.run_info.get("land") or "auto"
         if self.paths.run_id not in existing and self.land_mode == "auto":
-            notices.extend(("warn", text) for text in self._uncommitted_config())
-        for level, text in notices:
-            if level == "warn":
-                self._warn(text)
-            else:
-                terminal.show(self.console, text, style="dim")
+            snapshot = self.paths.experiment
+            stored = [path.relative_to(snapshot).as_posix() for path in snapshot.rglob("*") if path.is_file()]
+            notices.extend(("warn", text) for text in self._uncommitted_config(self.run_info.get("target_branch"),
+                                                                               stored))
+        self._say(notices)
         try:
             self.history = History(self.project_path, self.paths.run_id)
             tip, warning = reconcile(self.paths, self.run_info, self.history, self.land_mode)
@@ -345,22 +355,43 @@ class Harness:
             self.close()
             raise
 
-    def _uncommitted_config(self) -> list[str]:
+    def _say(self, notices: list[tuple[str, str]]) -> None:
+        """Print `(level, text)` notices: warnings, else dim."""
+        for level, text in notices:
+            if level == "warn":
+                self._warn(text)
+            else:
+                terminal.show(self.console, text, style="dim")
+
+    def _check_notices(self, config_file: Path, land_mode: str, group: str | None,
+                       imported: str | None) -> list[tuple[str, str]]:
+        """`run --check`'s notices: what `run` would say at its start about the config's
+        other runs (`new_run_notices`) and, landing automatically, its uncommitted files."""
+        base = git(self.project_path, "rev-parse", "HEAD").stdout.strip()
+        target = git(self.project_path, "symbolic-ref", "--quiet", "HEAD",
+                     check=False).stdout.strip().removeprefix("refs/heads/") or None
+        notices = new_run_notices(self.project_path, config_relative(self.project_path, config_file), target,
+                                  group, imported, base, land_mode)
+        if land_mode == "auto":
+            stored = [file.name for file in snapshot_files(self.config, self.project_path)]
+            notices.extend(("warn", text) for text in self._uncommitted_config(target, stored))
+        return notices
+
+    def _uncommitted_config(self, branch: str | None, stored: list[str]) -> list[str]:
         """A new auto-landing run's warning when its config file, prompt template or a file
-        the snapshot stores of its experiment folder is untracked or modified (not ignored): committing it
-        after the run lands puts the branch past the run's tip, and `resume` then refuses."""
-        branch = self.run_info.get("target_branch")
+        the snapshot stores of its experiment folder (`stored`, names in it) is untracked or
+        modified (not ignored): committing it after the run lands on `branch` puts the
+        branch past the run's tip, and `resume` then refuses."""
         files = [f for f in (self.config_file, self.config.prompt_template) if f is not None]
         if not branch or not files:
             return []
-        consequence = f"a commit on {branch} after this run lands makes `resume` refuse."
+        consequence = (f"a commit on {branch} after this run lands makes `resume` refuse. Or keep "
+                       f"{CONFIG_DIR}/ private (docs/concepts.md#where-configs-live).")
         warnings = []
         if (folder := self.config.experiment).is_dir():
             # What the run stored (a link, as git lists it, by the files under it) that is
             # untracked and not ignored (tracked files are clean: `require_clean`).
             where = config_relative(self.project_path, folder)
-            snapshot = self.paths.experiment
-            stored = [path.relative_to(snapshot).as_posix() for path in snapshot.rglob("*") if path.is_file()]
             listed = git(self.project_path, "--no-optional-locks", "ls-files", "-z", "--others", "--exclude-standard",
                          "--", where, check=False).stdout.split("\0")
             changed = {name[len(where) + 1:] for name in listed if name.startswith(f"{where}/")}
@@ -414,7 +445,7 @@ class Harness:
             changed = f"it no longer reads: {e}"
         if changed:
             self._refuse_changed(paths, data, f"{data['config_path']} changed since run {short} started ({changed}); ",
-                                 "the run keeps the config it started with", "config", "file")
+                                 "the run keeps the config it started with", "config", "restore the file")
         self._check_experiment(paths, data, config)
         return config
 
@@ -428,24 +459,29 @@ class Harness:
         if not config.experiment.is_dir():
             terminal.show(self.console, f"{folder} is gone; run {short} continues with the files it "
                           "stored when it started.", style="dim")
-        elif changed := snapshot_changes(config, self.project_path, paths.experiment):
+        elif found := snapshot_changes(config, self.project_path, paths.experiment):
+            # Added files (an evaluator's test output) are removed, not restored.
+            changed, kinds = found
+            remedy = ("remove the added files" if kinds == {"added"} else
+                      "restore the files and remove the added ones" if "added" in kinds else "restore the files")
             self._refuse_changed(paths, data, f"{folder} changed since run {short} started ({changed}); ",
-                                 "the run keeps the experiment folder it started with", "folder", "files")
+                                 "the run keeps the experiment folder it started with", "folder", remedy)
 
     @staticmethod
-    def _refuse_changed(paths: RunPaths, data: dict, said: str, keeps: str, what: str, restore: str):
+    def _refuse_changed(paths: RunPaths, data: dict, said: str, keeps: str, what: str, remedy: str):
         """`_run_config`'s refusal of a changed config or experiment folder (`said`, how):
-        with a baseline, `run --import`, else a new run."""
+        with a baseline, `run --import`, else a new run; `remedy` continues this one."""
         short = short_id(paths.run_id)
         if not has_baseline(paths):  # a failed first attempt: nothing to continue or import
             raise RuntimeError(f"{said}run {short} has no accepted baseline: start a new run, "
                                f"`{run_command(data['config_path'])}` (`autohelix delete {short}` removes "
                                "this attempt).")
+        command = f"`{run_command(data['config_path'])} --import {short}`"
+        # The landing first, when there is one: a new run started before it lacks the code.
         first = land_first(paths, data, data.get("target_branch"))
-        raise RuntimeError(
-            f"{said}{keeps}. To apply the new {what}, start a new run "
-            f"that continues from this one: `{run_command(data['config_path'])} --import {short}`"
-            f"{'. ' + first if first else '.'} To continue this run, restore the {restore}.")
+        apply = (f"{first}\nThen {command} applies the new {what}." if first else
+                 f"To apply the new {what}, start a new run that continues from this one: {command}.")
+        raise RuntimeError(f"{said}{keeps}.\n{apply}\nTo continue this run, {remedy}.")
 
     def _metric_label(self, name: str) -> str:
         """Format metric name with direction arrow."""
@@ -1003,8 +1039,13 @@ class Harness:
         result.summary = workspace.summary
         result.base = workspace.base
         result.tree = workspace.tree if workspace.iteration else None
-        result.discarded = self._discarded(workspace)
-        result.discarded_frozen = [path for path in result.discarded if path_in_scope(path, self.config.frozen_patterns())]
+        discarded = self._discarded(workspace)
+        patterns = self.config.frozen_patterns()
+        frozen = {path for path in discarded if path_in_scope(path, patterns)}
+        listed = ([path for path in discarded if path in frozen]
+                  + [path for path in discarded if path not in frozen])[:DISCARDED_LISTED]  # frozen first
+        result.discarded, result.discarded_more = listed, len(discarded) - len(listed)
+        result.discarded_frozen = [path for path in listed if path in frozen]
 
     def _gate_text(self, command: str) -> str:
         """A gate command's display text (`ask: <question>` for ask entries)."""
@@ -1374,6 +1415,39 @@ class Harness:
             self.history.append(baseline)
         self.segment_log.iteration(ended_at=baseline.ended_at, **iteration_fields(baseline))
 
+    def _unworkable_gate(self, evaluation: _Evaluation) -> str | None:
+        """At the baseline, a gate that can't work, which would reject every paid
+        iteration the same way: a command gate exiting 126 or 127 (the shell's "not
+        executable", "not found"), unless its first word is a path the agent may write
+        (it may be meant to create it), and an `ask:` gate exiting 2 (no valid answer).
+        Other failing gates are the agent's to make pass."""
+        for spec, result in zip(self.config.gate_commands(), evaluation.constraints):
+            said = next((clean(line, 300) for line in reversed(result.stderr.splitlines()) if line.strip()), "")
+            if spec.label is not None:  # an `ask:` entry
+                if result.return_code == 2:
+                    return f"gate `{spec.text}` got no answer" + (f" ({said})" if said else "")
+            elif result.return_code in (126, 127) and not self._agent_may_write(spec.command):
+                what = "command not found" if result.return_code == 127 else "not executable"
+                return f"gate `{spec.text}` could not run (exit {result.return_code}: {what})" + (
+                    f": {said}" if said else "")
+        return None
+
+    def _agent_may_write(self, command: str) -> bool:
+        """Whether a command's first word is a project path the scope lets the agent write
+        and git doesn't ignore (an ignored file, `.venv/bin/pytest`, never reaches a copy)."""
+        try:
+            first = shlex.split(command)[0]
+        except (ValueError, IndexError):
+            return False
+        path = os.path.normpath(first)
+        if "/" not in first or os.path.isabs(path) or path == ".." or path.startswith("../"):
+            return False
+        editable = self.config.editable
+        return ((not editable or path_in_scope(path, editable))
+                and not path_in_scope(path, self.config.frozen_patterns())
+                and git(self.project_path, "--no-optional-locks", "check-ignore", "-q", "--", path,
+                        check=False).returncode != 0)
+
     def _capture_baseline(self) -> dict[str, str] | None:
         """Evaluate A in a checks copy and check stop commands.
 
@@ -1400,6 +1474,10 @@ class Harness:
                     reason = f"Baseline setup error: {reason}"
                 self.log.info(f"baseline FAILED — {reason}")
                 raise AutoHelixRunError(reason) from e
+
+            if problem := self._unworkable_gate(evaluation):
+                self.log.info(f"baseline FAILED — {problem}")
+                raise RuntimeError(f"Baseline setup error: {problem}")
 
             # A missing number is a setup error, except a review's that no gate uses: an
             # LLM's answer missing once may be flakiness. A failed entry produces none.
@@ -1430,8 +1508,6 @@ class Harness:
                 self.log.info(f"baseline FAILED — missing metrics: {names}")
                 raise RuntimeError(f"Baseline setup error: {why(missing - advisory)}: every declared metric "
                                    "needs a value at the baseline")
-            self._print_row(IterationResult(iteration=0, accepted=True, metrics=metrics,
-                                            gates=evaluation.gates, observe=evaluation.observe))
             if metrics:
                 self.log.info("baseline: " + ", ".join(f"{name}: {value:g}" for name, value in metrics.items()))
 
@@ -1450,10 +1526,11 @@ class Harness:
                     )
             self._complete_record(baseline, started_at, time.monotonic(), evaluation)
             self._write_baseline(baseline)
+            self._print_row(baseline)  # the stored record, its judges' cost included, as `view` shows it
             return baseline.stop
         except BaseException as error:
-            baseline = IterationResult(iteration=0, accepted=False, reason=f"baseline failed: {error}",
-                                       base=workspace.base)
+            reason = "baseline interrupted" if isinstance(error, KeyboardInterrupt) else f"baseline failed: {error}"
+            baseline = IterationResult(iteration=0, accepted=False, reason=reason, base=workspace.base)
             self._complete_record(baseline, started_at, time.monotonic(), evaluation)
             if any(r.iteration == 0 and r.accepted for r in self.history.load()):
                 raise
@@ -1606,10 +1683,10 @@ class Harness:
             raise RuntimeError("Preflight checks failed. Fix the issues above before running.")
         self._preflight_done = True
 
-    def _preflight(self) -> bool:
-        """Print preflight warnings and errors; False if there are errors (the caller
-        then raises, saying the checks failed)."""
-        issues = preflight_check(self.config, self.project_path)
+    def _preflight(self, issues=None) -> bool:
+        """Print preflight warnings and errors (`issues`, default: all of preflight's); False
+        if there are errors (the caller then raises, saying the checks failed)."""
+        issues = preflight_check(self.config, self.project_path) if issues is None else issues
         for w in (i for i in issues if i.level == "warning"):
             self._warn(w.message)
         errors = [i for i in issues if i.level == "error"]
@@ -1638,7 +1715,7 @@ class Harness:
                     before = self._target_tip()
                     land(self.paths, self.run_info, self.run_state.expected_tip)
                     self._landed_count = self._commits_between(before, self.run_state.expected_tip)
-                    self._landing = terminal.landed(self._landed_count, target)
+                    self._landing = terminal.landed(self._landed_count, target, segment=(self._segment or 1) > 1)
                 else:
                     found, words = self._relation()
                     self._landing = terminal.unlanded(found.ahead, f"autohelix/{self.paths.run_id}", words.note,
@@ -1727,17 +1804,15 @@ class Harness:
                                "prompt is used. To keep a custom prompt, move it next to your config, set "
                                "`prompt_template: <file>` there, and update its .autohelix/ paths to "
                                f"{ITERATION_DIR}/. Otherwise delete it.")
-        if self.config.prompt_template and (unknown := unknown_variables(load_template(self.config))):
-            self._warn(f"{self.config.prompt_template.name} uses variables the prompt doesn't have "
-                       f"(they render empty): {', '.join(unknown)}. See docs/concepts.md#prompt for the names.")
-        if self.config.prompt_template and uses_old_layout(load_template(self.config)):
-            self._warn(f"{self.config.prompt_template.name} names .autohelix/ paths "
-                               f"in the agent's copy; they are now {ITERATION_DIR}/ (notes written to the old "
-                               "place are lost).")
 
         # Run preflight checks before the baseline (silent on success); a first
-        # start already ran them before allocating the run.
-        if needs_baseline and not self._preflight_done and not self._preflight():
+        # start already ran them before allocating the run. Later segments check only
+        # that every agent can start (a resume in another shell or on another machine).
+        if needs_baseline:
+            ready = self._preflight_done or self._preflight()
+        else:
+            ready = self._preflight(agent_issues(self.config))
+        if not ready:
             raise AutoHelixRunError("Preflight checks failed. Fix the issues above before running.")
         self._segment_checked = True
 
@@ -1827,7 +1902,7 @@ class Harness:
                 if result.stop:
                     stop_reason = self._condition_stop(result.stop, iteration)
                     break
-                if result.infrastructure:  # credentials or the model service: the next call fails too
+                if result.infrastructure:  # rejected credentials (401/403): the next call fails too
                     stop_reason = {"kind": "infrastructure", "iteration": iteration,
                                    "infrastructure": result.infrastructure, "error": result.agent_error,
                                    "detail": f"the agent call failed: {result.infrastructure}: "
@@ -1914,7 +1989,11 @@ class Harness:
             short = short_id(self.paths.run_id)
             # What lands the commits that wait (a manual run, an auto landing that failed):
             # `autohelix land` when the target can fast-forward, else `git merge`.
-            commands = terminal.next_commands(short, also=self._relation()[1].commands)
+            # A failed first baseline: `resume` would refuse the fixed setup (an interrupted one resumes).
+            last = (self.history.load() or [None])[-1]
+            failed = last is not None and last.iteration == 0 and not last.accepted and last.reason != "baseline interrupted"
+            restart = run_command(self.run_info["config_path"]) if failed else None
+            commands = terminal.next_commands(short, also=self._relation()[1].commands, restart=restart)
             lines = table.ending(outcome, spent=format_total_cost(self.history.cost_usages), landing=self._landing,
                                  commands=commands, files=self._files,
                                  folder=terminal.shown_path(self.paths.run_dir) + "/",

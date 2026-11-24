@@ -24,6 +24,7 @@ from rich.text import Text
 from autohelix import terminal
 from autohelix.formatting import clean, format_cap, format_duration
 from autohelix.iteration_time import format_limit
+from autohelix.config import config_name, run_command
 from autohelix.runs import LandingWords, short_id
 from autohelix.terminal import Row, Table
 
@@ -79,17 +80,17 @@ def _phase(run: dict, now: float | None = None) -> str:
 
 
 def time_cap(run: dict, now: float) -> str:
-    """What is left of the running segment's --time: `47m 55s left (--time 1h)`, past
-    it `time up (--time 1h)` (the limit as the flag spells it). "" when the run isn't
-    running or the segment has no --time (a stopped run's stop reason says when time
-    ended it). Never a run total."""
+    """The running segment's time against its --time, as the web pages say it: `12m 05s
+    of 1h (this segment)` (the web: `12m5s of 1h`), past it `... (time up)`. "" when the run isn't running or the
+    segment has no --time (a stopped run's stop reason says when time ended it). Never
+    a run total."""
     status = run.get("status") or {}
     cap, started = status.get("max_time_seconds"), status.get("segment_started_at")
     if (not _live(run) or not isinstance(cap, (int, float)) or isinstance(cap, bool) or cap <= 0
             or not isinstance(started, (int, float))):
         return ""
-    left = int(cap) - max(0, int(now - started))
-    return f"{format_duration(left)} left (--time {format_limit(cap)})" if left > 0 else f"time up (--time {format_limit(cap)})"
+    used = max(0, int(now - started))
+    return f"{format_duration(used)} of {format_limit(cap)} (this segment)" + " (time up)" * (used >= cap)
 
 
 def _iterations(run: dict) -> str:
@@ -230,8 +231,9 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
                            version=terminal.version())
     if config is not None:
         progress = run["progress"]
-        budget = [f"{progress['max_iterations']} iterations"] if progress.get("max_iterations") else []
-        budget += [format_cap(progress["max_cost_usd"])] if progress.get("max_cost_usd") is not None else []
+        # The status's caps are run totals (`run`'s header says this segment's "2 more"): said so.
+        budget = [f"to iteration {progress['max_iterations']}"] if progress.get("max_iterations") else []
+        budget += [f"{format_cap(progress['max_cost_usd'])} run total"] if progress.get("max_cost_usd") is not None else []
         budget += [left] if (left := time_cap(run, now)) else []
         called = run.get("agent") or {}  # the latest main-agent call's (`latest_agent_call`)
         agent = terminal.agent_text(config.agent.cli, called.get("model") or config.agent.model,
@@ -261,7 +263,7 @@ def view_parts(data: dict, saved: Saved, width: int = 100, now: float | None = N
         tail = [Text(), terminal.rule(width), *table.outcome_lines(_outcome(run))]
     else:
         accepted = sum(1 for r in table.rows if r.accepted and r.iteration > 0 and r.commit)
-        commands = terminal.next_commands(short, view=False, also=_words(run).commands)
+        commands = terminal.next_commands(short, view=False, also=_words(run).commands, restart=_restart(run))
         tail = table.ending(_outcome(run), spent=terminal.money(run["progress"]["cost_usd"],
                                                                  run["progress"]["cost_incomplete"]),
                             landing=_landed(run, accepted), commands=commands, files=list(saved.files),
@@ -398,11 +400,23 @@ def suggestion(run: dict) -> tuple[str, str] | None:
         command = f"autohelix resume {short}"
     elif lands:
         command, where = lands[0], _words(run).cell
+    elif state == "failed" and (restart := _restart(run)):
+        command = restart
     elif state in ("failed", "idle", None) and resumable:
         command = f"autohelix resume {short}"
     else:
         return None
     return f"{_word(run)} · {where}", command
+
+
+def _restart(run: dict) -> str | None:
+    """For a run that ended without an accepted baseline (a setup error: `resume` would
+    refuse the fixed config), the command that starts a new run of its config."""
+    if run.get("baseline") is not False or (run.get("status") or {}).get("state") != "failed":
+        return None
+    if not isinstance(file := run.get("config_file"), str) or config_name(file) is None:
+        return None
+    return run_command(file)
 
 
 def entry_header(folder: str, width: int = 100, git: tuple | None = None, version: str | None = None

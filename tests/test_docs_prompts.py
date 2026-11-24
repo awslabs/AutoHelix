@@ -12,7 +12,7 @@ from autohelix import review
 from autohelix.config import load_config
 from autohelix.history import History, IterationResult
 from autohelix.judge import Target, build_system_prompt, describe_change
-from autohelix.prompt_template import build_prompt_variables, load_template, render_template
+from autohelix.prompt_template import SAMPLE_RECORDS, build_prompt_variables, load_template, render_template
 
 PHASES = Path(__file__).resolve().parents[1] / "docs" / "phases.md"
 
@@ -29,24 +29,7 @@ CONFIG = {
     "scope": {"editable": ["sort.py"]},
     "agent": {"timeout": "30m"},
 }
-OBSERVED = [{"name": "bench", "ok": True, "error": None, "metrics": {"speed": 10.0}},
-            {"name": "clarity", "ok": True, "error": None, "metrics": {}}]
-RECORDS = [
-    {"iteration": 0, "accepted": True, "metrics": {"speed": 10.0}, "reason": "baseline",
-     "gates": [{"text": "pytest -q", "kind": "command", "passed": True},
-               {"text": "speed regress 5%", "kind": "metric", "passed": None}],
-     "observe": OBSERVED},
-    {"iteration": 1, "accepted": True, "metrics": {"speed": 14.2}, "summary": "Insertion sort for short runs",
-     "gates": [{"text": "pytest -q", "kind": "command", "passed": True},
-               {"text": "speed regress 5%", "kind": "metric", "passed": True}],
-     "observe": [{**OBSERVED[0], "metrics": {"speed": 14.2}}, OBSERVED[1]]},
-    {"iteration": 2, "accepted": False, "reason": "gate failed: pytest -q",
-     "failure_output": "FAILED test_sort.py::test_negative_numbers - assert [-1, -3] == [-3, -1]",
-     "summary": "Radix sort", "discarded": ["test_sort.py"], "tree": "abc",
-     "rejected_ref": "refs/autohelix-rejected/20261118-1205-sort-x7k2/2",
-     "gates": [{"text": "pytest -q", "kind": "command", "passed": False},
-               {"text": "speed regress 5%", "kind": "metric", "passed": None}]},
-]
+RECORDS = SAMPLE_RECORDS  # the sample a custom template is validated against
 
 
 def main_agent_prompt(tmp_path: Path) -> str:

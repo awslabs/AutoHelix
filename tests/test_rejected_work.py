@@ -131,6 +131,48 @@ def test_discarded_paths_are_recorded(project):
     assert _refs(project, harness) == []
 
 
+def test_the_discarded_list_is_capped_in_the_record_and_the_prompt(project):
+    """Thousands of files written outside the scope (a dataset): the record lists the
+    first 20 and counts the rest; so does the next prompt."""
+    _configure(project, scope={"editable": ["hello.py"]})
+    harness = Harness(project, verbose=False, land_mode="manual")
+
+    def dataset(copy_dir):
+        (copy_dir / "data").mkdir(exist_ok=True)
+        for index in range(25):
+            (copy_dir / "data" / f"part-{index:02}.txt").write_text(f"{index}\n")
+
+    spy = Spy(harness, edit=dataset)
+    harness.run(Budget(until=2), report=False)
+    record = History(project, latest_run(project).run_id).load()[1]
+    assert record.discarded == [f"data/part-{index:02}.txt" for index in range(20)]
+    assert record.discarded_more == 5
+    prompt = spy.seen[2]["prompt"]
+    assert "Your changes to data/part-00.txt, data/part-01.txt," in prompt and "data/part-20.txt" not in prompt
+    assert "Your changes to 5 more paths outside the scope were discarded too." in prompt
+
+
+def test_a_frozen_discard_stays_listed_past_the_cap(project):
+    """A frozen file edited among a dataset written outside the scope: the cap keeps
+    the frozen one listed (frozen first), so the next prompt still names it."""
+    _configure(project, scope={"editable": ["hello.py", "zz/"], "frozen": ["zz/"]})
+    harness = Harness(project, verbose=False, land_mode="manual")
+
+    def dataset(copy_dir):
+        (copy_dir / "data").mkdir(exist_ok=True)
+        for index in range(25):
+            (copy_dir / "data" / f"part-{index:02}.txt").write_text(f"{index}\n")
+        (copy_dir / "zz").mkdir(exist_ok=True)
+        (copy_dir / "zz" / "check.txt").write_text("weakened\n")
+
+    spy = Spy(harness, edit=dataset)
+    harness.run(Budget(until=2), report=False)
+    record = History(project, latest_run(project).run_id).load()[1]
+    assert record.discarded[0] == "zz/check.txt" and record.discarded_frozen == ["zz/check.txt"]
+    assert len(record.discarded) == 20 and record.discarded_more == 6
+    assert "Your changes to zz/check.txt were discarded: frozen." in spy.seen[2]["prompt"]
+
+
 def test_no_scope_warns_at_run_start(project, capsys):
     _configure(project, gates=["true"])
     Harness(project, verbose=False, land_mode="manual").run(Budget(until=1), report=False)

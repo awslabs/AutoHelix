@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 from pathlib import Path
 
-from autohelix.config import (ENTRY_NAME, config_name, config_relative, load_config, not_an_experiment, project_configs,
+from autohelix.config import (ENTRY_NAME, config_name, config_relative, experiment_config, load_config, not_an_experiment, project_configs,
                               run_command, template_text)
 from autohelix.experiment import build_snapshot, snapshot_files, sweep_staging
 
@@ -724,10 +724,27 @@ def check_why(text: str) -> str:
     return why
 
 
-def has_baseline(paths: RunPaths) -> bool:
+def has_baseline(paths: RunPaths, damaged: bool | None = None) -> bool:
+    """Whether the run's baseline was accepted. A damaged history raises
+    (`damaged_history`), or, with `damaged` set, gives that: a reader looking across
+    runs leaves the damage to that run's own commands."""
     from autohelix.history import History
 
-    return any(r.iteration == 0 and r.accepted for r in History(paths.project, paths.run_id).load())
+    try:
+        return any(r.iteration == 0 and r.accepted for r in History(paths.project, paths.run_id).load())
+    except RuntimeError:
+        if damaged is None:
+            raise
+        return damaged
+
+
+def damaged_history(paths: RunPaths, line: int) -> RuntimeError:
+    """The one error for a history line that can't be read (`History.load`, `repair_history`)."""
+    if paths.run_id is None:
+        return RuntimeError(f"{paths.history} line {line} is damaged: fix or remove the line.")
+    short = short_id(paths.run_id)
+    return RuntimeError(f"Run {short}'s history.jsonl line {line} is damaged: fix or remove the line, "
+                        f"or `autohelix archive {short}`.")
 
 
 @dataclass(frozen=True)
@@ -903,7 +920,7 @@ def landing_words(found: Landing, run_id: str, land_mode: str | None = None) -> 
         if not accepted:
             return words("—", "No commits accepted yet.")
         if relation == "landed":
-            return words("landed", f"Run {short} landed on {target} (`autohelix land`), which has other "
+            return words("landed", f"Run {short} landed on {target}, which has other "
                          f"commits in their place since (a squash-merged or rebased PR).")
         past = (f", which has {plural(behind, 'commit')} past its tip (committed after it)"
                 if relation == "behind" else "")
@@ -944,9 +961,23 @@ def resolve_run(project: Path, value: str) -> str:
         return matches[0]
     if matches:
         raise RuntimeError(f"{value!r} matches several runs ({', '.join(matches)}); use the full id.")
+    project = Path(project).resolve()
+    if "/" not in value and (project / experiment_config(value)).is_file():  # a config name, as `resume` takes
+        found = project_runs(project, experiment_config(value))
+        latest = next(((p, False) for p, d in found if not is_archived(d)), None) or next(
+            ((p, True) for p, _ in found), None)
+        if latest:
+            short, archived = short_id(latest[0].run_id), " (archived)" if latest[1] else ""
+            raise RuntimeError(f"{value} is an experiment, not a run: its latest run is {short}{archived}; "
+                               f"use {short}.")
+        raise RuntimeError(f"{value} is an experiment, not a run, and has no runs; "
+                           f"`autohelix run {value}` starts one.")
     folder = f" ({value} is a folder: use -p {value})" if Path(value).is_dir() else ""
-    raise RuntimeError(f"No run {value!r} in {Path(project).resolve()}{folder}. Use a run id or its last "
-                       "part, e.g. k3f9 (names aren't ids); `autohelix view --once` lists runs.")
+    where = os.path.relpath(project, Path.cwd())
+    known = [short_id(p.run_id) for p, _ in project_runs(project)[:3]]
+    ids = f"the latest: {', '.join(known)}" if known else "e.g. k3f9"
+    raise RuntimeError(f"No run {value!r} in {min(where, str(project), key=len)}{folder}. Use a run id or its "
+                       f"last part ({ids}); `autohelix view --once` lists runs.")
 
 
 def resolve_runs(project: Path, values) -> list[str]:
@@ -978,21 +1009,31 @@ def no_run(project: Path) -> str:
     return f"No runs in {project}; {how_to_start(project)}"
 
 
-def default_run(project: Path) -> tuple[RunPaths, dict, str]:
-    """The run a command given no run id acts on (`land`, `hint`, `view --terminal`, `report`): the
-    one running run, else the most recently active run that isn't archived. Returns it
-    with why it was chosen ("running", "most recently active") for the caller to say.
-    RuntimeError when several runs are running (name one), NoRun when there is none."""
+def default_run(project: Path, running: bool = True) -> tuple[RunPaths, dict, str]:
+    """The run a command given no run id acts on (`hint`, `view --terminal`): the one
+    running run, else the most recently active run that isn't archived. Without
+    `running` (`land`, `report`, which a running run refuses), the most recently active
+    run that isn't running or archived. Returns it with why it was chosen ("running",
+    "most recently active", "most recently active … that isn't running") for the caller
+    to say. RuntimeError when several runs are running (name one), NoRun when there is none."""
     runs = project_runs(project)
     live = [(p, d) for p, d in runs if is_live(p)]
+    if not running:
+        for paths, data in runs:
+            if not is_archived(data) and (paths, data) not in live:
+                return paths, data, "most recently active run that isn't running"
+        if live:
+            raise RuntimeError(f"Every run is running or archived (running: "
+                               f"{', '.join(short_id(p.run_id) for p, _ in live)}); name one.")
+        raise NoRun(no_run(project))
     if len(live) > 1:
         raise RuntimeError(f"Several runs are running: {', '.join(short_id(p.run_id) for p, _ in live)}; "
                            "name one.")
     if live:
-        return (*live[0], "running")
+        return (*live[0], "running run")
     for paths, data in runs:
         if not is_archived(data):
-            return paths, data, "most recently active"
+            return paths, data, "most recently active run"
     raise NoRun(no_run(project))
 
 
@@ -1033,7 +1074,7 @@ def _resuming(paths: RunPaths, data: dict) -> str:
     return f"Resuming {short_id(paths.run_id)}: {last} iteration{'s' * (last != 1)}{ago}.{back}"
 
 
-def _new_run_notices(project: Path, config_path: str, target: str | None,
+def new_run_notices(project: Path, config_path: str, target: str | None,
                      group: str | None = None, imported: str | None = None,
                      base: str | None = None, land_mode: str | None = None) -> list[tuple[str, str]]:
     """What `run` says about this config's other runs: it never refuses. Runs of a
@@ -1066,7 +1107,7 @@ def _new_run_notices(project: Path, config_path: str, target: str | None,
         short = short_id(paths.run_id)
         found = landing(paths, data)
         count = found.ahead
-        if not has_baseline(paths):  # a failed first attempt: nothing to continue
+        if not has_baseline(paths, damaged=False):  # a failed first attempt: nothing to continue
             if not notices:
                 notices.append(("info", f"Previous run for this config: {short}, without an accepted baseline "
                                 f"(`autohelix delete {short}` removes it)."))
@@ -1181,13 +1222,8 @@ def _resumable(project: Path, config_path: str) -> list[RunPaths]:
     (an empty run, `run` typed by mistake and interrupted, must not shadow the real one,
     but is resumed when it is all there is), then by activity."""
     candidates = [p for p, d in project_runs(project, config_path) if not is_archived(d)]
-    def baseline(paths: RunPaths) -> bool:
-        try:
-            return has_baseline(paths)
-        except RuntimeError:  # a corrupt history: that run's own resume says so, not every other's
-            return False
-
-    candidates.sort(key=baseline, reverse=True)  # stable: by activity within each
+    # A damaged history: that run's own resume says so, not every other's.
+    candidates.sort(key=lambda paths: has_baseline(paths, damaged=False), reverse=True)  # stable: by activity within each
     return candidates
 
 
@@ -1268,7 +1304,7 @@ def select_run(project: Path, config: Path, *, name: str | None = None, new: boo
         files = snapshot_files(loaded, project)  # refused here, before anything is written
         base = git(project, "rev-parse", "HEAD").stdout.strip()
         target = git(project, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip().removeprefix("refs/heads/") or None
-        notices = _new_run_notices(project, config_path, target, group, imported, base, land_mode)
+        notices = new_run_notices(project, config_path, target, group, imported, base, land_mode)
         # Suffixes are unique across the repository (refs of old-format ids included).
         taken = {short_id(ref) for ref in git(project, "for-each-ref", "--format=%(refname:lstrip=2)",
                                               "refs/autohelix/").stdout.split()}
@@ -1335,17 +1371,19 @@ def repair_history(paths: RunPaths) -> None:
     lines = raw.splitlines(keepends=True)
     records = []
     for index, line in enumerate(lines):
+        if not line.strip():  # skipped, as `History.load` does
+            continue
         try:
             record = json.loads(line)
         except (ValueError, UnicodeDecodeError):
             if index != len(lines) - 1 or line.endswith(b"\n"):
-                raise RuntimeError(f"Corrupt history record {index + 1}: {path}") from None
+                raise damaged_history(paths, index + 1) from None
             torn = re.match(rb'\s*\{\s*"iteration"\s*:\s*(\d+)\s*[,}]', line)
             write_records(paths, records, mode="replace",
                           iterations=stale_records(paths, records) | ({int(torn[1])} if torn else set()))
             return
         if not valid_record(record):
-            raise RuntimeError(f"Invalid history record {index + 1}: {path}")
+            raise damaged_history(paths, index + 1)
         records.append(record)
     stale = stale_records(paths, records)
     if raw and not raw.endswith(b"\n"):  # complete, but unterminated
@@ -1411,8 +1449,9 @@ def reconcile(paths: RunPaths, data: dict, history, land_mode: str) -> tuple[str
     return tip, warning
 
 
-def land(paths: RunPaths, data: dict, expected_tip: str, into: str | None = None) -> None:
-    """Fast-forward the target to the harness's validated tip, never a moving ref."""
+def land(paths: RunPaths, data: dict, expected_tip: str, into: str | None = None) -> str | None:
+    """Fast-forward the target to the harness's validated tip, never a moving ref. None
+    when it moved the branch, else what it found instead (nothing was done)."""
     target = into or data.get("target_branch")
     if not target:
         raise RuntimeError("This run started detached; land requires --into <branch>.")
@@ -1424,9 +1463,14 @@ def land(paths: RunPaths, data: dict, expected_tip: str, into: str | None = None
         # Already there (a `behind` target that has the tip), or nothing accepted to land.
         there = found.relation != "behind" or _has(paths.project, found.target_tip, expected_tip)
         if there or not found.accepted:
-            if there and found.relation != "landed":
-                _record_landed(paths, data, found)
-            return
+            short = short_id(paths.run_id)
+            if not found.accepted:
+                return f"Run {short} has nothing accepted to land."
+            if found.relation == "landed":
+                return (f"Run {short} landed on {target} before, which has other commits in their place since; "
+                        f"to land it again: `git merge autohelix/{paths.run_id}`.")
+            _record_landed(paths, data, found)
+            return f"Run {short} is already in {target}."
     hint = f"Run {paths.run_id} remains available: git merge autohelix/{paths.run_id}"
     if found.relation != "ahead":  # diverged (also commits accepted after a squash-merged landing)
         why = (landing_words(found, paths.run_id, data.get("land") or "auto").sentence
@@ -1452,6 +1496,7 @@ def land(paths: RunPaths, data: dict, expected_tip: str, into: str | None = None
             if result.returncode:
                 raise RuntimeError(f"Cannot land {target}: branch is busy or changed. {hint}")
         _record_landed(paths, data, found)
+    return None
 
 
 def _record_landed(paths: RunPaths, data: dict, found: Landing) -> None:
@@ -1513,7 +1558,9 @@ def set_options(paths: RunPaths, *, land_mode: str | None = None, group: str | N
 
 def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
     """Remove a run's state, ref, pin, rejected trees and copies. Refuses while it runs, and, unless
-    forced, while it has unlanded commits (they'd become unreachable)."""
+    forced, while it has unlanded commits or its accepted tip is on no branch, tag or
+    remote-tracking branch (they'd become unreachable: `landed` is no proof, a reset
+    target reads landed too)."""
     short = short_id(paths.run_id)
     with RunLock(paths.lock):
         try:
@@ -1528,6 +1575,14 @@ def delete(paths: RunPaths, *, force: bool = False, warn=None) -> None:
             raise RuntimeError(f"Not deleting run {short}, which has {plural(found.ahead, 'unlanded commit')}: "
                                f"{sentence} "
                                f"`autohelix delete --force {short}` discards {'it' if found.ahead == 1 else 'them'}.")
+        if found and found.accepted and found.tip and not force and not git(
+                paths.project, "for-each-ref", "--count=1", "--contains", found.tip, "--format=%(refname)",
+                "refs/heads", "refs/tags", "refs/remotes", check=False).stdout.strip():
+            why = (f" It reads landed: `land` put it on {found.target}, which lacks it now (a squash-merged PR, "
+                   f"or a reset?)." if found.relation == "landed" else "")
+            raise RuntimeError(f"Not deleting run {short}: its tip isn't on any branch, tag or remote-tracking "
+                               f"branch, so its commits would be lost.{why} `autohelix delete --force {short}` "
+                               f"discards them; `autohelix archive {short}` keeps them.")
         remove_copies(paths.copies, warn or (lambda message: None))
         git(paths.project, "update-ref", "-d", paths.pin, check=False)
         kept = git(paths.project, "for-each-ref", "--format=%(refname)", paths.rejected_refs, check=False)

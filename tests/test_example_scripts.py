@@ -171,3 +171,48 @@ def test_workflow_benchmark_calls_are_read_as_priced_calls(tmp_path, monkeypatch
     calls = read_usage(usage)
     assert [call["cost_usd"] for call in calls] == [0.25, 0.25]
     assert all(call["source"] == "workflow-benchmark" for call in calls)
+
+
+# --- algotune: collect.py reads what a run stores ---
+
+def test_algotune_collect_reads_the_runs_base_commit_and_each_iterations_files(tmp_path):
+    """collect.py read `run.json`'s `base`, a key no run has: a no-op best iteration's
+    code was None. Its files list is the iteration's own, not everything since the base."""
+    project = tmp_path / "task" / "project"
+    project.mkdir(parents=True)
+
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                               *args], cwd=project, capture_output=True, text=True, check=True).stdout.strip()
+
+    git("init", "-q")
+    (project / "a.py").write_text("a\n")
+    git("add", "a.py")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (project / "b.py").write_text("b\n")
+    git("add", "b.py")
+    git("commit", "-qm", "one")
+    one = git("rev-parse", "HEAD")
+    (project / "c.py").write_text("c\n")
+    git("add", "c.py")
+    git("commit", "-qm", "two")
+    two = git("rev-parse", "HEAD")
+    run = project / ".autohelix" / "runs" / "20261115-1402-task-krp3"
+    run.mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"base_commit": base}))
+    records = [{"iteration": 0, "accepted": True, "metrics": {"speedup": 1.0}},
+               {"iteration": 1, "accepted": True, "metrics": {"speedup": 3.0}},  # a no-op accept: no commit
+               {"iteration": 2, "accepted": True, "metrics": {"speedup": 2.0}, "commit": one},
+               {"iteration": 3, "accepted": True, "metrics": {"speedup": 2.5}, "commit": two}]
+    (run / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+    sys.path.insert(0, str(EXAMPLES / "algotune"))
+    try:
+        collect = runpy.run_path(str(EXAMPLES / "algotune" / "collect.py"))
+        rescore = runpy.run_path(str(EXAMPLES / "algotune" / "rescore.py"))
+    finally:
+        sys.path.remove(str(EXAMPLES / "algotune"))
+    runs = collect["autohelix_runs"](str(tmp_path / "task"))
+    assert runs[0]["base"] == base
+    assert [it.get("files") for it in runs[0]["iterations"]] == [None, None, ["b.py"], ["c.py"]]
+    assert rescore["best_iteration"](runs, limit=3)["code"] == base  # the no-op best: the run's base

@@ -46,8 +46,8 @@ ROWS = [
     Row(2, False, {}, 143, 0.48, reason="gate failed: pytest -q test_sort.py", gates=_gates(False)),
     Row(3, True, {"speed": 35310.7, "mem_mb": 96}, 126, 0.32, commit="a3",
         summary="Switch to built-in sorted() with key caching", gates=_gates(True, True)),
-    Row(4, False, {}, 1800, 1.10, reason="Iteration 4 agent failed: timed out after 30 minutes",
-        agent_error="timed out after 30 minutes"),
+    Row(4, False, {}, 1800, 1.10, reason="Iteration 4 agent failed: timed out after 30m",
+        agent_error="timed out after 30m"),
     Row(5, False, {"speed": 33002.0, "mem_mb": 140}, 108, 0.29,
         reason="metric gate: speed 33002 is 6.5% worse than 35310.7 (regress: 5% allowed)",
         gates=_gates(True, False, value=33002.0, reference=35310.7),
@@ -69,10 +69,10 @@ def _header(width: int, budget: Budget, done: int = 0, show_mark: bool = True) -
 
 def _ending(table: Table, stop: dict, first: int = 1) -> list:
     """The end block as the harness assembles it (`Harness._print_ending`): auto landing
-    of this segment's commits, the run's cost so far."""
+    of this segment's commits (said so after the first), the run's cost so far."""
     landed = [row for row in table.rows if row.iteration >= first and row.accepted and row.commit]
     return table.ending(terminal.outcome(stop, None, None), spent=terminal.money(sum(r.cost or 0 for r in table.rows)),
-                        landing=terminal.landed(len(landed), "main"), commands=terminal.next_commands("krp3"),
+                        landing=terminal.landed(len(landed), "main", segment=first > 1), commands=terminal.next_commands("krp3"),
                         files=FILES, folder=FOLDER)
 
 

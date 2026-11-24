@@ -15,7 +15,7 @@ from autohelix.agents import (
     infrastructure_reason,
 )
 from autohelix.agents.codex_cost import TOKEN_FIELDS, estimate_cost
-from autohelix.agents.runner import format_timeout_seconds, run_process
+from autohelix.agents.runner import run_process, timeout_error
 from autohelix.sandbox import build_copy_env
 
 
@@ -270,13 +270,13 @@ class CodexAgent:
             event_callback(
                 AgentEvent(
                     kind=AgentEventKind.WARNING,
-                    text=f"Agent {format_timeout_seconds(self.config.timeout)}",
+                    text=f"Agent {timeout_error(self.config.timeout)}",
                 )
             )
 
         error = self._turn_error
         if result.timed_out:
-            error = format_timeout_seconds(self.config.timeout)
+            error = timeout_error(self.config.timeout)
         elif result.exit_code != 0 and error is None:
             error = f"Codex exited with status {result.exit_code}"
 

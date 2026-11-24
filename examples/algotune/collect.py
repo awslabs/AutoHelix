@@ -74,10 +74,10 @@ def autohelix_runs(folder):
                 "summary": r.get("summary"),
             })
         run = json.load(open(os.path.join(run_dir, "run.json")))
-        base = run.get("base")
+        base = run.get("base_commit")  # where the run started (rescore: a no-op accept's code)
         for it in iterations:
-            if it["commit"]:
-                files = git(project, "diff", "--name-only", base or it["commit"] + "~", it["commit"])
+            if it["commit"]:  # this iteration's files, not everything since the base
+                files = git(project, "diff", "--name-only", it["commit"] + "~", it["commit"])
                 it["files"] = files.split("\n") if files else []
         summary_cost = 0.0
         for f in glob.glob(os.path.join(run_dir, ".internal/usage/summary.jsonl")):

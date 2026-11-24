@@ -17,8 +17,6 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 from autohelix.agents.runner import _kill_process_group, child_signals, end_group
 from autohelix.agents import command_path
 from autohelix.config import (CONFIG_DIR, CONFIG_FILE, DEFAULT_CHECK_TIMEOUT, CommandSpec, Config, ConfigError, MetricGate,
@@ -27,7 +25,7 @@ from autohelix.experiment import snapshot_files
 from autohelix.sandbox import build_copy_env
 from autohelix.workspace import git_env, path_in_scope, run_git
 
-# Progress callback type: (phase, command, elapsed_seconds | None)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -61,24 +59,8 @@ def preflight_check(config: Config, project_path: Path) -> list[PreflightIssue]:
     for ci in config_issues:
         issues.append(PreflightIssue(level=ci.level, message=ci.message))
 
-    # 2. Every agent the config runs (main agent, `ask:` and `review:` judges) can start:
-    # its executable resolved as the backend resolves it (mock is built in; a variable
-    # that is gone raises ConfigError there, reported as the config errors are).
-    from autohelix.agents import CLI_NAMES, command_variable
-
-    missing: dict[str, list[str]] = {}
-    for who, cli in config.agent_commands():
-        if cli in CLI_NAMES and not shutil.which(path := command_path(cli)):
-            missing.setdefault(f"{cli}\0{path}", []).append(who)
-    for key, whos in missing.items():
-        cli, path = key.split("\0")
-        users = "" if whos == ["agent"] else " (used by " + ", ".join(
-            "the agent" if who == "agent" else f"`{who}`" for who in whos) + ")"
-        issues.append(PreflightIssue(
-            level="error",
-            message=(f"Agent command '{path}' not found in PATH{users}; install {CLI_NAMES[cli]}, or set "
-                     f"{command_variable(cli)}"),
-        ))
+    # 2. Every agent the config runs can start.
+    issues.extend(agent_issues(config))
 
     # 3. Scope patterns that match no committed file, with the matcher the harness uses
     # (no scope at all: `scope_warning`, at run start). Editable ones may name files the
@@ -99,6 +81,30 @@ def preflight_check(config: Config, project_path: Path) -> list[PreflightIssue]:
     issues.extend(PreflightIssue(level="warning", message=message)
                   for message in uncommitted_command_paths(config, project_path))
 
+    return issues
+
+
+def agent_issues(config: Config) -> list[PreflightIssue]:
+    """Preflight's errors for agents the config runs (main agent, `ask:` and `review:`
+    judges) that can't start: its executable resolved as the backend resolves it (mock is
+    built in; a variable that is gone raises ConfigError there, reported as the config
+    errors are). Checked at every segment start: a resume on another shell or machine."""
+    from autohelix.agents import CLI_NAMES, command_variable
+
+    issues: list[PreflightIssue] = []
+    missing: dict[str, list[str]] = {}
+    for who, cli in config.agent_commands():
+        if cli in CLI_NAMES and not shutil.which(path := command_path(cli)):
+            missing.setdefault(f"{cli}\0{path}", []).append(who)
+    for key, whos in missing.items():
+        cli, path = key.split("\0")
+        users = "" if whos == ["agent"] else " (used by " + ", ".join(
+            "the agent" if who == "agent" else f"`{who}`" for who in whos) + ")"
+        issues.append(PreflightIssue(
+            level="error",
+            message=(f"Agent command '{path}' not found in PATH{users}; install {CLI_NAMES[cli]}, or set "
+                     f"{command_variable(cli)}"),
+        ))
     return issues
 
 
@@ -264,9 +270,15 @@ def _execute(command: str, cwd: Path, timeout: int, env: dict[str, str]) -> _Exe
             )
         while True:
             try:
-                stdout, stderr = proc.communicate(timeout=2.0)
+                stdout, stderr = proc.communicate(timeout=0.5)
                 break
             except subprocess.TimeoutExpired:
+                if proc.poll() is not None:
+                    # The shell has exited, but a background child still holds its output:
+                    # the command has ended, so its group goes, and so does the wait.
+                    end_group(proc)
+                    stdout, stderr = _drain(proc)
+                    return _Execution(proc.returncode, stdout, stderr, duration_s=time.monotonic() - start)
                 elapsed = time.monotonic() - start
                 if elapsed > timeout:
                     # Kill the whole process group, not just the /bin/sh wrapper,

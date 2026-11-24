@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from autohelix.iteration_time import format_limit
+
 
 @dataclass
 class ProcessRunResult:
@@ -49,30 +51,19 @@ def child_signals():
             signal.signal(signum, signal.SIG_IGN)
 
 
-def format_timeout_seconds(timeout_seconds: int | None) -> str:
-    """Render a timeout value as natural language."""
-    if timeout_seconds is None:
-        return "timed out"
-
-    remaining = int(timeout_seconds)
-    hours, remainder = divmod(remaining, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    parts: list[str] = []
-    if hours:
-        parts.append(f"{hours} hour" if hours == 1 else f"{hours} hours")
-    if minutes:
-        parts.append(f"{minutes} minute" if minutes == 1 else f"{minutes} minutes")
-    if seconds or not parts:
-        parts.append(f"{seconds} second" if seconds == 1 else f"{seconds} seconds")
-    return f"timed out after {' '.join(parts)}"
+def timeout_error(timeout_seconds: int | None) -> str:
+    """A timed-out call's error, worded as a timed-out command's: `timed out after 30m`."""
+    return "timed out" if timeout_seconds is None else f"timed out after {format_limit(int(timeout_seconds))}"
 
 
 def _kill_process_group(process: subprocess.Popen, grace: float = 3) -> None:
-    """Kill a process and its entire process group (SIGTERM, then SIGKILL after `grace` s)."""
+    """Kill a process and its entire process group (SIGTERM, then SIGKILL after `grace` s).
+    The group is the process's own (`start_new_session`): its id is the process's pid,
+    also when the process exits right after the `poll` (where `getpgid` would raise)."""
     if process.poll() is not None:
         return
 
-    pgid = os.getpgid(process.pid)
+    pgid = process.pid
 
     try:
         os.killpg(pgid, signal.SIGTERM)
@@ -204,7 +195,9 @@ def run_process(
             # outlive a normal exit either.
             end_group(process)
             return ProcessRunResult(exit_code=exit_code)
-    except KeyboardInterrupt:
+    except BaseException:
+        # Ctrl-C, or anything raised while the agent runs (a line callback, a full disk
+        # writing the log): the agent must not go on working, unbounded, without the loop.
         if process is not None:
             _kill_process_group(process)
             end_group(process)

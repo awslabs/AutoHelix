@@ -262,8 +262,9 @@ The variables a template gets are a stable, documented contract:
 | `hints_text` | The hints' text (the lines `autohelix hint` added, oldest first), else empty; over 8,000 characters, the last whole lines that fit, after a line saying earlier hints are in `.autohelix-iteration/hints.md` |
 | `rejected_patch` | `.autohelix-iteration/rejected.patch` if the copy has one, else empty |
 | `rejected_diff` | When the latest rejected change is over 2 MiB (no patch file), the `git diff <tip> <tree>` command that shows it, else empty |
-| `discarded` | The paths whose changes the latest iteration lost to the scope |
+| `discarded` | The paths whose changes the latest iteration lost to the scope (the first 20, frozen ones first) |
 | `discarded_frozen` | Those of them that are frozen (the others aren't editable) |
+| `discarded_more` | How many more paths it lost, not listed (0 for 20 or fewer) |
 | `last` | The latest iteration (the baseline before iteration 1), or none: `{iteration, accepted, reason, summary, failure_output, gates: [{text, kind, status, path}], observe: [{name, ok, error, missing, path}]}`; `status` is `passed`, `failed` or `pending`, `missing` the declared metrics an entry ran without reporting, and `path` the item's folder in the copy if it has one there, else empty (a failed gate's `.autohelix-iteration/iterations/KKK/gates/<k>/`, an observe entry's `.autohelix-iteration/iterations/KKK/observe/<name>/`; passing gates' output isn't in the copy) |
 | `last_accepted` | The latest accepted iteration (the baseline counts), or none: `{iteration, path}`, `path` being its folder in the copy (`.autohelix-iteration/iterations/KKK/`: its record and observations describe the code in the copy), or empty |
 | `recent_iterations` | How many of the latest iterations the copy has folders of (5; the last accepted one is there too) |
@@ -273,11 +274,11 @@ The variables a template gets are a stable, documented contract:
 | `experiment` | `.autohelix-iteration/experiment/`, the copy of the run's stored experiment folder (`runs/<id>/experiment/`), or empty for a folder holding only its config |
 
 A custom template is a copy: it won't pick up future changes to the built-in
-one. Remove `prompt_template:` to return to it. A run warns when a custom
-template uses variables not in this table (such as the old `constraints` or
-`history_summary`; they render empty), and when it still names `.autohelix/`
-paths in the agent's copy (they are now `.autohelix-iteration/`).
-A template naming `worktree`, `copy`'s old name, is a config error.
+one. Remove `prompt_template:` to return to it. A custom template that uses
+variables not in this table (such as the old `constraints` or
+`history_summary`) is a config error, and so is one naming `worktree`
+(`copy`'s old name) or `.autohelix/` paths in the agent's copy (they are now
+`.autohelix-iteration/`).
 Agent-written text in the variables (summaries, discarded paths, errors,
 failure output) has its control characters removed; summaries are cut to 200
 characters.
@@ -519,7 +520,7 @@ evaluator calls count when they record usage through `$AUTOHELIX_USAGE_FILE`.
 Codex agent duration is measured locally even when usage is unavailable.
 
 Missing, invalid, or interrupted usage remains **unavailable**, not zero, and
-totals with unavailable parts are labeled **incomplete**. `--cost` counts the
+a total with unavailable parts gets the same `+` (`$0.25+`: what is known). `--cost` counts the
 saved amounts (Codex estimates included) and is checked between iterations, so
 it is an approximate stopping threshold, not a guaranteed spending cap; what it
 does when a cost is unavailable is in [CLI → Budgets](cli.md#budgets).

@@ -356,3 +356,42 @@ def test_download_repairs_a_partially_populated_level(tmp_path, monkeypatch):
     assert data_dir.joinpath("L1", "1_Test", "reference.py").read_text() == (
         "class Model: pass\n"
     )
+
+
+def _no_git_identity(monkeypatch, tmp_path):
+    """A machine without a git identity (a fresh GPU box, a container)."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+    for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_kernelbench_commits_without_a_git_identity(tmp_path, monkeypatch):
+    _no_git_identity(monkeypatch, tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "a.txt").write_text("a\n")
+    _load_setup_module().git_init(project)
+    assert subprocess.run(["git", "log", "--format=%an"], cwd=project, capture_output=True, text=True,
+                          check=True).stdout == "AutoHelix\n"
+
+
+def test_autoresearch_lays_out_without_a_git_identity_and_reruns(tmp_path, monkeypatch):
+    """Its commit failed without an identity, after the project was written; a rerun
+    then refused the folder ("exists and isn't empty"), despite "it can be re-run"."""
+    spec = importlib.util.spec_from_file_location("autoresearch_setup", ROOT / "examples" / "autoresearch" / "setup.py")
+    setup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(setup)
+    _no_git_identity(monkeypatch, tmp_path)
+    local = tmp_path / "local"
+    (local / "upstream").mkdir(parents=True)
+    for name in ("train.py", "prepare.py"):
+        (local / "upstream" / name).write_text("# upstream\n")
+    monkeypatch.setattr(setup, "run", lambda *args, **kwargs: None if args[0] == "patch" else
+                        subprocess.run([str(a) for a in args], check=True, **kwargs))
+    project = tmp_path / "project"
+    setup.lay_out(project, local)
+    assert subprocess.run(["git", "-C", project, "log", "--format=%an"], capture_output=True, text=True,
+                          check=True).stdout == "AutoHelix\n"
+    setup.lay_out(project, local)  # a rerun: skipped, not refused

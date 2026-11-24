@@ -28,7 +28,10 @@ def test_status_line():
     assert W.status_line(_status(iteration=0, phase="baseline", phase_started_at=now), now) == "Running · measuring the baseline · 0s"
     assert W.status_line(_status(phase="report", phase_started_at=now - 75), now) == "Running · writing the summary · 1m 15s"
     finished = W.status_line({"state": "finished", "stopped_at": now})
-    assert finished.startswith("Finished at ") and finished.endswith("Waiting for the next run…")
+    assert finished.startswith("Finished at ") and finished.endswith("Waiting for `autohelix resume`…")
+    # The view follows one run: it waits for that run's resume, not "the next run".
+    assert W.status_line({"state": "finished", "stopped_at": now}, run_id="20261115-1402-sorting-krp3").endswith(
+        "Waiting for `autohelix resume krp3`…")
 
 
 def test_log_for_follows_phases(tmp_path, run_paths):
@@ -163,6 +166,24 @@ def test_view_serves_the_web_page_by_default(tmp_path, monkeypatch, args, page):
     assert served == [(9000, True, page)]
 
 
+def test_a_second_view_names_the_port_in_use_and_the_page(tmp_path):
+    """A second `view` while one serves: not a bare "Address already in use", but the
+    page to open there (one server serves every run), or --port 0."""
+    import socket
+
+    import autohelix.cli as cli
+
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        with pytest.raises(cli.click.ClickException) as raised:
+            cli._serve(tmp_path, port, False, "/run/20261115-1402-sorting-krp3/")
+    assert raised.value.message == (
+        f"Port {port} is in use (another `autohelix view`?). If it serves this project, open "
+        f"http://127.0.0.1:{port}/run/20261115-1402-sorting-krp3/ there; else pass --port 0 (any free port).")
+
+
 @pytest.mark.parametrize("flags", [["--json"], [], ["r1", "--once"]])
 def test_metric_goes_with_the_runs_table(tmp_path, flags):
     result = _cli("view", "-p", tmp_path, "--metric", "speed", *flags)
@@ -182,22 +203,22 @@ def _run_data(iterations: int) -> dict:
 
 
 def test_the_time_cap_is_the_running_segments_own():
-    """What is left of --time is shown against the segment's clock while it runs,
-    "time up" past it, nothing once the run stopped; the run's total time has no cap."""
+    """The segment's time used of --time is shown while it runs, as the web pages say it,
+    "(time up)" past it, nothing once the run stopped; the run's total time has no cap."""
     data = _run_data(3)
     run = data["run"]
     assert W.run_table.time_cap(run, 1000) == ""  # not running
     run["status"] = {"state": "running", "iteration": 2, "segment_started_at": 1000 - 725,
                      "max_time_seconds": 3600, "phase": "agent", "phase_started_at": 990}
-    assert W.run_table.time_cap(run, 1000) == "47m 55s left (--time 1h)"  # the cap as --time spells it
+    assert W.run_table.time_cap(run, 1000) == "12m 05s of 1h (this segment)"  # the cap as --time spells it
     once = W.run_table.format_run(data, W.run_table.Saved(), now=1000)  # no stored config: the header still has it
-    assert "  Budget     47m 55s left (--time 1h)" in once and once.count("left") == 1  # the live row has the iteration's time
+    assert "  Budget     12m 05s of 1h (this segment)" in once and once.count("12m 05s") == 1  # the live row has the iteration's time
     run["status"].update(segment_started_at=1000 - 6000, max_time_seconds=5400)
-    assert W.run_table.time_cap(run, 1000) == "time up (--time 1h30m)"
+    assert W.run_table.time_cap(run, 1000) == "1h 40m of 1h30m (this segment) (time up)"
     config = Config.from_dict({"goal": "Go faster", "gates": ["true"]})
-    assert "Budget     time up (--time 1h30m)" in W.run_table.format_run(data, W.run_table.Saved(config), now=1000)
+    assert "Budget     1h 40m of 1h30m (this segment) (time up)" in W.run_table.format_run(data, W.run_table.Saved(config), now=1000)
     run["status"]["segment_started_at"] = 1000 + 5  # clock skew
-    assert W.run_table.time_cap(run, 1000) == "1h 30m left (--time 1h30m)"
+    assert W.run_table.time_cap(run, 1000) == "0s of 1h30m (this segment)"
     run["status"].update(state="finished")
     assert W.run_table.time_cap(run, 1000) == ""
     assert "1h30m" not in W.run_table.format_run(data, W.run_table.Saved(config), now=1000)

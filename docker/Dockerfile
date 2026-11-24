@@ -29,7 +29,6 @@ RUN git config --system user.email "autohelix@container" && \
 # Workspace accessible by any UID
 RUN mkdir -p /workspace /home/user && chmod 777 /workspace /home/user
 
-ENV AUTOHELIX_IN_CONTAINER=1
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 WORKDIR /workspace

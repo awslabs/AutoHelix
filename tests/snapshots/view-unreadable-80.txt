@@ -4,7 +4,7 @@
   ⣴⠙⢦      ⡴⠊⣧   Gates      pytest -q test_sort.py · speed regress 5%
   ⠙⠦⠬⠤⢤⡀⢀⡤⠄⡇⠴⠋   Observe    bench (speed ↑, mem_mb ↓)
     ⠘⢦⣤⠵⠫⣤⡴⠃     Scope      editable: sort.py
-                 Budget     7 iterations · $10.00 · 30m each
+                 Budget     to iteration 7 · $10.00 run total · 30m each
   ────────────────────────────────────────────────────────────────────────────
   ! The run's history can't be read: no iterations to show.
 

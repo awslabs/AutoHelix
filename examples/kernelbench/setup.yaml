@@ -8,4 +8,6 @@ defaults:
   evaluation_timeout: 1800
   correctness_trials: 5
   iterations: 5
-  agent_model: us.anthropic.claude-opus-4-8
+  # The published runs used a Bedrock id, us.anthropic.claude-opus-4-8: set it here
+  # only with Claude Code set up for Bedrock.
+  agent_model: opus

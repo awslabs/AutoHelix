@@ -367,10 +367,16 @@ a benchmark gate already rejected.
 
 **The baseline** (iteration 0, on the run's starting code) runs every gate
 command and every observe entry, `ask:` gates and reviews included; failures
-are logged but reject nothing, and metric gates aren't checked. A gate, entry
-or judge that modifies the code it checks stops the run with a setup error. A
-metric from a `command:` entry that is missing at the baseline stops the run
-too (there would be no reference). A metric from a `review:` entry stops it
+are logged but reject nothing (the agent may be meant to make a gate pass), and
+metric gates aren't checked. A setup that can't work stops the run at the
+baseline with a setup error naming it: a gate or entry that modifies the code
+it checks; a command gate that exits 126 or 127 (not executable, not found),
+unless its first word is a file the agent may write and git doesn't ignore (it may create it; only
+the first word counts, so name such a script `./tests/new.sh`, not
+`bash tests/new.sh`); an
+`ask:` gate that exits 2 (no answer: its judge changed files, or its calls
+failed). A metric from a `command:` entry that is missing at the baseline stops
+the run too (there would be no reference). A metric from a `review:` entry stops it
 only if a gate uses it; otherwise it is a warning (an LLM answer missing once
 may be flakiness, not setup).
 
@@ -493,8 +499,10 @@ config error.
 
 Changes outside the scope are discarded when the agent's copy is frozen, before
 any gate runs, so gates check exactly the tree that would be accepted. Nothing
-is written back into the agent's copy. Discarded paths are recorded with the
-iteration (`discarded` in history, the frozen ones also in `discarded_frozen`),
+is written back into the agent's copy, and an out-of-scope file is never stored
+in your repository's objects. Discarded paths are recorded with the
+iteration (`discarded` in history, the first 20, frozen ones first; `discarded_more` counts the
+rest; the frozen ones also in `discarded_frozen`),
 shown in the console, `view` and the viewer, and the next agent is told ("Your
 changes to tests/x.py were discarded: outside the editable scope", or "...:
 frozen" for frozen paths). A rejected attempt whose changes were all discarded
@@ -564,9 +572,9 @@ model when the CLI's default does.
 | Models | [OpenCode models](https://opencode.ai/docs/models/) |
 
 The executable is never in the config: set the variable (a wrapper script, a
-Bedrock or proxy launcher) where you run `autohelix`. `run` checks before
-starting that every agent the config runs (the main agent, each `ask:` and
-`review:` entry's judge) can be found; `ask`, `review` and bare `autohelix` use
+Bedrock or proxy launcher) where you run `autohelix`. `run` and every `resume`
+check before starting that every agent the config runs (the main agent, each
+`ask:` and `review:` entry's judge) can be found; `ask`, `review` and bare `autohelix` use
 the same variables. A `resume` whose agent executable differs from the one the
 run's last segment started warns ("The agent now starts …").
 
@@ -590,10 +598,11 @@ hints), OpenCode through a plugin. Every agent can run
 
 `prompt_template:` is optional: a [Jinja2](https://jinja.palletsprojects.com/)
 file that replaces the built-in agent prompt, as a path relative to the config
-file (so it lives beside it). A template that doesn't parse is a config
-error naming the file and line, and one that fails to render (say `{{
-last.gates.x.y }}`) stops the run with an error naming the file, before its
-agent call. A run stores the template's text with its config when it starts, so
+file (so it lives beside it). These are config errors naming the file, so
+`run --check` finds them: a template that doesn't parse (with its line), one
+naming a variable the prompt doesn't have, or the old `.autohelix/` paths in the
+agent's copy, and one that fails to render (say `{{ last.gates.x.y }}`) against
+a sample history: a baseline, an accepted iteration and a rejected one. A run stores the template's text with its config when it starts, so
 editing the template changes later runs, not this one. Most configs need only
 `goal:`. The
 variables a template gets are a documented contract; see

@@ -219,8 +219,9 @@ def run_in_pty(argv, cwd, env, width, *, keys=(), frame_when=None, timeout=180):
     return snapshot(screen), live, code
 
 
-MENU = "(q: quit)"  # the last line a menu draws ("Which agent?")
+MENU = "(q: quit)"  # the last line a menu draws (several agents: "Start an agent with AutoHelix:")
 QUESTION = "Enter/q"  # the entry screen's one question
+ENTRY_TITLE = "Start an agent with AutoHelix:"  # its menu with several agents (`cli.ENTRY_TITLE`)
 
 
 def showing(*texts: str):
@@ -364,13 +365,12 @@ def main() -> int:
                 # The same, Enter: the first option starts the (fake) agent with its first prompt.
                 final, _, code = run_in_pty([*cli], project, env, width, keys=[(QUESTION, b"\r")], timeout=30)
                 record(f"entry-ask-{width}", final, width, f"autohelix · runs, Enter · {width} cols", code)
-                # Two agents: the labels say "an agent", then "Which agent?"; q there quits.
+                # Two agents: one menu of them (`cli.ENTRY_TITLE`); q there quits.
                 two = environment(root, width, ("claude", "codex"))
-                _, live, code = run_in_pty([*cli], project, two, width,
-                                           keys=[(MENU, b"\x1b[B"), (0.5, b"\r"), ("Which agent?", b"q")],
-                                           frame_when=showing("Which agent?", MENU), timeout=30)
+                _, live, code = run_in_pty([*cli], project, two, width, keys=[(MENU, b"q")],
+                                           frame_when=showing(ENTRY_TITLE, MENU), timeout=30)
                 record(f"entry-agents-{width}", live or [], width,
-                       f"autohelix · two agents, ↓ Enter (then q) · {width} cols", code)
+                       f"autohelix · two agents (then q) · {width} cols", code)
 
                 configs = make_project(root, "half-done", True)  # autohelix/sorting/config.yaml, no runs yet
                 _, live, code = run_in_pty([*cli], configs, env, width, keys=[(QUESTION, b"q")],

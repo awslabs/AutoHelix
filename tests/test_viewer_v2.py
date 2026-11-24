@@ -468,6 +468,23 @@ def test_the_stored_template_is_shown_with_the_config(project):
     assert config["template"] == {"file": f"autohelix/{NAME}/prompt.md", "text": "Stored: {{ goal }}\n"}
 
 
+def test_a_stored_config_or_template_that_is_a_symlink_is_not_shown(project, tmp_path):
+    """The page's config and template text are run state: read without following a
+    symlink, so report.html can't embed a file an agent pointed them at."""
+    paths = RunPaths(project, "test")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("SECRET-KEY-MATERIAL\n")
+    paths.config.write_text(CONFIG + "prompt_template: prompt.md\n")
+    paths.template.symlink_to(secret)
+    config = RunData(project, run_id="test").state()["config"]
+    assert config["text"].endswith("prompt_template: prompt.md\n") and config["template"]["text"] is None
+    paths.config.unlink()
+    paths.config.symlink_to(secret)
+    data = RunData(project, run_id="test")
+    assert "SECRET" not in json.dumps(data.state())
+    assert "SECRET" not in write_static(project, run_id="test").read_text()
+
+
 def test_config_is_parsed_again_only_when_its_file_changes(project, monkeypatch):
     import autohelix.viewer as viewer_module
 

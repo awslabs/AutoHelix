@@ -102,6 +102,10 @@ def prepare_data(local):
 
 
 def lay_out(project, local):
+    if (project / "ar" / "paths.sh").exists() and subprocess.run(
+            ["git", "-C", project, "rev-parse", "-q", "--verify", "HEAD"], capture_output=True).returncode == 0:
+        print(f"project: {project} exists")  # laid out and committed by an earlier run of this script
+        return
     if project.exists() and any(project.iterdir()):
         sys.exit(f"setup: {project} exists and isn't empty")
     shutil.copytree(HERE / "template", project, dirs_exist_ok=True,
@@ -121,7 +125,8 @@ AR_TOKENIZER={local}/autoresearch/tokenizer
     (project / ".gitignore").write_text("__pycache__/\n")
     run("git", "init", "-q", project)
     run("git", "-C", project, "add", "-A")
-    run("git", "-C", project, "commit", "-q", "-m", "autoresearch at upstream 228791f, patched")
+    run("git", "-C", project, "-c", "user.name=AutoHelix", "-c", "user.email=autohelix@localhost",
+        "-c", "commit.gpgsign=false", "commit", "-q", "-m", "autoresearch at upstream 228791f, patched")
 
 
 def heldout_shard(folder):

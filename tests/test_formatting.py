@@ -12,7 +12,7 @@ def test_known_zero_is_distinct_from_unknown_cost():
 
 def test_complete_partial_and_unavailable_totals():
     assert format_total_cost([{"cost_usd": 0.25}, {"cost_usd": 0}]) == "$0.25"
-    assert format_total_cost([{"cost_usd": 0.25}, {}]) == "$0.25 (incomplete)"
+    assert format_total_cost([{"cost_usd": 0.25}, {}]) == "$0.25+"
     assert format_total_cost([{}, {"cost_usd": None}]) == "cost unavailable"
 
 
@@ -31,7 +31,7 @@ def test_an_unavailable_total_says_why_when_its_calls_agree():
     assert format_total_cost([{"cost_unavailable_reason": "a"}, {"cost_unavailable_reason": "b"}]) == "cost unavailable"
     assert format_total_cost([{"cost_unavailable_reason": "a"}, {}]) == "cost unavailable"
     # A known part: incomplete, as before (no reason).
-    assert format_total_cost([{"cost_usd": 0.25}, {"cost_unavailable_reason": "a"}]) == "$0.25 (incomplete)"
+    assert format_total_cost([{"cost_usd": 0.25}, {"cost_unavailable_reason": "a"}]) == "$0.25+"
 
 
 @pytest.mark.parametrize("reason", [["a"], {"a": 1}, 3])

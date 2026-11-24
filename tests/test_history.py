@@ -61,7 +61,7 @@ class TestHistoryAppendAndLoad:
         history._invalidate_cache()
         with history.history_path.open("a") as stream:
             stream.write('corrupt\n{"iteration":3,"accepted":true}\n')
-        with pytest.raises(RuntimeError, match="Corrupt history"):
+        with pytest.raises(RuntimeError, match="line 3 is damaged: fix or remove the line"):
             history.load()
 
     def test_empty(self, history):

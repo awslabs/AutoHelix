@@ -5,7 +5,7 @@ Run AutoHelix inside a Docker container for filesystem isolation. The agent can'
 ## Quick start
 
 ```bash
-# 1. Build the image (one-time, takes a few minutes)
+# 1. Build the image, from an AutoHelix source checkout (one-time, takes a few minutes)
 bash docker/build.sh
 
 # 2. Create an env script with your credentials
@@ -15,14 +15,14 @@ EOF
 
 # 3. Run from your project directory
 cd my-project
-docker/run.sh --env ~/autohelix-env.sh run -n 10        # or: run perf -n 10 for autohelix/perf/config.yaml
+/path/to/AutoHelix/docker/run.sh --env ~/autohelix-env.sh run -n 10   # or: run perf -n 10 for autohelix/perf/config.yaml
 ```
 
 All autohelix commands work: `run`, `resume`, `report`, `view --terminal`.
 
 Tip: set up an alias to avoid repeating the env path:
 ```bash
-alias autohelix-docker='path/to/docker/run.sh --env ~/autohelix-env.sh'
+alias autohelix-docker='/path/to/AutoHelix/docker/run.sh --env ~/autohelix-env.sh'
 autohelix-docker run -n 10
 ```
 

@@ -79,16 +79,16 @@ def test_judge_config_inherits_cli_but_not_extra_args():
     assert judge_config(base, model="n", timeout=30).model == "n"
 
 
-def test_load_base_config_reads_v2_agent_and_rejects_old_keys(tmp_path, monkeypatch):
-    from autohelix.judge import load_base_config
+def test_base_config_reads_v2_agent_and_rejects_old_keys(tmp_path, monkeypatch):
+    from autohelix.judge import base_config
 
     monkeypatch.delenv("AUTOHELIX_CONFIG", raising=False)
     _write(tmp_path, "goal: g\nagent:\n  cli: codex\n  timeout: 5m\n")
-    config = load_base_config(tmp_path)
+    config = base_config(tmp_path)[0]
     assert (config.cli, config.timeout) == ("codex", 300)
     _write(tmp_path, "goal: g\nagent:\n  backend: claude\n")
     with pytest.raises(JudgeError, match="`agent.backend` is now `agent.cli`"):
-        load_base_config(tmp_path)
+        base_config(tmp_path)
 
 
 def test_cli_option_reaches_the_judge(tmp_path, monkeypatch):

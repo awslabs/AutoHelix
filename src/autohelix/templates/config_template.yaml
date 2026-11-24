@@ -44,7 +44,7 @@ scope:
 
 agent:
   cli: claude-code        # claude-code, codex or opencode
-  model: opus             # passed through unchanged; unset = the CLI's default
+  # model: opus           # the CLI's own model name, passed through; unset = its default
   # effort: high
   # timeout: 30m          # per iteration: the agent sees the time left, then is stopped
 

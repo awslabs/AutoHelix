@@ -568,6 +568,8 @@ def test_the_template_is_a_valid_config_once_it_has_a_goal(project):
     config = load_config(project, config_file=path)
     assert [i for i in config.validate() if i.level == "error"] == []
     assert config.title == "Make main.py faster."
+    # No live model: changing only `cli:` must not keep a Claude model name for Codex.
+    assert config.agent.model is None
 
 
 # --- the docs in the package -------------------------------------------------------------
@@ -626,3 +628,12 @@ def test_the_old_claude_variable_refuses_the_session(project, monkeypatch, execs
     result = entry(input="\n")
     assert result.exit_code == 1 and not execs
     assert "AUTOHELIX_CLAUDE_CMD is now AUTOHELIX_CLAUDE_CODE_CMD" in flat(result.output)
+
+
+def test_the_package_version_has_one_home():
+    """`__version__` was a second, hand-written copy of pyproject.toml's version."""
+    import autohelix
+    from autohelix import terminal
+
+    assert autohelix.__version__ == terminal.version()
+    assert "__version__ = \"" not in Path(autohelix.__file__).read_text()

@@ -42,7 +42,7 @@ from markdown_it import MarkdownIt
 from autohelix import run_table
 from autohelix.agents import AgentEventKind
 from autohelix.safe_open import bad_parts as _bad_parts, contained as _contained, open_dir as _open_dir, open_file as _open_file, open_run_log
-from autohelix.config import ConfigError, MetricGate, config_relative, load_config, template_text
+from autohelix.config import MetricGate, config_relative, load_config
 from autohelix.costs import summarize_costs
 from autohelix.history import History, latest_agent_call, record_seconds
 from autohelix.runs import (COMMIT, RunPaths, git, is_archived, is_transcript, landing, landing_words,
@@ -61,7 +61,7 @@ IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
 # Phases after the agent copy is frozen, when the pin holds this iteration's tree.
-FROZEN_PHASES = {"preparing checks", "checks", "observe", "review", "accept", "stop check"}
+FROZEN_PHASES = {"preparing checks", "checks", "observe", "accept", "stop check"}
 ASSETS = {
     "/": ("dashboard.html", "text/html; charset=utf-8"),
     "/common.js": ("common.js", "text/javascript; charset=utf-8"),
@@ -110,6 +110,11 @@ def _field(record, name: str):
     return getattr(record, name, None) if record is not None else None
 
 
+def _count(value) -> int:
+    """A count from a history record: a non-negative int, else 0."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
 def _object(value) -> str | None:
     """A git object name from a history record, or None: never an option or a rev expression."""
     return value if isinstance(value, str) and COMMIT.fullmatch(value) else None
@@ -137,19 +142,6 @@ def _read_text_at(root: Path, parts, single_link: bool = False) -> str | None:
     """`_tail` of `root/parts...`, through `_open_file`."""
     fd = _open_file(root, parts, single_link)
     return None if fd is None else _tail(fd)
-
-
-def _read_user_file(path: Path) -> str | None:
-    """`_tail` of a file the user owns (the config: a symlink to it is fine), never
-    blocking on a FIFO."""
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
-    except OSError:
-        return None
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
-        os.close(fd)
-        return None
-    return _tail(fd)
 
 
 def _listing(root: Path, parts) -> list[tuple[str, os.stat_result]]:
@@ -263,8 +255,14 @@ class RunData:
                 config = load_run_config(self.paths)
             except Exception:
                 config = None
-            cached = self._configs[path] = (key, config, _read_user_file(path))
+            cached = self._configs[path] = (key, config, self._stored_text(path))
         return cached[1], path
+
+    def _stored_text(self, path: Path) -> str | None:
+        """A file the run stored (its config, its template), read as the rest of run state
+        is: from the run folder down, no symlinks, a single link (the page and report.html
+        show it)."""
+        return _read_text_at(self.root, self.paths.parts(path), single_link=True)
 
     def _config_summary(self, config, path: Path | None, called: dict | None = None) -> dict | None:
         """The run page's config: its file and text, and the header's fields; `agent` with
@@ -278,13 +276,10 @@ class RunData:
                 file = self.paths.read_identity()["config_path"]
             except (RuntimeError, KeyError):
                 pass
-        summary = {"file": file, "text": cached[2] if cached else _read_user_file(path)}
+        summary = {"file": file, "text": cached[2] if cached else self._stored_text(path)}
         if config is not None and config.prompt_template is not None:  # stored beside a run's config
-            try:
-                text = template_text(config)
-            except ConfigError:
-                text = None
-            summary["template"] = {"file": config_relative(self.project, config.prompt_template), "text": text}
+            summary["template"] = {"file": config_relative(self.project, config.prompt_template),
+                                   "text": self._stored_text(self.paths.template)}
         if config:
             summary.update(
                 agent=agent_text(config.agent.cli, (called or {}).get("model") or config.agent.model,
@@ -312,11 +307,12 @@ class RunData:
                            or reason or subjects.get(r.commit),
                 "reason": reason,
                 "cost": r.cost.cost_usd, "cost_incomplete": r.cost.incomplete,
-                "seconds": (r.usage.get("wall_clock_ms") or 0) / 1000 or None,
+                "seconds": record_seconds(r) or None,  # the baseline's from its start and end
                 "gates": r.gates, "observe": r.observe,
                 "stops": [item for item in _field(r, "stops") or [] if isinstance(item, dict)],
                 "discarded": [p for p in _field(r, "discarded") or [] if isinstance(p, str)],
                 "discarded_frozen": [p for p in _field(r, "discarded_frozen") or [] if isinstance(p, str)],
+                "discarded_more": _count(_field(r, "discarded_more")),
             })
         return rows
 
@@ -458,6 +454,7 @@ class RunData:
             "summary": summary if isinstance(summary, str) and summary.strip() else None,
             "discarded": [p for p in _field(record, "discarded") or [] if isinstance(p, str)],
             "discarded_frozen": [p for p in _field(record, "discarded_frozen") or [] if isinstance(p, str)],
+            "discarded_more": _count(_field(record, "discarded_more")),
             # What `/iteration/<n>/diff` compares: the commit the attempt started from and its frozen tree.
             "attempt": {"base": base, "tree": tree, "commit": record.commit if record else None,
                         "rejected_ref": rejected_ref if isinstance(rejected_ref, str) else None}
@@ -1001,6 +998,7 @@ class ProjectRuns:
             # `autohelix stop` asked the running segment to end ({requested_at, why, now}), else None.
             "stop_requested": pending_stop(paths, status),
             "accepted": accepted,
+            "baseline": any(r.iteration == 0 and r.accepted for r in records),  # its baseline was accepted
             "metrics": self._metrics(records, config.get("directions") or {}),
             # The caps of the latest segment (`run`/`resume` flags), from its status; None
             # where it had none. Iterations and cost as run totals (spent before it plus its

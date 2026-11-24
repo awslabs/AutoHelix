@@ -17,12 +17,16 @@ part). Without one they act on the **running run**, else the **most recently
 active run that isn't [archived](#autohelix-archive)**, and say which on stderr
 ("Run k3f9 (the running run; name one to choose another)").
 
-- With several runs running they refuse: "Several runs are running: k3f9,
-  m2x7; name one."
+- `land` and `report` skip running runs (a running run refuses them): they
+  take the most recently active run that isn't running or archived ("Run m2x7
+  (the most recently active run that isn't running; …)").
+- With several runs running `hint` and `view --terminal` refuse: "Several runs
+  are running: k3f9, m2x7; name one."
 - With no run to act on, they say so and how to start one ("No runs in
   /path/to/project; start one with `autohelix run`.").
 - `resume` has its own rule (a config's latest run,
-  [below](#autohelix-resume)).
+  [below](#autohelix-resume)). Other commands take run ids only: given a
+  config name (`land perf`), they name its latest run instead.
 - Commands that take several ids (`archive`, `delete`, `stop`, `wait`) check
   every id first: an unknown one refuses the whole command, nothing done. Then
   they act on each, report each, and exit 1 if any failed.
@@ -53,7 +57,8 @@ The screen has:
   `resume` one that stopped before its end, `land` waiting commits,
   `git merge autohelix/<id>` for a run whose branch diverged from its target.
   An interrupted run or one that stopped unexpectedly gets `resume` even with
-  commits to land, which an auto-landing resume lands;
+  commits to land, which an auto-landing resume lands; a run whose first
+  baseline failed gets `autohelix run <name>`;
 - how many runs are archived, and a pointer to `autohelix --help`;
 - the question.
 
@@ -267,7 +272,9 @@ VPN alive.
   `Interrupted`, `Error`), each metric from the baseline to the run's tip, the
   totals, what landed (`landing  failed: …` in yellow when auto landing
   couldn't, the commits then waiting for `autohelix land`), what to type next
-  (one command per line, with what it does; left out when it doesn't fit), the
+  (one command per line, with what it does; left out when it doesn't fit;
+  after a failed first baseline, `autohelix run <name>` and `autohelix delete
+  <id>` instead of `resume`, which would refuse the fixed setup), the
   run's `folder` (`report.md`, `history.jsonl`, `iterations/` are in it), and
   the files written.
 - **`resume`** shows the baseline and the last 5 rows before `resumed HH:MM`.
@@ -288,11 +295,11 @@ pipe, a log file) or colours there is no mark and no live row. The renders at 80
 | `--path`, `-p` | Project directory (default: current dir) |
 | `--group NAME` | Make the run part of a [group](#groups): it sees the other runs of the group (their notes, history and code), and lands manually by default |
 | `--land auto\|manual` | Land accepted code at the end of each segment, or retain it only on the run ref until `autohelix land`. Stored with the run. Default: `manual` with `--group`, else `auto` |
-| `--import RUN_ID` | [Continue from another run](#continuing-from-another-run): its notes and history, read-only, in every iteration, and its last observe outputs at the baseline |
+| `--import RUN_ID` | [Continue from another run](#continuing-from-another-run): its notes and history, read-only, in every iteration, and its last observe outputs until each entry succeeds here (normally the baseline) |
 | `--why TEXT` | Why this run is started: one line (at most 300 characters), stored in `run.json` and shown by `autohelix view` |
 | `--verbose` | Show agent command details, file paths, heartbeats |
 | `--no-report` | Don't write the run summary when this segment finishes (not stored: pass it to each `resume` too) |
-| `--check` | Start nothing: make every check the run makes before writing anything (the config and its prompt template, the experiment folder, a clean checkout, the agent command, scope patterns, commands naming an `autohelix/` path the commit lacks, `--import`'s run), print what it finds, exit 0 when the run would start, else 1. For setup and CI |
+| `--check` | Start nothing: make every check the run makes before writing anything (the config and its prompt template, the experiment folder, a clean checkout, the agent command, scope patterns, commands naming an `autohelix/` path the commit lacks, `--import`'s run), print what it finds, the warnings `run` gives at its start included (other runs' unlanded commits, an uncommitted config), exit 0 when the run would start, else 1. For setup and CI |
 
 `run` always starts a **new** run, with its own notes and history; to
 continue one, use [`autohelix resume`](#autohelix-resume) (scripts that want
@@ -342,8 +349,9 @@ When a call fails:
   row: …"), with landing as at any segment end but no run summary, and the
   command exits 1.
 - An infrastructure failure stops the run after that one call: the agent CLI
-  reported a rejected key or credentials (HTTP 401/403), or, for Claude Code
-  and OpenCode, an unavailable model service (HTTP 429 or 5xx). The call is
+  reported a rejected key or credentials (HTTP 401/403). A rate limit or an
+  unavailable model service (HTTP 429 or 5xx) is an ordinary failure: a short
+  outage costs an iteration, and three in a row stop the run as above. The call is
   recorded as any failed call (its record's `infrastructure` says which), then
   the run stops ("the agent call failed: authentication failed (HTTP 403): …;
   fix it, then autohelix resume <id>"), lands as after three failures, writes
@@ -372,7 +380,7 @@ When a call fails:
 - **1** on an error: the config or a check refused the start (no run to
   resume, a dirty checkout, failed preflight checks, also on `resume`), the
   baseline or an iteration failed with an error, the agent failed three times in
-  a row or once for its infrastructure (credentials, the model service), or auto landing failed (the iterations stay accepted on the run's ref;
+  a row or once for its infrastructure (rejected credentials, HTTP 401/403), or auto landing failed (the iterations stay accepted on the run's ref;
   `autohelix land` once the cause is fixed);
 - **130** when interrupted: Ctrl-C, SIGTERM, or `autohelix stop --now`
   (the iteration is recorded and the run lands as usual).
@@ -430,9 +438,10 @@ autohelix resume --until 30 --time 2h   # up to iteration 30, starting none afte
   more · 2h", or "1 iteration (default)").
 - The run's status records the iteration and cost caps as run totals and the
   `--time` cap as this segment's own.
-- While the segment runs, `view --terminal`'s Budget field shows what is left
-  of that cap ("47m 55s left (--time 1h)", "time up (--time 1h)" once past
-  it). The run's total time has no cap (`progress.seconds` in
+- `view`'s Budget field shows the status's caps, as run totals ("to iteration 8
+  · $5.04 run total"), and while the segment runs the time it used of its
+  `--time` ("12m 05s of 1h (this segment)", "(time up)" once past it), as the
+  web pages do. The run's total time has no cap (`progress.seconds` in
   [JSON output](#json-output)).
 - Every segment that starts is also an event for
   [`autohelix wait`](#autohelix-wait).
@@ -495,8 +504,9 @@ What it adds:
   ref, `autohelix/<id>`; the prompt's "Where things are" list names it as
   imported ("this run continues from k3f9"). They are copied at the start of each iteration, as for a
   [group](#groups); a deleted imported run is just left out;
-- at the baseline, each observe entry gets as `$AUTOHELIX_PREVIOUS` that run's
-  last successful output of the entry with the same name
+- until it succeeds in this run (normally at the baseline), each observe entry
+  gets as `$AUTOHELIX_PREVIOUS` that run's last successful output of the entry
+  with the same name
   ([Previous output](config.md#previous-output)), so a tracker continues from it.
 
 `run.json` records `"import": {"run": "<id>"}`. The imported run may be
@@ -584,7 +594,8 @@ picking an older one. With no run to resume it exits 1 (see
 anything, `resume` compares it with the config file:
 
 - When the file's parsed config differs (a setting, or the prompt template's
-  text), it refuses, names the settings, and names both ways out: `autohelix
+  text), it refuses, names the settings (`agent.timeout`, `gates entry 2`,
+  `observe bench (added)`), and names both ways out: `autohelix
   run <config> --import <id>` applies the new config in a new run, or restore
   the file to continue this one.
 - What the run would do counts, not how the file says it: comments,
@@ -596,7 +607,7 @@ anything, `resume` compares it with the config file:
 - The experiment folder is compared with the run's copy
   (`runs/<id>/experiment/`), file by file: a changed file (its bytes or exec
   bit), an added one or a removed one refuses, naming them, with the same two
-  ways out (restore the files). Edits to files the folder links to count. A
+  ways out (restore the files; remove the added ones). Edits to files the folder links to count. A
   deleted folder isn't a change, and a run without a stored folder resumes
   as before.
 - A run started before runs stored their config can't be resumed: continue it
@@ -711,7 +722,7 @@ autohelix land [RUN_ID] [-p PATH] [--into BRANCH]
 ```
 
 Fast-forward the run's starting branch to its accepted tip, preserving unrelated
-checkout edits. Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on).
+checkout edits. Without `RUN_ID`, the [latest run that isn't running](#which-run-a-command-acts-on).
 
 - It only fast-forwards: when the target diverged (a commit on it after the
   run's base, during a segment or since), it refuses, says so, and gives what
@@ -720,6 +731,10 @@ checkout edits. Without `RUN_ID`, the [running or latest run](#which-run-a-comma
   trying to land it.
 - Auto landing at a segment's end refuses the same way; AutoHelix never
   rewinds user commits.
+- When there is nothing to land it says so instead of "Landed": the run is
+  already in the branch, it accepted nothing, or it landed there before and
+  the branch has other commits in their place (to land it again: `git merge
+  autohelix/<id>`).
 - A run created from a detached checkout requires `--into BRANCH`.
 - Landing also refuses branches that are being rebased.
 
@@ -734,12 +749,15 @@ git push origin main:perf-pr            # push it as a branch and open a PR from
 git fetch origin && git reset --hard origin/main   # your main as the remote has it
 ```
 
-The runs table, `view`, the entry screen and `delete` then read k3f9 as
-landed (no `--force` needed), while its tip isn't on main: the target lacks the
-tip, but run.json says `land` landed that tip on this same branch.
+The runs table, `view` and the entry screen then read k3f9 as landed, while
+its tip isn't on main: the target lacks the tip, but run.json says `land`
+landed that tip on this same branch.
 
 - Nothing compares the code, so if the PR is abandoned and main reset, the run
-  still reads landed (its commits stay on `autohelix/<id>`).
+  still reads landed, and `autohelix/<id>` is the only ref to its commits.
+  So `delete` asks for `--force` for any run whose tip is on no branch, tag or
+  remote-tracking branch, landed or not; once the PR's branch is gone, use
+  `--force` or `archive`.
 - Only a landing on the run's own target is recorded: a landing on another
   branch (`land --into other`) leaves the record alone, and a squash merge of
   the run's branch done without `land` (`git merge --squash autohelix/<id>`)
@@ -788,8 +806,10 @@ Deletes runs:
   (`refs/autohelix-rejected/<id>/<n>`);
 - any leftover copies.
 
-It refuses a running run, and a run with accepted commits that its target
-branch lacks (they would be lost) unless `--force`. Code on your branch and
+It refuses a running run, and, unless `--force`, a run with accepted commits
+that its target branch lacks or whose tip is on no branch, tag or
+remote-tracking branch (they would be lost; a squash-merged PR's run once its
+branch is gone, too). Code on your branch and
 external artifacts stay intact. To keep a run but hide it, use `archive`.
 
 ## `autohelix view`
@@ -818,7 +838,7 @@ ssh -L 8765:127.0.0.1:8765 user@host   # then open http://localhost:8765
 The run list (`/`) has one row per run, with these columns:
 
 - its short id and name (with its group, and the config file under it when the run isn't named after it);
-- state, with time and cost so far, and what is left of `--time`, under it;
+- state, with time and cost so far, and the time used of `--time` (`12m5s/1h`), under it;
 - iterations;
 - one metric from the latest accepted iteration, picked from a menu in the column header; its change against the run's own baseline is in the tooltip;
 - landing;
@@ -830,7 +850,7 @@ Hover a cell for details such as the stop reason or budgets; click a row for tha
 A run's page (`/run/<id>/`) shows its `.autohelix/` state:
 
 - The header: the goal's title (its first line; click it for the rest) and run status (which iteration and phase is running, or whether the run finished, was interrupted, or crashed, and when; hover for why it ended).
-- The left side: the best metric value with total time and cost, the metric over time, and one row per iteration with the agent's one-line summary (and, for a rejection, the gate that failed), then a row for the run summary once one is written (see [`autohelix report`](#autohelix-report)).
+- The left side: the best metric value with the total time (the baseline's included, as the run list's) and cost, the metric over time, and one row per iteration with the agent's one-line summary (and, for a rejection, the gate that failed), then a row for the run summary once one is written (see [`autohelix report`](#autohelix-report)).
 - The right side, one panel: the selected iteration, or, after the last iteration, the run summary (shown when the run has stopped; `#summary`). While a run is live the running iteration is selected. To pick another, click a row or chart point, press `j`/`k`, or use the panel's arrows; `#iter-N` in the address picks one.
 
 An iteration's panel has these sections (paths are below `.autohelix/runs/<id>/`):
@@ -880,7 +900,7 @@ With `RUN_ID`:
 
 - `--once` prints the top part of `--terminal`'s screen once and exits (`tests/snapshots/view-*.txt` shows it). In its table a rejected iteration shows the gate that failed (a metric gate as `speed 6.5% worse than iter 3 (5% allowed)`), with failed observe entries, failed stop commands and discarded paths on the lines under it.
 - `--json` prints the run once and exits, for scripts and agents managing runs: the run's row from [`view --json`](#json-output) under `run`, plus `iterations`, one entry per iteration with:
-  - `iteration`, `accepted`, `metrics`, `cost`, `cost_incomplete`, `seconds`;
+  - `iteration`, `accepted`, `metrics`, `cost`, `cost_incomplete`, `seconds` (the baseline's from its start to end);
   - `summary`: the agent's one-line summary; for records without one, the commit subject, or why it was rejected;
   - `reason`: why it was rejected, `null` otherwise;
   - `gates`, in config order: `text`, `kind` (`command` or `metric`), `passed` (`true`, `false`, or `null` when not reached); for commands that ran, `return_code`, `duration_s` (`timed_out` when one did) and, failed, the `output` tail; for checked metric gates, `value`, `reference` and, failed, `reason`;
@@ -906,7 +926,7 @@ With `RUN_ID`:
     - `segment_started_at`, when that segment started (its `--time` counts from there), and `segment`, its number (1, 2, … in the run);
     - `entry`: the name of the observe entry running, else `null`;
   - `stop_requested`: while the running segment has been asked to end by [`autohelix stop`](#autohelix-stop), `requested_at`, `why` and `now`; else `null`;
-  - `accepted`: the number of accepted iterations;
+  - `accepted`: the number of accepted iterations, and `baseline`: whether its baseline was accepted;
   - `metrics`: the latest accepted measurement, `iteration` and `values` (`name`, `value`, `baseline`, `direction`), or `null`;
   - `progress`:
     - `iterations` attempted, `cost_usd` and `cost_incomplete` (the whole run's), `seconds` (the recorded iterations' wall clock, the baseline's included);
@@ -1234,7 +1254,7 @@ Write (or rewrite) the run summary.
 autohelix report [RUN_ID] [-p PATH]
 ```
 
-Without `RUN_ID`, the [running or latest run](#which-run-a-command-acts-on).
+Without `RUN_ID`, the [latest run that isn't running](#which-run-a-command-acts-on).
 
 One agent call reads the run's history, notes, logs and commits and writes a
 short summary to `.autohelix/runs/<id>/report.md`: what was achieved, which

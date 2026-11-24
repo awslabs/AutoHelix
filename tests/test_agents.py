@@ -728,10 +728,10 @@ class TestOpenCodeRunResult:
 
     def test_a_timeout_is_an_error_with_unknown_cost(self, monkeypatch, tmp_path):
         result, events = self._run(monkeypatch, tmp_path, exit_code=124, timed_out=True)
-        assert not result.success and result.error == "timed out after 4 seconds"
+        assert not result.success and result.error == "timed out after 4s"
         assert "cost_usd" not in result.usage and result.usage["partial_cost_usd"] == 0.25
         assert "timed out" in result.usage["cost_unavailable_reason"]
-        assert any(event.text == "Agent timed out after 4 seconds" for event in events)
+        assert any(event.text == "Agent timed out after 4s" for event in events)
 
     def test_a_failed_call_says_its_status_and_keeps_its_cost(self, monkeypatch, tmp_path):
         result, _ = self._run(monkeypatch, tmp_path, exit_code=3)
@@ -741,3 +741,25 @@ class TestOpenCodeRunResult:
     def test_a_finished_call_is_priced(self, monkeypatch, tmp_path):
         result, _ = self._run(monkeypatch, tmp_path)
         assert result.success and result.error is None and result.usage["cost_usd"] == 0.25
+
+
+@pytest.mark.parametrize("agent_class,cli", [(ClaudeCodeAgent, "claude-code"), (CodexAgent, "codex"),
+                                             (OpenCodeAgent, "opencode")])
+@pytest.mark.parametrize("line", ["0", "[1]", "true", "null", '"text"'])
+def test_a_json_line_that_isnt_an_object_is_raw_output(agent_class, cli, line):
+    # A wrapper script's stderr (a PID, a count) parses as JSON but is no event.
+    events = _collect_events(agent_class(config=AgentConfig(cli=cli)), line)
+    assert [(event.kind, event.text) for event in events] == [(AgentEventKind.RAW, line)]
+
+
+def test_a_claude_code_wrapper_printing_a_number_on_stderr_still_finishes(tmp_path, monkeypatch):
+    fake = tmp_path / "claude"
+    result_line = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done",
+                              "duration_ms": 10, "total_cost_usd": 0.5, "usage": {}})
+    fake.write_text(f"#!/bin/sh\necho 0 >&2\necho '{result_line}'\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("AUTOHELIX_CLAUDE_CODE_CMD", str(fake))
+    agent = ClaudeCodeAgent(config=AgentConfig(cli="claude-code", timeout=20))
+    result = agent.run(copy_path=tmp_path, prompt="test", iteration=1, log_path=tmp_path / "agent.log",
+                       event_callback=lambda event: None)
+    assert result.success and result.usage["cost_usd"] == 0.5
