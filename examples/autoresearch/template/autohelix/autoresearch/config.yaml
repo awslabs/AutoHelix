@@ -39,9 +39,8 @@ goal: |
 
 agent:
   cli: claude-code
-  # A Bedrock id: the arms run Claude Code on Bedrock (arms/container.sh sets it up), and the
-  # session arm uses the same id. Outside Bedrock, use `opus` instead.
-  model: us.anthropic.claude-opus-5-5
+  # No model: Claude Code's own. The arms pin one model for every arm (arms/container.sh's
+  # ANTHROPIC_MODEL, a Bedrock id).
   effort: high
   timeout: 30m
 

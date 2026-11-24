@@ -15,7 +15,8 @@
 #    console.log (autohelix), or session.jsonl (the stream), session.err, session-end.json
 #    (exit code: 124 for the AR_WALL cap) and transcript.jsonl (Claude Code's own record).
 #    The session gets the flags AutoHelix's backend uses (stream-json with partial messages,
-#    --dangerously-skip-permissions, model and effort of template/autohelix/autoresearch/config.yaml) plus
+#    --dangerously-skip-permissions, the effort of template/autohelix/autoresearch/config.yaml, the
+#    model from ANTHROPIC_MODEL, which the AutoHelix arm's Claude Code reads too) plus
 #    --max-budget-usd AR_MAX_BUDGET_USD, under `timeout AR_WALL`.
 # 4. Kills whatever the agent's user left running. Then the container ends.
 set -uo pipefail
