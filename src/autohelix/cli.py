@@ -286,7 +286,7 @@ def _run_line(run: dict) -> str:
 def first_prompt(agent: str, project: Path, runs: list[dict], configs: list[str],
                  git: tuple[str, str | None] | None = None) -> str:
     """The session's first prompt: facts only; how the session opens and goes on is the
-    skill's (SKILL.md). The bundled skill, AutoHelix's own CLI, Python and docs, the
+    skill's (SKILL.md). The bundled skill, AutoHelix's own CLI and docs, the
     coordinator's notes (`autohelix/README.md`, when there is one), any git problem, the
     project's runs and configs, and which agent CLI the session runs in."""
     skill_dir = _skill_dir()
@@ -295,13 +295,12 @@ def first_prompt(agent: str, project: Path, runs: list[dict], configs: list[str]
     current = run_table.current_runs(runs)
     archived = len(runs) - len(current)
     unrun = _unrun(configs, runs)
-    python = shlex.quote(sys.executable)
-    tools = (f"`autohelix` below means `{shlex.quote(str(launcher))}`, and AutoHelix's Python is `{python}`: "
-             "use them rather than whatever `autohelix` or `python` your shell finds." if launcher else
-             f"AutoHelix's Python is `{python}`: use it rather than whatever `python` your shell finds.")
+    tools = [f"`autohelix` below means `{shlex.quote(str(launcher))}`: use it rather than "
+             "whatever `autohelix` your shell finds."] if launcher else []
+    if docs:
+        tools.append(f"AutoHelix's user docs are in `{docs}`: read them when needed.")
     parts = [f"Read `{skill_dir / 'SKILL.md'}` and follow it: you are helping me with AutoHelix in this "
-             f"project ({project}).",
-             tools + (f" AutoHelix's user docs are in `{docs}`: read them when needed." if docs else "")]
+             f"project ({project})."] + ([" ".join(tools)] if tools else [])
     if (project / "autohelix" / "README.md").is_file():
         parts.append("The coordinator's notes are in `autohelix/README.md`: read it first.")
     if git:

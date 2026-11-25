@@ -217,16 +217,16 @@ agent:
   cli: claude-code
 ```
 
-Launch: `autohelix run train -n 3 --time 8h`. `--time` bounds the segment
-when each iteration trains for a long time.
+Launch: `autohelix run train -n 3 --time 8h`. `--time` starts no iteration
+after 8 hours; the one under way runs on, up to `agent.timeout` for its agent
+call (a hard limit that also tells the agent how much time is left).
 
 - **What it gives**: rollback. The next agent starts from the last accepted
   model, and every accepted model stays on disk.
 - **What it doesn't**: cleanup (nothing removes the folders; delete them
   yourself), and accepting a retrain that changes no code as an improvement
   (see [ML experiments](ml-experiments.md#one-folder-per-iteration)).
-- **Long training**: offer `agent.timeout` (a hard limit that also tells the
-  agent how much time is left) besides `--time`;
+- **Long training**: set `agent.timeout` with `--time`;
   [ML experiments](ml-experiments.md) has the environment and run discipline
   (pre-installed dependencies, cached data, training in the foreground).
 
@@ -347,8 +347,10 @@ agent:
 `validate.py` checks what a script can (the results' schema, recorded seeds
 and parameters, every number in the report present in the results); it can't
 establish that the science is sound, which is the review's job. If the
-experiments call models or remote services, cap them in those commands:
-AutoHelix doesn't count what they spend.
+experiments call models or remote services, AutoHelix counts their spend only if
+they record it in `$AUTOHELIX_USAGE_FILE`
+([Cost Tracking](concepts.md#cost-tracking)); otherwise cap them in those
+commands.
 
 ## Comparing approaches
 

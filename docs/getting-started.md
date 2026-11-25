@@ -2,6 +2,8 @@
 
 ## Installation
 
+AutoHelix needs Python 3.11 or newer and git 2.29 or newer (`git --version`).
+
 Install the CLI and its agent skill from git (until the PyPI release):
 
 ```bash
@@ -17,19 +19,9 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-To design a run with your coding agent, run `autohelix` in your project, in a
-terminal (see [With your coding agent](#with-your-coding-agent)), or explicitly
-install the portable skill into your target project:
-
-```bash
-autohelix skill install --agent codex --scope project --path /path/to/my-project
-```
-
-Choose `claude-code`, `codex`, or `opencode`, then ask the agent to use the
-`autohelix` skill to prepare and verify your experiment. The skill includes
-performance, writing, and research patterns. Preparation does not start the
-optimization loop. See [CLI → skill](cli.md#autohelix-skill) for user installation,
-export, and update behavior.
+Commands run in the environment AutoHelix starts in. Don't editable-install your
+own project there: commands would then test the checkout's code, not the
+candidate's (see [Command environment](phases.md#command-environment)).
 
 ## Agent Setup
 
@@ -82,122 +74,47 @@ default, what `effort` maps to and its model docs: [Config → Agent](config.md#
 
 ### With your coding agent
 
-In your project, run:
+Install the skill once, where your agent finds it:
 
 ```bash
-autohelix
+autohelix skill install --agent claude-code --scope user   # or codex, opencode
 ```
 
-`autohelix` shows the project's runs (none yet), then asks "Start Claude Code
+Then ask the agent "Use AutoHelix to improve [goal]", in any app, IDE or terminal
+session; it needs `autohelix` on its `PATH`. After upgrading AutoHelix, repeat
+the install with `--force` (the agent tells you when its copy is older than
+`autohelix --version`). In a terminal, `autohelix` does the same without the
+install: it shows the project's runs (none yet), then asks "Start Claude Code
 with AutoHelix? Enter/q" (or names the agent you have: Codex or OpenCode; it
-asks which when there are several). Enter starts your coding agent with the
-skill bundled with AutoHelix; the agent takes a quick look at the project and
-asks what AutoHelix should work on, with a few goals that fit it. The skill helps design the experiment from your existing code,
-checks, and evidence. The agent proposes a short name for the experiment,
-saves the config as `autohelix/<name>/config.yaml`, keeps `autohelix/` private
-unless you want the experiment shared
-([Where configs live](concepts.md#where-configs-live)), checks it with
-`autohelix run <name> --check`, and gives the `autohelix run` command to start. The agent you choose becomes
-`agent.cli`, the loop's agent, unless you decide otherwise.
+asks which when there are several), and Enter starts that agent with the skill.
+See [CLI → autohelix skill](cli.md#autohelix-skill) and
+[CLI → autohelix](cli.md#autohelix).
 
-Later, `autohelix` lists the project's runs with the command that applies to
-each (`resume`, `land`, `view`), and the same question starts the agent: it
-says what the table doesn't show (why iterations were rejected, anything odd)
-and asks what next, whether a question about the runs or another experiment. See [CLI → autohelix](cli.md#autohelix).
+The agent looks at the project, asks what AutoHelix should work on, and
+designs the experiment with you from your existing code, checks and evidence.
+When you agree, it saves the config as `autohelix/<name>/config.yaml` (kept
+private unless you want it shared:
+[Where configs live](concepts.md#where-configs-live)), checks it with
+`autohelix run <name> --check`, and gives the command to start, with a
+suggested budget (`autohelix run perf -n 10 --cost 20`). The agent you work
+with becomes `agent.cli`, the loop's agent, unless you decide otherwise.
 
-With the skill installed as described above, you can also start from an
-ordinary agent session. The installation's `--agent` selects the agent that
-discovers the skill; `agent.cli` in the generated configuration selects the
-loop's agent. For preparation only, ask:
+To have it start the run too, ask: "Run and manage AutoHelix using the
+existing config", with any budget. It starts the loop, follows it to the end,
+can send `autohelix hint`s, and reports what was accepted and measured. Its own
+calls aren't counted in the run's cost.
 
-> Set up AutoHelix to improve [goal]. [Optional instructions.]
-
-Describe the outcome you want, such as making data processing faster while
-preserving its results. The agent can propose suitable tests and benchmarks;
-you do not need to specify the evaluation in the initial request.
-
-The agent inspects the project, then shows the complete proposed YAML and its
-intended path (`autohelix/<name>/config.yaml`) before changing
-project files. A numbered walkthrough follows the YAML in configuration order:
-what each section controls, why its settings were chosen, and how to adjust
-them. It covers the goal, scope, gates, observations and evidence, backend,
-and effective defaults for omitted fields. Missing evaluators are
-proposed with their design and likely cost before implementation. Discuss
-revisions, then agree to save it when the proposal fits your goal. You can
-also ask for a proposal only.
-
-The skill uses a consistent top-level order for generated configs: `goal`,
-`scope`, `gates`, `observe`, `stop`, `agent`, `prompt_template`, omitting
-unused fields. This is a presentation convention; existing configs can use any
-top-level order.
-
-After agreement, the agent writes the setup files and validates the config
-without executing evaluators. It commits the experiment only when you want it
-shared. It can also run known cheap checks within the request. Its final reply
-gives the saved paths, where they are kept (private, or the setup commit),
-verification results, what remains unverified, and the complete
-command line to start it, with a suggested budget and why (`autohelix run perf
--n 10 --cost 20`). Budgets are command-line flags, not config: `-n`
-iterations, `--cost` dollars, `--time` wall clock, for each `run` or `resume`
-(1 iteration when none is given; see [CLI → Budgets](cli.md#budgets)).
-Measurements alone do not reject regressions; metric gates are optional.
-
-After reviewing the configuration, ask for a managed execution:
-
-> Run and manage AutoHelix using the existing config. [Optional changes or budget limits.]
-
-For example, add limits of three iterations, four minutes per agent call, and
-fifteen minutes for the loop. Choose bounds appropriate to your work.
-Within the request, the agent uses the existing configuration, applies agreed
-changes, verifies setup, resolves the clean
-committed state required to launch, starts the loop, and monitors it through
-termination. It can send evidence-based `autohelix hint` messages for subsequent
-iterations. The handoff should explain accepted changes, actual measurements,
-failures, evidence paths, and accounting limits. Ending this execution does not
-mean an open-ended experiment cannot be continued with `autohelix resume`.
-
-You can also combine preparation and execution in one request when you want the
-agent to set up and manage the experiment from scratch.
-
-`--time` and `--cost` are checked between iterations; per-agent deadlines and
-check timeouts have their own boundaries. Dollar accounting depends on backend
-reporting and includes the optimization agent and the `ask` and `review` calls
-of gates and observe entries, including the baseline's. The run summary's cost
-counts in the run's total but runs after `--cost` is checked; supervisor calls
-are separate. Missing cost
-is unknown, not zero. See [CLI → Budgets](cli.md#budgets) before relying on a cap.
-For a long run, `run` and `resume` keep the machine from sleeping until the
-segment ends (macOS `caffeinate`, Linux `systemd-inhibit`; nothing where the tool
-is missing or refused). A closed laptop lid still sleeps, and expiring
-credentials or a dropped VPN still stop the agent: keep the lid open (or use a
-server) and check how long your login lasts.
-The console, `autohelix view`, the run summary and run page (`report.md`,
-`report.html`), and saved records already support inspecting results.
+Later, ask the agent about the runs: it reads them, says what the numbers don't
+show (why iterations were rejected, anything odd) and asks what next. In a
+terminal, `autohelix` lists them first, with the command that applies to each
+(`resume`, `land`, `view`). See [After the first run](#after-the-first-run).
 
 ### Manual setup
 
-The following steps prepare the same kind of experiment without the skill.
-
-### 1. Write the config
+#### 1. Write the config
 
 Write the config of an experiment folder, `autohelix/perf/config.yaml` (a
-project can have [several](#5-several-configs)). Start from the config below, a
-[pattern](patterns.md) for your kind of goal, an
-[example](https://github.com/awslabs/AutoHelix/tree/main/examples), or the commented template shipped in the package:
-
-```bash
-cd my-project
-mkdir -p autohelix/perf
-python -c "from importlib.resources import files; print(files('autohelix.templates').joinpath('config_template.yaml').read_text())" > autohelix/perf/config.yaml
-```
-
-(use the Python AutoHelix is installed in). There is nothing else to
-initialize: the first run creates `.autohelix/`, its runtime directory, kept
-out of git.
-
-### 2. Configure
-
-Edit `autohelix/perf/config.yaml`: set your goal and uncomment relevant sections:
+project can have [several](#several-configs)):
 
 ```yaml
 goal: |
@@ -215,59 +132,73 @@ observe:                    # measured after the gates; the next agent reads the
     metrics: {speed: higher}
   - name: review            # a read-only reviewer's feedback
     review: Review the change for correctness. What should the next iteration fix?
+
+agent:
+  cli: claude-code          # or codex, opencode
 ```
 
 `gates:` decide what is accepted; `observe:` entries only inform (a failing
 benchmark doesn't reject anything, unless a `metric:` gate is on its number).
-See the [configuration reference](config.md).
+For other goals, start from a [pattern](patterns.md) or an
+[example](https://github.com/awslabs/AutoHelix/tree/main/examples); every key is
+in the [configuration reference](config.md). There is nothing else to
+initialize: the first run creates `.autohelix/`, its runtime directory, kept
+out of git.
 
-### 3. Run
+#### 2. Run
 
 AutoHelix needs a git repository with a commit, and the first baseline needs no
-uncommitted changes to tracked files. Commit the config before the first
-`run` (or keep it private: [Where configs live](concepts.md#where-configs-live)),
-and commit any scripts its commands use
-([Phases → Candidate copies](phases.md#candidate-copies)).
-Preserve unrelated work:
+uncommitted changes to tracked files. A script kept in the experiment folder is
+stored with the run, like the config (commands run it as
+`"$AUTOHELIX_EXPERIMENT/bench.py"`:
+[Experiment folder](config.md#experiment-folder)); a script elsewhere in the
+project must be committed, since copies are made from the commit. The config
+needn't be committed. Keep `autohelix/` private, as the agent-led setup does:
 
 ```bash
-git add autohelix/perf/config.yaml
-git commit -m "Configure AutoHelix experiment"
+echo /autohelix/ >> "$(git rev-parse --git-path info/exclude)"
 ```
 
-The configuration must reference implemented checks and measurements that use
-the intended environment. Then launch:
+or commit it to share the experiment (the other setups:
+[Where configs live](concepts.md#where-configs-live)). Then launch:
 
 ```bash
 autohelix run perf -n 5  # a bare `autohelix run -n 5` runs the only experiment
 ```
 
-It prints a header (goal, agent, gates, observe, scope, budget), then one row per
+## After the first run
+
+### Follow it
+
+`run` prints a header (goal, agent, gates, observe, scope, budget), then one row per
 iteration as it ends, with a live row for the one under way:
 
 ```text
              time    cost   speed ↑
   · base                       46.9
   ✓ 1         31s   $0.15  17,481.5 373×
-  ✗ 2      2m 23s   $0.48  pytest -q test_sort.py failed (exit 1)
+  ✗ 2      2m 23s   $0.48  pytest tests/ failed (exit 1)
   ⠹ 3      1m 12s  agent
 ```
 
-✓ is accepted, with each metric's change from the baseline; ✗ is rejected, with the reason. When
-the segment ends, the end block says why, how each metric moved, what landed on your
-branch and what to type next (see [CLI → What it prints](cli.md#what-it-prints)).
+✓ is accepted, with each metric's change from the baseline; ✗ is rejected, with
+the reason. When the command ends, the end block says why, how each metric
+moved, what landed on your branch and what to type next (see
+[CLI → What it prints](cli.md#what-it-prints)).
 
-Use `autohelix view` in a second terminal to follow the run on a live page in your browser
-(every run of the project, each with its own page), or `autohelix view --terminal` for the
-same screen `run` prints (header, iterations so far, the live row) with the agent's live output below it.
-`autohelix stop <id>` ends it after the current iteration (`--now`, or Ctrl-C in its
-terminal, at once); scripts can block on `autohelix wait`, which prints each iteration
-and the run's end as JSON.
+Use `autohelix view` in a second terminal to follow the run on a live page in
+your browser (every run of the project, each with its own page), or
+`autohelix view --terminal` for the same screen `run` prints (header,
+iterations so far, the live row) with the agent's live output below it.
+`autohelix stop <id>` ends it after the current iteration (`--now`, or Ctrl-C
+in its terminal, at once); scripts can block on `autohelix wait`, which prints
+each iteration and the run's end as JSON.
 
-### 4. Continue, set aside or start over
+### Continue, set aside or start over
 
 Each `autohelix run` starts a **new** run, with fresh notes. To give the same
-run more iterations, resume it; budgets count each segment:
+run more iterations, resume it; each `run` or `resume` command has its own
+budget:
 
 ```bash
 autohelix resume -n 5                # five more iterations of this config's latest run
@@ -295,7 +226,7 @@ rm -rf /path/to/artifacts/<task>/*   # 3. only if you configured an external art
 Run step 1 on the run's branch. `git reset --hard` also discards uncommitted
 changes and any commits you made on that branch since the run started.
 
-### 5. Several configs
+### Several configs
 
 A project can have several loops: one experiment folder each, in
 `autohelix/` at the project root. Commit the configs, or keep the folder private
@@ -321,7 +252,7 @@ Runs are named after the folder (`20261112-1400-perf-0mws`). A bare
 stops with the list (`autohelix run <name>` picks one). See
 [CLI → Config files](cli.md#config-files) for the rules.
 
-### 6. Several runs side by side
+### Several runs side by side
 
 To try a goal several ways at once (another model or prompt), write one config
 per variant, commit them, and start one run per config in its own terminal,

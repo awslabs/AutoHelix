@@ -50,9 +50,9 @@ def resources(bundled):
     from autohelix.terminal import version
 
     front, body = bundled["SKILL.md"].decode().split("\n---\n", 1)
-    line = (f"> Written for AutoHelix {version()}. If `autohelix --version` prints another version, "
-            "tell the user this copy of the skill may be out of date and suggest reinstalling it "
-            "(`autohelix skill install --force` with the same `--agent` and `--scope`).\n")
+    line = (f"> Written for AutoHelix {version()}. Run `autohelix --version` first: if it prints another "
+            "version, tell the user this copy of the skill may be out of date and suggest reinstalling "
+            "it (`autohelix skill install --force` with the same `--agent` and `--scope`).\n")
     return {**bundled, "SKILL.md": f"{front}\n---\n\n{line}{body}".encode()}
 
 

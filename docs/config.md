@@ -11,9 +11,9 @@ the examples below or the commented template shipped in the package
 `observe:` and `stop:`) runs inside a per-iteration copy of the code, not the main
 repo, and every path (`capture:` files, the patterns in `scope.editable` and
 `scope.frozen`) is resolved there. Use relative paths (`src/`, `tests/`,
-`results/log.json`); absolute paths point outside the copy and will either be
-silently ignored or crash the run (in `scope:`, an absolute path or a `..`
-component is a config error).
+`results/log.json`). An absolute path in a command reaches the main checkout,
+not the candidate (an absolute `capture:` or scope entry, or one with a `..`
+component, is a config error).
 (The one exception is long-lived outputs you deliberately keep outside the repo,
 such as model checkpoints: see
 [ML Experiments → One folder per iteration](ml-experiments.md#one-folder-per-iteration).) Untracked files such as a virtualenv or downloaded data aren't in the copy;
@@ -22,7 +22,7 @@ see [Phases → Candidate copies](phases.md#candidate-copies).
 ## Where configs live
 
 A run stores its config when it starts, so git is only for sharing configs.
-Setup keeps `autohelix/` private (`/autohelix/` in the local exclude file,
+The agent-led setup (bare `autohelix`) keeps `autohelix/` private (`/autohelix/` in the local exclude file,
 `git rev-parse --git-path info/exclude`) unless
 you share an experiment by committing it. The setups, and how to share one experiment
 out of a private folder: [Concepts → Where configs live](concepts.md#where-configs-live).
@@ -389,9 +389,10 @@ Where gate, observe and stop commands run and the variables they get:
 
 An experiment folder (`autohelix/NAME/`, holding `config.yaml`) can keep its
 evaluator scripts and material beside it. The run stores the folder when it
-starts, as `.autohelix/runs/<id>/experiment/` (without the config and its
-template), and each gate, observe and stop command gets its own copy of that
-as `$AUTOHELIX_EXPERIMENT`:
+starts, as `.autohelix/runs/<id>/experiment/` (without the config, its
+template, dotfiles, dot-folders and `__pycache__/`; at most 200 files, 200
+folders and 10 MB: see [CLI → Config files](cli.md#config-files)), and each
+gate, observe and stop command gets its own copy of that as `$AUTOHELIX_EXPERIMENT`:
 
 ```
 autohelix/console/

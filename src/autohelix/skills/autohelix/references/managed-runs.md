@@ -7,8 +7,8 @@ without ongoing supervision.
 
 ## Launch and observe
 
-Use the agreed configuration, agent/model, and effort limits. Follow the
-entrypoint's evaluator-implementation and execution rules. Before launching,
+Use the agreed configuration, agent/model, and effort limits. Follow
+SKILL.md's evaluator-implementation and execution rules. Before launching,
 inspect git state and include only the intended setup changes in any authorized
 commit; preserve unrelated work. Resolve routine startup problems within scope,
 and explain or ask about repairs that would change the agreed experiment.
@@ -92,7 +92,7 @@ Observe the run's `ended` (or `crashed`) event and the process exit, and inspect
 the final saved outcomes before reporting completion. Account for background work you launched; do not leave it running
 without explaining its state. Report accepted/rejected attempts, actual
 measurements, retained changes, failures, and useful evidence paths. Execute
-post-run checks only under the entrypoint's existing cheap/authorized policy.
+post-run checks only under SKILL.md's existing cheap/authorized policy.
 
 Use available usage records and what each limit counts (the docs' `concepts.md`,
 Cost Tracking).
@@ -109,8 +109,9 @@ same run (its stored config, its own tip): to apply an edited config, to keep
 going after the target branch moved past the run (it landed and the user
 committed more), or to fork from an old run (`git switch -c <branch>
 autohelix/<id>` first), start a new run that continues from it, `autohelix run <name> --import
-<id>`: it sees that run's notes and history read-only and continues its
-observations at the baseline. When the branch lacks that run's accepted
+<id>`: it sees that run's notes and history read-only, and takes its last
+observations as the previous ones until each observe entry has run in the new
+run (normally at the baseline). When the branch lacks that run's accepted
 commits, `run --import` says "land it first" with the commands; do that
 unless the user wants to start without them. A run whose first baseline
 failed is a disposable attempt: fix the config and `autohelix run` again
@@ -125,8 +126,8 @@ iterations only: `--cost` and `--time` start fresh on each segment, so track
 the total yourself (`run.progress.cost_usd` in `autohelix view ID --json`) and
 pass only the remainder. `run` and `resume` exit 0 when the segment ended
 by a budget, a `stop:` condition or `autohelix stop`; 1 on an error (no run to
-resume, failed preflight checks, the agent failing three times in a row, a
-landing that failed); 130 when interrupted (Ctrl-C, `autohelix stop --now`). A failed actual main-agent call consumes its number; resume at the next
+resume, failed preflight checks, the agent failing three times in a row or once
+for a rejected key or credentials, a landing that failed); 130 when interrupted (Ctrl-C, `autohelix stop --now`). A failed actual main-agent call consumes its number; resume at the next
 iteration. Do not archive or delete runs, reset accepted code, or extend the
 agreed effort without authorization. Record why you start or archive a run, one
 line each, so `autohelix view` explains it: `autohelix run a --why "baseline for the

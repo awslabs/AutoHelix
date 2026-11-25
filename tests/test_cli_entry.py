@@ -445,8 +445,9 @@ def test_claude_gets_the_skill_and_the_docs(project, monkeypatch, execs, tty):
     assert prompt.startswith(f"Read `{skill_dir / 'SKILL.md'}` and follow it")
     assert f"AutoHelix's user docs are in `{docs}`: read them when needed." in prompt
     launcher = cli._launcher()
-    assert (f"`autohelix` below means `{launcher}`, and AutoHelix's Python is `{sys.executable}`" if launcher
-            else f"AutoHelix's Python is `{sys.executable}`: use it") in prompt
+    if launcher:
+        assert f"`autohelix` below means `{launcher}`: use it" in prompt
+    assert "AutoHelix's Python" not in prompt
 
 
 def test_the_prompt_names_the_launcher_it_was_started_as(project, monkeypatch, execs, tty, tmp_path):
@@ -456,7 +457,7 @@ def test_the_prompt_names_the_launcher_it_was_started_as(project, monkeypatch, e
     launcher.write_text("#!/usr/bin/env python\n")
     monkeypatch.setattr(sys, "argv", [str(launcher)])
     assert entry(input="\n").exit_code == 0
-    assert f"`autohelix` below means `{launcher.resolve()}`, and AutoHelix's Python" in execs[0][1][-1]
+    assert f"`autohelix` below means `{launcher.resolve()}`: use it" in execs[0][1][-1]
 
 
 def test_an_agent_that_cannot_start(project, monkeypatch, tty):
