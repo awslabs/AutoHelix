@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "autohelix"
 version = "0.2.0"
-description = "Agent-powered iterative optimization: put an AI agent in a verified improvement loop"
+description = "Run agents with protocols, not conversations: an AI agent iterates on your code, and only changes that pass your gates are kept"
 readme = "assets/README-pypi.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

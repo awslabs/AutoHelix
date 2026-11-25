@@ -60,9 +60,9 @@ when the copy is made; no stash, no remote). This means:
   each copy gets: [At a glance](#at-a-glance)).
 - Accepted commits advance the run's hidden `refs/autohelix/<id>` first.
 - A process-held per-run lock lets only one process write a run at a time.
-- PYTHONPATH is remapped so Python imports resolve to the copy (not the main repo), and
-  `autohelix` on a command's `PATH` is a launcher for the harness's own installation
-  (see [Command environment](#command-environment)).
+- PYTHONPATH is remapped so the project's sources import from the copy, with a
+  limit (see [Command environment](#command-environment)), and `autohelix` on a
+  command's `PATH` is a launcher for the harness's own installation.
 - **A copy holds only committed files.** A script a gate runs that isn't
   committed is missing there, so commit the scripts your commands use. Commands get
   their tools from the environment AutoHelix started in: run it with your virtualenv
@@ -269,8 +269,16 @@ the agent can still find the project (its copy's `.git` borrows the project's
 objects through alternates, and the copies folder records the checkout) and runs
 as you.
 
-`PYTHONPATH` is remapped so the project's own sources import from the copy.
-That would let candidate code replace modules inside `autohelix ask` or
+`PYTHONPATH` is remapped so the project's own sources import from the copy, but
+only the project paths on AutoHelix's own Python's `sys.path`. So the environment
+your commands run in must not import the project from the checkout: no editable
+install of it there (`pip install -e .`), or every iteration is measured on the
+checkout's code. Installing AutoHelix in that environment isn't enough on its
+own: an editable install that puts no project path on `sys.path` (setuptools'
+strict mode, a meta-path finder) isn't remapped either. A command can put the
+sources on the path itself, relative to the copy: `PYTHONPATH=src pytest`.
+
+The remapped `PYTHONPATH` would let candidate code replace modules inside `autohelix ask` or
 `autohelix review`, so `PATH` starts with a private folder holding an
 `autohelix` launcher: it runs the harness's own installation in isolated mode,
 whatever the command's `PYTHONPATH` and working directory. Call `autohelix` by

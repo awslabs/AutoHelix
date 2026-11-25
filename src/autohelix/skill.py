@@ -40,9 +40,9 @@ def _bundled_files() -> dict[Path, bytes]:
     return dict(walk(root))
 
 
-STAMP = ("> Written for AutoHelix {version}. If `autohelix --version` prints another version, "
-         "tell the user this copy of the skill may be out of date and suggest reinstalling it "
-         "(`autohelix skill install --force` with the same `--agent` and `--scope`).\n")
+STAMP = ("> Written for AutoHelix {version}. Run `autohelix --version` first: if it prints another "
+         "version, tell the user this copy of the skill may be out of date and suggest reinstalling "
+         "it (`autohelix skill install --force` with the same `--agent` and `--scope`).\n")
 
 
 def stamped(skill_md: bytes, version: str) -> bytes:

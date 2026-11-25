@@ -16,7 +16,8 @@ for each iteration:
     5. checks copy      — fresh copy of T (HEAD at A); T's files are verified after every command
     6. gate commands    — in list order (tests, linting, ask: questions); the first failure rejects
     7. observe entries  — in list order (benchmarks, reviews), each output saved by name;
-                          after each, the metric gates on its numbers; a failure rejects
+                          after each, the metric gates on its numbers (a failed metric
+                          gate rejects; a failed entry doesn't)
     8. accept or reject — commit exactly T on A, update the run ref and history atomically;
                           or keep T as refs/autohelix-rejected/<id>/<n>
     9. stop commands    — after an accept, in a copy of the accepted tip
@@ -133,7 +134,9 @@ A failed or timed-out attempt is rejected without checks: it is kept for the
 record and the next agent, never accepted unchecked, and the loop goes on (the
 next agent gets its `rejected.patch`). Three failed agent calls in a row stop
 the run: "the agent failed 3 times in a row: <last error>". An accepted or
-gate-rejected iteration resets the count.
+gate-rejected iteration resets the count. A rejected key or credentials (HTTP
+401/403) stops the run after the one call, with an error that says to fix it
+and `autohelix resume`.
 
 An attempt whose changes were all discarded (its tree equals the commit it
 started from) keeps no ref: there is nothing to keep or re-apply.
@@ -288,7 +291,7 @@ characters.
 Editing the template is also how you can keep an evaluation *out of the agent's view*, useful for measuring generalization without the agent optimizing against the eval itself. Two prompt-only levers:
 
 - **Don't list the eval command.** Drop the `observe` (or `gates`) loop from your `prompt_template:` file. The command still runs and its metric still gates and ranks the run; it just isn't named in the prompt. Its output is still in the agent's copy under `.autohelix-iteration/iterations/NNN/`: an observe entry's `observe/<name>/` (a review's transcript included), and a *failing* gate's whole `gates/<k>/` folder (`command.txt`, so the gate's command verbatim, stdout, stderr, and an `ask:` gate's judge transcript; passing gates' output is not copied). A gate's command is in every record too (`record.json`, `history.jsonl`), so leaving a gate out of the prompt doesn't hide its command. So keep what it prints minimal, and prefer an observe entry or a gate that says little when it fails.
-- **Fence the agent into its copy.** Add an explicit instruction to only read and write inside `{{ copy }}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config). The agent then has nothing in scope to reverse-engineer.
+- **Fence the agent into its copy.** Add an explicit instruction to only read and write inside `{{ copy }}`, and keep the eval script *and* any answer key outside the project tree (reference the script by absolute path from your config), and out of the experiment folder too: the agent's copy holds that as `.autohelix-iteration/experiment/`. The agent then has nothing in scope to reverse-engineer.
 
 This is a **best-effort nudge, not a security boundary.** In practice a cooperative agent respects the fence: in testing, Claude declined to read an out-of-copy eval even when its path was visible in a log it had legitimately read. But nothing *enforces* it: copies live outside the project, but the agent runs as you, so one that is determined (or explicitly told to cheat) can still reach the project and anything else on disk by absolute path. Treat it as reducing reward-hacking pressure, not eliminating the possibility.
 
@@ -325,13 +328,12 @@ file it points to. A link out of `autohelix/` (even to a committed file), or
 into a dot-name inside it (`autohelix/.git/`, `.env`), is refused: a committed
 project file is in every copy, so a command names it by its path
 (`python scripts/bench.py`); an ignored document (under `notes/`, say) is
-copied into the folder (stored and frozen with the run) or named by its path
-in the goal (read live). Use relative links: they still work in a clone of
-`autohelix/`'s own repository.
+copied into the folder (stored and frozen with the run). Use relative links:
+they still work in a clone of `autohelix/`'s own repository.
 
 `autohelix/README.md` is the coordinator's notes: the current state, decisions
-and why, work done outside the loop, what's next. The agent session bare
-`autohelix` starts reads it first, and updates it at the end only while
+and why, work done outside the loop, what's next. An agent session with
+the skill reads it first, and updates it at the end only while
 `autohelix/` isn't tracked by the project (a tracked file edited during a run
 dirties the checkout).
 
@@ -347,7 +349,7 @@ committed one. Git is only for sharing them.
 
 | Setup | How | When |
 |---|---|---|
-| **Private** (setup's default) | `/autohelix/` in the local exclude file | your own experiments; their scripts live in their folders |
+| **Private** (the agent-led setup's default) | `/autohelix/` in the local exclude file | your own experiments; their scripts live in their folders |
 | **Private, tracked** | private, plus `git init` in `autohelix/` | as private, with history, backup and a remote to clone onto other machines |
 | **Committed** | commit `autohelix/`, or one experiment of it, with the project | shared experiments (a team's benchmark) |
 | Team-wide ignore | `/autohelix/` in `.gitignore` | everyone on the team keeps their configs private |
@@ -432,10 +434,7 @@ for cooperative agents, not a filesystem security boundary.
 Archive retains evidence, unlanded commits and rejected trees, and leaves code
 intact. Delete removes the run directory, its ref and its
 `refs/autohelix-rejected/<id>/` refs, while lock files remain outside that
-directory. A run folder missing a file every release writes (its stored
-`config.yaml`) was made by a development build: it is refused, with the advice
-to delete it. Legacy top-level
-history must be moved or deleted before run; there is no automatic migration.
+directory.
 
 ## Cost Tracking
 
@@ -463,8 +462,7 @@ stays unknown; see [CLI → `autohelix report`](cli.md#autohelix-report)).
 
 History's `calls` list records each attempted agent call and command model call
 with its role, usage and log path (relative to the run directory); it is the
-only place usage is stored. Records from earlier versions may list `reviewer`
-calls; they count the same way. Every agent call's usage (the main agent's, a
+only place usage is stored. Every agent call's usage (the main agent's, a
 judge's, the run summary's) records `cli`, `model` (the model the CLI's output
 named, `null` when it named none) and `executable` (the resolved path started):
 which model ran, whatever `model:` asked for. `view`'s run screen and the web
@@ -486,7 +484,7 @@ accepted commits record that charge as unknown.
 The numeric field is `usage.cost_usd` for every CLI. `usage.cost_source` is
 `backend` when the CLI supplies the amount, or `calculated` when AutoHelix
 calculates it. Backend-supplied amounts can themselves be estimates; they are
-not necessarily invoice totals. Older history without this metadata still loads.
+not necessarily invoice totals.
 
 **Codex costs are estimated** from reported input, cached-input, cache-write,
 and output token counts and a bundled snapshot of the model's published

@@ -14,13 +14,10 @@ This skill covers three jobs: explaining existing runs, setting up an
 experiment (an agreed, checked config, ready to run), and launching or
 supervising a run, only when the user asks for one.
 
-Use the installed AutoHelix; a source checkout is not required. Its CLI and
-Python are the ones the session's first prompt names, else the `autohelix` on
-`PATH` and the interpreter on that launcher's first line
-(`head -1 "$(command -v autohelix)"`): a plain `python` may lack the package
-(pipx, `uv tool`, a venv that isn't active), and the harness and the target
-project may use different environments. Check `autohelix --help` and the
-relevant subcommand help against the installed version. Its user docs are in
+Use the installed AutoHelix; a source checkout is not required. Use the
+`autohelix` the session's first prompt names, else the one on `PATH`. Check
+`autohelix --help` and the relevant subcommand help against the installed
+version. Its user docs are in
 the folder `autohelix docs` prints (`README.md` is their index); read them when
 needed. Every config key is in `config.md` there, every flag in `cli.md`.
 
@@ -35,12 +32,13 @@ nothing that changes anything: `autohelix/README.md` first when it exists (the
 coordinator's notes: see [Coordinator notes](#coordinator-notes)), the README
 and project instructions, how the
 code is tested and measured (test folders, benchmarks, evaluators, CI config),
-task or spec files (`TODO`, `TASKS.md`, a PRD), and any AutoHelix configs
-(`autohelix/*/config.yaml`).
+task or spec files (`TODO`, `TASKS.md`, a PRD), any AutoHelix configs
+(`autohelix/*/config.yaml`), and the runs: the first prompt lists them, else
+`autohelix view --once` (it only reads).
 
-- **With current runs**: the user has just seen them in a table (state,
-  iterations, landing, cost), from bare `autohelix`; don't repeat it. Read the
-  live runs and the most recent other one ([reading runs](references/reading-runs.md))
+- **With current runs**: when the first prompt says the user saw them in a
+  table (state, iterations, landing, cost), don't repeat it; otherwise give
+  its gist in a line. Read the live runs and the most recent other one ([reading runs](references/reading-runs.md))
   and give in a few lines what the table doesn't show: why recent iterations
   were rejected, anything odd. Then ask what next, with two or three examples
   drawn from the state: a question about a run, the command that applies (land,
@@ -122,13 +120,15 @@ Pick these yourself and say what you picked; don't ask about them:
   expensive, say so in the handoff and offer the flag ("add `--cost 20` to cap
   it").
 - **Timeouts**: none (no `timeout:` on entries, no `agent.timeout`): the
-  built-in defaults apply. When each iteration trains a model for a long time,
+  built-in defaults apply (commands 30m, `ask:` gates 10m, the main agent no
+  limit). When each iteration trains a model for a long time,
   offer `agent.timeout` and `--time` (`patterns.md`, Training a model).
 - **Metric gates**: none: the agent sees the numbers and decides. Suggest one
   in the walkthrough when a measurement is stable enough to protect.
 - **Agent**: `agent: {cli: X}`, where X is the CLI this session runs in (the
-  first prompt names it), unless the user names another. Add `model:` or
-  `effort:` only when the user names one.
+  first prompt names it; else the agent you are: `claude-code`, `codex` or
+  `opencode`), unless the user names another. Add `model:` or `effort:` only
+  when the user names one.
 - **Summary**: written by default; `--no-report` only when the user asks (it
   isn't stored: it goes on every `resume` command too).
 
@@ -151,8 +151,8 @@ Name the config's path:
 
 An experiment folder holds its config and what only it uses: its prompt
 template, evaluators, metric adapters, sketches. The run stores the folder
-when it starts (dotfiles and `__pycache__/` left out; at most 200 files and
-10 MB):
+when it starts (dotfiles and `__pycache__/` left out; at most 200 files, 200
+folders and 10 MB):
 
 ```
 autohelix/
@@ -177,7 +177,7 @@ commits stays in the project (`scripts/`) and commands name it by its path
 A document the goal relies on (a design, a spec): to freeze it with the run
 (editing it then makes `resume` refuse), keep it in the experiment folder or
 `autohelix/` and link it; an ignored one elsewhere (under `notes/`) is copied
-into the folder. To keep it live, name it by its path in the goal.
+into the folder.
 
 Preserve other configs and the run state in `.autohelix/`. A config in the
 first format (`constraints:`, `metrics:`, `reviewer:`, ...) no longer loads:

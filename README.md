@@ -29,8 +29,8 @@
 
 ## Quickstart
 
-In your project (a git repository), with its environment active and Claude Code, Codex or
-OpenCode installed:
+In your project (a git repository, git 2.29 or newer), with its environment active and
+Claude Code, Codex or OpenCode installed:
 
 ```bash
 pip install git+https://github.com/awslabs/AutoHelix.git
@@ -39,11 +39,12 @@ pip install git+https://github.com/awslabs/AutoHelix.git
 **1. Set up.**
 
 ```bash
-autohelix
+autohelix skill install --agent claude-code --scope user   # once (or codex, opencode)
 ```
 
-An agent session opens and helps you turn your goal into a protocol: it looks at your
-project, proposes the checks and what to measure, and saves the file once you agree.
+Then ask your agent "Use AutoHelix to improve [goal]", in any app, IDE or terminal session.
+In a terminal, `autohelix` starts one with the skill directly. The agent looks at your
+project, proposes the checks and what to measure, and saves the protocol once you agree.
 
 **2. Run.** The setup agent ends by suggesting a command and budget, for example:
 
@@ -56,17 +57,15 @@ branch when the run ends. With `--land manual` they wait until you run `autoheli
 for example to review them first or to compare several runs. `autohelix resume` continues
 a run later.
 
-**3. Follow it.**
+**3. Ask and follow.** Ask your agent about the runs: it reads them, answers questions and
+suggests what to try next. To watch them live:
 
 ```bash
 autohelix view --open
 ```
 
-The web view lists all of the project's runs, live. Open one to see its metrics, diffs,
-notes and costs, iteration by iteration.
-
-**4. Ask about it.** Run `autohelix` again any time: it lists your runs and opens an agent
-that can read them, answer questions and suggest what to try next.
+The web view lists all of the project's runs. Open one to see its metrics, diffs, notes and
+costs, iteration by iteration.
 
 ## How it works
 
@@ -141,8 +140,8 @@ was given.
 
 AutoHelix records every attempt: its diff, cost, metrics and gate results, why it was
 rejected and the reviews it got. It's all plain files in `.autohelix/runs/<id>/`, which the
-web view shows and the `autohelix` agent reads when you ask about a run. When the run ends, an agent reads the record and writes a report of what
-was tried, what worked and what it cost.
+web view shows and your agent reads when you ask about a run. When the run ends, an agent
+reads the record and writes a report of what was tried, what worked and what it cost.
 
 In the terminal, each iteration is a row with its time, cost and metrics:
 
@@ -157,29 +156,43 @@ models:
   <img alt="The web view's run list: the same protocol run with Claude Opus, Sonnet and Haiku" src="assets/run-list-dark.png" width="880">
 </p>
 
-## Why not just a loop?
+## What you can use it for
 
-A `while` loop around `claude -p` takes a few lines to write. Here's what such a loop
-usually gets wrong, and what AutoHelix does instead:
+The goal can be anything that can be checked, either with a script or with an agent:
+
+| | Pass or fail | Better or worse |
+|---|---|---|
+| **Checked by a script** | Fix a failing test, finish a Lean proof | Speed up code, raise a model's accuracy, cut an agent's cost ([sorting](examples/sorting), [AlgoTune](examples/algotune), [KernelBench](examples/kernelbench), [posttrain](examples/posttrain), [autoresearch](examples/autoresearch), [workflow-optimization](examples/workflow-optimization)) |
+| **Checked by an agent** | Implement every item of a spec, with a reviewer tracking what's missing ([task-queue](examples/task-queue)) | Improve research or writing, with a reviewer saying what to improve next ([research](examples/research), [writing](examples/writing)) |
+
+The agent proposes changes toward the goal. Gates are the constraints the result must meet
+for a change to be kept: the tests still pass, the public API stays the same, accuracy
+doesn't drop. It's constrained optimization, checked by scripts or agents.
+
+## Why not a simple loop?
+
+A `while` loop around `claude -p` is easy to write. Here are some things a loop can get
+wrong, and what AutoHelix does instead:
 
 | A homemade loop | AutoHelix |
 |---|---|
-| Tests pass in the agent's working folder, with files that never get committed. | The gates run on a fresh copy of exactly the tree that will be committed. |
 | The agent quietly edits the tests or the benchmark until they pass. | Only files in scope can change, and the config and its checks are frozen. |
+| Tests pass in the agent's working folder, with files that never get committed. | The gates run on a fresh copy of exactly the tree that will be committed. |
+| It stops when the agent says it's done. | It stops when your budget runs out, or when a stop condition you wrote says so. |
 | A failed attempt is thrown away, along with what it learned. | Its patch goes to the next iteration, and the agent's notes survive rejections. |
 | The context fills up, and compaction drops the important part. | Every iteration is a fresh session; what carries over is files: code, notes and results. |
 | You come back to a branch in an unknown state. | Your checkout isn't touched until checked work lands. |
 | Finding out what happened overnight, and what it cost, means digging through logs. | Every attempt's metrics, diff, notes and cost are in a live web view, and a report sums up the run. |
-| It stops when the agent says it's done. | It stops when your budget runs out, or when a stop condition you wrote says so. |
 
-**Compared with Ralph loops, `/goal` or autoresearch.** These share the basic idea of
+**Compared with Ralph loops, `/goal` or autoresearch.** These all share the basic idea of
 keeping an agent working toward one goal. Ralph and `/goal` work toward a goal that is
-either met or not (tests pass, a feature is done); autoresearch pushes a number (loss). A protocol covers both: gates for what must hold, metrics for what should improve,
-and a stop condition for when it's done. The bigger difference is who decides what counts
-and what gets kept: the checks run outside the agent, on an isolated copy of exactly its
-change; the protocol is one file, committed with your code, that anyone can rerun; and
-every attempt is recorded, whether it was kept or not, so you can follow a run, pick it up
-later and compare it with other runs.
+either met or not (tests pass, a feature is done); autoresearch pushes a number (loss). A
+protocol is one general pattern that covers both: gates for what must hold, metrics for
+what should improve, and a stop condition for when it's done. Another difference is who
+decides what counts and what gets kept: the checks run outside the agent, on an isolated
+copy of exactly its change. And the protocol is one file, stored with every run, and every
+attempt is recorded, whether it was kept or not, so you can follow a run, pick it up later
+and compare it with other runs.
 
 **Compared with subagents and multi-agent workflows.** These work at a different level, and
 the two combine well: a workflow decides how a single attempt is made, while AutoHelix
@@ -187,40 +200,14 @@ decides what happens between attempts. The agent in each iteration is a full Cla
 Codex or OpenCode session, so it can use subagents and skills as usual. What changes is that
 it doesn't check its own work, since the gates run outside it, on the frozen change.
 
-## More features
-
-| | |
-|---|---|
-| **Agent judges** | Read-only agents check, review or track progress on exactly the candidate: `ask:` gates answer a yes/no question, `review:` entries write feedback for the next iteration, and a review that sees its previous verdict keeps an independent count of what's left in a spec. Judges can use a different agent or model from the main one. [→](docs/concepts.md#reviews) |
-| **Resume** | Continue a run later, with its stored protocol and a new budget. [→](docs/cli.md#autohelix-resume) |
-| **Steer** | `hint` sends the running agent a note for its next iteration; `stop` ends the run after the current one. [→](docs/cli.md#autohelix-hint) |
-| **Groups** | Parallel runs in a group read each other's notes and accepted code at every iteration, so they can build on each other's work. [→](docs/cli.md#groups) |
-| **Docker sandbox** | Optionally run the agent in a container with no access to your home directory or other projects. [→](docs/docker.md) |
-
-For everything else, see the [CLI](docs/cli.md) and [configuration](docs/config.md) references.
-
-## What you can use it for
-
-The goal can be anything you can check, with a script or with an agent:
-
-| | Pass or fail | Better or worse |
-|---|---|---|
-| **Checked by a script** | Fix a failing test, finish a Lean proof | Speed up code, raise a model's accuracy, cut an agent's cost ([sorting](examples/sorting), [AlgoTune](examples/algotune), [KernelBench](examples/kernelbench), [posttrain](examples/posttrain), [workflow-optimization](examples/workflow-optimization)) |
-| **Checked by an agent** | Implement every item of a spec, with a reviewer tracking what's missing ([task-queue](examples/task-queue)) | Improve research or writing, with a reviewer saying what to improve next ([research](examples/research), [writing](examples/writing)) |
-
-Gates add the constraints. Whatever the goal, a change is kept only if it passes them: the
-tests still pass, the public API stays the same, accuracy doesn't drop. In the sorting run
-at the top, the speedup is the goal and pytest is the constraint. It's optimization under
-constraints, with scripts or agents checking both.
-
 ## Results
 
-**Iterating beats resampling.** On 30 random [AlgoTune](https://github.com/oripress/AlgoTune)
+**AlgoTune.** On 30 random [AlgoTune](https://github.com/oripress/AlgoTune)
 tasks, each AutoHelix iteration turned more agent spend into more speedup, while the best of
 up to five independent attempts leveled off and a Claude Code `/goal` session stopped on its
 own near the AutoHelix curve. Scored on held-out instances, five iterations were faster than
 the best of five attempts on all 30 tasks and faster than `/goal` on 27
-([setup, audit and per-task results](examples/algotune)).
+([details](examples/algotune/README.md)).
 
 <p align="center">
   <picture>
@@ -229,28 +216,12 @@ the best of five attempts on all 30 tasks and faster than `/goal` on 27
   </picture>
 </p>
 
-On 270 [KernelBench](https://github.com/ScalingIntelligence/KernelBench) tasks, median
-speedup rose with every iteration, to 3.12× after five (earlier harness version, Claude
-Opus 4.8).
-
-<p align="center">
-  <img alt="Median KernelBench speedup over five iterations" src="assets/steps_kernelbench.png" width="400">
-</p>
-
-**An open-ended goal, one H200.** Asked to post-train `Qwen3-4B-Base` on GSM8K with no
-method prescribed, the agent went from supervised fine-tuning through rejection sampling
-to GRPO, reaching **93%** in 8 iterations ([posttrain](examples/posttrain)).
-
-<p align="center">
-  <img alt="GSM8K accuracy over 8 iterations of post-training Qwen3-4B-Base, from 41% to 93%" src="assets/progression_posttrain_gsm8k.png" width="820">
-</p>
-
-**Three loops, same budget.** On Karpathy's [autoresearch](https://github.com/karpathy/autoresearch)
+**Autoresearch.** On Karpathy's [autoresearch](https://github.com/karpathy/autoresearch)
 (lower val_bpb of a small GPT trained for five minutes), AutoHelix, Claude Code `/goal` and
 autoresearch's own `program.md` loop got the same model (Claude Opus 5.5), up to 60
 experiments and the same trusted scorer, two runs each, each run isolated in its own
 container. Both AutoHelix runs ended 4.8% below the baseline on a held-out shard, for
-$27–36; `/goal` 4.3% for $36–37; `program.md` 2.3% for $20–45 ([autoresearch](examples/autoresearch)).
+$27–36; `/goal` 4.3% for $36–37; `program.md` 2.3% for $20–45 ([details](examples/autoresearch/README.md#comparing-loops)).
 
 <p align="center">
   <picture>
@@ -259,16 +230,26 @@ $27–36; `/goal` 4.3% for $36–37; `program.md` 2.3% for $20–45 ([autoresear
   </picture>
 </p>
 
-**In the wild.** In [Hybrid Model Factory](https://github.com/awslabs/hybrid-model-factory),
-the agent developed a state-passing sequence-parallelism implementation: ~5× faster per
-layer and 1.6× faster end-to-end training at 128K sequence length on a 27B model.
+## More features
+
+| | |
+|---|---|
+| **Agent judges** | Read-only agents judge exactly the candidate. Add as many as you like, each with its own question, agent and model: `ask:` gates for what must hold, `review:` entries for what to fix next. A review that sees its previous verdict keeps an independent count of what's left in a spec. [→](docs/concepts.md#reviews) |
+| **Any feedback** | An observe entry keeps a command's whole output and any files it names (`capture: [results/plots/]`), and the next agent reads them: profiles, logs, plots, failing cases, not just numbers. [→](docs/config.md#observe) |
+| **Continue** | `resume` continues a run with its stored protocol and a new budget. After you change the protocol, `run --import ID` starts a new run whose agent reads the old run's notes, history and code. [→](docs/cli.md#autohelix-resume) |
+| **Steer** | `hint` sends the running agent a note for its next iteration; `stop` ends the run after the current one. [→](docs/cli.md#autohelix-hint) |
+| **Groups** | Parallel runs in a group read each other's notes and accepted code at every iteration, so they can build on each other's work. [→](docs/cli.md#groups) |
+| **Scripts and agents** | `wait` blocks until a run event and prints it as JSON, and `view --json` gives every run's state, so a script or an agent can launch and supervise runs. [→](docs/cli.md#autohelix-wait) |
+| **Docker sandbox** | Optionally run the agent in a container with no access to your home directory or other projects. [→](docs/docker.md) |
+
+For everything else, see the [CLI](docs/cli.md) and [configuration](docs/config.md) references.
 
 ## Limitations
 
-- **Your checks are the verdict.** The agent optimizes what you measure, and the more
-  iterations you run, the harder it pushes on loopholes in your checks (reward hacking).
-  AutoHelix makes gaming visible through diffs, notes, reviews and the report, and an
-  `ask:` gate or a reviewer can look for it, but it can't make weak checks strong.
+- **Results are only as good as your checks.** The agent optimizes what you measure, so
+  it can find and use a loophole in your checks (reward hacking). Diffs, notes, reviews and
+  the run's summary make gaming visible, and an `ask:` gate can look for it, but weak checks
+  stay weak.
 - **Copies are not a sandbox.** Each iteration's private copy protects your code from bad
   attempts, not your machine from the agent, which runs with your permissions. Use the
   [Docker mode](docs/docker.md) on machines with anything sensitive on them.
@@ -278,6 +259,7 @@ layer and 1.6× faster end-to-end training at 128K sequence length on a 27B mode
 ## Learn more
 
 - [Getting started](docs/getting-started.md): install, agent setup, first run
+- [Patterns](docs/patterns.md): a starting config for each kind of goal
 - [Concepts](docs/concepts.md): iterations, notes, reviews, progress tracking, groups
 - [Configuration](docs/config.md): every field
 - [CLI](docs/cli.md): every command

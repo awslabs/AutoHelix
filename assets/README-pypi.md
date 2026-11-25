@@ -1,10 +1,10 @@
 # AutoHelix
 
-**Put an AI agent in a verified improvement loop.**
+**Run agents with protocols, not conversations.**
 
-Set gates and what to observe; an AI agent proposes changes in a loop, and only
-changes that pass your gates get merged. Works with Claude Code, Codex, and
-OpenCode.
+One file sets the goal, the checks and what to observe. An AI agent iterates on
+your code in private copies, and only changes that pass your gates are kept.
+Works with Claude Code, Codex and OpenCode.
 
 ```bash
 pip install autohelix

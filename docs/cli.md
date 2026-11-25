@@ -402,7 +402,7 @@ Every budget counts **this segment**, whatever earlier ones spent:
 | `-n N` | after N iterations (`resume -n N`: N more) |
 | `--until N` | after iteration N of the run: the one flag that counts a total, so a script can repeat it (`resume --until 20` twice runs nothing the second time) |
 | `--cost USD` | once this segment has charged USD: agent calls, reviews, asks, every model call a command reports, the baseline's too (the summary, written after the loop, is counted but never stopped by it) |
-| `--time DURATION` | once DURATION of this segment's wall clock has passed, the baseline included |
+| `--time DURATION` | before the next iteration, once DURATION of this segment's wall clock has passed, the baseline included; one under way finishes (below) |
 
 Whichever comes first ends the segment; a stop condition or [`autohelix stop`](#autohelix-stop) can end it sooner.
 
@@ -1301,10 +1301,12 @@ $ autohelix docs
 
 ## `autohelix skill`
 
-Install or export the packaged `autohelix` skill and all its references. It
-helps your coding agent set up experiments, explain a project's runs, and, when
-asked, launch and supervise one, using the installed CLI. A source checkout is
-not required.
+Install or export the packaged `autohelix` skill and all its references, so your
+coding agent can set up experiments, explain a project's runs and, when asked,
+launch and supervise one, in any app, IDE or terminal session. It uses the
+installed CLI; a source checkout is not required. In a terminal, bare
+[`autohelix`](#autohelix) starts an agent with the bundled skill without
+installing anything.
 
 ```bash
 autohelix skill install --agent claude-code --scope project --path /path/to/project
@@ -1337,27 +1339,13 @@ directory.
 - Updates replace individual files; an I/O failure can leave a partially
   updated folder. Correct the error and repeat with `--force`.
 
-The copied `SKILL.md` says which AutoHelix version wrote it (a line after its
-front matter), and tells the agent to point out a different `autohelix
---version` and suggest reinstalling with `--force`: an installed copy stays as
-it was when AutoHelix is upgraded.
+The copied `SKILL.md` names the AutoHelix version that wrote it, and tells the
+agent to run `autohelix --version` first and, on another version, to suggest
+reinstalling with `--force`: an installed copy stays as it was when AutoHelix is
+upgraded.
 
-After installation, ask your agent to use the `autohelix` skill to prepare your
-experiment (or to explain the project's runs) (or run bare [`autohelix`](#autohelix) in a terminal: it starts the
-agent with the bundled skill, without installing anything). The agent:
-
-- inspects the project and proposes scope, gates, observe entries (commands
-  and reviews) and optional metric gates;
-- shows the complete YAML and its section-by-section explanation for you to
-  review before project files change; agreement to save and commit leads to
-  writing, validating, and committing only the setup files;
-- gives verification results and the complete launch command with a suggested
-  budget (`autohelix run perf -n 10 --cost 20`), and starts `autohelix run`
-  only when requested.
-
-To request ongoing management, ask the agent to prepare, run, and supervise
-within explicit effort limits. It should monitor saved outcomes through process
-termination and use hints when useful for later iterations. See the
-[setup-only and managed walkthroughs](getting-started.md#with-your-coding-agent).
+After installation, ask your agent "Use AutoHelix to improve [goal]", or about
+the project's runs: see
+[Getting started → With your coding agent](getting-started.md#with-your-coding-agent).
 
 Installing the Python package does not register skills automatically.

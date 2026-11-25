@@ -36,7 +36,7 @@ and pair it with existing output-equality tests. State that its conclusions
 cover those cases, estimate CPU time from available evidence (or label it
 unknown), and propose observing runtime before choosing any regression gate.
 This makes the implementation agreement concrete without requiring a fixed
-interview. Follow the entrypoint's authorization distinction before coding
+interview. Follow SKILL.md's authorization distinction before coding
 the evaluator or executing it.
 
 Use representative cases and protect evaluation criteria by default, while
